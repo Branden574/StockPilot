@@ -41,8 +41,8 @@ import 'server-only';
  *     thumbnail could show anything).
  *
  * `sharp` is already a dependency of apps/web and is loaded lazily, as in
- * lib/exports/webp-to-png.ts. Any failure resolves to null; the caller
- * rejects the upload and deletes the object.
+ * lib/image-decode.ts. Any failure resolves to null; the caller rejects the
+ * upload and deletes the object.
  */
 
 export type ReencodeKind = 'jpeg' | 'png' | 'webp';
@@ -96,6 +96,10 @@ export async function reencodeWithoutMetadata(
 ): Promise<ReencodedPhoto | null> {
   try {
     const { default: sharp } = await import('sharp');
+    // libvips' operation cache off, as in lib/image-decode.ts (loadSharp): it
+    // keeps a progressive JPEG's whole-image buffers after the request, and
+    // on Linux ten re-encodes of one at 7071 x 7071 passed 3 GB (S45).
+    sharp.cache(false);
     const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const quality = options.quality ?? DEFAULT_QUALITY;
     // rotate() with no angle applies the EXIF orientation to the pixels.
@@ -109,7 +113,11 @@ export async function reencodeWithoutMetadata(
           ? oriented.png({ compressionLevel: 9 })
           : oriented.webp({ quality });
     const { data: master, info } = await encoded.toBuffer({ resolveWithObject: true });
-    const thumb = await sharp(master)
+    // The master is this function's own capped output; the thumbnail's
+    // decode carries the same limit (lib/sharp-input-limits.guard.test.ts).
+    const thumb = await sharp(master, {
+      limitInputPixels: options.maxInputPixels ?? MAX_INPUT_PIXELS,
+    })
       .resize({
         width: EVIDENCE_THUMB_MAX_EDGE,
         height: EVIDENCE_THUMB_MAX_EDGE,

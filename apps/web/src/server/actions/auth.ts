@@ -10,9 +10,7 @@ import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
-import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
 import {
@@ -20,7 +18,9 @@ import {
   isBannedUserAuthError,
 } from '@/server/actions/auth-error-classify';
 import { unexpectedActionError } from '@/server/lib/action-error-result';
-import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
+import { audit } from '@/server/services/audit';
+import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
+import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 
 import {
   ACCOUNT_DISABLED_MESSAGE,
@@ -51,113 +51,6 @@ async function getClientIp(): Promise<string> {
     h.get('x-real-ip') ??
     'unknown'
   );
-}
-
-/**
- * Writes an auth-lifecycle audit row directly via the admin client.
- *
- * The standard `audit()` helper requires a ServiceContext, and its
- * `withContext()` fallback throws NEXT_REDIRECT for org-less callers —
- * which would corrupt the control flow of a sign-in (no resolved org
- * yet) or a sign-in-failure (no authenticated user). This direct helper
- * writes the event with whatever attribution we have, tags IP/UA from
- * the request headers, and never throws.
- *
- * organization_id and user_id are both nullable on audit_logs (see
- * migration 0002_inventory.sql), so a sign-in-failure with both null
- * is still a valid forensic row.
- */
-async function emitAuthAudit(params: {
-  event: AuditEvent;
-  userId?: string | null;
-  organizationId?: string | null;
-  extra?: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    const h = await headers();
-    const ip =
-      h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? null;
-    const userAgent = h.get('user-agent') ?? null;
-
-    // Reads the INSERT's own result: supabase-js returns a refused write as
-    // { error } rather than throwing, so the catch below never saw one.
-    await insertAuditRowReported({
-      organization_id: params.organizationId ?? null,
-      user_id: params.userId ?? null,
-      event: params.event,
-      ip,
-      user_agent: userAgent,
-      metadata: {
-        entity_type: 'user',
-        entity_id: params.userId ?? null,
-        warehouse_id: null,
-        before: null,
-        after: null,
-        reason: null,
-        ...(params.extra ?? {}),
-      },
-    });
-  } catch (e) {
-    // Best-effort — never let a logging failure break an auth action.
-    void reportError(e, {
-      tag: 'audit.auth_emit_failed',
-      level: 'warning',
-      extra: { event: params.event },
-    });
-  }
-}
-
-/**
- * Resolves a user's default organization + role for audit attribution
- * and ServiceContext construction. Returns nulls if the lookup fails —
- * the audit row is still written (organization_id is nullable). Uses
- * the admin client because the user may be on a freshly-issued or
- * recovery session with limited RLS context.
- */
-async function resolveDefaultOrgAndRole(
-  userId: string,
-): Promise<{ organizationId: string | null; role: string | null }> {
-  try {
-    const admin = createAdminClient();
-    const { data: profile } = await admin
-      .from('user_profiles')
-      .select('default_organization_id')
-      .eq('id', userId)
-      .maybeSingle();
-    const defaultOrgId =
-      (profile as { default_organization_id: string | null } | null)
-        ?.default_organization_id ?? null;
-
-    if (defaultOrgId) {
-      const { data: member } = await admin
-        .from('organization_members')
-        .select('organization_id, role')
-        .eq('user_id', userId)
-        .eq('organization_id', defaultOrgId)
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      const row = member as { organization_id: string; role: string } | null;
-      if (row) return { organizationId: row.organization_id, role: row.role };
-    }
-
-    const { data: anyMember } = await admin
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userId)
-      .not('accepted_at', 'is', null)
-      // Oldest first: the same tie-break as every other membership resolver (0355).
-      .order('created_at', { ascending: true })
-      .order('organization_id', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const row = anyMember as { organization_id: string; role: string } | null;
-    return {
-      organizationId: row?.organization_id ?? null,
-      role: row?.role ?? null,
-    };
-  } catch {
-    return { organizationId: null, role: null };
-  }
 }
 
 /**
@@ -696,6 +589,11 @@ export async function changePasswordAction(
     }
   }
 
+  // The account's sessions, listed BEFORE the password changes, so the ones
+  // the change ends can be named to their devices below: once ended they
+  // cannot be listed. Never throws; unreadable is null and nothing is named.
+  const listedSessions = await listMySessionIds(supabase);
+
   const { error: updateError } = await supabase.auth.updateUser({
     password: parsed.data.newPassword,
   });
@@ -721,16 +619,19 @@ export async function changePasswordAction(
   // listener for this window — the same one signOutAction and
   // completePasswordResetAction drive — it just was never told from here.
   //
-  // keepId spares the tab that made the change. A `keepId: null` payload means
-  // "evict EVERY session" (signOutAction's semantics), so when the current
-  // session id can't be derived we SKIP the broadcast rather than send a null
-  // we don't mean and bounce the user to /signin mid-flow. The id is the
-  // access token's `session_id` claim once its signature checks out
-  // (lib/auth/verified-claims), not getSession()'s token decoded unchecked.
+  // The broadcast names the sessions that ended (the listed ones other than
+  // this tab's), never the one that stays: the channel is public, and a live
+  // session id must not go out on it (S5, services/sessions.ts). A
+  // `keepId: null` payload means "evict EVERY session" (signOutAction's
+  // semantics), so when the current session id can't be derived we SKIP the
+  // broadcast rather than send a null we don't mean and bounce the user to
+  // /signin mid-flow. The id is the access token's `session_id` claim once
+  // its signature checks out (lib/auth/verified-claims), not getSession()'s
+  // token decoded unchecked.
   try {
-    const keepId = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
-    if (keepId) {
-      await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId });
+    const current = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
+    if (current) {
+      await broadcastEndedSessions(user.id, listedSessions, current);
     } else {
       console.warn(
         '[changePasswordAction] could not derive current session id — skipped revocation broadcast',

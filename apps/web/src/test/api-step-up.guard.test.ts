@@ -295,13 +295,23 @@ const AAL1_AUTH: Record<string, Listed> = {
 
 /**
  * Routes whose withApiContext call passes allowStepUpPending: they must answer
- * before the code. Reviewed 2026-11-01. S5a's POST /api/v1/auth/signed-in and
- * signed-out join when they land (plans/S5.md).
+ * before the code. Reviewed 2026-11-01; S5a's two phone notes joined 2026-11-02
+ * (plans/S5.md). app/api/v1/auth/step-up-pending.test.ts serves each at aal1
+ * through the real withApiContext; rules 1 and 3 here keep every other route
+ * refusing.
  */
 const AAL1_ROUTES: Record<string, { reason: string }> = {
   'api/client-error/route.ts': {
     reason:
       'The client crash beacon. app/error.tsx and app/global-error.tsx post to it from /signin/mfa too, so a crash on the code screen still reaches the error feed. It reads nothing of the organization: it forwards the report, keyed by the verified user and limited per user.',
+  },
+  'api/v1/auth/signed-in/route.ts': {
+    reason:
+      "The phone's sign-in note, sent right after the password and before the authenticator code, so a sign-in with a stolen password still writes its Audit log row and sends the new-device email. It accepts only a verified bearer token of the account itself, asks for no permission, and writes one row per session and the account's device note.",
+  },
+  'api/v1/auth/signed-out/route.ts': {
+    reason:
+      "The phone's sign-out note, sent while the session still exists, which can be aal1 for an account with an authenticator: it revokes the account's other sessions, which the Auth server's own logout and revoke_my_other_sessions already allow before the code, names them on the sessions channel, and writes one row per session. Bearer only, of the account itself.",
   },
 };
 

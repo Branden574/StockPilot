@@ -237,6 +237,7 @@ import {
   derivePickingStatus,
   HOLD_AVAILABLE_STOCK_LABEL,
   isDeliveryDriverDeleted,
+  isUuid,
   orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
@@ -543,9 +544,10 @@ export default function OrderDetail() {
   const attachmentsError = recalled ? recalled.view.attachmentsError : loadedAttachmentsError;
   const shipment = recalled ? recalled.view.shipment : loadedShipment;
   // Why the order is not shown. Offline with nothing to show, it says so
-  // (never "Order not found." and never a stale read error).
+  // (never "Order not found." and never a stale read error). A link id that
+  // is not a uuid is "Order not found." offline too: no connection opens it.
   const loadError =
-    offline && order === null ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
+    offline && order === null && isUuid(id) ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
@@ -1403,6 +1405,16 @@ export default function OrderDetail() {
 
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no order.
+    // It is "Order not found." at once, online or offline: Postgres refuses
+    // it, so the read could only fail, and its raw text with Try again was
+    // all the screen could say.
+    if (!isUuid(id)) {
+      setOrder(null);
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     if (offline) {
       // OFFLINE: nothing is asked. Every read would fail, and a failed header
       // read would replace the order on screen with an error. The view is

@@ -119,7 +119,13 @@ describe('the small fixes slice 8 release', () => {
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: nothing seen): an old phone build lists at most three unseen releases, and the authenticator code, integration retries, lists-delivery-sites-and-fixes and export fixes releases, all published later, reach the owner first; once the two newest are seen, this one is in the list again.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, newerSeen).map((a) => a.id)).toContain(ID);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: newerSeen alone): the update-ready-and-fixes release, which folds in the B44 phone update draft, is published later too, directly below the lists-delivery-sites-and-fixes release, and reaches every member, so with only the two newest seen the owner's list of three is the lists-delivery-sites-and-fixes, update-ready-and-fixes and export fixes releases; once the lists-delivery-sites-and-fixes release is seen too, this one is in the list again.
+    expect(
+      legacyAnnouncementsFor(RELEASES, everyone, {
+        ...newerSeen,
+        'lists-delivery-sites-and-fixes-2026-11': true,
+      }).map((a) => a.id),
+    ).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
     expect(registryFingerprint(RELEASES)).not.toBe(
@@ -156,9 +162,8 @@ describe('the small fixes slice 8 release', () => {
     // A real time: never the draft's placeholder date (2026-10-31T17:00Z).
     expect(release().publishedAt).not.toBe('2026-10-31T17:00:00Z');
     expect(release().revision).toBe(1);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
-      'mobile-app-asks-before-restarting',
-    ]);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ['mobile-app-asks-before-restarting']): the B44 phone update draft is folded into the update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, so no draft is left.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
   });
 
   it('has a line for each user-visible change, in this order', () => {
@@ -280,7 +285,8 @@ describe('the small fixes slice 8 release', () => {
   // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the first notice for every member, and an old phone build ...", ID first for the owner with every permission and for a member with no permission, with nothing read or seen): the export fixes release is published later, at the top, and reaches whoever holds the items:export permission, so that owner is told it first and this one once it is read or seen. A member with no permission is not told it. Claim kept: it is the first notice for every member the export fixes release does not reach, and an old phone build shows its title and summary with the same buttons.
   // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "is the first notice for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary, with Open purchase orders for whoever can open the list", with nothing read or seen before the export fixes release): the lists-delivery-sites-and-fixes release is published later, at the top of the published releases, and reaches every member, so every reader here reads or sees it first. Claim kept: once it is read or seen, this one is the first notice for every member the export fixes release does not reach and the next for whoever it reaches, and an old phone build shows its title and summary with the same buttons.
   // Renamed by docs/whats-new-s43a-2026-11 (2026-11-02; was: "is the first notice, once the lists-delivery-sites-and-fixes release is read, for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary once that release is seen, with Open purchase orders for whoever can open the list", with that release alone read or seen before the export fixes release): the authenticator code release (every member) and the integration retries release (the owner here) are published later, above it, so every reader here reads or sees them with it. Claim kept: once the newer releases that reach a reader are read or seen, this one is the first notice for every member the export fixes release does not reach and the next for whoever it reaches, and an old phone build shows its title and summary with the same buttons.
-  it('is the first notice, once the lists-delivery-sites-and-fixes release and the newer releases are read, for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary once those are seen, with Open purchase orders for whoever can open the list', () => {
+  // Renamed by docs/whats-new-2026-11-02 (2026-11-02; was: "is the first notice, once the lists-delivery-sites-and-fixes release and the newer releases are read, ...", with those releases read or seen): the update-ready-and-fixes release, which folds in the B44 phone update draft, is published later, directly below the lists-delivery-sites-and-fixes release, and reaches every member, so every reader here is told it once the newer releases are read and this one, or the export fixes release, once it is read too. Claim kept: the same notices, buttons and old phone build lists after it.
+  it('is the first notice, once the update-ready-and-fixes release and the newer releases are read, for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary once those are seen, with Open purchase orders for whoever can open the list', () => {
     const exportRead = {
       release_id: 'export-fixes-2026-10',
       revision: 1,
@@ -296,21 +302,52 @@ describe('the small fixes slice 8 release', () => {
       read_at: '2026-11-02T06:10:00Z',
     };
     const listsSeen = { ...newerSeen, 'lists-delivery-sites-and-fixes-2026-11': true };
+    // Added by docs/whats-new-2026-11-02 (2026-11-02): the update-ready-and-fixes release, read or seen with the
+    // newer releases.
+    const updateReadyRead = {
+      ...listsRead,
+      release_id: 'update-ready-and-fixes-2026-11',
+      opened_at: '2026-11-02T17:40:00Z',
+      read_at: '2026-11-02T17:40:00Z',
+    };
+    const updateReadySeen = { ...listsSeen, 'update-ready-and-fixes-2026-11': true };
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the export fixes release for the owner and ID for the
+    // member once the newer releases are read, ID for the owner once the export fixes release was read too, and the
+    // seen sets below without the update-ready-and-fixes release): the update-ready-and-fixes release comes first for
+    // every reader here until it is read or seen too, then each is told what they were told before.
     expect(
       buildReleaseList(RELEASES, everyone, [...newerReads, listsRead], null).latestUnread?.id,
+    ).toBe('update-ready-and-fixes-2026-11');
+    expect(
+      buildReleaseList(RELEASES, everyone, [...newerReads, listsRead, updateReadyRead], null)
+        .latestUnread?.id,
     ).toBe('export-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, everyone, [...newerReads, listsRead, exportRead], null)
-        .latestUnread?.id,
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [...newerReads, listsRead, updateReadyRead, exportRead],
+        null,
+      ).latestUnread?.id,
     ).toBe(ID);
     expect(
       buildReleaseList(RELEASES, member, [...newerReads, listsRead], null).latestUnread?.id,
+    ).toBe('update-ready-and-fixes-2026-11');
+    expect(
+      buildReleaseList(RELEASES, member, [...newerReads, listsRead, updateReadyRead], null)
+        .latestUnread?.id,
     ).toBe(ID);
     expect(legacyAnnouncementsFor(RELEASES, everyone, listsSeen)[0]?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(legacyAnnouncementsFor(RELEASES, everyone, updateReadySeen)[0]?.id).toBe(
       'export-fixes-2026-10',
     );
     expect(
-      legacyAnnouncementsFor(RELEASES, everyone, { ...listsSeen, 'export-fixes-2026-10': true })[0],
+      legacyAnnouncementsFor(RELEASES, everyone, {
+        ...updateReadySeen,
+        'export-fixes-2026-10': true,
+      })[0],
     ).toEqual({
       id: ID,
       date: '2026-10-31',
@@ -324,12 +361,23 @@ describe('the small fixes slice 8 release', () => {
       permissions: ['schedule:read'],
       enabledModules: ['schedule'],
     };
-    expect(legacyAnnouncementsFor(RELEASES, scheduler, listsSeen)[0]?.id).toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, scheduler, listsSeen)[0]?.cta).toEqual({
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ID first with listsSeen): the update-ready-and-fixes
+    // release has no link, so it is first with no button until it is seen too.
+    expect(legacyAnnouncementsFor(RELEASES, scheduler, listsSeen)[0]?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(legacyAnnouncementsFor(RELEASES, scheduler, listsSeen)[0]?.cta).toBeUndefined();
+    expect(legacyAnnouncementsFor(RELEASES, scheduler, updateReadySeen)[0]?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, scheduler, updateReadySeen)[0]?.cta).toEqual({
       href: '/dashboard/schedule',
       label: 'Open the team calendar',
     });
-    expect(legacyAnnouncementsFor(RELEASES, member, listsSeen)[0]).toEqual({
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ID first with listsSeen): the same, for a member with
+    // no permission.
+    expect(legacyAnnouncementsFor(RELEASES, member, listsSeen)[0]?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(legacyAnnouncementsFor(RELEASES, member, updateReadySeen)[0]).toEqual({
       id: ID,
       date: '2026-10-31',
       title: release().title,
