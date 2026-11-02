@@ -44,7 +44,10 @@ const EAST_DC = '55555555-5555-4555-8555-555555555555';
 const NORTH = '22222222-2222-4222-8222-222222222222';
 const SOUTH = '33333333-3333-4333-8333-333333333333';
 
-function renderForm(pairs: Array<{ warehouse_id: string; charter_id: string }>) {
+function renderForm(
+  pairs: Array<{ warehouse_id: string; charter_id: string }>,
+  opts: { capped?: boolean } = {},
+) {
   render(
     <ItemForm
       defaults={{
@@ -63,6 +66,7 @@ function renderForm(pairs: Array<{ warehouse_id: string; charter_id: string }>) 
         { id: EAST_DC, name: 'East DC' },
       ]}
       warehouseCharters={pairs}
+      {...(opts.capped === undefined ? {} : { warehouseChartersCapped: opts.capped })}
       charters={[
         { id: NORTH, name: 'North Campus' },
         { id: SOUTH, name: 'South Campus' },
@@ -155,6 +159,51 @@ describe('ItemForm: the charter', () => {
     await user.click(await screen.findByRole('option', { name: 'East DC' }));
 
     expect(charterBox()).not.toHaveTextContent('North Campus');
+    expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: null });
+  });
+});
+
+/**
+ * B47 decisions round (2026-11-01): the page's warehouse charter list stops at
+ * the lookup ceiling (listPairs reads at most LOOKUP_ROW_CEILING links). At
+ * that many, a pair missing from the list may still exist, so the form must
+ * not change the record's charter from part of the list: it keeps the charter
+ * on a warehouse change, makes no "not linked" claim, and the server checks
+ * the pair on save (refusing one the warehouse does not service).
+ */
+describe('ItemForm: the charter when the warehouse charter list is cut at the ceiling', () => {
+  it("keeps the record's charter when the warehouse changes and sends it for the server to check", async () => {
+    // The cut list shows East DC with South only; it may serve North too.
+    renderForm(
+      [
+        { warehouse_id: MAIN_DC, charter_id: NORTH },
+        { warehouse_id: EAST_DC, charter_id: SOUTH },
+      ],
+      { capped: true },
+    );
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('combobox', { name: /warehouse/i }));
+    await user.click(await screen.findByRole('option', { name: 'East DC' }));
+
+    expect(charterBox()).toHaveTextContent('North Campus');
+    expect(charterBox()).not.toHaveTextContent(/not linked/i);
+    expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: NORTH });
+  });
+
+  it('a list under the ceiling still clears it, as before', async () => {
+    renderForm(
+      [
+        { warehouse_id: MAIN_DC, charter_id: NORTH },
+        { warehouse_id: EAST_DC, charter_id: SOUTH },
+      ],
+      { capped: false },
+    );
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('combobox', { name: /warehouse/i }));
+    await user.click(await screen.findByRole('option', { name: 'East DC' }));
+
     expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: null });
   });
 });
