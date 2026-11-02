@@ -1048,23 +1048,51 @@ describe('orders/[id]: the Collect signature link (migration 0389)', () => {
     await renderPage();
     expect(panelProps()?.viewerMayHandOver).toBe(true);
 
+    // Security slice E (0416): in transit the panel holds no read, so a staff
+    // approver from another warehouse is shown no panel at all (no line, no
+    // Collect signature), and a failed access read is no access. Each render
+    // below starts with no recorded panel, so a panel left from the render
+    // before cannot answer for it.
     ctxHolder.current = { role: 'staff', permissions: new Set(['orders:read', 'orders:approve']) };
-    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-other'] });
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-other'],
+      writableIds: ['wh-other'],
+    });
     inTransit();
+    managerActionsProps.mockClear();
+    await renderPage();
+    expect(panelProps()).toBeUndefined();
+
+    // Where the panel shows for its reads (staged for pickup), the same
+    // approver is told they may not hand the order over: the link's rule,
+    // never orders:approve alone.
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ status: 'staged_for_pickup', signature_token: DIGEST }),
+      }),
+    );
+    managerActionsProps.mockClear();
     await renderPage();
     expect(panelProps()?.viewerMayHandOver).toBe(false);
     expect(panelProps()?.signatureToken).toBeNull();
 
-    getWarehouseAccessMock.mockResolvedValue({ hasAllAccess: false, writableIds: ['wh-1'] });
+    getWarehouseAccessMock.mockResolvedValue({
+      hasAllAccess: false,
+      readableIds: ['wh-1'],
+      writableIds: ['wh-1'],
+    });
     inTransit();
+    managerActionsProps.mockClear();
     await renderPage();
     expect(panelProps()?.viewerMayHandOver).toBe(true);
     expect(panelProps()?.signatureToken).toBe(RAW);
 
     getWarehouseAccessMock.mockRejectedValue(new Error('assignments unreadable'));
     inTransit();
+    managerActionsProps.mockClear();
     await renderPage();
-    expect(panelProps()?.viewerMayHandOver).toBe(false);
+    expect(panelProps()).toBeUndefined();
   });
 
   it('no link before the order can be signed (packing slip generated): the raw token is not read', async () => {
