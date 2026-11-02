@@ -80,10 +80,15 @@ export const RELEASES: Release[] = [
     //   sent before put it in Unsent work (apps/mobile/src/lib/
     //   drain-failure.ts:57 and :66-67; a queued stock adjustment,
     //   adjust-outbox.ts:155-162);
-    // - queued count lines are sent every 60 s (cycle-count-sync.ts:111-113),
-    //   so a waiting change goes at the next sync after the code;
+    // - queued count lines are tried at a sync every 60 s
+    //   (cycle-count-sync.ts:111-113), but each line first waits out its own
+    //   backoff, which grows with every refused try up to 5 minutes
+    //   (cycle-count-cache.ts:665-675; a line not yet due is skipped,
+    //   cycle-count-sync.ts:304-306), so a waiting change goes at a later
+    //   sync after the code, not always the next one;
     // - the app goes in without the code screen when its check for an
-    //   authenticator fails (apps/mobile/src/lib/auth-context.tsx:121-139);
+    //   authenticator fails (apps/mobile/src/lib/auth-context.tsx:121-139),
+    //   at sign-in and when it opens with a saved session (:221-224);
     // - a stock adjustment answered 401 says "Your session has ended. Sign in
     //   again, then retry." (item-adjust.ts:174-184), and the order screens
     //   say "Your session has expired." (edit-order-line.ts:459,
@@ -98,7 +103,12 @@ export const RELEASES: Release[] = [
     // cookie path (:731-734), by core's stepUpOwed
     // (packages/core/src/auth/step-up.ts); each route answers it as its own
     // 401. Before, such a session got a context, and assertPermission refused
-    // its writes with a 403 (server/services/context.ts:316-341).
+    // its writes with a 403 (server/services/context.ts:316-341, the gate at
+    // :338-340), and the signature hand-over refused it with its own 403
+    // (apps/web/src/app/api/orders/sign/route.ts:261-272, unchanged by #447):
+    // its changes, a signature included, were already refused, and for those
+    // only the wording changed. What is new is the refusal of the phone's
+    // sync, which answered 200 before.
     // Walks and checks:
     // - the pre-merge lab walk (PASS), with synthetic users: with a password
     //   alone, an enrolled account's /api requests answered 401 on the bearer
@@ -128,26 +138,30 @@ export const RELEASES: Release[] = [
     //   nothing changes without an authenticator (walk 4.6, the production
     //   check). The second title says "needs to", for the same reason;
     // - phone-waiting-changes-kept-for-code said "a moment after you enter
-    //   your code": the phone sends them at its next sync (60 s; 53 s in walk
-    //   4.3), so it says the next sync;
+    //   your code": each waiting line goes at a sync once its own backoff
+    //   has passed (at most 5 minutes, cycle-count-cache.ts:665-675; 53 s
+    //   after the code in walk 4.3), so it says a later sync;
     // - phone-without-code-signs-in-again said a phone could also end up
     //   without the code "if you turned the authenticator on after signing
     //   in on the phone": in walk 4.7, turning it on ended the phone's
     //   session and the app went back to sign-in, so that case is gone. Its
-    //   whatChanged named "that phone's requests": S43a covers the web's
-    //   /api routes only (S6 follows), so it names the sync and collecting a
-    //   signature, which the walk saw refused; "ended" is now "ended or
-    //   expired" (the order screens' words). Its whatToDo said "tells you to
-    //   update the app when you collect a signature": updating would not
-    //   help (signing in again with the code does), and no line may point to
-    //   a phone update, so it names the message by its own words, "not
-    //   available on this version of the app".
-    // Left out on purpose: no line says a password alone now reads nothing,
-    // or that an account is safer (S43a covers the web's /api routes only;
-    // S6 follows); the web pages already went to the code page, and a
-    // tab left open gets a 401 only until its next page load; the QuickBooks
-    // and Sage Intacct connect from such a session (the existing forbidden
-    // error); the crash reports; the log line (operators).
+    //   whyItMatters now names opening the app too: a saved session runs the
+    //   same check (auth-context.tsx:221-224). Its whatChanged named "that
+    //   phone's requests": it now says the sync is refused as well, and that
+    //   the phone's changes, such as collecting a signature, already were
+    //   (a 403 before #447: context.ts:338-340, sign/route.ts:261-272), so
+    //   only their wording changed; "ended" is now "ended or expired" (the
+    //   order screens' words). Its whatToDo said "tells you to update the app
+    //   when you collect a signature": updating would not help (signing in
+    //   again with the code does), and no line may point to a phone update,
+    //   so it quotes the alert's first sentence as the app shows it. It now
+    //   starts "If you use an authenticator app", since every member is told
+    //   it.
+    // Left out on purpose: no line may claim more than the entries describe
+    // (see #447's What's New note); the web pages already went to the code
+    // page, and a tab left open gets a 401 only until its next page load; the
+    // QuickBooks and Sage Intacct connect from such a session (the existing
+    // forbidden error); the crash reports; the log line (operators).
     // Who is told: every member (no entry has a link or an audience), so the
     // summary starts "If you use an authenticator app" and its last sentence
     // speaks to everyone else.
@@ -159,13 +173,14 @@ export const RELEASES: Release[] = [
     entries: [
       {
         // drain-failure.ts:66 (a 401 is tried again), adjust-outbox.ts:162,
-        // cycle-count-sync.ts:111-113 (the 60 s drain); walk 4.3.
+        // cycle-count-sync.ts:111-113 (the 60 s drain) and :304-306 with
+        // cycle-count-cache.ts:665-675 (each line's backoff); walk 4.3.
         id: 'phone-waiting-changes-kept-for-code',
         category: 'fixed',
         area: 'Mobile app',
         title: 'Changes waiting on the phone are sent after your authenticator code',
         whatChanged:
-          'If you use an authenticator app and sign back in on your phone while changes are still waiting to be sent, such as count lines or stock adjustments, the phone now keeps them while the code screen shows. It sends them at its next sync after you enter your 6-digit code.',
+          'If you use an authenticator app and sign back in on your phone while changes are still waiting to be sent, such as count lines or stock adjustments, the phone now keeps them while the code screen shows. It sends them at a later sync after you enter your 6-digit code.',
         whyItMatters:
           'Before, those changes were refused while the code screen showed, and the phone stopped sending them. They stayed in Unsent work instead of being saved.',
         howItAffectsYou:
@@ -173,21 +188,23 @@ export const RELEASES: Release[] = [
         whatToDo: 'No action needed.',
       },
       {
-        // api-context.ts:583-587 and :731-734; auth-context.tsx:121-139 (the
-        // failed check); item-adjust.ts:181, edit-order-line.ts:459 and
-        // api-error-body.ts:58 (the words); walk 4.7 and 4.1 to 4.4.
+        // api-context.ts:583-587 and :731-734; context.ts:338-340 and
+        // sign/route.ts:261-272 (the 403 before); auth-context.tsx:121-139
+        // and :221-224 (the failed check); item-adjust.ts:181,
+        // edit-order-line.ts:459 and api-error-body.ts:58 (the words); walk
+        // 4.7 and 4.1 to 4.4.
         id: 'phone-without-code-signs-in-again',
         category: 'improved',
         area: 'Mobile app',
         title: 'A phone signed in without your authenticator code needs to sign in again',
         whatChanged:
-          "If you use an authenticator app and your phone is signed in without your 6-digit code, StockPilot now refuses that phone's sync and actions such as collecting a signature until you sign in again with the code. Some screens stop loading and may say your session has ended or expired.",
+          "If you use an authenticator app and your phone is signed in without your 6-digit code, StockPilot now also refuses that phone's sync until you sign in again with the code, as it already refused its changes, such as collecting a signature. Some screens stop loading, and some messages now say your session has ended or expired.",
         whyItMatters:
-          'A phone could end up signed in without the code if it could not check for your authenticator when you signed in. The web already asked for the code in that case.',
+          'A phone could end up signed in without the code if it could not check for your authenticator when you signed in or opened the app. The web already asked for the code in that case.',
         howItAffectsYou:
           'Phones that signed in with your code work as before, and nothing changes for anyone who does not use an authenticator app.',
         whatToDo:
-          'If the app says your session has ended or expired, says a signature is not available on this version of the app, or a screen will not load, sign out, then sign back in and enter your code.',
+          'If you use an authenticator app and the app says your session has ended or expired, says “That is not available on this version of the app” when you save a signature, or a screen will not load, sign out, then sign back in and enter your code.',
       },
     ],
   },
@@ -224,7 +241,13 @@ export const RELEASES: Release[] = [
     //   :399-412, lib/ssrf-guard.ts:122); the endpoint read and the delivery
     //   insert are tried up to three times, a refusal a retry cannot change
     //   once (integration-events.ts:133, :505-537, :540-619); Slack and Teams
-    //   are endpoint types (:84).
+    //   are endpoint types (:84). Before #454 a host's HTTP error or timeout
+    //   was already tried again with backoff; only a refused address, and a
+    //   failed lookup with it, was final (integration-events.ts at
+    //   472fca631^1, :380-385). A delivery is tried up to 6 times
+    //   (MAX_ATTEMPTS, :86), with backoff of 1, 2, 4, 8 and 16 minutes
+    //   (:134-137), at the drain every 10 minutes, so the last try can come
+    //   about an hour after the event.
     // The production check (drain-outbox ticks, the new report tags, Demo Co
     // Integrations read-only) was running when this was written; the
     // integrator merges this only after it passes. A provider or DNS failure
@@ -236,7 +259,13 @@ export const RELEASES: Release[] = [
     // - "QuickBooks recognizes a repeat, so its exports always try again" now
     //   says "in these cases": QuickBooks still stops an export it answered
     //   with a refusal (quickbooks/index.ts:50), which the entry's last
-    //   sentence says.
+    //   sentence says;
+    // - the summary said an alert "that met a brief failure is retried
+    //   instead of dropped": an HTTP error or a timeout was already retried
+    //   (see webhooks above), so it says the brief failure "used to drop it";
+    // - integration-alerts-retry-brief-failure's howItAffectsYou said "some
+    //   minutes late": a failed lookup's last try can come about an hour
+    //   later (see webhooks above), so it says late, at a later sync.
     // Who is told: whoever manages integrations where the Integrations module
     // is on. The page shows QuickBooks, Sage Intacct, Failed exports and
     // Webhooks & alerts only with both (app/(dashboard)/dashboard/settings/
@@ -244,7 +273,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'Exports and alerts try again after a network failure',
     summary:
-      'A QuickBooks or Sage Intacct export that could not reach the service now tries again on its own instead of stopping, and a webhook, Slack or Teams alert that met a brief failure is retried instead of dropped.',
+      'A QuickBooks or Sage Intacct export that could not reach the service now tries again on its own instead of stopping, and a webhook, Slack or Teams alert is now retried after a brief failure that used to drop it.',
     publishedAt: '2026-11-02T15:42:00Z',
     audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
     entries: [
@@ -274,7 +303,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Before, a webhook alert whose address failed to look up once was given up for good, and an event that met a brief failure while it was being queued was never sent to any of your channels.',
         howItAffectsYou:
-          'A retried alert can arrive some minutes late. A webhook whose address is refused, such as one on a private network, is still not sent, as before.',
+          'A retried alert can arrive late, at a later sync. A webhook whose address is refused, such as one on a private network, is still not sent, as before.',
         whatToDo: 'No action needed.',
         link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
         audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },

@@ -209,8 +209,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(text).not.toMatch(
       /App Store|TestFlight|update the (mobile )?app|after the latest update|update your app/i,
     );
-    // The Data API still answers a session without the code until S6, so no
-    // line may say a password alone is harmless or that data is protected.
+    // No line may claim more than the entries describe (see #447's What's
+    // New note).
     expect(text).not.toMatch(
       /\bsafe|\bsecur|protect|harmless|stolen|password alone|cannot read|can no longer read/i,
     );
@@ -242,8 +242,19 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(phone('src/lib/adjust-outbox.ts')).toContain(
       "if (status === 401 || status === 429 || status === 404) return 'failed';",
     );
-    // Queued count lines go every 60 s.
-    expect(phone('src/lib/cycle-count-sync.ts')).toContain('}, 60_000);');
+    // Queued count lines are tried at a sync every 60 s, each once its own
+    // backoff (at most 5 minutes) has passed, so a line goes at a later sync,
+    // not always the next one.
+    const countSync = phone('src/lib/cycle-count-sync.ts');
+    expect(countSync).toContain('}, 60_000);');
+    expect(countSync).toContain('if (!row.due) continue;');
+    expect(phone('src/lib/cycle-count-cache.ts')).toContain(
+      'const delay = Math.min(2 ** attempts * 1000, 5 * 60 * 1000);',
+    );
+    expect(release().entries[0]!.whatChanged).toContain(
+      'It sends them at a later sync after you enter your 6-digit code.',
+    );
+    expect(readerText(release()).join(' ')).not.toMatch(/next sync|a moment after/);
     expect(phone('app/(drawer)/settings.tsx')).toContain('title="Unsent work"');
   });
 
@@ -261,14 +272,34 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(phone('src/lib/api-error-body.ts')).toContain(
       "'That is not available on this version of the app. Update the app and try again.'",
     );
+    // The alert's first sentence, as the app shows it.
+    expect(text).toContain('“That is not available on this version of the app”');
     // The signature hand-over answers every refusal with its one 404.
-    expect(source('app/api/orders/sign/route.ts')).toContain(
-      'return NextResponse.json(NOT_FOUND_BODY, { status: 404 });',
+    const sign = source('app/api/orders/sign/route.ts');
+    expect(sign).toContain('return NextResponse.json(NOT_FOUND_BODY, { status: 404 });');
+    // Before #447 the phone's changes, a signature included, were already
+    // refused (a 403): the hand-over's own gate and assertPermission's. So the
+    // entry says the sync is refused as well, and the changes already were.
+    expect(sign).toContain('if (ctx.mfaRequired && !ctx.mfaSatisfied) {');
+    expect(source('server/services/context.ts')).toContain(
+      'if (ctx.mfaRequired && !ctx.mfaSatisfied) {\n    throw mfaGateError(ctx);',
     );
-    // A failed check for an authenticator lets the app in without the code.
+    const signsInAgain = release().entries[1]!;
+    expect(signsInAgain.whatChanged).toContain(
+      "now also refuses that phone's sync until you sign in again with the code, as it already refused its changes, such as collecting a signature.",
+    );
+    // A failed check for an authenticator lets the app in without the code,
+    // at sign-in and when the app opens with a saved session.
     const auth = phone('src/lib/auth-context.tsx');
     expect(auth).toContain("console.warn('[auth] MFA level check failed', e);");
-    expect(text).toContain('could not check for your authenticator when you signed in');
+    expect(auth).toContain(
+      '// A restored session may still owe an AAL2 challenge if it was\n          // only ever AAL1 on disk. Check before exposing the app.\n          // (checkMfa is already internally try/caught.)\n          await checkMfa();',
+    );
+    expect(text).toContain(
+      'could not check for your authenticator when you signed in or opened the app',
+    );
+    // Every member is told it, so the steps start with who they are for.
+    expect(signsInAgain.whatToDo).toMatch(/^If you use an authenticator app and /);
   });
 });
 
@@ -401,8 +432,23 @@ describe('the integration retries release (B49, B81 and B82)', () => {
       'return err instanceof SsrfBlockedError && !(err instanceof SsrfLookupFailedError);',
     );
     // Three tries to read the endpoints and queue the deliveries.
-    expect(source('server/services/integration-events.ts')).toContain(
-      'export const DISPATCH_RETRY_DELAYS_MS = [1_000, 3_000];',
+    const events = source('server/services/integration-events.ts');
+    expect(events).toContain('export const DISPATCH_RETRY_DELAYS_MS = [1_000, 3_000];');
+    // A host's HTTP error or timeout was already retried before #454, so the
+    // summary names only the brief failure that used to drop an alert. A
+    // delivery is tried up to 6 times with backoff, at the drain every 10
+    // minutes, so a retried alert is said to arrive late, at a later sync.
+    expect(release().summary).toContain(
+      'a webhook, Slack or Teams alert is now retried after a brief failure that used to drop it.',
+    );
+    expect(text).not.toMatch(/some minutes|retried instead of dropped/);
+    expect(text).toContain('A retried alert can arrive late, at a later sync.');
+    expect(events).toContain('const MAX_ATTEMPTS = 6;');
+    expect(events).toContain(
+      'return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempt - 1));',
+    );
+    expect(repoFile('apps/web/vercel.json')).toContain(
+      '"path": "/api/cron/drain-outbox",\n      "schedule": "*/10 * * * *"',
     );
     // The screen's own words: Failed exports, Replay, and the Error and Dead
     // badges (the status, capitalised).

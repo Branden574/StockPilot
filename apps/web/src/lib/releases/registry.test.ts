@@ -8465,23 +8465,11 @@ describe('a partly approved order says what is reserved (small fixes slice 2) is
         ?.id,
     ).toBe('export-fixes-2026-10');
     expect(buildReleaseList(RELEASES, everyone, newerRead, null).latestUnread?.id).toBe(ID);
-    const requester: ReleaseViewer = {
-      role: 'viewer',
-      permissions: ['orders:request'],
-      enabledModules: ['orders'],
-    };
-    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain(
-      'public-link-sent-request-2026-10',
-    );
-    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain(
-      'returns-exchange-2026-10',
-    );
-    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain(
-      'returns-close-rest-2026-10',
-    );
-    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain(
-      'returns-history-hand-over-2026-10',
-    );
+    const requester: ReleaseViewer = { role: 'viewer', permissions: ['orders:request'], enabledModules: ['orders'] };
+    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('public-link-sent-request-2026-10');
+    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('returns-exchange-2026-10');
+    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('returns-close-rest-2026-10');
+    expect(visibleReleases(RELEASES, requester).map((r) => r.id)).not.toContain('returns-history-hand-over-2026-10');
     // Re-pinned by the What's New publish of ungroup-2026-10 and
     // group-selected-2026-10 (2026-10-12; was: RX-3's release first for a
     // requester): Group selected's release reaches every member (its list
@@ -9331,24 +9319,15 @@ describe('exchanges on returns (returns RX-2) is published', () => {
       buildReleaseList(RELEASES, everyone, [...authRetriesRead(), listsRead()], null).latestUnread
         ?.id,
     ).toBe('export-fixes-2026-10');
-    expect(buildReleaseList(RELEASES, everyone, handOverRead, null).latestUnread?.id).toBe(
-      'returns-close-rest-2026-10',
+    expect(buildReleaseList(RELEASES, everyone, handOverRead, null).latestUnread?.id).toBe('returns-close-rest-2026-10');
+    expect(buildReleaseList(RELEASES, everyone, [...handOverRead, ...rx4Read], null).latestUnread?.id).toBe(
+      'returns-requester-exchange-2026-10',
     );
-    expect(
-      buildReleaseList(RELEASES, everyone, [...handOverRead, ...rx4Read], null).latestUnread?.id,
-    ).toBe('returns-requester-exchange-2026-10');
-    expect(
-      buildReleaseList(RELEASES, everyone, [...handOverRead, ...rx4Read, ...rx3Read], null)
-        .latestUnread?.id,
-    ).toBe(ID);
+    expect(buildReleaseList(RELEASES, everyone, [...handOverRead, ...rx4Read, ...rx3Read], null).latestUnread?.id).toBe(ID);
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: group-selected-2026-10 first for returnsOnly and
     // the approver with nothing read): the three redesign releases reach every member, so both are told
     // redesign-2026-10 first, and Group selected's once those are read. Claim kept: the same order after it.
-    const returnsOnly: ReleaseViewer = {
-      role: 'staff',
-      permissions: ['returns:read'],
-      enabledModules: ['returns'],
-    };
+    const returnsOnly: ReleaseViewer = { role: 'staff', permissions: ['returns:read'], enabledModules: ['returns'] };
     // Re-pinned by docs/whats-new-2026-10-25 (2026-10-25; was: redesign-2026-10 with nothing read): the unsubscribe-rack-question-fixes release, published at the top, reaches every member, so this reader is told it first and redesign-2026-10 once it is read; the reads and seen sets below include it.
     // Re-pinned by docs/whats-new-2026-10-26 (2026-10-26; was: unsubscribe-rack-question-fixes-2026-10 with nothing read): the ended-session-group-page-fixes release, published at the top, reaches every member, so this reader is told it first and the unsubscribe-rack-question-fixes release once it is read. Claim kept: the same order after them.
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: ended-session-group-page-fixes-2026-10 with nothing read): the manage-order-items-and-app-fixes release, published at the top, reaches every member, so this reader is told it first and the ended-session-group-page-fixes release once it is read. Claim kept: the same order after them.
@@ -13087,9 +13066,7 @@ describe('the Ungroup follow-ups release (#358 to #361)', () => {
     expect(RELEASES[14]?.id).toBe(ID);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse('2026-10-12T17:43:00Z'));
-    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(
-      Date.parse('2026-10-14T00:00:00Z'),
-    );
+    expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.parse('2026-10-14T00:00:00Z'));
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
     for (const r of RELEASES.slice(15)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
