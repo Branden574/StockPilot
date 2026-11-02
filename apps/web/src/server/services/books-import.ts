@@ -8,9 +8,9 @@ import {
 import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
 import { reportError } from '@/lib/error-reporter';
+import { asReportableError } from '@/lib/error-text';
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
-import { asError } from '@/server/lib/api-error-response';
 
 import { PLANS, bookCoverPath, isbnSearchKeys, isUnlimited, type PlanId } from '@stockpilot/core';
 
@@ -432,7 +432,7 @@ export class BooksImportService {
       Array.from({ length: Math.min(concurrency, lookupTargets.length) }, worker),
     );
     if (lookupFailures > 0) {
-      void reportError(asError(firstLookupFailure), {
+      void reportError(asReportableError(firstLookupFailure), {
         tag: 'books_import.lookup',
         organizationId: this.ctx.organizationId,
         level: 'warning',

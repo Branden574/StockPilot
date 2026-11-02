@@ -78,7 +78,11 @@ describe('actionErrorResult', () => {
       error: { code: 'internal_error', message: UNEXPECTED_ERROR_MESSAGE },
     });
     const reported = reportMock.mock.calls.map(([error]) => (error as Error).message);
-    expect(reported).toEqual(['column "x" does not exist', 'permission denied for table tags']);
+    // C21's rule for a value that is not an Error: its message and code.
+    expect(reported).toEqual([
+      'column "x" does not exist',
+      'permission denied for table tags (code 42501)',
+    ]);
   });
 
   it('uses the sentence the caller chose', () => {

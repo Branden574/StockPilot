@@ -170,8 +170,8 @@ describe('internalErrorResponse', () => {
 
   // A supabase-js read returns its `error` as the parsed JSON object, not an
   // Error, and a helper that rethrows it as it is (recurring-pos.ts advErr)
-  // throws that object: its message is what the report needs, not
-  // "[object Object]".
+  // throws that object: its message and code are what the report needs, not
+  // "[object Object]" (the reporter's rule, lib/error-text.ts, docket C21).
   it.each([
     [
       'a thrown string',
@@ -181,9 +181,12 @@ describe('internalErrorResponse', () => {
     [
       'a thrown PostgREST error object',
       { message: 'new row violates row-level security policy for table "x"', code: '42501' },
-      'new row violates row-level security policy for table "x"',
+      'new row violates row-level security policy for table "x" (code 42501)',
     ],
     ['a thrown null', null, 'null'],
+    // String() of an object with no prototype throws: the answer used to
+    // throw with it, so the route answered nothing it chose.
+    ['a thrown object with no prototype', Object.create(null), 'Non-Error object with no message'],
   ])(
     '%s gets the same answer, and is reported as an Error with its text',
     async (_label, thrown, reportedText) => {

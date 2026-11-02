@@ -1594,9 +1594,9 @@ WEB_TESTS=(
   # { expire: 0 } (never 'max' or the global tag). No requester surface offers
   # a hidden item: the storefront loader filters and overlays recent hides, the
   # public link page overlays every render, the legacy public thumbnails answer
-  # an empty map, Frequently ordered filters and the picker thumbnails' set is
-  # refused outright (both thumbnail suites are listed once, with the catalog
-  # photo maps' rate limits above); Add items is one atomic database call, and
+  # an empty map, and the picker thumbnails' set is refused outright (both
+  # thumbnail suites are listed once, with the catalog photo maps' rate limits
+  # above); Add items is one atomic database call, and
   # a raise, the portal and the public form refuse a hidden item; PO-import
   # charter siblings and restore points keep a hidden choice.
   src/server/services/order-catalog-visibility.test.ts
@@ -1607,7 +1607,6 @@ WEB_TESTS=(
   src/server/services/portal.pricing-mode.test.ts
   src/app/api/v1/public/order-requests/route.order-visibility.test.ts
   src/server/services/public-catalog.order-visibility.test.ts
-  src/app/api/orders/freq/route.test.ts
   src/server/services/po-imports.charter-decoupling.test.ts
   src/server/services/po-imports-lines.charter-sibling.test.ts
   src/server/services/restore-points.test.ts

@@ -56,9 +56,10 @@ const TENT: CatalogItem = {
 };
 
 function renderForm() {
-  // One tent already in this warehouse's rental cart, so Check out is live.
+  // One tent already in this warehouse's rental cart (the viewer's own key,
+  // B20a), so Check out is live.
   localStorage.setItem(
-    'rental-draft:wh-1',
+    'rental-draft:v2:u-viewer:wh-1',
     JSON.stringify({
       warehouseId: 'wh-1',
       charterId: null,
@@ -77,6 +78,7 @@ function renderForm() {
       aisles={[]}
       members={[{ userId: 'u-jane', displayName: 'Jane Doe', email: 'jane@example.org' }]}
       viewerRole="admin"
+      viewerUserId="u-viewer"
     />,
   );
 }

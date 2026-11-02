@@ -7,7 +7,8 @@ import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
-import { asError, reportContext, UNEXPECTED_ERROR_MESSAGE } from '@/server/lib/api-error-response';
+import { asReportableError } from '@/lib/error-text';
+import { reportContext, UNEXPECTED_ERROR_MESSAGE } from '@/server/lib/api-error-response';
 import { ServiceError } from '@/server/services/context';
 
 /** A feature whose server setting is missing (a local or preview server). Never names the setting. */
@@ -49,7 +50,7 @@ export function unexpectedActionError(
   opts: ActionErrorOptions = {},
 ): ActionResult<never> {
   rethrowControlFlow(e);
-  void reportError(asError(e), reportContext(tag, opts));
+  void reportError(asReportableError(e), reportContext(tag, opts));
   return err('internal_error', opts.message ?? UNEXPECTED_ERROR_MESSAGE);
 }
 
@@ -141,7 +142,7 @@ export class RowFailures {
     if (this.unexpected === 0) return;
     const detail = this.first instanceof ServiceError ? this.first.internalDetail : undefined;
     void reportError(
-      asError(this.first),
+      asReportableError(this.first),
       reportContext(this.tag, {
         organizationId: this.opts.organizationId,
         extra: { failed: this.unexpected, ...(detail ? { detail } : {}) },
