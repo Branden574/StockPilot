@@ -229,6 +229,17 @@ export function ChatPanel() {
   const [hydrating, setHydrating] = React.useState(true);
   const scrollRef = React.useRef<HTMLDivElement | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  // Which chat is on screen (docket B84, the web twin of B75's phone fix). It
+  // counts up whenever the screen is replaced: New chat, and a chat opened
+  // from the rail or restored on page open. An answer, its error and the chat the
+  // route names in `done` are kept only while the chat the message was sent
+  // from is still on screen. The route saves the answer in that chat either
+  // way, so it is there when the chat is opened again.
+  const chatRef = React.useRef(0);
+  // Counts the person's actions that choose what the screen shows (B84):
+  // opening a chat, New chat, sending a message and attaching a file. A chat
+  // that finishes loading after the count moved no longer replaces the screen.
+  const askRef = React.useRef(0);
 
   // Load persisted session list + restore active session on mount.
   //
@@ -243,6 +254,9 @@ export function ChatPanel() {
   React.useEffect(() => {
     let cancelled = false;
     async function bootstrap() {
+      // Recorded before the first read: if the count moves while the list or
+      // the chat loads, the restore gives way (B84).
+      const ask = askRef.current;
       try {
         const res = await fetch('/api/ai/sessions');
         const json = await res.json().catch(() => ({}));
@@ -253,7 +267,7 @@ export function ChatPanel() {
           const stored =
             typeof window !== 'undefined' ? window.localStorage.getItem(ACTIVE_SESSION_KEY) : null;
           const target = stored && list.find((s) => s.id === stored) ? stored : null;
-          if (target) await loadSession(target);
+          if (target) await loadSession(target, ask);
         }
       } finally {
         if (!cancelled) setHydrating(false);
@@ -282,15 +296,22 @@ export function ChatPanel() {
     }
   }
 
-  async function loadSession(id: string) {
+  async function loadSession(id: string, asked?: number) {
+    // A click on a chat in the rail counts as an action here; the restore
+    // passes the count it recorded when the page opened (B84).
+    const ask = asked ?? ++askRef.current;
     try {
       const res = await fetch(`/api/ai/sessions/${id}`);
       const json = await res.json().catch(() => ({}));
+      // Another chat was opened, New chat chosen, or a message or a file sent
+      // while this chat loaded: that stays on screen (B84).
+      if (askRef.current !== ask) return;
       if (!res.ok || !json.ok) {
         // Stored id is stale (expired or deleted elsewhere). Clear it.
         if (typeof window !== 'undefined') {
           window.localStorage.removeItem(ACTIVE_SESSION_KEY);
         }
+        chatRef.current += 1;
         setSessionId(null);
         setTurns([]);
         return;
@@ -301,6 +322,7 @@ export function ChatPanel() {
           content: string;
           toolCalls: Array<{ name: string; ok: boolean }> | null;
         }>) ?? [];
+      chatRef.current += 1;
       setSessionId(id);
       setTurns(
         messages.map((m) => ({
@@ -313,6 +335,8 @@ export function ChatPanel() {
         window.localStorage.setItem(ACTIVE_SESSION_KEY, id);
       }
     } catch (err) {
+      // No toast for a chat the person has moved on from (B84).
+      if (askRef.current !== ask) return;
       toast.error(
         err instanceof Error
           ? err.message
@@ -322,6 +346,7 @@ export function ChatPanel() {
   }
 
   function startNewChat() {
+    chatRef.current += 1;
     setSessionId(null);
     setTurns([]);
     setInput('');
@@ -335,7 +360,17 @@ export function ChatPanel() {
     }
   }
 
+  // The New chat button (B84). It counts askRef here, not in startNewChat:
+  // deleting the open chat also calls startNewChat, and must not cancel a
+  // chat opened after Delete was pressed.
+  function chooseNewChat() {
+    askRef.current += 1;
+    startNewChat();
+  }
+
   async function deleteSession(id: string) {
+    // The chat on screen when Delete was pressed (B84).
+    const chat = chatRef.current;
     try {
       const res = await fetch(`/api/ai/sessions/${id}`, { method: 'DELETE' });
       if (!res.ok) {
@@ -343,7 +378,9 @@ export function ChatPanel() {
         return;
       }
       setSessions((cur) => cur.filter((s) => s.id !== id));
-      if (id === sessionId) startNewChat();
+      // Empty the screen only if that chat is still on it: a chat opened
+      // while the delete ran stays (B84).
+      if (id === sessionId && chatRef.current === chat) startNewChat();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Couldn't delete this chat. Try again in a moment.",
@@ -359,6 +396,10 @@ export function ChatPanel() {
    */
   async function uploadFile(file: File) {
     if (uploading || busy) return;
+    // The chat the file was attached in, and the attach as the latest
+    // action (B84).
+    const chat = chatRef.current;
+    const ask = ++askRef.current;
     setUploading(true);
     try {
       const fd = new FormData();
@@ -382,6 +423,15 @@ export function ChatPanel() {
       const isbns = json.isbns ?? [];
       if (isbns.length === 0) {
         toast.warning(`No ISBNs found in "${file.name}".`);
+        return;
+      }
+      // Another chat was opened, New chat chosen, or the open chat deleted
+      // while the file was read: its ISBNs are not sent into a chat it was
+      // not attached in (B84).
+      if (chatRef.current !== chat || askRef.current !== ask) {
+        toast.warning(
+          `The ISBNs from "${file.name}" were not sent because you changed chats while the file was being read. Attach it again.`,
+        );
         return;
       }
       const synthetic = [
@@ -413,6 +463,12 @@ export function ChatPanel() {
     const trimmed = message.trim();
     if (!trimmed) return;
     if (busy) return;
+    // The chat this message is sent from (B84). Its answer, its error and
+    // its session stay out of any other chat. Sending also counts as the
+    // latest action, so a chat still loading no longer replaces this one.
+    const chat = chatRef.current;
+    const onScreen = () => chatRef.current === chat;
+    askRef.current += 1;
     // Push the user turn AND a placeholder assistant turn — the
     // placeholder is what we mutate as text deltas stream in. The
     // index of the assistant turn in the array stays stable across
@@ -426,6 +482,7 @@ export function ChatPanel() {
     setBusy(true);
 
     const appendAssistantDelta = (delta: string) => {
+      if (!onScreen()) return;
       setTurns((cur) => {
         const last = cur[cur.length - 1];
         if (!last || last.role !== 'assistant') return cur;
@@ -435,6 +492,7 @@ export function ChatPanel() {
     };
 
     const pushAssistantTool = (name: string, ok: boolean) => {
+      if (!onScreen()) return;
       setTurns((cur) => {
         const last = cur[cur.length - 1];
         if (!last || last.role !== 'assistant') return cur;
@@ -447,6 +505,7 @@ export function ChatPanel() {
     };
 
     const replaceAssistantWithError = (msg: string) => {
+      if (!onScreen()) return;
       setTurns((cur) => {
         const last = cur[cur.length - 1];
         if (!last || last.role !== 'assistant') {
@@ -475,6 +534,8 @@ export function ChatPanel() {
         const json = (await res.json().catch(() => ({}))) as { message?: string };
         const friendly =
           json.message ?? 'The AI assistant ran into a problem. Try again in a moment.';
+        // Said even after a chat change (B84): the route refused the message
+        // before saving it, so it is in no chat and has to be sent again.
         toast.error(friendly);
         replaceAssistantWithError(friendly);
         return;
@@ -527,7 +588,7 @@ export function ChatPanel() {
             pushAssistantTool(event.name, Boolean(event.ok));
           } else if (event.type === 'done' && typeof event.sessionId === 'string') {
             const newSessionId = event.sessionId;
-            if (newSessionId !== sessionId) {
+            if (onScreen() && newSessionId !== sessionId) {
               setSessionId(newSessionId);
               if (typeof window !== 'undefined') {
                 window.localStorage.setItem(ACTIVE_SESSION_KEY, newSessionId);
@@ -537,7 +598,9 @@ export function ChatPanel() {
             streamErrored = true;
             const friendly =
               event.message ?? 'The AI assistant ran into a problem. Try again in a moment.';
-            toast.error(friendly);
+            // Only in the chat it was sent from (B84): the question is saved in
+            // its chat, and the route has reported the error.
+            if (onScreen()) toast.error(friendly);
             replaceAssistantWithError(friendly);
           }
         }
@@ -555,12 +618,16 @@ export function ChatPanel() {
         replaceAssistantWithError(fallback);
       }
 
-      if (!streamErrored) void refreshSessions();
+      // A chat that was left is listed even when its answer failed: the
+      // question is saved there (B84).
+      if (!streamErrored || !onScreen()) void refreshSessions();
     } catch (err) {
       const msg =
         err instanceof Error
           ? err.message
           : "Couldn't reach the assistant. Check your network and try again.";
+      // Said even after a chat change (B84): the message may not have
+      // reached the route at all.
       toast.error(msg);
       replaceAssistantWithError(msg);
     } finally {
@@ -573,7 +640,7 @@ export function ChatPanel() {
       type="button"
       size="sm"
       variant="outline"
-      onClick={startNewChat}
+      onClick={chooseNewChat}
       className="justify-start gap-2"
     >
       <Plus className="h-3.5 w-3.5" />
@@ -685,7 +752,7 @@ export function ChatPanel() {
                     key={s}
                     type="button"
                     onClick={() => send(s)}
-                    disabled={busy}
+                    disabled={busy || uploading}
                     className={cn(
                       filterChipClass({ size: 'md' }),
                       'h-auto min-h-[30px] max-w-full whitespace-normal py-1 text-left disabled:opacity-50',
@@ -761,6 +828,7 @@ export function ChatPanel() {
                       {t.role === 'assistant' &&
                         i === turns.length - 1 &&
                         !busy &&
+                        !uploading &&
                         /confirm\?\s*$/i.test(t.content) && (
                           <div className="mt-2.5 flex flex-wrap items-center gap-2">
                             <Button
@@ -896,7 +964,7 @@ export function ChatPanel() {
               variant="gradient"
               size="icon"
               aria-label="Send message"
-              disabled={busy || input.trim().length === 0}
+              disabled={busy || uploading || input.trim().length === 0}
               className="shrink-0"
             >
               {busy ? (
