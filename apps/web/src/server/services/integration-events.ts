@@ -1,9 +1,9 @@
 import 'server-only';
 
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
-import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
+import { isSsrfRefusal, safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
@@ -16,7 +16,7 @@ import {
 } from './context';
 import { keepAlive } from './lib/defer';
 import { listRows } from './lib/list-rows';
-import { postgrestErrorText } from './lib/postgrest-error';
+import { isPermanentRefusal, postgrestErrorText } from './lib/postgrest-error';
 
 /**
  * Outbound event delivery — the engine behind generic webhooks + Slack/Teams
@@ -109,6 +109,28 @@ export const DRAIN_DELIVERY_CONCURRENCY = 10;
  * that is not started is not claimed, so it stays pending for the next tick.
  */
 export const DRAIN_TIME_BUDGET_MS = 30_000;
+
+/**
+ * This drain's share of a drain-outbox cron run (docket B81). The cron runs
+ * it first, with a deadline this long after the run starts: it starts
+ * deliveries for the first 7 s, and the last one it starts (with at least
+ * CLAIM_LEASE_MS left) ends inside the share, so the exports that follow get
+ * the rest of the run. Run last, it was left no time when the exports used
+ * the run, and due retries waited tick after tick. When the share leaves due
+ * rows unstarted, the cron drains again after the other stages, to the run's
+ * deadline, with the time they left (drain-outbox route).
+ */
+export const WEBHOOK_DRAIN_SHARE_MS = CLAIM_LEASE_MS + 7_000;
+
+/**
+ * How long dispatch waits before it tries the endpoint read, or the delivery
+ * insert, again after a failure: three tries in all (docket B82). A brief
+ * failure lost the event, because the cron retries only deliveries that
+ * exist. A read changes nothing, and the delivery ids are chosen before the
+ * first try, so either step is safe to repeat. Each wait is its delay times
+ * 0.5 to 1.5 (withDispatchRetries).
+ */
+export const DISPATCH_RETRY_DELAYS_MS = [1_000, 3_000];
 /** Backoff: ~1m, 2m, 4m, 8m, 16m, capped at 30m. */
 function backoffMs(attempt: number): number {
   return Math.min(30 * 60_000, 60_000 * 2 ** Math.max(0, attempt - 1));
@@ -375,9 +397,13 @@ async function attemptDelivery(
     ok = res.status >= 200 && res.status < 300;
     if (!ok) errorMsg = `HTTP ${res.status}`;
   } catch (e) {
-    // SSRF block is terminal (don't retry a poisoned URL); network errors retry.
+    // A refusal of the URL is final (a bad scheme, a private address, a host
+    // off an allowlist, too many redirects, a Slack or Teams URL on another
+    // host): don't retry a poisoned URL. A failed lookup of the host is a
+    // network failure like any other and retries with backoff, up to
+    // MAX_ATTEMPTS (docket B49).
     errorMsg = e instanceof Error ? e.message : 'delivery failed';
-    if (e instanceof SsrfBlockedError) {
+    if (isSsrfRefusal(e)) {
       await finalize(admin, endpoint, delivery, { ok: false, code: null, error: errorMsg, dead: true }, attempts);
       return { claimed: true, ok: false };
     }
@@ -461,6 +487,55 @@ export function dispatchEvent(
   return work;
 }
 
+/**
+ * A dispatch step's failed database call, with the code it was refused with,
+ * so withDispatchRetries can tell a refusal the same request meets again from
+ * a brief failure.
+ */
+class DispatchStepError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null,
+  ) {
+    super(message);
+    this.name = 'DispatchStepError';
+  }
+}
+
+/**
+ * Runs `step` until it resolves, at most three tries; the last try's failure
+ * is thrown. Between tries it waits each DISPATCH_RETRY_DELAYS_MS delay times
+ * 0.5 to 1.5, so the dispatches one brief failure stopped together do not all
+ * try again in the same moment. A refusal the same request meets again
+ * (isPermanentRefusal: bad data, a constraint, PostgREST refusing the request
+ * itself) is thrown at once, as a retry cannot change it, unless
+ * `retryRefusals`: a security.* event is always tried three times
+ * (integrator R4, R4b).
+ *
+ * No deadline: every caller fires dispatchEvent around its response, kept
+ * alive past it (keepAlive; order-requests through defer), and none has a
+ * deadline of its own, so a step takes at most its three tries and 6 s of
+ * waiting. A caller that has a deadline must pass it in, and this must then
+ * stop at it.
+ */
+async function withDispatchRetries<T>(
+  step: () => Promise<T>,
+  opts: { retryRefusals: boolean },
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await step();
+    } catch (e) {
+      const delay = DISPATCH_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined) throw e;
+      if (!opts.retryRefusals && e instanceof DispatchStepError && isPermanentRefusal(e)) {
+        throw e;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay * (0.5 + Math.random())));
+    }
+  }
+}
+
 /** The body of `dispatchEvent()`. Never rejects. */
 async function dispatchEventNow(
   organizationId: string,
@@ -469,87 +544,131 @@ async function dispatchEventNow(
 ): Promise<void> {
   try {
     const admin = createAdminClient();
-    const endpointsRes = await admin
-      .from('integration_endpoints')
-      .select('id, organization_id, type, url, secret')
-      .eq('organization_id', organizationId)
-      .eq('enabled', true)
-      .contains('event_types', [eventType]);
+    // A security.* event (a role change, an MFA or API key change) is never
+    // given up after one try (integrator R4b).
+    const retry = { retryRefusals: eventType.startsWith('security.') };
     // A failed read, or an answer that is not a list (an empty body), is not
     // "no endpoints": the event's deliveries are never inserted, and the cron
-    // retries only rows that exist. The catch below reports it (docket S27).
-    if (endpointsRes.error) {
-      throw new Error(
-        `integration_endpoints select: ${postgrestErrorText(endpointsRes.error, endpointsRes)}`,
-      );
-    }
-    const eps = listRows<EndpointRow>('integration_endpoints', endpointsRes);
+    // retries only rows that exist. It is tried again (docket B82); the catch
+    // below reports the last failure (docket S27).
+    const eps = await withDispatchRetries(async () => {
+      const endpointsRes = await admin
+        .from('integration_endpoints')
+        .select('id, organization_id, type, url, secret')
+        .eq('organization_id', organizationId)
+        .eq('enabled', true)
+        .contains('event_types', [eventType]);
+      if (endpointsRes.error) {
+        throw new DispatchStepError(
+          `integration_endpoints select: ${postgrestErrorText(endpointsRes.error, endpointsRes)}`,
+          endpointsRes.error.code ?? null,
+        );
+      }
+      return listRows<EndpointRow>('integration_endpoints', endpointsRes);
+    }, retry);
     if (eps.length === 0) return;
 
     // Batch-insert one pending delivery per endpoint (single round trip), then
     // fire the immediate attempts in PARALLEL. Previously this was a per-endpoint
     // insert + sequential await — O(N) round trips that blocked each other on the
     // 8s delivery timeout (audit 2026-06-09). Failures stay 'pending' for the cron.
-    const insertRes = await admin
-      .from('integration_deliveries')
-      .insert(
-        eps.map((ep) => ({
-          organization_id: organizationId,
-          endpoint_id: ep.id,
-          event_type: eventType,
-          payload: data,
-          status: 'pending',
-          max_attempts: MAX_ATTEMPTS,
-        })),
-      )
-      .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
-    // A failed insert lost the event's deliveries just the same: reported below.
-    if (insertRes.error) {
-      throw new Error(
-        `integration_deliveries insert: ${postgrestErrorText(insertRes.error, insertRes)}`,
-      );
-    }
-    const rows = insertRes.data;
-    if (!rows || rows.length === 0) return;
+    //
+    // The ids are chosen here, before the first try, and a row whose id is
+    // already there is skipped (ON CONFLICT (id) DO NOTHING), so a failed insert
+    // is tried again without queuing a delivery twice (docket B82): a try that
+    // committed but whose answer was lost leaves its rows to the cron, because
+    // the insert answers only the rows it inserted.
+    const deliveries = eps.map((ep) => ({
+      id: randomUUID(),
+      organization_id: organizationId,
+      endpoint_id: ep.id,
+      event_type: eventType,
+      payload: data,
+      status: 'pending',
+      max_attempts: MAX_ATTEMPTS,
+    }));
+    const rows = await withDispatchRetries(async () => {
+      const insertRes = await admin
+        .from('integration_deliveries')
+        .upsert(deliveries, { onConflict: 'id', ignoreDuplicates: true })
+        .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
+      // A failed insert lost the event's deliveries just the same: reported below.
+      if (insertRes.error) {
+        throw new DispatchStepError(
+          `integration_deliveries insert: ${postgrestErrorText(insertRes.error, insertRes)}`,
+          insertRes.error.code ?? null,
+        );
+      }
+      return listRows<DeliveryRow>('integration_deliveries', insertRes);
+    }, retry);
+    if (rows.length === 0) return;
     const epById = new Map(eps.map((e) => [e.id, e]));
     await Promise.allSettled(
-      (rows as DeliveryRow[]).map((row) => {
+      rows.map((row) => {
         const ep = epById.get(row.endpoint_id);
         return ep ? attemptDelivery(admin, ep, row) : Promise.resolve({ claimed: false, ok: false });
       }),
     );
   } catch (e) {
-    void reportError(e, { tag: 'integration-events.dispatch', extra: { eventType } });
+    void reportError(e, {
+      tag: 'integration-events.dispatch',
+      organizationId,
+      extra: { eventType },
+    });
   }
 }
 
 /**
  * Cron entry: deliver due pending rows (oldest first), retrying with backoff.
  * Called from the drain-outbox cron. Returns a small summary; never throws.
+ *
+ * `opts.deadlineAt` is the cron run's deadline (docket B81): no delivery is
+ * started with less than CLAIM_LEASE_MS left, so a delivery it starts ends
+ * (8 s timeout) before the deadline, and with less than that left at the
+ * start nothing is read at all. The rows stay pending for the next tick, and
+ * the summary says `skipped: 'deadline'` whenever time (the deadline or
+ * DRAIN_TIME_BUDGET_MS) left due rows unstarted, so it never reads as a tick
+ * with nothing to do.
  */
 export async function drainIntegrationDeliveries(
   admin: Admin,
   now: Date = new Date(),
   limit = 100,
-  /** Test seam: the clock the time budget is measured with. */
-  opts: { clock?: () => number } = {},
-): Promise<{ attempted: number; delivered: number }> {
+  opts: {
+    /** Test seam: the clock the time budget and the deadline are measured with. */
+    clock?: () => number;
+    deadlineAt?: number;
+  } = {},
+): Promise<{ attempted: number; delivered: number; skipped?: 'deadline' }> {
   const clock = opts.clock ?? Date.now;
   const startedAt = clock();
+  const { deadlineAt } = opts;
+  /** Whether a delivery started now could outlast the cron run's deadline. */
+  const pastDeadline = () => deadlineAt !== undefined && deadlineAt - clock() < CLAIM_LEASE_MS;
   let attempted = 0;
   let delivered = 0;
+  /** Set when time left a due row unstarted. */
+  let skipped: 'deadline' | undefined;
+  if (pastDeadline()) return { attempted, delivered, skipped: 'deadline' };
   try {
-    const { data: due } = await admin
+    const dueRes = await admin
       .from('integration_deliveries')
       .select('id, endpoint_id, event_type, payload, attempts, max_attempts')
       .eq('status', 'pending')
       .lte('next_attempt_at', now.toISOString())
       .order('next_attempt_at', { ascending: true })
       .limit(limit);
-    if (!due || due.length === 0) return { attempted, delivered };
+    // A failed read, or an answer that is not a list (an empty body), is not
+    // "nothing due": the catch below reports it, and the rows stay pending for
+    // the next tick (docket B82).
+    if (dueRes.error) {
+      throw new Error(`integration_deliveries select: ${postgrestErrorText(dueRes.error, dueRes)}`);
+    }
+    const due = listRows<DeliveryRow>('integration_deliveries', dueRes);
+    if (due.length === 0) return { attempted, delivered };
 
     // Batch-load the endpoints for the due rows.
-    const endpointIds = Array.from(new Set(due.map((d) => (d as DeliveryRow).endpoint_id)));
+    const endpointIds = Array.from(new Set(due.map((d) => d.endpoint_id)));
     const epsRes = await admin
       .from('integration_endpoints')
       .select('id, organization_id, type, url, secret')
@@ -560,14 +679,16 @@ export async function drainIntegrationDeliveries(
     // permanently dropped every due webhook. Stop here; the rows stay pending
     // and the next tick retries them. The catch below reports it. An answer
     // that is not a list (an empty body) is a failed read too (docket S27).
-    if (epsRes.error) throw new Error(`integration_endpoints select: ${epsRes.error.message}`);
+    if (epsRes.error) {
+      throw new Error(`integration_endpoints select: ${postgrestErrorText(epsRes.error, epsRes)}`);
+    }
     const eps = listRows<EndpointRow>('integration_endpoints', epsRes);
     const epById = new Map(eps.map((e) => [e.id, e]));
 
     // Partition into deliverable rows vs orphans (endpoint deleted out-of-band).
     const live: DeliveryRow[] = [];
     const deadIds: string[] = [];
-    for (const d of due as DeliveryRow[]) {
+    for (const d of due) {
       if (epById.has(d.endpoint_id)) live.push(d);
       else deadIds.push(d.id);
     }
@@ -582,11 +703,14 @@ export async function drainIntegrationDeliveries(
     // Attempt due deliveries CONCURRENTLY (was sequential — a single slow/hung
     // webhook blocked every later row for up to the 8s timeout), at most
     // DRAIN_DELIVERY_CONCURRENCY at once (it was all 100 at once), and none
-    // started after DRAIN_TIME_BUDGET_MS. `run` never throws (a failed attempt
-    // counts as not claimed, as Promise.allSettled's rejection did), so
-    // mapWithConcurrency's stop-on-first-error never applies.
+    // started after DRAIN_TIME_BUDGET_MS or too close to the cron run's
+    // deadline. `run` never throws (a failed attempt counts as not claimed, as
+    // Promise.allSettled's rejection did), so mapWithConcurrency's
+    // stop-on-first-error never applies.
     const results = await mapWithConcurrency(live, DRAIN_DELIVERY_CONCURRENCY, async (d) => {
-      if (clock() - startedAt >= DRAIN_TIME_BUDGET_MS) return { claimed: false, ok: false };
+      if (clock() - startedAt >= DRAIN_TIME_BUDGET_MS || pastDeadline()) {
+        return { claimed: false, ok: false, leftForTime: true };
+      }
       try {
         return await attemptDelivery(admin, epById.get(d.endpoint_id)!, d);
       } catch {
@@ -599,10 +723,11 @@ export async function drainIntegrationDeliveries(
     // (SP-067).
     attempted = results.filter((r) => r.claimed).length;
     delivered = results.filter((r) => r.ok).length;
+    if (results.some((r) => 'leftForTime' in r)) skipped = 'deadline';
   } catch (e) {
     void reportError(e, { tag: 'integration-events.drain' });
   }
-  return { attempted, delivered };
+  return skipped ? { attempted, delivered, skipped } : { attempted, delivered };
 }
 
 // ── One-off test delivery (sends a synthetic event; persists no row) ─────────

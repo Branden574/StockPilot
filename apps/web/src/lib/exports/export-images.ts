@@ -3,7 +3,7 @@ import 'server-only';
 import { reportError } from '@/lib/error-reporter';
 import { jpegPassesUnchanged, pngPassesUnchanged } from '@/lib/image-decode';
 import { fetchItemImage, ItemImageUrlRefusedError } from '@/lib/item-image-fetch';
-import { SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
+import { isSsrfRefusal } from '@/lib/ssrf-guard';
 import { ItemImagesService } from '@/server/services/item-images';
 import type { ServiceContext } from '@/server/services/context';
 import {
@@ -450,10 +450,9 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
     // is refused the same way every time: final, never retried, counted as a
     // source we do not read. A failed lookup of the host
     // (SsrfLookupFailedError, a subclass) is not a refusal: it falls through
-    // and is retried like any other network failure.
-    const refused =
-      err instanceof ItemImageUrlRefusedError ||
-      (err instanceof SsrfBlockedError && !(err instanceof SsrfLookupFailedError));
+    // and is retried like any other network failure. isSsrfRefusal is the rule
+    // the webhook delivery uses too (docket B49).
+    const refused = err instanceof ItemImageUrlRefusedError || isSsrfRefusal(err);
     if (refused) return { kind: 'skip', reason: 'unsupported' };
     // Timeout, DNS, reset, abort. Never log — the URL carries a signed token.
     return { kind: 'retry', reason: timedOut ? 'timeout' : 'other', retryAfterMs: null };
