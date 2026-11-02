@@ -11,6 +11,7 @@ import {
   type ReleaseViewer,
 } from '@stockpilot/core';
 
+import { computeSeenViewedMap } from '@/lib/onboarding/announcement-logic';
 import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
 
 import {
@@ -73,7 +74,27 @@ const newerReads = NEWER_IDS.map((id) => ({
   opened_at: '2026-11-02T17:40:00Z',
   read_at: '2026-11-02T17:40:00Z',
 }));
-const newerSeen: Record<string, boolean> = Object.fromEntries(NEWER_IDS.map((id) => [id, true]));
+
+/**
+ * Added in the review round after that merge (2026-11-02). Every phone build's
+ * What's New is the old list (GET /api/v1/me/announcements): at most three
+ * unseen releases, newest first, and every way of closing it posts all:true,
+ * which stamps every published release as seen. So what a phone shows depends
+ * on when it last closed What's New, as each close stamped the releases
+ * published then.
+ */
+const PUBLISHED_IDS = RELEASES.filter((r) => r.status === 'published').map((r) => r.id);
+/** A phone's seen map after a close, with these releases stamped. */
+const phoneSeen = (ids: readonly string[]): Record<string, unknown> =>
+  Object.fromEntries(ids.map((id) => [id, { at: '2026-11-02T00:00:00Z', outcome: 'seen' }]));
+/** The published releases below this one. */
+const OLDER_IDS = PUBLISHED_IDS.filter((id) => id !== ID && !NEWER_IDS.includes(id));
+/** Closed What's New before #461 went live (about 15:33Z): only the older releases. */
+const closedBefore461 = phoneSeen(OLDER_IDS);
+/** Closed it between #461 and #471 (about 17:33Z): the lists release too. */
+const closedBefore471 = phoneSeen([...OLDER_IDS, 'lists-delivery-sites-and-fixes-2026-11']);
+/** Closed it after #471 went live: every published release but this one. */
+const closedAfter471 = phoneSeen(PUBLISHED_IDS.filter((id) => id !== ID));
 
 /** A file in the repository, as written. */
 const REPO = resolve(__dirname, '../../../../..');
@@ -204,7 +225,8 @@ describe('the update-ready-and-fixes release', () => {
   });
 
   // Renamed when main was merged in after #461 and #471 (2026-11-02; was: "reaches every member and is the first notice for each with nothing read; an old phone build shows ...", with nothing read or seen): the authenticator code and lists-delivery-sites-and-fixes releases, dated later, reach every member and come first. Claim kept: every member is told it, and an old phone build shows its title and summary, with the Integrations button only for a reader that line reaches.
-  it('reaches every member and is the notice for each once the newer releases are read; an old phone build shows its title and summary once they are seen, with the Integrations button only for a reader that line reaches', () => {
+  // Renamed again in the review round after that merge (2026-11-02; was: "...; an old phone build shows its title and summary once they are seen, ...", with only the three newer releases seen): only a phone that closed What's New after #471 went live has every newer release seen, so the phone half now says so and uses that phone's seen map. The phone list of every other phone is pinned in the next test.
+  it("reaches every member and is the notice for each once the newer releases are read; a phone that closed What's New after they were published lists only it, with its title and summary, and the Integrations button only for a reader that line reaches", () => {
     const told = (v: ReleaseViewer) =>
       visibleReleases(RELEASES, v)
         .find((r) => r.id === ID)
@@ -216,21 +238,25 @@ describe('the update-ready-and-fixes release', () => {
     for (const v of [everyone, member]) {
       expect(buildReleaseList(RELEASES, v, newerReads, null).latestUnread?.id, v.role).toBe(ID);
     }
-    // The old phone builds' list takes its button from the first line with a
-    // link that the reader is told.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, newerSeen)[0]).toEqual({
-      id: ID,
-      date: '2026-11-02',
-      title: release().title,
-      body: release().summary,
-      cta: INTEGRATIONS_LINK,
-    });
-    expect(legacyAnnouncementsFor(RELEASES, member, newerSeen)[0]).toEqual({
-      id: ID,
-      date: '2026-11-02',
-      title: release().title,
-      body: release().summary,
-    });
+    // The phone's list takes its button from the first line with a link that
+    // the reader is told.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, closedAfter471)).toEqual([
+      {
+        id: ID,
+        date: '2026-11-02',
+        title: release().title,
+        body: release().summary,
+        cta: INTEGRATIONS_LINK,
+      },
+    ]);
+    expect(legacyAnnouncementsFor(RELEASES, member, closedAfter471)).toEqual([
+      {
+        id: ID,
+        date: '2026-11-02',
+        title: release().title,
+        body: release().summary,
+      },
+    ]);
     // Every phone build with What's New hides that button: the Integrations
     // page has no phone screen of its own, so the rewrite sends it home.
     expect(phone('src/components/onboarding/whats-new.tsx')).toContain(
@@ -245,6 +271,81 @@ describe('the update-ready-and-fixes release', () => {
     expect(registryFingerprint(RELEASES)).not.toBe(
       registryFingerprint(RELEASES.filter((r) => r.id !== ID)),
     );
+  });
+
+  // Added in the review round after the merge with main (2026-11-02). Dated
+  // 04:21Z, this release is fourth, and a phone lists at most three unseen
+  // releases, so a phone that has seen none of the three newer ones never
+  // shows it to a member all three reach, and any close stamps it seen. This
+  // pins that cost of keeping the date, and where it is a later slide.
+  it('on a phone, is never shown to a member all three newer releases reach whose phone has seen none of them, is a later slide for the others, and is stamped seen by any close', () => {
+    // Every phone build reads and closes the old list, never /api/v1/me/releases,
+    // and every close posts all:true, which the route answers by stamping every
+    // published release.
+    const whatsNew = phone('src/components/onboarding/whats-new.tsx');
+    expect(whatsNew).toMatch(
+      /void recordAnnouncementsSeen\(\s*items\.map\(\(i\) => i\.id\),\s*outcome,\s*true,\s*\);/,
+    );
+    const transport = phone('src/lib/announcements.ts');
+    expect(transport).toContain("api<{ items: AnnouncementItem[] }>('/api/v1/me/announcements')");
+    expect(transport).toContain(
+      "await api('/api/v1/me/announcements', { method: 'POST', body: { ids, outcome, all } });",
+    );
+    expect(transport).not.toContain('/me/releases');
+    const route = source('app/api/v1/me/announcements/route.ts');
+    expect(route).toContain(
+      '{ items: legacyAnnouncementsFor(RELEASES, releaseViewerFor(ctx), viewed) },',
+    );
+    expect(route).toContain("RELEASES.filter((r) => r.status === 'published').map((r) => r.id),");
+
+    const listed = (v: ReleaseViewer, seen: Record<string, unknown>) =>
+      legacyAnnouncementsFor(RELEASES, v, seen).map((a) => a.id);
+    /** The seen map after the phone shows this list and is closed in any way. */
+    const close = (v: ReleaseViewer, seen: Record<string, unknown>) =>
+      computeSeenViewedMap(
+        seen,
+        listed(v, seen),
+        'seen',
+        true,
+        PUBLISHED_IDS,
+        '2026-11-02T19:00:00Z',
+      );
+    const [authenticator, retries, lists] = NEWER_IDS as [string, string, string];
+
+    // A member all three reach (whoever manages integrations with the
+    // Integrations module on, here an owner with every permission and module).
+    expect(
+      visibleReleases(RELEASES, everyone)
+        .map((r) => r.id)
+        .slice(0, 4),
+    ).toEqual([...NEWER_IDS, ID]);
+    // Phone last closed before #461 went live (about 15:33Z): the three newer
+    // releases fill the list, and the close stamps this one, never shown.
+    expect(listed(everyone, closedBefore461)).toEqual(NEWER_IDS);
+    expect(close(everyone, closedBefore461)[ID]).toBeTruthy();
+    expect(listed(everyone, close(everyone, closedBefore461))).toEqual([]);
+    // Last closed between #461 and #471 (about 17:33Z): the third slide.
+    expect(listed(everyone, closedBefore471)).toEqual([authenticator, retries, ID]);
+    // Last closed after #471 went live: the only slide (the test above).
+    expect(listed(everyone, closedAfter471)).toEqual([ID]);
+
+    // A member the retries release does not reach (here a viewer with no
+    // permission and no module): the third slide, then the second.
+    expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(retries);
+    expect(listed(member, closedBefore461)).toEqual([authenticator, lists, ID]);
+    expect(listed(member, closedBefore471)).toEqual([authenticator, ID]);
+    expect(listed(member, closedAfter471)).toEqual([ID]);
+
+    // Whichever slide is open when the phone closes What's New, the close
+    // stamps this release, so a phone that closes before reaching it does not
+    // show it again.
+    for (const v of [everyone, member]) {
+      for (const seen of [closedBefore461, closedBefore471, closedAfter471]) {
+        const after = close(v, seen);
+        expect(after[ID], v.role).toBeTruthy();
+        expect(listed(v, after), v.role).toEqual([]);
+      }
+    }
   });
 
   // The quoted message, its title and its buttons are the phone's own words,
