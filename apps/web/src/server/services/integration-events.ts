@@ -767,9 +767,10 @@ export async function sendTest(endpoint: {
 /**
  * What a member is told when the database refused their integration write
  * (docket S27). The services gate on the member's effective Manage
- * integrations or Manage shipping, while the integration tables' row rules
- * still ask for the admin role, so a member given the key can pass the gate
- * and be refused by the database. Names no table, policy or code.
+ * integrations or Manage shipping, and since 0428 the integration tables' row
+ * rules ask the same keys, so a refusal is the database applying a change to
+ * the member's access the request had not seen yet (or, after a rollback of
+ * 0428, its old role floor). Names no table, policy or code.
  */
 export const INTEGRATION_WRITE_REFUSED =
   'This change was not saved: your access does not allow it. Ask an owner or an admin.';
@@ -807,7 +808,10 @@ export class IntegrationEndpointsService {
     return new IntegrationEndpointsService(await withContext());
   }
 
-  /** integrations module + admin-level manage permission (matches the RLS floor). */
+  /**
+   * The integrations module + integrations:manage, the key the endpoint row
+   * rule asks for (integration_endpoints_manage, 0428; docket S27).
+   */
   private gate() {
     assertModuleEnabled(this.ctx, 'integrations');
     assertPermission(this.ctx, 'integrations:manage');

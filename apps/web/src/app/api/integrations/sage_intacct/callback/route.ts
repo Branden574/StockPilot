@@ -120,10 +120,10 @@ export async function GET(req: Request) {
     }
 
     // 2b. The user must hold integrations:manage in this org: their EFFECTIVE
-    //     set, as the QuickBooks callback and beginConnect check it (docket
-    //     S19). Never the role's static defaults: an admin whose
-    //     integrations:manage was revoked can write a pending row and its state
-    //     themselves (org_connections' write rule asks only for the admin role).
+    //     set, as the QuickBooks callback and beginConnect check it and as
+    //     org_connections' row rules ask it since 0428 (docket S19, S27). Never
+    //     the role's static defaults: the activation below is a service-role
+    //     write no row rule sees.
     const { data: member } = await supabase
       .from('organization_members')
       .select('role')

@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { isZendeskSubdomain } from '@/lib/zendesk-subdomain';
+
 export class ZendeskApiError extends Error {
   constructor(public status: number, message = `Zendesk API error ${status}`) {
     super(message);
@@ -30,7 +32,7 @@ export class ZendeskClient {
     // interpolated straight into the request host, so a value containing
     // `.`, `/`, `:`, `@`, `#`, `?` or whitespace could retarget the host
     // (e.g. `169.254.169.254#`). Allow only a DNS label.
-    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(cfg.subdomain)) {
+    if (!isZendeskSubdomain(cfg.subdomain)) {
       throw new ZendeskApiError(400, 'Invalid Zendesk subdomain');
     }
     this.base = `https://${cfg.subdomain}.zendesk.com/api/v2`;

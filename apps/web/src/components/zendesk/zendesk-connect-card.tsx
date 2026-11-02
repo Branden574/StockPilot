@@ -6,6 +6,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isZendeskSubdomain } from '@/lib/zendesk-subdomain';
 import { connectZendeskAction, disconnectZendeskAction } from '@/server/actions/zendesk';
 
 interface Props {
@@ -17,7 +18,9 @@ interface Props {
  * Zendesk connect card: paste a subdomain + agent email + API token to connect.
  * The token buys read/write access to the helpdesk, so it goes straight to the
  * server action → Vault and is NEVER rendered back; the card only shows the
- * connected subdomain once active. Disconnect destroys the Vault secret.
+ * connected subdomain once active (only when it is one DNS label, the check
+ * the save makes: lib/zendesk-subdomain, docket S27). Disconnect destroys the
+ * Vault secret.
  */
 export function ZendeskConnectCard({ status, subdomain }: Props) {
   const connected = status === 'active';
@@ -63,7 +66,7 @@ export function ZendeskConnectCard({ status, subdomain }: Props) {
     return (
       <div className="border-border bg-sunk rounded-lg border p-4">
         <p className="text-foreground text-[13.5px] font-medium">
-          Connected{subdomain ? ` to ${subdomain}.zendesk.com` : ''}
+          Connected{isZendeskSubdomain(subdomain) ? ` to ${subdomain}.zendesk.com` : ''}
         </p>
         <Button
           type="button"

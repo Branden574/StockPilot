@@ -793,6 +793,20 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Integration tables follow the keys (0428, docket S27 part b): connection
+  # rows follow Manage shipping (EasyPost) or Manage integrations (every other
+  # provider), the replay of a failed export either key, webhook endpoints and
+  # deliveries Manage integrations, all through rls_orgs_with_permission with
+  # no role floor (16 personas: owner, admins with either key taken away,
+  # managers given either key, staff, viewer, disabled, expired Act-as seat,
+  # invitation, a role override and a member's override winning over it,
+  # another organization, a member of two); connection_mappings and
+  # carrier_shipments take no signed-in write; a guard trigger keeps a
+  # connection's Vault pointer, organization, provider and id for the server
+  # while the app's own writes pass. The preflight is replayed from the
+  # recorded statements; the lock footprint is
+  # scripts/db-concurrency/0428_migration_lock_footprint.sh.
+  supabase/tests/0428_integrations_follow_permission.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

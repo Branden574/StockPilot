@@ -152,10 +152,11 @@ export async function GET(req: Request) {
 
     // 2b. The user must hold integrations:manage in this org: their EFFECTIVE
     //     set, the organization's overrides applied, as beginConnect checks it
-    //     (docket S19). Never the role's static defaults: org_connections' write
-    //     rule asks only for the admin role, so an admin whose integrations:manage
-    //     was revoked can write a pending row and its state themselves, and a
-    //     static check here let them finish the connect.
+    //     and as org_connections' row rules ask it since 0428 (docket S19,
+    //     S27). Never the role's static defaults: the activation below is a
+    //     service-role write no row rule sees, so this check is the one that
+    //     keeps a member whose integrations:manage was taken away from
+    //     finishing a connect.
     const { data: member } = await supabase
       .from('organization_members')
       .select('role')

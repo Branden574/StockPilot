@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isZendeskSubdomain } from '@/lib/zendesk-subdomain';
 import { setZendeskSubdomainAction } from '@/server/actions/zendesk';
 
 /**
@@ -14,14 +15,19 @@ import { setZendeskSubdomainAction } from '@/server/actions/zendesk';
  * (Zendesk sends `X-Frame-Options: SAMEORIGIN`), so this opens the real Zendesk
  * in a new tab where the user is already signed in via SSO. Admins set the
  * org's subdomain here (no token required).
+ *
+ * The link is built only from a stored subdomain that is one DNS label, the
+ * check the app's save makes (lib/zendesk-subdomain); any other stored value
+ * reads as not set, here and in its field (docket S27).
  */
 export function ZendeskQuickAccess({
-  subdomain,
+  subdomain: stored,
   canManage,
 }: {
   subdomain: string | null;
   canManage: boolean;
 }) {
+  const subdomain = isZendeskSubdomain(stored) ? stored : null;
   const router = useRouter();
   const [value, setValue] = React.useState(subdomain ?? '');
   const [saving, setSaving] = React.useState(false);
