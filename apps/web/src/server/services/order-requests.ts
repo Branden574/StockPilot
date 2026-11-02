@@ -110,6 +110,11 @@ import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { isOrderBusyError, orderBusyRefusal } from './lib/order-busy';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import {
+  assertCanEditOrganizationSetup,
+  PUBLIC_REQUEST_SETTINGS_OWNER_ADMIN_ONLY_COPY,
+  setupNothingSaved,
+} from './lib/organization-setup-gate';
+import {
   loadOrderExchangeChips,
   loadReplacementInfo,
   replacementRefusal,
@@ -5079,8 +5084,10 @@ export class OrderRequestsService {
     // tables whose UPDATE RLS policies require admin+. Previously gated on
     // `orders:approve` (manager+), so a warehouse-scoped manager would pass
     // the service gate and then hit a confusing RLS denial at the DB. Align
-    // service gate with RLS: admin+ only.
-    assertPermission(this.ctx, 'organization:update');
+    // service gate with RLS: admin+ only. organization:update alone did not
+    // do that: it can be given to a member below admin, whose UPDATE then
+    // changed no row with no error (B99). The gate asks the role too.
+    assertCanEditOrganizationSetup(this.ctx, PUBLIC_REQUEST_SETTINGS_OWNER_ADMIN_ONLY_COPY);
     const token = generateToken();
     const tokenHash = sha256Hex(token);
     // Load the CURRENT token hash first: since migration 0261 the /r/<token>
@@ -5100,14 +5107,19 @@ export class OrderRequestsService {
     const oldTokenHash =
       (orgRow as { public_request_token_hash: string | null } | null)
         ?.public_request_token_hash ?? null;
-    const { error } = await this.ctx.supabase
+    // Its row comes back, so an UPDATE that changed nothing refuses before
+    // the link row is touched (B99).
+    const { data: rotatedOrg, error } = await this.ctx.supabase
       .from('organizations')
       .update({
         public_request_token_hash: tokenHash,
         public_request_token_rotated_at: new Date().toISOString(),
       })
-      .eq('id', this.ctx.organizationId);
+      .eq('id', this.ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!rotatedOrg) throw setupNothingSaved();
     let linkSynced = false;
     if (oldTokenHash) {
       const { data: updatedLinks, error: linkErr } = await this.ctx.supabase
@@ -5211,13 +5223,18 @@ export class OrderRequestsService {
 
   async setBlurb(blurb: string | null): Promise<void> {
     assertModuleEnabled(this.ctx, 'public_requests');
-    // C1: writes `organizations.public_request_blurb`; RLS requires admin+.
-    assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    // C1: writes `organizations.public_request_blurb`; RLS requires admin+,
+    // so the gate asks the role as well as organization:update, and the
+    // UPDATE asks for its row back (B99).
+    assertCanEditOrganizationSetup(this.ctx, PUBLIC_REQUEST_SETTINGS_OWNER_ADMIN_ONLY_COPY);
+    const { data: row, error } = await this.ctx.supabase
       .from('organizations')
       .update({ public_request_blurb: blurb })
-      .eq('id', this.ctx.organizationId);
+      .eq('id', this.ctx.organizationId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw setupNothingSaved();
   }
 
   async setWarehousePublicOrderable(warehouseId: string, on: boolean): Promise<void> {
@@ -5225,14 +5242,19 @@ export class OrderRequestsService {
     // C1: writes `warehouses.is_public_orderable`; `warehouses_admin_write`
     // RLS requires admin+. Was previously `orders:approve` (manager+) which
     // let a manager-scoped session through the service gate and then trip
-    // an RLS denial — confusing for the user.
-    assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    // an RLS denial — confusing for the user. organization:update alone let
+    // a member below admin through too, whose UPDATE changed no row with no
+    // error (B99): the gate asks the role, and the UPDATE its row back.
+    assertCanEditOrganizationSetup(this.ctx, PUBLIC_REQUEST_SETTINGS_OWNER_ADMIN_ONLY_COPY);
+    const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ is_public_orderable: on })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', warehouseId);
+      .eq('id', warehouseId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw setupNothingSaved();
   }
 
   async getPublicSettings(): Promise<{
