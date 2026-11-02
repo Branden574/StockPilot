@@ -1,4 +1,4 @@
-import { orderCancelOffer } from '@stockpilot/core';
+import { orderCancelOffer, orderCancelWords } from '@stockpilot/core';
 
 /**
  * Cancel on the phone's order screen (L93). WHO is offered it is core's
@@ -7,6 +7,7 @@ import { orderCancelOffer } from '@stockpilot/core';
  * it waits for approval, and nobody without orders:request, which the service
  * asserts for every cancel (desk check F3). The confirm carries the web's optional reason
  * (Alert.prompt's text field), sent to /api/v1/orders/[id]/transition.
+ * Its words are core orderCancelWords, the web's (B51).
  *
  * Pure, so vitest pins it; the screen reads the result.
  */
@@ -28,6 +29,9 @@ export function phoneOrderCancel(input: {
   isOwnRequest: boolean;
   /** The effective orders:request. */
   canRequestOrders: boolean;
+  /** Any line was delivered (quantity_fulfilled above zero): an approver's
+   *  confirm then says delivered items are not put back in stock. */
+  anythingDelivered: boolean;
 }): PhoneOrderCancel | null {
   if (!input.status) return null;
   const offer = orderCancelOffer({
@@ -37,25 +41,19 @@ export function phoneOrderCancel(input: {
     canRequest: input.canRequestOrders,
   });
   if (offer === null) return null;
-  if (offer === 'requester') {
-    // The web's CancelOrderButton words.
-    return {
-      label: 'Cancel request',
-      confirmTitle: 'Cancel this order request?',
-      confirmMessage: `The request is marked cancelled and any stock reservations attached to it are released back to available stock. The request stays on the record for the audit trail. ${REASON_PROMPT}`,
-      confirmLabel: 'Cancel request',
-      keepLabel: 'Keep request',
-    };
-  }
+  // B51: the words are the web's CancelOrderButton's, from one place. The
+  // delivered sentence follows what was delivered, not the status (it was
+  // said only while backordered, so a resumed backorder lost it).
+  const words = orderCancelWords(offer, {
+    status: input.status,
+    anythingDelivered: input.anythingDelivered,
+  });
   return {
-    label: 'Cancel order',
-    confirmTitle: 'Cancel this order?',
-    confirmMessage:
-      input.status === 'backordered'
-        ? `The order is voided. Already-delivered items are NOT restocked; the hold on the remaining items is released. ${REASON_PROMPT}`
-        : `The order is marked cancelled and the stock held for it is released. Anything already picked goes back into stock. The order stays on the record. ${REASON_PROMPT}`,
-    confirmLabel: 'Cancel order',
-    keepLabel: 'Keep order',
+    label: words.label,
+    confirmTitle: words.title,
+    confirmMessage: `${words.body} ${REASON_PROMPT}`,
+    confirmLabel: words.confirmLabel,
+    keepLabel: words.keepLabel,
   };
 }
 

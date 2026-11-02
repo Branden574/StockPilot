@@ -7124,8 +7124,12 @@ describe('the small fixes release (slice 1) is published', () => {
     const cancel = entry('cancel-own-order-request');
     expect(cancel.whatChanged).not.toMatch(/as on the web/);
     expect(cancel.whatChanged).toContain('with Cancel order');
+    // Re-pinned by B51 (was: the helper holds "label: 'Cancel order'"). The
+    // app's words moved to core orderCancelWords, which the helper calls; the
+    // approver's label there is still Cancel order.
     const phone = readFileSync(resolve(__dirname, '../../../../mobile/src/lib/order-cancel-action.ts'), 'utf8');
-    expect(phone).toContain("label: 'Cancel order'");
+    expect(phone).toContain('orderCancelWords(');
+    expect(orderCancelWords('approver', { status: 'approved', anythingDelivered: false }).label).toBe('Cancel order');
   });
 
   // Review (2026-10-05): a closed order's slip refusal is reached only from a
