@@ -793,6 +793,11 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Category reads (0426, docket S49): categories_select reads the membership
+  # and category sets inventory_items_select uses (the same rows for 13
+  # personas), and user_can_see_item_category answers service_role only. The
+  # lock footprint is scripts/db-concurrency/0426_migration_lock_footprint.sh.
+  supabase/tests/0426_categories_select_category_sets.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

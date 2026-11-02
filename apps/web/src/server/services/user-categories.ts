@@ -63,8 +63,10 @@ export class UserCategoriesService {
     // In production this shouldn't happen because ctx.organizationId is
     // only set after auth has verified org membership; returning null
     // here means "no extra service-layer filter" while RLS still
-    // enforces the visibility boundary (user_can_see_item_category
-    // returns false when no role row exists in the requested org).
+    // enforces the visibility boundary (categories_select and
+    // inventory_items_select read rls_cat_unrestricted_org_ids and
+    // rls_cat_allowed_category_ids, which hold nothing for a user with
+    // no membership row in the requested org).
     if (!role) return null;
     if (role !== 'viewer') return null;    // unrestricted by role
 
