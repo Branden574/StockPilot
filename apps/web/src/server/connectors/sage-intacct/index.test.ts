@@ -468,7 +468,7 @@ describe('sageIntacctConnector — the cron run deadline', () => {
   ];
 
   it.each(EXPORTS)(
-    '%s: with 19 s left nothing is sent and the export retries',
+    '%s: with 19 s left nothing is sent, and the export says it was not started',
     async (_topic, event, admin) => {
       const res = await sageIntacctConnector.handleOutboxEvent(
         event(),
@@ -477,7 +477,13 @@ describe('sageIntacctConnector — the cron run deadline', () => {
         makeDeps(admin(), { deadlineAt: Date.now() + 19_000 }),
       );
       expect(fetchSpy).not.toHaveBeenCalled();
-      expect(res).toEqual({ ok: false, retryable: true, error: INTACCT_CREATE_NOT_STARTED });
+      // Not an attempt: the drainer puts the event's ledger row back (integrator R1).
+      expect(res).toEqual({
+        ok: false,
+        retryable: true,
+        notStarted: true,
+        error: INTACCT_CREATE_NOT_STARTED,
+      });
     },
   );
 

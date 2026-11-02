@@ -100,11 +100,13 @@ describe('drainIntegrationDeliveries fan-out', () => {
       { clock: () => now },
     );
 
-    // The first wave started inside the budget; nothing after it.
+    // The first wave started inside the budget; nothing after it, and the
+    // summary says rows were left for time (docket B81, integrator R3).
     expect(DRAIN_DELIVERY_CONCURRENCY * 10_000).toBeGreaterThanOrEqual(DRAIN_TIME_BUDGET_MS);
     expect(summary).toEqual({
       attempted: DRAIN_DELIVERY_CONCURRENCY,
       delivered: DRAIN_DELIVERY_CONCURRENCY,
+      skipped: 'deadline',
     });
     expect(claims(s)).toBe(DRAIN_DELIVERY_CONCURRENCY);
   });
@@ -119,7 +121,7 @@ describe('drainIntegrationDeliveries fan-out', () => {
  * deadline, and with less than that left at the start it reads nothing.
  */
 describe('drainIntegrationDeliveries under the cron run deadline', () => {
-  it('with 12 s left it reads, claims and sends nothing', async () => {
+  it('with 12 s left it reads, claims and sends nothing, and says it was skipped', async () => {
     const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const s = stub();
@@ -135,7 +137,7 @@ describe('drainIntegrationDeliveries under the cron run deadline', () => {
       },
     );
 
-    expect(summary).toEqual({ attempted: 0, delivered: 0 });
+    expect(summary).toEqual({ attempted: 0, delivered: 0, skipped: 'deadline' });
     expect(s.fromCalls).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -199,5 +201,6 @@ describe('drainIntegrationDeliveries under the cron run deadline', () => {
     expect(summary.attempted).toBe(leftAtClaim.length);
     expect(summary.attempted).toBeLessThan(100);
     expect(Math.min(...leftAtClaim)).toBeGreaterThanOrEqual(13_000);
+    expect(summary.skipped).toBe('deadline');
   });
 });

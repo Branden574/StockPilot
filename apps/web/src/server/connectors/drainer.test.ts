@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
@@ -1266,6 +1269,8 @@ describe('runDrain: the cron run deadline', () => {
 
     expect(connector.handleOutboxEvent).toHaveBeenCalledTimes(1);
     expect(res.processed).toBe(1);
+    // The run says it left work for the next tick (integrator R3).
+    expect(res.skipped).toBe('deadline');
     const pending = (admin.__writes as any[]).filter(
       (w) => w.table === 'connection_sync_log' && w.op === 'upsert',
     );
@@ -1285,7 +1290,13 @@ describe('runDrain: the cron run deadline', () => {
 
     expect(admin.__candidateCalls).toHaveLength(0);
     expect(connector.handleOutboxEvent).not.toHaveBeenCalled();
-    expect(res).toEqual({ processed: 0, succeeded: 0, failed: 0, deadlettered: 0 });
+    expect(res).toEqual({
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      deadlettered: 0,
+      skipped: 'deadline',
+    });
   });
 
   it('hands the deadline to the connector', async () => {
@@ -1306,7 +1317,7 @@ describe('runDrain: the cron run deadline', () => {
     const connector = okConnector();
     const admin = makeFakeAdmin({ conns: [CONN], events: [event('evt-1'), event('evt-2')] });
     const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
-    expect(res.processed).toBe(2);
+    expect(res).toEqual({ processed: 2, succeeded: 2, failed: 0, deadlettered: 0 });
     const deps = (connector.handleOutboxEvent.mock.calls[0] as unknown[])[3] as {
       deadlineAt?: number;
     };
@@ -1396,5 +1407,252 @@ describe('runDrain: a failed mapping write after a create', () => {
       tag: 'cron.drain-outbox.mapping-write',
       extra: { connectionId: 'conn-si', entityType: 'purchase_order' },
     });
+  });
+});
+
+/**
+ * docket B81 (integrator R1, 2026-11-02): an export the run's deadline held
+ * back sent nothing, so it is not an attempt. The drainer wrote the event's
+ * pending row with one more attempt before the connector refused, then booked
+ * the refusal as an 'error': eight such ticks dead-lettered an export that
+ * was never sent. The row now goes back to what it was.
+ */
+describe('runDrain: an export the run deadline held back is not an attempt', () => {
+  const TICK0 = Date.UTC(2026, 10, 2, 6, 0, 0);
+  const CONN = {
+    id: 'conn-si',
+    organization_id: 'org-1',
+    provider_id: 'sage_intacct',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'company-1',
+    settings: { intacct: { defaultItemId: 'NONINV', defaultVendorId: 'VDEF' } },
+  };
+  const EVENT = {
+    id: 'evt-1',
+    organization_id: 'org-1',
+    topic: 'purchase_order.ordered',
+    aggregate_type: 'purchase_order',
+    aggregate_id: 'po-1',
+    payload: {},
+    dedupe_key: null,
+    created_at: new Date(TICK0).toISOString(),
+  };
+  const intacctFetch = vi.fn(async () => json({ 'ia::result': { key: 'DOC-1' } }, 201));
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.mocked(reportError).mockClear();
+    intacctFetch.mockClear();
+    vi.stubGlobal('fetch', intacctFetch);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  type LedgerRow = Record<string, unknown>;
+
+  /**
+   * A connection_sync_log that keeps its row between ticks, with candidates
+   * chosen as connector_drain_candidates chooses them (0148:59-60): not
+   * success or dead, and not an error row inside its backoff. Reading the
+   * purchase order takes 7 s, so a create the drainer started with 26 s left
+   * has 19 s left, under the 20 s the Intacct client needs to send it.
+   */
+  /** `rollbackFails`: removing the row answers a statement timeout. */
+  function ledgerAdmin(initial: LedgerRow | null, opts: { rollbackFails?: boolean } = {}) {
+    let row: LedgerRow | null = initial ? { ...initial } : null;
+    const admin = realSupabaseClient((req) => {
+      const table = req.url.pathname.replace(/^\/rest\/v1\//, '');
+      const body = req.body ? (JSON.parse(req.body) as LedgerRow) : {};
+      if (req.method === 'GET' && table === 'org_connections') return json([CONN]);
+      if (req.method === 'GET' && table === 'organization_modules') {
+        return json([{ organization_id: 'org-1' }]);
+      }
+      if (table === 'rpc/connector_drain_candidates') {
+        const terminal = row?.status === 'success' || row?.status === 'dead';
+        const backingOff =
+          row?.status === 'error' &&
+          typeof row.next_attempt_at === 'string' &&
+          new Date(row.next_attempt_at).getTime() > Date.now();
+        return json(terminal || backingOff ? [] : [EVENT]);
+      }
+      if (table === 'connection_sync_log') {
+        if (req.method === 'GET') return json(row ? [row] : []);
+        if (req.method === 'POST') {
+          row = { ...(row ?? {}), ...body };
+          return new Response(null, { status: 201 });
+        }
+        if (opts.rollbackFails && req.method === 'DELETE') {
+          return json(
+            { code: '57014', message: 'canceling statement due to statement timeout' },
+            500,
+          );
+        }
+        if (req.method === 'PATCH') {
+          if (row) row = { ...row, ...body };
+          return new Response(null, { status: 204 });
+        }
+        if (req.method === 'DELETE') {
+          row = null;
+          return new Response(null, { status: 204 });
+        }
+      }
+      if (req.method === 'GET' && table === 'connection_mappings') return json([]);
+      if (req.method === 'GET' && table === 'purchase_orders') {
+        vi.setSystemTime(Date.now() + 7_000);
+        return json([
+          { id: 'po-1', po_number: 'PO-1', supplier_id: null, subtotal: 120, total: 120 },
+        ]);
+      }
+      return new Response(null, { status: 204 });
+    });
+    return { admin, row: () => row };
+  }
+
+  /** One cron tick, 10 minutes after the last, with the route's deadline. */
+  function tick(k: number, admin: ReturnType<typeof ledgerAdmin>['admin']) {
+    const start = TICK0 + k * 10 * 60_000;
+    vi.setSystemTime(start);
+    return runDrain(admin, { sage_intacct: sageIntacctConnector }, new Date(start), {
+      deadlineAt: start + 26_000,
+    });
+  }
+
+  it('nine held-back ticks in a row leave an export never tried without a ledger row, never dead', async () => {
+    const ledger = ledgerAdmin(null);
+
+    for (let k = 0; k < 9; k++) {
+      const result = await tick(k, ledger.admin);
+      expect(result).toEqual({
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        deadlettered: 0,
+        skipped: 'deadline',
+      });
+      expect(ledger.row()).toBeNull();
+    }
+    expect(intacctFetch).not.toHaveBeenCalled();
+  });
+
+  it('an export already tried three times keeps its status, tries and error through nine held-back ticks', async () => {
+    const before = {
+      connection_id: 'conn-si',
+      organization_id: 'org-1',
+      outbox_event_id: 'evt-1',
+      topic: 'purchase_order.ordered',
+      status: 'error',
+      attempts: 3,
+      last_error: 'Intacct POST /objects/purchasing/document got no answer (ECONNREFUSED)',
+      next_attempt_at: new Date(TICK0 - 60_000).toISOString(),
+      updated_at: new Date(TICK0 - 60_000).toISOString(),
+    };
+    const ledger = ledgerAdmin(before);
+
+    for (let k = 0; k < 9; k++) {
+      await tick(k, ledger.admin);
+      // updated_at aside: the table's trigger sets it on every write.
+      expect(ledger.row()).toEqual({ ...before, updated_at: expect.any(String) });
+    }
+    expect(intacctFetch).not.toHaveBeenCalled();
+  });
+
+  it('a rollback that fails is reported', async () => {
+    const ledger = ledgerAdmin(null, { rollbackFails: true });
+
+    await tick(0, ledger.admin);
+
+    const reports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, context]) => context?.tag === 'cron.drain-outbox.not-started');
+    expect(reports).toHaveLength(1);
+    expect((reports[0]?.[0] as Error).message).toBe(
+      'connection_sync_log rollback: canceling statement due to statement timeout',
+    );
+    expect(reports[0]?.[1]).toEqual({
+      tag: 'cron.drain-outbox.not-started',
+      extra: { connectionId: 'conn-si', eventId: 'evt-1' },
+    });
+  });
+});
+
+/**
+ * docket B81 (integrator R2, 2026-11-02): the connection read gives no order,
+ * and a run that reaches its deadline leaves the rest for the next tick. The
+ * same connections came first on every tick, so with a backlog they could take
+ * every tick's time while the others were never reached.
+ */
+describe('runDrain: every connection gets its turn', () => {
+  /** vercel.json runs the cron every 10 minutes. */
+  const TICK_MS = 10 * 60_000;
+  const CONNS = ['conn-a', 'conn-b', 'conn-c'].map((id, i) => ({
+    id,
+    organization_id: `org-${i}`,
+    provider_id: 'quickbooks',
+    status: 'active',
+    secret_id: `sec-${i}`,
+    settings: {},
+  }));
+  const EVENT = {
+    id: 'evt-1',
+    organization_id: 'org-0',
+    topic: 'receipt.posted',
+    aggregate_type: 'receipt',
+    aggregate_id: 'r-1',
+    payload: {},
+    created_at: new Date().toISOString(),
+  };
+
+  it('with time for one export a tick, three ticks in a row reach all three connections', async () => {
+    const tick0 = Date.UTC(2026, 10, 2, 6, 0, 0);
+    const reached: string[] = [];
+    for (let k = 0; k < 3; k++) {
+      const start = tick0 + k * TICK_MS;
+      // 30 s left at the start and 6 s an export: one export, then 24 s left.
+      let now = start;
+      const connector = {
+        ...okConnector(),
+        handleOutboxEvent: vi.fn(async (_event: unknown, conn: { id: string }) => {
+          reached.push(conn.id);
+          now += 6_000;
+          return { ok: true, externalId: 'ext-1' };
+        }),
+      };
+      const admin = makeFakeAdmin({ conns: CONNS, events: [EVENT] });
+
+      await runDrain(admin as any, { quickbooks: connector } as any, new Date(start), {
+        deadlineAt: start + 30_000,
+        clock: () => now,
+      });
+    }
+
+    expect(reached).toHaveLength(3);
+    expect(new Set(reached)).toEqual(new Set(['conn-a', 'conn-b', 'conn-c']));
+  });
+
+  it('the turn moves on with the cron schedule in vercel.json', async () => {
+    const { DRAIN_OUTBOX_INTERVAL_MS } = await import('./drainer');
+    const vercel = JSON.parse(
+      readFileSync(path.resolve(__dirname, '../../../vercel.json'), 'utf8'),
+    ) as { crons?: Array<{ path: string; schedule: string }> };
+    const entries = (vercel.crons ?? []).filter((c) => c.path === '/api/cron/drain-outbox');
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.schedule).toBe('*/10 * * * *');
+    expect(DRAIN_OUTBOX_INTERVAL_MS).toBe(TICK_MS);
+  });
+
+  it('without a deadline every connection is still drained (unchanged)', async () => {
+    const connector = okConnector();
+    const admin = makeFakeAdmin({ conns: CONNS, events: [EVENT] });
+
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+
+    expect(res.processed).toBe(3);
+    const drained = connector.handleOutboxEvent.mock.calls.map(
+      (call) => ((call as unknown[])[1] as { id: string }).id,
+    );
+    expect(new Set(drained)).toEqual(new Set(['conn-a', 'conn-b', 'conn-c']));
   });
 });

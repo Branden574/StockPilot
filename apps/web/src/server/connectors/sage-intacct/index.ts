@@ -67,6 +67,20 @@ function isRetryableIntacctError(e: unknown): boolean {
 }
 
 /**
+ * The answer for an export that failed. A create held back by the cron run's
+ * deadline sent nothing, so it is not an attempt: `notStarted` tells the
+ * drainer to put the event's ledger row back (docket B81).
+ */
+function exportFailed(e: unknown, fallback: string): PushResult {
+  return {
+    ok: false,
+    retryable: isRetryableIntacctError(e),
+    ...(e instanceof IntacctNotSentError ? { notStarted: true } : {}),
+    error: e instanceof Error ? e.message : fallback,
+  };
+}
+
+/**
  * Sage Intacct connector — push mode mirrors the QuickBooks connector
  * one-for-one (same topics, same fail-closed rehydration, same zero-amount
  * acks, same graceful config gaps):
@@ -237,11 +251,7 @@ async function handlePurchaseOrderOrdered(
     }
     return { ok: true, externalId: externalId ?? undefined };
   } catch (e: unknown) {
-    return {
-      ok: false,
-      retryable: isRetryableIntacctError(e),
-      error: e instanceof Error ? e.message : 'intacct purchase order failed',
-    };
+    return exportFailed(e, 'intacct purchase order failed');
   }
 }
 
@@ -335,11 +345,7 @@ async function handleReturnClosed(
     }
     return { ok: true, externalId: externalId ?? undefined };
   } catch (e: unknown) {
-    return {
-      ok: false,
-      retryable: isRetryableIntacctError(e),
-      error: e instanceof Error ? e.message : 'intacct return journal entry failed',
-    };
+    return exportFailed(e, 'intacct return journal entry failed');
   }
 }
 

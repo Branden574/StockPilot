@@ -57,7 +57,9 @@ const CANDIDATE_LIMIT = 200;
  * How long after the drain-outbox cron starts its work must be done (docket
  * B81). The route has maxDuration 60: nothing is started that could not finish
  * by this long after the route starts, and the last 10 s stay spare for the
- * response and a cold start. The route hands this deadline to every stage.
+ * response and a cold start. The route hands this deadline to the export
+ * drain and the monthly valuation; the webhook drain runs first, inside its
+ * own share of the run (integration-events.ts WEBHOOK_DRAIN_SHARE_MS).
  */
 export const DRAIN_OUTBOX_DEADLINE_MS = 50_000;
 
@@ -68,11 +70,39 @@ export const DRAIN_OUTBOX_DEADLINE_MS = 50_000;
  */
 export const CONNECTOR_START_RESERVE_MS = 25_000;
 
+/**
+ * How often the drain-outbox cron runs (vercel.json: every 10 minutes). Each
+ * run starts its connection loop one connection further on (connectionsInTurn).
+ */
+export const DRAIN_OUTBOX_INTERVAL_MS = 10 * 60_000;
+
 export interface DrainResult {
   processed: number;
   succeeded: number;
   failed: number;
   deadlettered: number;
+  /**
+   * Set when the run's deadline left work for the next tick: a connection or
+   * an event not started, or an export a connector held back (docket B81).
+   */
+  skipped?: 'deadline';
+}
+
+/**
+ * The active connections in the order this run drains them: by id, starting
+ * one further on at each run (the run's number counted in
+ * DRAIN_OUTBOX_INTERVAL_MS). A run that reaches its deadline leaves the rest
+ * for the next tick, and the connection read has no order: the same
+ * connections came first on every tick, so with a backlog they could take
+ * every tick's time while the others were never reached (docket B81). Turns
+ * rather than "least recently synced first": last_synced_at moves only on a
+ * success, so a connection whose exports keep failing would stay first.
+ */
+export function connectionsInTurn<T extends { id: string }>(conns: T[], now: Date): T[] {
+  const byId = [...conns].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  if (byId.length < 2) return byId;
+  const first = Math.floor(now.getTime() / DRAIN_OUTBOX_INTERVAL_MS) % byId.length;
+  return [...byId.slice(first), ...byId.slice(0, first)];
 }
 
 /**
@@ -156,7 +186,10 @@ export async function enabledIntegrationOrgIds(
  *
  * `opts.deadlineAt` (epoch ms, from the cron route): no connection or event is
  * started with less than CONNECTOR_START_RESERVE_MS left, and every connector
- * gets it in its deps. Absent (tests, other callers): no deadline.
+ * gets it in its deps. Absent (tests, other callers): no deadline. Work the
+ * deadline left for the next tick sets `skipped: 'deadline'`; the connections
+ * take turns going first (connectionsInTurn), and an export a connector held
+ * back for time is not counted as an attempt.
  * `opts.clock` is a test seam for the time the deadline is measured against.
  */
 export async function runDrain(
@@ -200,7 +233,7 @@ export async function runDrain(
     enabledOrgIds = new Set();
   }
 
-  connections: for (const c of (conns ?? []) as any[]) {
+  connections: for (const c of connectionsInTurn((conns ?? []) as any[], now)) {
     const connector = connectors[c.provider_id as ConnectorProviderId];
     if (!connector) continue;
     // SKIP any connection whose org's integrations module is not enabled. A
@@ -234,7 +267,10 @@ export async function runDrain(
     //    CANDIDATE_LIMIT. Bounding by work-REMAINING (not a NOT-IN list of all
     //    work-done) means the window advances and can never truncate at the
     //    PostgREST max-rows cap (head-of-line starvation fix). Fail-closed.
-    if (outOfTime()) break;
+    if (outOfTime()) {
+      res.skipped = 'deadline';
+      break;
+    }
     const { data: events, error: eventsErr } = await admin.rpc('connector_drain_candidates', {
       p_connection_id: conn.id,
       p_organization_id: c.organization_id,
@@ -246,7 +282,10 @@ export async function runDrain(
 
     for (const e of (events ?? []) as any[]) {
       // Not started: no pending row, so the event stays a candidate (docket B81).
-      if (outOfTime()) break connections;
+      if (outOfTime()) {
+        res.skipped = 'deadline';
+        break connections;
+      }
       // The candidate set already excludes terminal rows; we still point-read
       // the ledger to recover the attempt count + the backoff gate for 'error'.
       const { data: existing, error: existingErr } = await admin
@@ -339,6 +378,42 @@ export async function runDrain(
           secrets,
           makeDeps(admin, deadlineAt),
         );
+        if (!out.ok && out.notStarted) {
+          // Held back for time by the connector: nothing was sent, so it is
+          // not an attempt (docket B81). Its ledger row goes back to what it
+          // was before this run's pending write: removed when there was none,
+          // else its status and attempts, the only columns that write changed
+          // (updated_at aside: the table's trigger sets it on every write).
+          // So it neither moves toward MAX_ATTEMPTS nor waits a backoff. A
+          // failed rollback leaves the pending row, a candidate again at the
+          // next tick with one attempt more: reported.
+          res.processed--;
+          res.skipped = 'deadline';
+          const rollback = existing
+            ? admin
+                .from('connection_sync_log')
+                .update({ status: existing.status, attempts: existing.attempts })
+                .eq('connection_id', conn.id)
+                .eq('outbox_event_id', e.id)
+            : admin
+                .from('connection_sync_log')
+                .delete()
+                .eq('connection_id', conn.id)
+                .eq('outbox_event_id', e.id);
+          const rollbackRes = await rollback;
+          if (rollbackRes.error) {
+            void reportError(
+              new Error(
+                `connection_sync_log rollback: ${postgrestErrorText(rollbackRes.error, rollbackRes)}`,
+              ),
+              {
+                tag: 'cron.drain-outbox.not-started',
+                extra: { connectionId: conn.id, eventId: e.id },
+              },
+            );
+          }
+          continue;
+        }
         if (out.ok) {
           const { error: successErr } = await admin
             .from('connection_sync_log')

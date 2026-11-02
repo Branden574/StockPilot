@@ -111,6 +111,16 @@ export const DRAIN_DELIVERY_CONCURRENCY = 10;
 export const DRAIN_TIME_BUDGET_MS = 30_000;
 
 /**
+ * This drain's share of a drain-outbox cron run (docket B81). The cron runs
+ * it first, with a deadline this long after the run starts: it starts
+ * deliveries for the first 7 s, and the last one it starts (with at least
+ * CLAIM_LEASE_MS left) ends inside the share, so the exports that follow get
+ * the rest of the run. Run last, it was left no time when the exports used
+ * the run, and due retries waited tick after tick.
+ */
+export const WEBHOOK_DRAIN_SHARE_MS = CLAIM_LEASE_MS + 7_000;
+
+/**
  * How long dispatch waits before it tries the endpoint read, or the delivery
  * insert, again after a failure: three tries in all (docket B82). A brief
  * failure lost the event, because the cron retries only deliveries that
@@ -574,7 +584,10 @@ async function dispatchEventNow(
  * `opts.deadlineAt` is the cron run's deadline (docket B81): no delivery is
  * started with less than CLAIM_LEASE_MS left, so a delivery it starts ends
  * (8 s timeout) before the deadline, and with less than that left at the
- * start nothing is read at all. The rows stay pending for the next tick.
+ * start nothing is read at all. The rows stay pending for the next tick, and
+ * the summary says `skipped: 'deadline'` whenever time (the deadline or
+ * DRAIN_TIME_BUDGET_MS) left due rows unstarted, so it never reads as a tick
+ * with nothing to do.
  */
 export async function drainIntegrationDeliveries(
   admin: Admin,
@@ -585,7 +598,7 @@ export async function drainIntegrationDeliveries(
     clock?: () => number;
     deadlineAt?: number;
   } = {},
-): Promise<{ attempted: number; delivered: number }> {
+): Promise<{ attempted: number; delivered: number; skipped?: 'deadline' }> {
   const clock = opts.clock ?? Date.now;
   const startedAt = clock();
   const { deadlineAt } = opts;
@@ -593,7 +606,9 @@ export async function drainIntegrationDeliveries(
   const pastDeadline = () => deadlineAt !== undefined && deadlineAt - clock() < CLAIM_LEASE_MS;
   let attempted = 0;
   let delivered = 0;
-  if (pastDeadline()) return { attempted, delivered };
+  /** Set when time left a due row unstarted. */
+  let skipped: 'deadline' | undefined;
+  if (pastDeadline()) return { attempted, delivered, skipped: 'deadline' };
   try {
     const dueRes = await admin
       .from('integration_deliveries')
@@ -653,7 +668,7 @@ export async function drainIntegrationDeliveries(
     // stop-on-first-error never applies.
     const results = await mapWithConcurrency(live, DRAIN_DELIVERY_CONCURRENCY, async (d) => {
       if (clock() - startedAt >= DRAIN_TIME_BUDGET_MS || pastDeadline()) {
-        return { claimed: false, ok: false };
+        return { claimed: false, ok: false, leftForTime: true };
       }
       try {
         return await attemptDelivery(admin, epById.get(d.endpoint_id)!, d);
@@ -667,10 +682,11 @@ export async function drainIntegrationDeliveries(
     // (SP-067).
     attempted = results.filter((r) => r.claimed).length;
     delivered = results.filter((r) => r.ok).length;
+    if (results.some((r) => 'leftForTime' in r)) skipped = 'deadline';
   } catch (e) {
     void reportError(e, { tag: 'integration-events.drain' });
   }
-  return { attempted, delivered };
+  return skipped ? { attempted, delivered, skipped } : { attempted, delivered };
 }
 
 // ── One-off test delivery (sends a synthetic event; persists no row) ─────────

@@ -15,7 +15,10 @@ import {
   runDrain,
 } from '@/server/connectors/drainer';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
-import { drainIntegrationDeliveries } from '@/server/services/integration-events';
+import {
+  drainIntegrationDeliveries,
+  WEBHOOK_DRAIN_SHARE_MS,
+} from '@/server/services/integration-events';
 import { sweepExpiredImpersonations } from '@/server/services/platform/impersonation';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
 import { QboClient, type QboEnv } from '@/server/connectors/quickbooks/client';
@@ -57,12 +60,13 @@ function secretsEqual(a: string, b: string): boolean {
  * No connection is started with less than CONNECTOR_START_RESERVE_MS left before
  * the run's `deadlineAt` (docket B81). The pass is month-gated and posts with a
  * fixed requestid, so a connection skipped now is posted at a later tick.
+ * Answers true when the deadline left a connection to post for the next tick.
  */
 async function runMonthlyValuation(
   admin: ReturnType<typeof createAdminClient>,
   now: Date,
   deadlineAt: number,
-): Promise<void> {
+): Promise<boolean> {
   const { data: conns, error } = await admin
     .from('org_connections')
     .select('*')
@@ -72,7 +76,7 @@ async function runMonthlyValuation(
     void reportError(new Error(`valuation org_connections select: ${error.message}`), {
       tag: 'cron.drain-outbox.valuation',
     });
-    return;
+    return false;
   }
 
   // Module-enabled gate (same as runDrain): an org that disabled the
@@ -85,18 +89,18 @@ async function runMonthlyValuation(
     enabledOrgIds = await enabledIntegrationOrgIds(admin, orgIds);
   } catch (gateErr) {
     void reportError(gateErr, { tag: 'cron.drain-outbox.valuation.module-gate' });
-    return;
+    return false;
   }
 
   for (const c of (conns ?? []) as Array<Record<string, any>>) {
-    if (deadlineAt - Date.now() < CONNECTOR_START_RESERVE_MS) break;
+    // Skip orgs whose integrations module is disabled — no JournalEntry post.
+    if (!enabledOrgIds.has(c.organization_id)) continue;
+    // An active connection without a Vault handle is malformed (the OAuth
+    // callback must set secret_id). Skip rather than throwing the whole pass.
+    if (!c.secret_id || !c.external_account_id) continue;
+    // A connection left for time is posted at a later tick.
+    if (deadlineAt - Date.now() < CONNECTOR_START_RESERVE_MS) return true;
     try {
-      // Skip orgs whose integrations module is disabled — no JournalEntry post.
-      if (!enabledOrgIds.has(c.organization_id)) continue;
-      // An active connection without a Vault handle is malformed (the OAuth
-      // callback must set secret_id). Skip rather than throwing the whole pass.
-      if (!c.secret_id || !c.external_account_id) continue;
-
       const conn: ConnectionRef = {
         id: c.id,
         organizationId: c.organization_id,
@@ -136,6 +140,7 @@ async function runMonthlyValuation(
       });
     }
   }
+  return false;
 }
 
 /**
@@ -162,28 +167,45 @@ export async function GET(req: Request) {
   try {
     const admin = createAdminClient();
     const now = new Date();
-    // One deadline for every stage of this run (docket B81): each starts
-    // nothing it could not finish before it, inside maxDuration.
+    // One deadline for this run (docket B81): no stage starts anything it
+    // could not finish before it, inside maxDuration. The webhook drain's
+    // share ends earlier.
     const deadlineAt = now.getTime() + DRAIN_OUTBOX_DEADLINE_MS;
+    // Retry any pending webhook/Slack/Teams deliveries with backoff. FIRST, and
+    // inside its own share of the run: run last, it was left no time whenever
+    // the exports used the run (docket B81). Self-contained + never throws
+    // (mirrors the valuation fail-open posture).
+    const webhooks: Awaited<ReturnType<typeof drainIntegrationDeliveries>> =
+      await drainIntegrationDeliveries(admin, now, undefined, {
+        deadlineAt: now.getTime() + WEBHOOK_DRAIN_SHARE_MS,
+      }).catch(() => ({ attempted: 0, delivered: 0 }));
     const result = await runDrain(admin, CONNECTORS, now, { deadlineAt });
     // Monthly valuation runs AFTER the drain and must never fail the response —
     // runMonthlyValuation swallows + reports its own errors.
-    await runMonthlyValuation(admin, now, deadlineAt);
-    // Retry any pending webhook/Slack/Teams deliveries with backoff. Self-
-    // contained + never throws (mirrors the valuation fail-open posture).
-    const webhooks = await drainIntegrationDeliveries(admin, now, undefined, {
-      deadlineAt,
-    }).catch(() => ({
-      attempted: 0,
-      delivered: 0,
-    }));
+    const valuationSkipped = await runMonthlyValuation(admin, now, deadlineAt);
     // Safety net: revoke any expired platform-admin "act as" grants globally,
     // so an impersonation that was never explicitly exited still auto-expires.
     // Fail-open — never blocks the drain response.
     await sweepExpiredImpersonations(now.getTime()).catch((e) =>
       reportError(e, { tag: 'cron.impersonation-sweep' }),
     );
-    return NextResponse.json({ ...result, webhooks });
+    // NO SILENT CUTS: a stage the deadline cut short says so, in the answer
+    // (skipped: 'deadline') and in one log line, never as an empty success.
+    const cut = [
+      webhooks.skipped ? 'webhooks' : null,
+      result.skipped ? 'exports' : null,
+      valuationSkipped ? 'valuation' : null,
+    ].filter((stage) => stage !== null);
+    if (cut.length > 0) {
+      console.warn(
+        `[drain-outbox] stopped at the run deadline, the rest waits for the next tick: ${cut.join(', ')}`,
+      );
+    }
+    return NextResponse.json({
+      ...result,
+      webhooks,
+      ...(valuationSkipped ? { valuation: { skipped: 'deadline' } } : {}),
+    });
   } catch (err) {
     return internalErrorResponse(err, 'cron.drain-outbox');
   }

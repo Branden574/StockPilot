@@ -35,6 +35,12 @@ export interface PushResult {
   externalId?: string;
   retryable?: boolean;
   error?: string;
+  /**
+   * Nothing was sent: the connector held the event back because the cron run
+   * had too little time left (ConnectorDeps.deadlineAt). Not an attempt: the
+   * drainer puts the event's ledger row back as it was (docket B81).
+   */
+  notStarted?: boolean;
 }
 
 /** Injected seam to the service layer so connectors stay unit-testable. */

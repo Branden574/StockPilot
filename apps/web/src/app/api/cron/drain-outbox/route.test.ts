@@ -4,7 +4,8 @@
  * no stage knew how much time the run had left. A run the platform ended in
  * the middle of an export left it 'pending' for a blind re-send at the next
  * tick. The route now gives every stage one deadline, DRAIN_OUTBOX_DEADLINE_MS
- * after it starts.
+ * after it starts; the webhook drain runs first, inside its own share of the
+ * run (integrator R3), and a stage that left work for the next tick says so.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,7 +33,10 @@ vi.mock('@/server/connectors/drainer', async (importOriginal) => ({
 }));
 
 const drainIntegrationDeliveries = vi.hoisted(() => vi.fn());
-vi.mock('@/server/services/integration-events', () => ({ drainIntegrationDeliveries }));
+vi.mock('@/server/services/integration-events', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/integration-events')>()),
+  drainIntegrationDeliveries,
+}));
 vi.mock('@/server/services/platform/impersonation', () => ({
   sweepExpiredImpersonations: vi.fn(async () => undefined),
 }));
@@ -52,6 +56,7 @@ vi.mock('@/server/connectors/secret-store', () => ({
 }));
 
 import { CONNECTOR_START_RESERVE_MS, DRAIN_OUTBOX_DEADLINE_MS } from '@/server/connectors/drainer';
+import { WEBHOOK_DRAIN_SHARE_MS } from '@/server/services/integration-events';
 
 import { GET } from './route';
 
@@ -99,20 +104,25 @@ afterEach(() => {
 });
 
 describe('GET /api/cron/drain-outbox: one deadline for the whole run', () => {
-  it('hands the connector drain and the webhook drain the same deadline, 50 s after the start', async () => {
+  it('drains the webhooks first inside their share of the run, then the exports to the deadline 50 s after the start', async () => {
     const stub = adminWithOneQuickBooksConnection();
 
     const res = await GET(cronRequest());
 
     expect(res.status).toBe(200);
     expect(DRAIN_OUTBOX_DEADLINE_MS).toBe(50_000);
-    const deadlineAt = START.getTime() + DRAIN_OUTBOX_DEADLINE_MS;
-    expect(runDrain).toHaveBeenCalledTimes(1);
-    expect(runDrain).toHaveBeenCalledWith(stub.client, CONNECTORS, START, { deadlineAt });
+    expect(WEBHOOK_DRAIN_SHARE_MS).toBe(20_000);
     expect(drainIntegrationDeliveries).toHaveBeenCalledTimes(1);
     expect(drainIntegrationDeliveries).toHaveBeenCalledWith(stub.client, START, undefined, {
-      deadlineAt,
+      deadlineAt: START.getTime() + WEBHOOK_DRAIN_SHARE_MS,
     });
+    expect(runDrain).toHaveBeenCalledTimes(1);
+    expect(runDrain).toHaveBeenCalledWith(stub.client, CONNECTORS, START, {
+      deadlineAt: START.getTime() + DRAIN_OUTBOX_DEADLINE_MS,
+    });
+    expect(drainIntegrationDeliveries.mock.invocationCallOrder[0]).toBeLessThan(
+      runDrain.mock.invocationCallOrder[0] ?? 0,
+    );
   });
 
   it('the monthly valuation starts no connection once less than the reserve is left', async () => {
@@ -140,5 +150,63 @@ describe('GET /api/cron/drain-outbox: one deadline for the whole run', () => {
     await GET(cronRequest());
 
     expect(maybePostMonthlyValuation).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Integrator R3: a stage the deadline cut short answered like a stage with
+ * nothing to do ({ attempted: 0, delivered: 0 }), and the valuation not at
+ * all, so a run that left work behind looked like an empty success.
+ */
+describe('GET /api/cron/drain-outbox: work left for the next tick is said', () => {
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it('each stage the deadline cut short answers skipped: deadline, and one warn line names them', async () => {
+    adminWithOneQuickBooksConnection();
+    drainIntegrationDeliveries.mockResolvedValue({
+      attempted: 4,
+      delivered: 4,
+      skipped: 'deadline',
+    });
+    // The export drain stops at its reserve: 24 s are left for the valuation.
+    runDrain.mockImplementation(async () => {
+      vi.setSystemTime(START.getTime() + 26_000);
+      return { processed: 3, succeeded: 3, failed: 0, deadlettered: 0, skipped: 'deadline' };
+    });
+
+    const res = await GET(cronRequest());
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      processed: 3,
+      succeeded: 3,
+      failed: 0,
+      deadlettered: 0,
+      skipped: 'deadline',
+      webhooks: { attempted: 4, delivered: 4, skipped: 'deadline' },
+      valuation: { skipped: 'deadline' },
+    });
+    expect(maybePostMonthlyValuation).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      [
+        '[drain-outbox] stopped at the run deadline, the rest waits for the next tick: webhooks, exports, valuation',
+      ],
+    ]);
+  });
+
+  it('a run with time to spare answers no skip and logs no warn line', async () => {
+    adminWithOneQuickBooksConnection();
+
+    const res = await GET(cronRequest());
+
+    expect(await res.json()).toEqual({ ...EMPTY_DRAIN, webhooks: { attempted: 0, delivered: 0 } });
+    expect(maybePostMonthlyValuation).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
   });
 });
