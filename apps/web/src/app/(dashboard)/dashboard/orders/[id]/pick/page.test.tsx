@@ -50,7 +50,12 @@ vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({ hasAllAccess: true, writableIds: [] })),
 }));
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async () => ({ enabled: false, canManage: false })),
+  // Orders, the page's own module, is on (the page checks it before it reads,
+  // B66); Lots and serials is off.
+  checkModuleAccess: vi.fn(async (moduleId: string) => ({
+    enabled: moduleId === 'orders',
+    canManage: false,
+  })),
 }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => {
@@ -149,5 +154,24 @@ describe('orders/[id]/pick: readiness for the completion confirm (F2-2)', () => 
     await renderPage();
 
     expect(lastProps()).toMatchObject({ canPick: false, readiness: null });
+  });
+});
+
+// B63: a link whose id was mistyped or cut short is Page not found before the
+// readiness and order reads start (the order read's invalid-uuid error used to
+// be swallowed into a 404 only after both had run).
+describe('orders/[id]/pick: an order id that is not a uuid', () => {
+  it('is the not-found page, with nothing read and no request context asked for', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const id of ['not-a-uuid', ORDER.slice(0, -1)]) {
+      vi.clearAllMocks();
+      await expect(DigitalPickPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+      expect(events).toEqual([]);
+      expect(orderGet).not.toHaveBeenCalled();
+      expect(readinessForCurrentUser).not.toHaveBeenCalled();
+      expect(requireOrgContext).not.toHaveBeenCalled();
+    }
   });
 });

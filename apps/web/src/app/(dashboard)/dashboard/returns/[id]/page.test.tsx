@@ -50,13 +50,15 @@ import { ServiceError } from '@/server/services/context';
 
 import ReturnDetailPage from './page';
 
-const args = { params: Promise.resolve({ id: 'r1' }) };
+const RETURN_ID = '5eed0000-0000-4000-8000-0000000000a9';
+
+const args = { params: Promise.resolve({ id: RETURN_ID }) };
 
 function bench(over: Record<string, unknown> = {}) {
   return {
     organizationId: 'org-1',
     return: {
-      id: 'r1',
+      id: RETURN_ID,
       returnNumber: 'RMA-1',
       status: 'approved',
       source: 'requester',
@@ -135,5 +137,25 @@ describe('the RMA workbench page', () => {
     orgCtx.value = { organizationId: 'org-1', userId: 'u1', role: 'viewer', permissions: new Set([]) };
     await expect(ReturnDetailPage(args)).rejects.toThrow('redirect:/dashboard');
     orgCtx.value = { organizationId: 'org-1', userId: 'u1', role: 'viewer', permissions: new Set(['returns:read']) };
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before anything else:
+// ahead of the module panel and the returns:read redirect, and before the
+// workbench and the return label are read.
+describe('the RMA workbench page: a return id that is not a uuid', () => {
+  it('is the not-found page, with no gate asked and nothing read', async () => {
+    const { checkModuleAccess } = await import('@/lib/modules/module-gate');
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    const { ShippingService } = await import('@/server/services/shipping');
+    for (const id of ['not-a-uuid', RETURN_ID.slice(0, -1)]) {
+      await expect(ReturnDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(checkModuleAccess).not.toHaveBeenCalled();
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(workbench).not.toHaveBeenCalled();
+    expect(ShippingService.forCurrentUser).not.toHaveBeenCalled();
   });
 });

@@ -59,8 +59,8 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
         // a session it still accepts means the message is forged or stale, and
         // nothing happens; a request that could not be made proves nothing
         // either way, and token expiry still ends a revoked session. Only an
-        // answer that the session is gone signs this tab out. (Mobile keeps the
-        // same rule: use-session-revocation.ts.)
+        // answer that the session is gone signs this tab out. (The phone's
+        // listener is use-session-revocation.ts, which states its own rule.)
         void (async () => {
           const { error } = await supabase!.auth.getUser();
           if (!error) return;

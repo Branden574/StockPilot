@@ -764,20 +764,36 @@ const inventoryByCategoryTool: ToolExecutor = {
   },
   async execute(_args, ctx) {
     // SP-040 — paged, same rationale as inventoryByWarehouse above.
-    const [{ rows: items, truncated }, { data: cats }] = await Promise.all([
-      fetchAggregationItems<{
-        category_id: string | null;
-        quantity_on_hand: number;
-        unit_cost: number;
-      }>(ctx, 'id, category_id, quantity_on_hand, unit_cost'),
-      ctx.supabase
-        .from('categories')
-        .select('id, name')
-        .eq('organization_id', ctx.organizationId),
-    ]);
+    const { rows: items, truncated } = await fetchAggregationItems<{
+      category_id: string | null;
+      quantity_on_hand: number;
+      unit_cost: number;
+    }>(ctx, 'id, category_id, quantity_on_hand, unit_cost');
+
+    // The names of the categories these items use, and only those: by id, in
+    // batches, each batch page by page (B47). The item set is already capped
+    // at AI_AGGREGATION_ROW_CAP, so this read is bounded by it. It was one
+    // read of every category with no order, which answered an arbitrary 1000
+    // past 1000 categories, and each category left out was called
+    // "(deleted)". A failed batch fails the call instead of naming every
+    // category "(deleted)".
+    const categoryIds = [
+      ...new Set(items.map((i) => i.category_id).filter((id): id is string => Boolean(id))),
+    ];
+    const cats = await fetchAllRowsByIds<{ id: string; name: string }>(
+      categoryIds,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('categories')
+          .select('id, name')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
 
     const nameById = new Map<string, string>();
-    for (const c of (cats ?? []) as Array<{ id: string; name: string }>) {
+    for (const c of cats) {
       nameById.set(c.id, c.name);
     }
 

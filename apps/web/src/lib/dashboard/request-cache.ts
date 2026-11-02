@@ -1,6 +1,5 @@
 import 'server-only';
 
-import { isAuthSessionMissingError } from '@supabase/supabase-js';
 import { cache } from 'react';
 
 import {
@@ -10,7 +9,7 @@ import {
   orgRowFromMembership,
 } from '@/lib/auth/request-context-bundle';
 import { effectiveModules } from '@/lib/modules/effective-modules';
-import { SessionEndedError } from '@/lib/auth/session-ended';
+import { readMfaFactorList, type MfaFactor, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { createClient } from '@/lib/supabase/server';
 
 import { type ModuleId } from '@stockpilot/core';
@@ -143,34 +142,26 @@ export const getWarehousesForRequest = cache(
     (await readWarehousesForRequest(organizationId)).rows,
 );
 
-export interface MfaFactor {
-  status: string;
-}
+export type { MfaFactor, MfaFactorList };
 
 /**
- * The signed-in user's MFA factors. THROWS when they cannot be read.
+ * The signed-in user's MFA factors, with the account they belong to
+ * (readMfaFactorList in lib/auth/mfa-factors on the cookie session). THROWS
+ * when they cannot be read: `resolveMfaState` catches and fails closed (MFA
+ * required, not satisfied), and the layout shows its error screen rather than
+ * a dashboard without its gate (#229). Same contract as getOrgRowForRequest
+ * above.
  *
- * `listFactors()` goes through GoTrue (`getUser`), and auth-js RESOLVES a
- * failure as `{ data: null, error }` rather than throwing. This used to read
- * that as `[]`: "no verified factor". An enrolled user then skipped the
- * dashboard layout's AAL2 gate, and `resolveMfaState` skipped the
- * enrollment escalation (HI-6), under an 'optional' policy, for as long as
- * GoTrue was failing. An unreadable authorization input must deny, so this
- * throws: `resolveMfaState` catches and fails closed (MFA required, not
- * satisfied), and the layout shows its error screen rather than a
- * dashboard without its gate. Same contract as getOrgRowForRequest above.
+ * Read ONCE per page render and shared through React cache(): the dashboard
+ * layout starts it first thing and the page's withContext() takes the same
+ * read. Inside a Server Action or a Route Handler cache() does not memoize.
+ * Whoever decides anything on the list takes it through factorsOf() with the
+ * user the request validated: the read loads the cookie session, which can
+ * refresh into another account's (S43a, review round s43ar).
  */
-export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactor[]> => {
-  const supabase = await createClient();
-  const res = await supabase.auth.mfa.listFactors();
-  if (res.error) {
-    // The session is GONE (revoked elsewhere, signed out everywhere): not an
-    // unreadable list. Callers send this to sign-in (lib/auth/session-ended).
-    if (isAuthSessionMissingError(res.error)) throw new SessionEndedError();
-    throw new Error(`getMfaFactorsForRequest: ${res.error.name || 'unreadable'}`);
-  }
-  return (res.data?.all ?? []) as MfaFactor[];
-});
+export const getMfaFactorsForRequest = cache(async (): Promise<MfaFactorList> =>
+  readMfaFactorList(await createClient()),
+);
 
 /**
  * The org's effective module set AND whether its `organization_modules` rows

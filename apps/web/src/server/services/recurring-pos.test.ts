@@ -1059,10 +1059,16 @@ describe('recurringRunNotice — what the admins are told', () => {
     expect(recurringRunNotice(base)).toBeNull();
   });
 
+  // Re-pinned by fix/recurring-po-auto-order-words-b64-b105 (B64, B105,
+  // 2026-11-02; was: "..., 1 sent." and "Edit the template to remove it.",
+  // "Edit or disable it.", "Edit the templates to remove them."): the run
+  // marks a purchase order as ordered and sends nothing, and a template is
+  // edited on the web only (the phone's Recurring POs can turn it off or
+  // delete it).
   it('a run that created POs, unchanged when nothing was left off', () => {
     expect(recurringRunNotice({ ...base, created: 2, sent: 1 })).toEqual({
       title: 'Recurring purchase orders ran',
-      body: 'Recurring purchase orders created 2 purchase orders, 1 sent.',
+      body: 'Recurring purchase orders created 2 purchase orders, 1 marked as ordered.',
     });
   });
 
@@ -1072,7 +1078,7 @@ describe('recurringRunNotice — what the admins are told', () => {
     ).toEqual({
       title: 'Recurring purchase orders ran',
       body:
-        'Recurring purchase orders created 1 purchase order, 1 sent. 1 template line was left off ("Weekly Supplies") because the item was deleted or is a pre-assembled kit, which is never ordered. Edit the template to remove it.',
+        'Recurring purchase orders created 1 purchase order, 1 marked as ordered. 1 template line was left off ("Weekly Supplies") because the item was deleted or is a pre-assembled kit, which is never ordered. On the web, open Recurring POs and edit the template to remove it.',
     });
   });
 
@@ -1088,7 +1094,7 @@ describe('recurringRunNotice — what the admins are told', () => {
     ).toEqual({
       title: 'Recurring purchase orders need attention',
       body:
-        '1 template line was left off ("Monthly Pens") because the item was deleted or is a pre-assembled kit, which is never ordered. Edit the template to remove it. "Monthly Pens" created no purchase order: none of its items can be ordered any more. Edit or disable it.',
+        '1 template line was left off ("Monthly Pens") because the item was deleted or is a pre-assembled kit, which is never ordered. On the web, open Recurring POs and edit the template to remove it. "Monthly Pens" created no purchase order: none of its items can be ordered any more. In Recurring POs, edit it on the web or turn it off.',
     });
   });
 
@@ -1099,6 +1105,8 @@ describe('recurringRunNotice — what the admins are told', () => {
       templatesWithLinesLeftOff: ['A', 'B', 'C', 'D', 'E'],
     });
     expect(notice?.body).toContain('5 template lines were left off ("A", "B", "C" and 2 more)');
-    expect(notice?.body).toContain('Edit the templates to remove them.');
+    expect(notice?.body).toContain(
+      'On the web, open Recurring POs and edit the templates to remove them.',
+    );
   });
 });

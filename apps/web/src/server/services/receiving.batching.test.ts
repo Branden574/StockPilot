@@ -80,6 +80,8 @@ function receiptStub(opts: { failLinesBatch?: number; failUpdateBatch?: number }
   let updates = 0;
   const lists = { lines: [] as string[][], items: [] as string[][], update: [] as string[][] };
   const stub = makeSupabaseStub({
+    // The PO, read in the organization before the function (S39).
+    'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
     'rpc:post_receipt_v2': { data: receiptRow, error: null },
     'purchase_order_items.select': (call) => {
       lineCalls += 1;

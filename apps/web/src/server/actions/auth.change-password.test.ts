@@ -23,6 +23,11 @@ const getSession = vi.fn();
 const getClaims = vi.fn();
 const maybeSingle = vi.fn();
 const broadcastToChannel = vi.fn();
+/**
+ * The cookie client's rpc: list_my_sessions (the caller's sessions, the kept
+ * one included) and revoke_my_other_sessions (the database backstop).
+ */
+const rpc = vi.fn();
 // vi.hoisted: this spy is touched INSIDE a vi.mock factory (which vitest hoists
 // above the module body), so a plain `const` would still be in its temporal
 // dead zone when the factory runs.
@@ -92,6 +97,7 @@ vi.mock('@/lib/supabase/server', () => ({
       mfa: { listFactors, getAuthenticatorAssuranceLevel },
     },
     from: () => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }),
+    rpc,
   }),
 }));
 
@@ -100,6 +106,9 @@ vi.mock('@/lib/supabase/server', () => ({
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({ auth: { signInWithPassword } }),
 }));
+
+import { reportError } from '@/lib/error-reporter';
+import { audit } from '@/server/services/audit';
 
 import { changePasswordAction } from './auth';
 
@@ -199,9 +208,16 @@ describe('changePasswordAction — account status', () => {
  * its first intended caller. An inlined copy silently misses every future
  * hardening applied to the helper.
  */
+const OTHER_A = '55555555-5555-4555-8555-555555555555';
+const OTHER_B = '66666666-6666-4666-8666-666666666666';
+
 describe('changePasswordAction — session revocation + shared password check', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    rpc.mockResolvedValue({
+      data: [{ id: OTHER_A }, { id: 'sess-1' }, { id: OTHER_B }],
+      error: null,
+    });
     getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'u@example.com' } } });
     checkRateLimit.mockResolvedValue({ allowed: true });
     signInWithPassword.mockResolvedValue({ error: null });
@@ -214,14 +230,48 @@ describe('changePasswordAction — session revocation + shared password check', 
     maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
   });
 
-  it('broadcasts the revoke to other devices, keeping the current session alive', async () => {
+  it('broadcasts the revoke to other devices, naming the sessions it ended and never the one it kept', async () => {
     const res = await changePasswordAction(INPUT);
 
     expect(res.ok).toBe(true);
     expect(signOut).toHaveBeenCalledWith({ scope: 'others' });
+    // S5 (integrator decision 2026-11-01): `{ keepId: 'sess-1' }` put the LIVE
+    // session id on the public channel. The ended ones are named instead.
+    expect(broadcastToChannel).toHaveBeenCalledTimes(1);
     expect(broadcastToChannel).toHaveBeenCalledWith('user:u-1:sessions', 'revoked', {
-      keepId: 'sess-1',
+      sessionIds: [OTHER_A, OTHER_B],
     });
+    expect(JSON.stringify(broadcastToChannel.mock.calls)).not.toContain('sess-1');
+  });
+
+  it('lists the sessions BEFORE the password changes: once the others are ended they cannot be named', async () => {
+    await changePasswordAction(INPUT);
+    expect(rpc).toHaveBeenCalledWith('list_my_sessions');
+    expect(rpc.mock.invocationCallOrder[0]!).toBeLessThan(updateUser.mock.invocationCallOrder[0]!);
+    expect(updateUser.mock.invocationCallOrder[0]!).toBeLessThan(
+      broadcastToChannel.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it('no other session, or a list that cannot be read: the password still changes, and nothing is broadcast', async () => {
+    rpc.mockResolvedValueOnce({ data: [{ id: 'sess-1' }], error: null });
+    expect((await changePasswordAction(INPUT)).ok).toBe(true);
+    rpc.mockResolvedValueOnce({
+      data: null,
+      error: { code: 'PGRST000', message: 'connection refused' },
+    });
+    expect((await changePasswordAction(INPUT)).ok).toBe(true);
+    expect(updateUser).toHaveBeenCalledTimes(2);
+    expect(signOut).toHaveBeenCalledTimes(2);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+  });
+
+  it('a refused password change broadcasts nothing (the list before it was only a read)', async () => {
+    updateUser.mockResolvedValueOnce({
+      error: { message: 'Password should be at least 8 characters' },
+    });
+    expect((await changePasswordAction(INPUT)).ok).toBe(false);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 
   it('skips the broadcast when the current session id cannot be derived', async () => {
@@ -283,5 +333,114 @@ describe('changePasswordAction — session revocation + shared password check', 
     expect(updateUser).not.toHaveBeenCalled();
     expect(signOut).not.toHaveBeenCalled();
     expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(rpc).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * signOut({ scope: 'others' }) returns a failure rather than throwing, so the
+ * try/catch around it never saw one: the password changed and every other
+ * session of the account stayed alive. The error is now read, and the other
+ * sessions are ended in the database instead (revoke_my_other_sessions, which
+ * keeps the session id given), only with this tab's VERIFIED session id: with
+ * none, the function would end this session too.
+ */
+describe('changePasswordAction — when the sign-out of the other sessions returns an error', () => {
+  const GOTRUE_DOWN = {
+    name: 'AuthRetryableFetchError',
+    message: 'Service Unavailable',
+    status: 503,
+  };
+  let revokeOthersAnswer: { data: unknown; error: { message: string } | null };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'u@example.com' } } });
+    checkRateLimit.mockResolvedValue({ allowed: true });
+    signInWithPassword.mockResolvedValue({ error: null });
+    listFactors.mockResolvedValue({ data: { totp: [] } });
+    getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
+    updateUser.mockResolvedValue({ error: null });
+    signOut.mockResolvedValue({ error: GOTRUE_DOWN });
+    getSession.mockResolvedValue({ data: { session: { access_token: STORED_ACCESS } } });
+    getClaims.mockResolvedValue({ data: { claims: VERIFIED_CLAIMS }, error: null });
+    maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
+    revokeOthersAnswer = { data: 2, error: null };
+    rpc.mockImplementation(async (fn: string) =>
+      fn === 'list_my_sessions'
+        ? { data: [{ id: OTHER_A }, { id: 'sess-1' }, { id: OTHER_B }], error: null }
+        : revokeOthersAnswer,
+    );
+  });
+
+  /** The calls to the database revoke, apart from the session list read before the change. */
+  const revokeCalls = () => rpc.mock.calls.filter(([fn]) => fn === 'revoke_my_other_sessions');
+
+  it("ends the other sessions in the database, keeping this tab's verified session, and records it", async () => {
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    expect(revokeCalls()).toEqual([['revoke_my_other_sessions', { p_keep_session_id: 'sess-1' }]]);
+    // The devices are told which sessions ended, never the one that stays (S5).
+    expect(broadcastToChannel).toHaveBeenCalledWith('user:u-1:sessions', 'revoked', {
+      sessionIds: [OTHER_A, OTHER_B],
+    });
+    expect(JSON.stringify(broadcastToChannel.mock.calls)).not.toContain('sess-1');
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.password.changed',
+        extra: { revoke_error: 'AuthRetryableFetchError', database_revoke: 'ok' },
+      }),
+    );
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'auth.password_change_revoke_failed',
+        extra: expect.objectContaining({ database_revoke: 'ok' }),
+      }),
+    );
+    expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain('Service Unavailable');
+  });
+
+  it('records a database revoke that failed', async () => {
+    revokeOthersAnswer = { data: null, error: { message: 'db down' } };
+
+    await changePasswordAction(INPUT);
+
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extra: { revoke_error: 'AuthRetryableFetchError', database_revoke: 'failed' },
+      }),
+    );
+  });
+
+  it('never calls the database revoke without a verified session id', async () => {
+    getClaims.mockResolvedValue({ data: null, error: null });
+    getSession.mockResolvedValue({ data: { session: null } });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    expect(revokeCalls()).toEqual([]);
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        extra: { revoke_error: 'AuthRetryableFetchError', database_revoke: 'no_session_id' },
+      }),
+    );
+  });
+
+  it('a sign-out that answers records that no database revoke was needed', async () => {
+    signOut.mockResolvedValue({ error: null });
+
+    await changePasswordAction(INPUT);
+
+    expect(revokeCalls()).toEqual([]);
+    expect(reportError).not.toHaveBeenCalled();
+    expect(audit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.password.changed',
+        extra: { revoke_error: null, database_revoke: 'not_needed' },
+      }),
+    );
   });
 });

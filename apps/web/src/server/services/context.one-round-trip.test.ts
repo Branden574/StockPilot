@@ -52,7 +52,7 @@ const state = {
   factors: [] as Array<{ status: string }>,
   aal: 'aal1' as 'aal1' | 'aal2',
 };
-const calls = { rpc: 0, from: [] as string[], listFactors: 0, clients: [] as unknown[] };
+const calls = { rpc: 0, from: [] as string[], factorReads: 0, clients: [] as unknown[] };
 
 const org = (extra: Partial<OrgFixture> = {}): OrgFixture => ({
   id: 'A',
@@ -159,11 +159,11 @@ vi.mock('@/lib/supabase/server', () => ({
           data: { session: { access_token: 'stored.token' } },
           error: null,
         }),
-        mfa: {
-          listFactors: async () => {
-            calls.listFactors += 1;
-            return { data: { all: state.factors }, error: null };
-          },
+        // The factor list: GoTrue's user, with its factors (lib/auth/mfa-factors
+        // reads it with getUser(), the round trip listFactors() makes inside).
+        getUser: async () => {
+          calls.factorReads += 1;
+          return { data: { user: { id: 'u1', factors: state.factors } }, error: null };
         },
       },
     };
@@ -183,7 +183,7 @@ beforeEach(() => {
   state.aal = 'aal1';
   calls.rpc = 0;
   calls.from = [];
-  calls.listFactors = 0;
+  calls.factorReads = 0;
   calls.clients = [];
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -194,7 +194,7 @@ describe('withContext() in a Server Action', () => {
     const ctx = await withContext();
     expect(calls.rpc).toBe(1);
     expect(calls.from).toEqual([]);
-    expect(calls.listFactors).toBe(1);
+    expect(calls.factorReads).toBe(1);
     expect(ctx.organizationId).toBe('A');
     expect(ctx.role).toBe('admin');
     expect([...ctx.enabledModules]).toEqual(['orders']);

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 
+import { INVITE_ACCOUNT_EXISTS_COPY } from '@/app/invite/[token]/invite-copy';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import {
   assertCurrentAal2,
@@ -12,8 +13,11 @@ import {
 import { audit } from '@/server/services/audit';
 import { TeamService, acceptInviteWithToken } from '@/server/services/team';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
+import { factorsOf, readMfaFactorList, type MfaFactor } from '@/lib/auth/mfa-factors';
+import { isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
@@ -356,14 +360,27 @@ export async function transferOwnershipAction(input: {
 
     // AAL2 step-up. If caller has any verified factor, they must have
     // completed the MFA challenge this session.
-    const { data: factorsData, error: factorsError } = await ctx.supabase.auth.mfa.listFactors();
-    // Unreadable is not "not enrolled": refuse rather than skip the step-up.
-    if (factorsError) {
+    //
+    // Decided from THIS owner's factor list only (S43a, review round s43ar).
+    // The list is read after the context settled the owner, and the read
+    // loads the cookie session again: a load refreshes it with the cookie's
+    // own refresh token when the cookie's own `expires_at` says so, and
+    // nothing signs either field. The owner's password-only (aal1) token beside
+    // the refresh token of an account with no factor (an insider's own) made
+    // this list come back empty, the step-up was skipped, the password check
+    // passed, and the organization moved to the insider. Unreadable, or the
+    // list of another account, is not "not enrolled": refuse rather than skip
+    // the step-up.
+    let ownFactors: MfaFactor[] | null = null;
+    try {
+      ownFactors = factorsOf(await readMfaFactorList(ctx.supabase), ctx.userId);
+    } catch {
+      ownFactors = null;
+    }
+    if (!ownFactors) {
       return err('internal_error', 'Could not check your two-factor status. Please try again.');
     }
-    const hasVerifiedFactor = (factorsData?.totp ?? []).some(
-      (f) => f.status === 'verified',
-    );
+    const hasVerifiedFactor = ownFactors.some((f) => f.status === 'verified');
     if (hasVerifiedFactor) {
       await assertCurrentAal2(ctx);
     }
@@ -451,9 +468,14 @@ const acceptInviteWithSignupSchema = z.object({
 /**
  * Combined sign-up + invite-acceptance flow.
  *
- * This is the ONLY path through which a brand-new auth user is created in
- * this app — public signup is disabled. The action:
- *   1. Validates the invite token, expiry, and `accepted_at`.
+ * Public signup is disabled. A brand-new auth user is created in this app in
+ * three places, each gated: here (a single-use invite token), Platform >
+ * Provision (createOrgForCustomerAction in actions/platform-admin.ts, platform
+ * admins only) and the B2B portal invite (CustomersService.inviteUser in
+ * services/customers.ts, customers:manage). The action:
+ *   1. Validates the invite token, expiry, and `accepted_at`, and refuses an
+ *      address that already has an account or is on the platform-admin
+ *      allowlist (the same answer for both).
  *   2. Creates a Supabase auth user via the admin client (bypasses the
  *      org-level `enable_signup=false` setting because invites are gated by
  *      a single-use token only the inviter could have provided).
@@ -499,7 +521,7 @@ export async function acceptInviteWithSignupAction(input: {
 
   // 2. Check if an auth user already exists for this email. If so, this is
   //    actually the "I have an account, sign me in" path — return a clear
-  //    error directing them to the sign-in option.
+  //    error directing them to the invite page's Sign in link.
   //
   //    Implemented via the SECURITY DEFINER function
   //    `public.auth_user_exists_by_email` (migration 0097), which does a single
@@ -512,10 +534,27 @@ export async function acceptInviteWithSignupAction(input: {
   if (existsErr) return err('internal_error', existsErr.message);
   const alreadyExists = existsData === true;
   if (alreadyExists) {
-    return err(
-      'conflict',
-      'An account already exists for this email. Use the "I already have an account" option instead.',
-    );
+    return err('conflict', INVITE_ACCOUNT_EXISTS_COPY);
+  }
+
+  // Never create the account of a platform admin. The allowlist gives the
+  // Platform console, and creating workspaces, to whoever holds an account
+  // with that verified email, and step 3 creates one confirmed, with a
+  // password the token holder chooses. The token is not proof of the mailbox:
+  // TeamService.invite returns it to the inviter and the Team page lists it
+  // under Pending invites. So any workspace admin could invite an allowlisted
+  // address that has no account yet and claim it here. An allowlisted
+  // address gets its account from the operator before it goes on the list.
+  // The answer is the existing-account answer, word for word, so the token
+  // holder cannot tell an allowlisted address from one that has an account.
+  // An existing account still accepts an invite through acceptInviteAction.
+  if (isPlatformAdmin(email)) {
+    void reportError(new Error('Invite sign-up refused for a platform-admin address'), {
+      tag: 'team.invite_signup.platform_admin_address',
+      level: 'warning',
+      organizationId: invite.organization_id as string,
+    });
+    return err('conflict', INVITE_ACCOUNT_EXISTS_COPY);
   }
 
   // 3. Create the auth user (admin path bypasses enable_signup=false).

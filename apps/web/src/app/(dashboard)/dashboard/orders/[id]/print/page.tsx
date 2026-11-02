@@ -2,12 +2,16 @@ import { notFound } from 'next/navigation';
 
 import { formatOrderNumber, orderLineItemName } from '@stockpilot/core';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { AutoPrint } from '@/components/orders/auto-print';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getCachedOrgTimezone } from '@/lib/dashboard/cached-org';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { ServiceError } from '@/server/services/context';
 import { formatNumber } from '@/lib/utils';
 
 interface WarehouseAddress {
@@ -57,14 +61,27 @@ export default async function OrderPrintPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
+  // Orders off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
+  }
   const ctx = await requireOrgContext();
 
   const svc = await OrderRequestsService.forCurrentUser();
   let detail;
   try {
     detail = await svc.get(id);
-  } catch {
-    notFound();
+  } catch (e) {
+    // Only a missing order is Page not found. A failed read reaches the error
+    // page, which says the page could not be loaded, offers Try again and
+    // reports it; it used to tell the person the order did not exist (B66).
+    if (e instanceof ServiceError && e.code === 'not_found') notFound();
+    throw e;
   }
 
   const { request, lines, warehouseName, requesterDisplay } = detail;

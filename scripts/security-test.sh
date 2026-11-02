@@ -108,6 +108,13 @@ PGTAP_TESTS=(
   supabase/tests/0218_lock_org_billing_columns.test.sql
   supabase/tests/0219_org_module_minplan_rls.test.sql
   supabase/tests/0220_org_members_insert_owner_guard.test.sql
+  # Only a platform admin creates a workspace (S20): no signed-in or anonymous
+  # caller inserts an organization (RLS on, no INSERT policy since 0138), and
+  # nothing in the database creates one either: no function, whoever may run
+  # it (an INSERT or MERGE into the table, or dynamic SQL that names it), no
+  # trigger, and no view or rewrite rule a caller of the Data API can write
+  # through.
+  supabase/tests/0138_organizations_insert_denied.test.sql
   supabase/tests/0236_picking_rpcs_warehouse_scoped.test.sql
   supabase/tests/0279_auditor_read_permissions.test.sql
   supabase/tests/0282_cycle_count_assignment_lock.test.sql
@@ -765,6 +772,27 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0414_capture_race.sh; the lock footprint is
   # scripts/db-concurrency/0414_migration_lock_footprint.sh.
   supabase/tests/0414_order_signature_images.test.sql
+  # Kit checks (0415, written as 0404; docket S4 with S9's component
+  # organization check):
+  # assemble_bundle and distribute_bundle build no kit from a bundle with no
+  # required component and refuse a component of another organization, whoever
+  # can see it; a distribution's event must be the kit organization's (its one
+  # distribution slot cannot be taken from outside); distribute_bundle refuses
+  # a direct call without bundles:distribute unless it is the Schedule's
+  # completion of a completed event naming that kit, quantity and warehouse;
+  # bundle_components_write needs the item in the bundle's organization and
+  # bundles:manage and refuses the bundle's own kit item; the bundle write
+  # policies follow bundles:manage; bundle_distributions takes no raw API write
+  # (ledger-only guard). Review fixes: both bodies refuse a component that is
+  # the kit's own item (no kit made from nothing through the stale kit-item
+  # copy) and a kit item that is not the kit's own (another organization's,
+  # not a kit item, or named by a second bundle); the bundles guard stops a
+  # raw API write of phantom_item_id and a move to another organization. Each
+  # fix is removed in an undone subtransaction to show its probe pass again,
+  # and the migration's own preflight is replayed from the recorded statements.
+  # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
+  # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
+  supabase/tests/0415_bundle_component_checks.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -854,6 +882,11 @@ WEB_TESTS=(
   # while a failed lookup of an allowed host is retried and a lookup still out
   # when the attempt times out is cut off with it.
   src/lib/exports/export-images.test.ts
+  # The webhook delivery's use of the same guard (docket B49), with the guard
+  # and safeFetch run for real: a refused URL (a private address, a scheme
+  # other than http or https, a Slack or Teams URL on another host) is final
+  # and never sent, while a failed lookup of the host is retried with backoff.
+  src/server/services/integration-events.delivery-lookup.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a
@@ -912,6 +945,32 @@ WEB_TESTS=(
   # policy still requires AAL2, so a stolen password alone cannot pass the gates.
   # context.mfa.test.ts below is the web twin — keep the pair together.
   src/lib/auth/api-context.mfa.test.ts
+  # A password alone reads nothing through the API (docket S43a): withApiContext
+  # refuses an account with a verified authenticator factor whose session is
+  # not aal2, on both paths, right after the identity check and before any
+  # read (the route's own 401); the phone's snapshot end to end; the client
+  # crash beacon, on the AAL1 allowlist; the two OAuth callbacks
+  # that build their own principal ask the same question; and the sweep that
+  # holds every route handler under src/app to the rule or to a reviewed list
+  # (core's stepUpOwed truth table is in MANIFEST 4).
+  src/lib/auth/api-context.step-up.test.ts
+  # The level those refusals and the MFA label read is the validated user's
+  # own (S43a review round 1): a cookie carrying another account's refresh
+  # token, timed to refresh after getUser(), reads as not aal2. The real server
+  # client and auth-js against the fixture's Auth server.
+  src/lib/auth/api-context.refresh-swap.test.ts
+  src/app/api/v1/mobile/snapshot/route.step-up.test.ts
+  src/app/api/client-error/route.test.ts
+  # The phone's sign-in and sign-out notes (S5a), the other two routes on the
+  # AAL1 allowlist: an aal1 session of an account with an authenticator writes
+  # the sign-in row (code owed) and the device note, and its sign-out revokes
+  # and names the other sessions, through the REAL withApiContext; the same
+  # session still gets 401 from the push registration beside them, and
+  # withApiContext without the opt-out still answers it null.
+  src/app/api/v1/auth/step-up-pending.test.ts
+  src/app/api/integrations/quickbooks/callback/route.test.ts
+  src/app/api/integrations/sage_intacct/callback/route.test.ts
+  src/test/api-step-up.guard.test.ts
   # Cross-site cookie writes (docket S14, INV-E5): the one rule (a write with
   # no Bearer token is refused when Sec-Fetch-Site is not same-origin, when
   # Origin names another host, or when neither header is present),
@@ -961,10 +1020,82 @@ WEB_TESTS=(
   src/lib/auth/verified-claims.test.ts
   src/lib/auth/server-session-reads.guard.test.ts
   src/lib/auth/platform-admin.gates.test.ts
+  # The claims count only for the account the request already validated (S43a
+  # review round 1): a cookie whose refresh token belongs to another account's
+  # session, timed to refresh between the identity read and the claims read,
+  # passed the console's fresh step-up with that account's claims. The
+  # withContext gate and assertCurrentAal2 cases are in
+  # context.verified-aal.test.ts.
+  src/lib/auth/platform-admin.refresh-swap.test.ts
   src/server/services/context.verified-aal.test.ts
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
+  # The dashboard layout's gate for an enrolled member holds the claims to the
+  # member its context resolved (S43a): another account's aal2 session,
+  # refreshed in from the cookie's own refresh token, sends the member to the
+  # code page. The real server client, auth-js, requireOrgContext() and
+  # get_request_context(), with the shared claims read in both orders.
+  'src/app/(dashboard)/layout.refresh-swap.test.tsx'
+  # And the factor list, the gates' other input (S43a review round s43ar): a
+  # list that refreshed into an account with no authenticator read as "not
+  # enrolled". It now says whose list it is (lib/auth/mfa-factors.ts), and
+  # only the member's own counts: the layout sends them to the code page,
+  # withContext's gate fails closed, and the ownership transfer refuses before
+  # the service role moves the organization. The layout's cases are in
+  # layout.refresh-swap.test.tsx above.
+  src/lib/auth/mfa-factors.test.ts
+  src/server/services/context.factor-swap.test.ts
+  src/server/actions/team.transfer-refresh-swap.test.ts
+  # Each security check in the recovery codes, account deletion and the email
+  # change reads the factors and sign-in level of the account the action
+  # already validated (docket S50a). A recovery code is spent, and codes are
+  # minted, with that account's verified access token on a client that acts as
+  # it alone (lib/supabase/access-token-client.ts); account deletion reads that
+  # account's factors, level and email, and checks once more right before the
+  # delete (server/services/step-up-held.ts); the email change takes the
+  # factors from the getUser() answer that names the user. The real server
+  # client, auth-js and requireSession() in the three action files.
+  src/server/services/step-up-held.test.ts
+  src/server/actions/mfa-recovery.held-reads.test.ts
+  src/server/actions/profile.held-reads.test.ts
+  src/server/actions/email-change.held-reads.test.ts
+  # S5a: the phone's sign-in and sign-out reach the server. Each is one Audit
+  # log row per session, with a hashed session reference and never the session
+  # id, written only for a verified bearer token of the account itself; the
+  # phone's sign-out revokes the account's other sessions and names them on
+  # the sessions channel only after the revoke answered. That channel is
+  # public, so no path names a live session on it: "Sign out all other devices",
+  # Change password and the phone name the sessions they ended, never the one
+  # that stays (the guard holds every server keepId to the literal null), and
+  # "Sign out all other devices" names them only after its revoke answered
+  # without error. The new-device email goes out only for a device the call
+  # itself recorded (one per phone install) and its webhook event reaches
+  # accepted, non-act-as memberships only. The phone's device name comes from
+  # the allowlisted fields alone, never its User-Agent, and the sign-in note
+  # keeps only the device family in the Audit row and the organization's
+  # activity. The auth audit helpers are server code, never Server Actions.
+  src/app/api/v1/auth/signed-in/route.test.ts
+  src/app/api/v1/auth/signed-in/route.device-feed.test.ts
+  src/app/api/v1/auth/signed-out/route.test.ts
+  src/lib/auth/login-device.test.ts
+  src/test/session-revoked-payload.guard.test.ts
+  src/server/services/auth-audit.guard.test.ts
+
+  # Only a platform admin creates a workspace (S20, owner decision b.9):
+  # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
+  # before it reads its input, the real check against every caller type (each
+  # role, no membership, a portal user, a rewritten profile email, a failed
+  # verified-email lookup, a stale step-up); and every insert into
+  # organizations and every owner seat in apps/web/src runs after that check
+  # or is a reviewed entry whose callers do. A team invite never creates the
+  # account of an allowlisted address (the token is handed to the inviter, so
+  # it is not proof of the mailbox), and its refusal is the existing-account
+  # answer word for word. All three files carry the "Security invariant"
+  # marker.
+  src/server/actions/organization.create-gate.test.ts
+  src/server/organization-create-sites.guard.test.ts
+  src/server/actions/team.invite-signup-platform-admin.test.ts
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
@@ -1030,10 +1161,53 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S34: a member's session never leaves with an analytics request. PostHog's
+  # SDK sends to /ingest on our own origin, so the browser attaches every
+  # cookie of this host. app/ingest/[...path]/route.ts builds each request to
+  # PostHog from a list of headers: never a cookie, Authorization only as the
+  # app's own PostHog project key (Bearer <key>), no Set-Cookie back. It
+  # passes on only the requests posthog-js makes with the app's init options,
+  # each by the method the SDK uses (404 for any other path, 405 for another
+  # method; OPTIONS, PUT, PATCH and DELETE are answered by the route, not by
+  # Next), the remote config only for the app's own project key and with no
+  # query (another project's config.js would run that project's code as
+  # ours), a query token= or api_key= only when it is that key, PostHog's
+  # content type only when it is JSON, a script or text, every answer
+  # nosniff, and no body over the platform's request body limit (413); each
+  # refusal is logged with its path only. The census test fails when an
+  # installed posthog-js names a path or ships a bundle the list has not been
+  # checked against, and checks each request by every method. The guard
+  # fails if a /ingest rewrite (which forwards the browser's headers as they
+  # came) or a proxy matcher for /ingest comes back; it carries the
+  # "Security invariant" marker.
+  src/test/ingest-proxy.guard.test.ts
+  'src/app/ingest/[...path]/route.test.ts'
+  'src/app/ingest/[...path]/route.census.test.ts'
 
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+
+  # S39: a write named by a row id reads that row in the ACTIVE organization,
+  # through the caller's own client, before its function runs; a miss answers
+  # the site's not-found sentence and nothing runs (lib/in-active-org.ts). A
+  # member of two organizations whose page or phone screen was left open after
+  # a switch sent the other organization's id with this one's context: the
+  # function changed the row there while the audit row, the webhook, the
+  # outbox row and the notices were written here. Twelve sites: order cancel
+  # and paper signature, cycle count release and reassign, receipt post and
+  # reversal, rental checkout, kit save, assembly and hand-out, and the
+  # movement note (action and phone route). The guard classifies every .rpc(
+  # call under apps/web/src and removes each of the twelve reads in turn to
+  # prove it is what holds. Each file carries the "Security invariant" marker.
+  src/test/rpc-active-organization.guard.test.ts
+  src/server/services/lib/in-active-org.test.ts
+  src/server/services/order-requests.other-organization.test.ts
+  src/server/services/cycle-counts.other-organization.test.ts
+  src/server/services/receiving.other-organization.test.ts
+  src/server/services/rentals.other-organization.test.ts
+  src/server/services/bundles.other-organization.test.ts
+  src/server/actions/movements.other-organization.test.ts
 
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified
@@ -1303,6 +1477,16 @@ WEB_TESTS=(
   src/server/services/db-guard-refusal.wiring.test.ts
   src/server/services/order-requests.db-guard.test.ts
   src/server/services/inventory.db-guard.test.ts
+  # 0415: the kit refusals (no required component, another organization's
+  # item or event, a missing bundles:distribute, a component that is the kit's
+  # own item, a kit item that is not the kit's own) reach the Bundles page, the
+  # phone and the Schedule's completion as sentences; a component set with no
+  # required component is refused when it is saved, before anything is
+  # written; the Schedule hands out only the kit the event was saved with.
+  src/server/services/bundles.rpc-refusals.test.ts
+  src/server/services/bundles.save.test.ts
+  src/server/services/schedule.batching.test.ts
+  src/server/actions/bundles.test.ts
   # 0395 review: an approver's cancel asks write access to the order's
   # warehouse, as every other approver action does, and every refusal outside
   # the caller's warehouses (and a failed read of their own access) reads one
@@ -1432,9 +1616,9 @@ WEB_TESTS=(
   # { expire: 0 } (never 'max' or the global tag). No requester surface offers
   # a hidden item: the storefront loader filters and overlays recent hides, the
   # public link page overlays every render, the legacy public thumbnails answer
-  # an empty map, Frequently ordered filters and the picker thumbnails' set is
-  # refused outright (both thumbnail suites are listed once, with the catalog
-  # photo maps' rate limits above); Add items is one atomic database call, and
+  # an empty map, and the picker thumbnails' set is refused outright (both
+  # thumbnail suites are listed once, with the catalog photo maps' rate limits
+  # above); Add items is one atomic database call, and
   # a raise, the portal and the public form refuse a hidden item; PO-import
   # charter siblings and restore points keep a hidden choice.
   src/server/services/order-catalog-visibility.test.ts
@@ -1445,7 +1629,6 @@ WEB_TESTS=(
   src/server/services/portal.pricing-mode.test.ts
   src/app/api/v1/public/order-requests/route.order-visibility.test.ts
   src/server/services/public-catalog.order-visibility.test.ts
-  src/app/api/orders/freq/route.test.ts
   src/server/services/po-imports.charter-decoupling.test.ts
   src/server/services/po-imports-lines.charter-sibling.test.ts
   src/server/services/restore-points.test.ts
@@ -1547,6 +1730,27 @@ MOBILE_TESTS=(
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
 
+  # S5a: a signed-out phone stops showing the account's notifications. Every
+  # deliberate sign-out deletes this phone's push token row while the session
+  # still exists (awaited, bounded, by the token it registered), and so does a
+  # sign-out from another device; registration is held for the whole sign-out
+  # (a token refresh re-running it binds nothing) and never runs while the
+  # session still owes its authenticator code. The registration goes through
+  # register_push_token (SP-073). The phone's install id lives in the Keychain
+  # only, outlives every sign-out, and is never made up when the Keychain
+  # refuses. A "signed out from another device" message on the public sessions
+  # channel is a claim: the phone asks the Auth server about its own session
+  # first, outside auth-js, and a message about a live session, or one it gets
+  # no answer for, deletes no push row, signs nothing out and clears nothing.
+  src/lib/push-unbind.test.ts
+  src/lib/use-push-notifications.test.ts
+  src/lib/push-register-wiring.test.ts
+  src/lib/use-session-revocation.test.ts
+  src/lib/use-session-revocation.forged.test.ts
+  src/lib/session-check.test.ts
+  src/lib/supabase.fetch-auth-user.test.ts
+  src/lib/install-id.test.ts
+
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another
   # account's, left by a fallback sign-out or a session the server ended, is
@@ -1638,6 +1842,9 @@ CORE_TESTS=(
   # 0395: the database refusals' hints and words, shared by web and phone.
   src/guards/db-guard-copy.test.ts
   src/auth/account-status.test.ts
+  # S43a: the one rule for "this session still owes its authenticator code"
+  # (web API context now; the phone's code gate next).
+  src/auth/step-up.test.ts
   src/schemas/inventory.test.ts
   src/signature/signature.test.ts
   # The one item-images path builder (web presign and thumbnail, phone

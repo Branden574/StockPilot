@@ -12,6 +12,7 @@ import {
   detectMassMutations,
   detectPasswordResetBursts,
   detectPrivilegeEscalations,
+  detectRefusedCodeBursts,
   type AuditRow,
 } from '@/server/security/monitors';
 
@@ -34,6 +35,8 @@ const THRESHOLDS = {
   privilegeEscalation: 3,
   massMutation: 25,
   exportAbuse: 3,
+  refusedCodeUser: 5,
+  refusedCodeIp: 15,
 } as const;
 
 /** Audit events the detectors consume — the only rows we pull. */
@@ -44,6 +47,8 @@ const WATCHED_EVENTS = [
   'inventory.item.deleted',
   'inventory.item.archived',
   'security.export_rate_limited',
+  'mfa.code_refused',
+  'mfa.recovery.failed',
 ] as const;
 
 /** Constant-time secret compare. Matches cron/auth-anomalies. */
@@ -56,13 +61,18 @@ function secretsEqual(a: string, b: string): boolean {
 
 /**
  * Audit-anomaly monitor (Cybersecurity Phase 2). Pulls the watched audit_logs
- * events from the last hour and runs five pure detectors over them, alerting the
+ * events from the last hour and runs six pure detectors over them, alerting the
  * platform #alerts feed (via reportError → ERROR_WEBHOOK_URL) for each finding:
  *   - failed-login bursts (per email / per IP) — brute force / cred stuffing
  *   - password-reset bursts (per email) — account-takeover recon
  *   - privilege escalations (per org) — role elevations to admin/owner
  *   - mass deletes/archives (per actor) — insider / compromise / accident
  *   - export abuse (per actor) — sustained data scraping
+ *   - refused-code bursts (per account / per IP) — authenticator and recovery
+ *     code guessing (mfa.code_refused, mfa.recovery.failed)
+ *
+ * Every run that reads the window logs one summary line of counts (never a
+ * row), so the logs show the detectors ran also in an hour with no finding.
  *
  * Schedule: "0 *\/1 * * *" (hourly) — see apps/web/vercel.json.
  * Auth: Bearer ${CRON_SECRET} — fail-closed.
@@ -113,6 +123,10 @@ export async function GET(req: Request) {
     const escalations = detectPrivilegeEscalations(rows, THRESHOLDS.privilegeEscalation);
     const massMutations = detectMassMutations(rows, THRESHOLDS.massMutation);
     const exportAbuse = detectExportAbuse(rows, THRESHOLDS.exportAbuse);
+    const refusedCodes = detectRefusedCodeBursts(rows, {
+      userThreshold: THRESHOLDS.refusedCodeUser,
+      ipThreshold: THRESHOLDS.refusedCodeIp,
+    });
 
     for (const f of failedLogins.byEmail) {
       void reportError(new Error('Security anomaly: failed-login burst (account)'), {
@@ -156,28 +170,39 @@ export async function GET(req: Request) {
         extra: { kind: 'export_abuse', organizationId: f.organizationId, userId: f.userId, count: f.count, windowMinutes: WINDOW_MINUTES },
       });
     }
+    for (const f of refusedCodes.byUser) {
+      void reportError(new Error('Security anomaly: refused-code burst (account)'), {
+        tag: 'cron.audit-anomaly',
+        level: 'warning',
+        extra: { kind: 'refused_code_user', userId: f.userId, count: f.count, windowMinutes: WINDOW_MINUTES },
+      });
+    }
+    for (const f of refusedCodes.byIp) {
+      void reportError(new Error('Security anomaly: refused-code burst (IP)'), {
+        tag: 'cron.audit-anomaly',
+        level: 'warning',
+        extra: { kind: 'refused_code_ip', ip: f.ip, count: f.count, windowMinutes: WINDOW_MINUTES },
+      });
+    }
 
-    const flagged =
-      failedLogins.byEmail.length +
-      failedLogins.byIp.length +
-      passwordResets.length +
-      escalations.length +
-      massMutations.length +
-      exportAbuse.length;
+    const byDetector = {
+      failedLoginEmail: failedLogins.byEmail.length,
+      failedLoginIp: failedLogins.byIp.length,
+      passwordReset: passwordResets.length,
+      privilegeEscalation: escalations.length,
+      massMutation: massMutations.length,
+      exportAbuse: exportAbuse.length,
+      refusedCodeUser: refusedCodes.byUser.length,
+      refusedCodeIp: refusedCodes.byIp.length,
+    };
+    const flagged = Object.values(byDetector).reduce((sum, n) => sum + n, 0);
+    const summary = { windowMinutes: WINDOW_MINUTES, rowsScanned: rows.length, flagged, byDetector };
 
-    return NextResponse.json({
-      windowMinutes: WINDOW_MINUTES,
-      rowsScanned: rows.length,
-      flagged,
-      byDetector: {
-        failedLoginEmail: failedLogins.byEmail.length,
-        failedLoginIp: failedLogins.byIp.length,
-        passwordReset: passwordResets.length,
-        privilegeEscalation: escalations.length,
-        massMutation: massMutations.length,
-        exportAbuse: exportAbuse.length,
-      },
-    });
+    // Counts only, never a row: one line per run, so the runtime logs show the
+    // detectors ran (the JSON body below is read by nobody).
+    console.info('[cron.audit-anomaly] summary', JSON.stringify(summary));
+
+    return NextResponse.json(summary);
   } catch (err) {
     return internalErrorResponse(err, 'cron.audit-anomaly');
   }

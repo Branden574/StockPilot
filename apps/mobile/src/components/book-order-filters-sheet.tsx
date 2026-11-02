@@ -1,6 +1,6 @@
 import { Check, X } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
   BOOK_REPORT_ALL_CATEGORIES,
@@ -25,6 +25,7 @@ import {
   sheetStyles,
 } from '@/components/book-order-sheet-parts';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, Mono } from '@/components/ui/text';
 import {
   applyBookReportDraft,

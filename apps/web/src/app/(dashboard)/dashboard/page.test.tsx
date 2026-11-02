@@ -87,7 +87,7 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
   getOrgRowForRequest: async () => ({ timezone: 'UTC', dashboard_layout: null }),
-  getMfaFactorsForRequest: async () => [],
+  getMfaFactorsForRequest: async () => ({ userId: 'u1', factors: [] }),
   getWarehousesForRequest: async () => [{ id: 'wh-1', name: 'Main' }],
 }));
 vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: async () => 'wh-1' }));

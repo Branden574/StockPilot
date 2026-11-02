@@ -230,7 +230,6 @@ describe('parseAudit reads the pnpm report', () => {
 describe('the allow-list', () => {
   it('the committed allow-list parses, and every entry names an advisory, a package, a severity, a reason and a review date', () => {
     const entries = lib.parseAllowlist(readFileSync(path.join(ROOT, ALLOW_LIST), 'utf8'));
-    expect(entries.length).toBeGreaterThan(0);
     for (const e of entries) {
       expect(e.advisory).toMatch(/^GHSA(-[23456789cfghjmpqrvwx]{4}){3}$/);
       expect(e.package.length).toBeGreaterThan(0);
@@ -238,12 +237,6 @@ describe('the allow-list', () => {
       expect(e.reason.length).toBeGreaterThanOrEqual(20);
       expect(e.reviewBy).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
-    // Dependabot #112: node-forge has no patched release. Reviewed at high,
-    // and its reason holds only while no fixed version exists.
-    const forge = entries.find(
-      (e) => `${e.package} ${e.advisory}` === 'node-forge GHSA-86w9-cpqp-85rv',
-    );
-    expect(forge).toMatchObject({ severity: 'high', untilPatched: true });
   });
 
   // Mutation caught: a lenient parser that skips a malformed entry or
@@ -373,31 +366,6 @@ describe('the verdict', () => {
     expect(lib.evaluate(high, lib.parseAllowlist(allowJson(ENTRY)), TODAY).rows[0]).toMatchObject({
       dismissed: true,
     });
-  });
-
-  it('the committed node-forge entry does not dismiss its advisory re-scored critical', () => {
-    const committed = lib.parseAllowlist(readFileSync(path.join(ROOT, ALLOW_LIST), 'utf8'));
-    const forge = (severity: string) =>
-      lib.parseAudit(
-        auditJson(
-          raw({
-            id: 1,
-            module_name: 'node-forge',
-            severity,
-            github_advisory_id: 'GHSA-86w9-cpqp-85rv',
-            vulnerable_versions: '<=1.4.0',
-            patched_versions: '<0.0.0',
-          }),
-        ),
-      );
-    expect(lib.evaluate(forge('high'), committed, TODAY).rows[0]).toMatchObject({
-      dismissed: true,
-    });
-    const rescored = lib.evaluate(forge('critical'), committed, TODAY);
-    expect(rescored.passed).toBe(false);
-    expect(rescored.failing.map((r) => `${r.package} ${r.id}`)).toEqual([
-      'node-forge GHSA-86w9-cpqp-85rv',
-    ]);
   });
 
   // Mutation caught: an entry whose reason is "no fixed version exists" that

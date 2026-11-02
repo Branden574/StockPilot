@@ -6,7 +6,6 @@ import * as React from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,10 +15,11 @@ import {
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { dbPermissionRefusedCopy } from '@stockpilot/core';
+import { dbPermissionRefusedCopy, isUuid } from '@stockpilot/core';
 
 import { PoAttachments } from '@/components/po-attachments';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
 import { api, ApiError } from '@/lib/api';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
@@ -61,6 +61,7 @@ import {
   type Palette,
   type ThemeMode,
 } from '@/lib/theme';
+import { useHoldUpdatePrompt } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 
 interface PoLine {
@@ -143,6 +144,14 @@ export default function PoReceiveScreen() {
   const [posting, setPosting] = React.useState(false);
   // The receipt's optional note (L21), sent with Post receipt.
   const [notes, setNotes] = React.useState('');
+  // Quantities or a note typed and not yet posted: the phone update pop-up
+  // waits (B44). The draft holds an empty entry for every line from the
+  // start, so only typed text counts.
+  useHoldUpdatePrompt(
+    Object.values(draft).some((l) => l.received.trim() !== '' || l.rejected.trim() !== '') ||
+      notes.trim() !== '',
+    'receive',
+  );
   // Synchronous re-entry guard: blocks a double-tap from firing a second
   // post before React re-renders the disabled button (each post would
   // otherwise carry its own key = a duplicate receipt = double-counted stock).
@@ -308,6 +317,19 @@ export default function PoReceiveScreen() {
   // both itself before re-invoking load().
   const load = React.useCallback(async () => {
     if (!id || !orgId) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no PO:
+    // the not-found state at once, with nothing read. Postgres refuses it,
+    // so the reads could only fail, and the screen showed their raw text
+    // with a Try again that could never work.
+    if (!isUuid(id)) {
+      setHeader(null);
+      setLines([]);
+      setGroups({});
+      setReceipts([]);
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     const [{ data: po, error: poErr }, { data: lineRows, error: linesErr }] = await Promise.all([
       supabase
         .from('purchase_orders')
@@ -424,7 +446,7 @@ export default function PoReceiveScreen() {
   }, [id, orgId, loadRunGroups, loadReceiptHistory]);
 
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); a link id that is not a uuid sets the not-found state at once (no read); everything else is post-await
     setLoading(true);
     setLoadError(null);
     void load();

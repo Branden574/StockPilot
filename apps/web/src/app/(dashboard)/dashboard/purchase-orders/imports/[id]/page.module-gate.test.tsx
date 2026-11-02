@@ -98,8 +98,10 @@ import { PoImportsService } from '@/server/services/po-imports';
 
 import PoImportDetailPage from './page';
 
+const IMPORT_ID = '5eed0000-0000-4000-8000-0000000000e9';
+
 const header = {
-  id: 'imp-1',
+  id: IMPORT_ID,
   display_name: 'Fall order',
   file_name: 'fall.pdf',
   uploaded_by: null,
@@ -112,7 +114,7 @@ const header = {
 };
 
 async function renderDetail() {
-  render(await PoImportDetailPage({ params: Promise.resolve({ id: 'imp-1' }) }));
+  render(await PoImportDetailPage({ params: Promise.resolve({ id: IMPORT_ID }) }));
 }
 
 beforeEach(() => {
@@ -156,7 +158,7 @@ describe('PO import review: the po_imports module gate', () => {
   it('reads the import and renders the review when the module is on', async () => {
     await renderDetail();
 
-    expect(svc.get).toHaveBeenCalledWith('imp-1');
+    expect(svc.get).toHaveBeenCalledWith(IMPORT_ID);
     expect(screen.getByRole('heading', { level: 1, name: 'Fall order' })).toBeInTheDocument();
     expect(screen.getByText('import review')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
@@ -177,5 +179,31 @@ describe('PO import review: the po_imports module gate', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(refresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before the import is read
+// (its invalid-uuid error reached the error boundary). The module gate stays
+// first: with PO imports off, the module-off panel shows whatever the id.
+describe('PO import review: an import id that is not a uuid', () => {
+  it('is the not-found page with the module on, with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const id of ['not-a-uuid', IMPORT_ID.slice(0, -1)]) {
+      await expect(PoImportDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'NEXT_NOT_FOUND',
+      );
+    }
+    expect(PoImportsService.forCurrentUser).not.toHaveBeenCalled();
+    expect(svc.get).not.toHaveBeenCalled();
+    expect(requireOrgContext).not.toHaveBeenCalled();
+  });
+
+  it('with the module off it is still the module-off panel', async () => {
+    access.current = { enabled: false, canManage: true };
+    render(await PoImportDetailPage({ params: Promise.resolve({ id: 'not-a-uuid' }) }));
+    expect(
+      screen.getByRole('heading', { level: 1, name: "PO imports isn't enabled" }),
+    ).toBeInTheDocument();
+    expect(svc.get).not.toHaveBeenCalled();
   });
 });
