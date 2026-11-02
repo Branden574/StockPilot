@@ -2,7 +2,8 @@
  * The text an error report carries for a value that is not an Error (docket
  * C21). One rule for the reporter (error-reporter-core.ts), rawErrorText
  * (server/services/lib/fetch-by-ids.ts) and API routes' internalErrorResponse
- * (server/lib/api-error-response.ts).
+ * (server/lib/api-error-response.ts). Also the message the reporter gives an
+ * internal error (reportedMessage, below).
  *
  * supabase-js hands back a failed call's `error` as a plain object
  * (postgrest-js builds it from the response body, or from the fetch failure
@@ -98,4 +99,19 @@ export function nonErrorText(value: unknown): string {
 /** An Error as it is; anything else as a new Error with nonErrorText's text. */
 export function asReportableError(value: unknown): Error {
   return value instanceof Error ? value : new Error(nonErrorText(value));
+}
+
+/**
+ * The message a report carries for an Error. A ServiceError('internal_error')
+ * says only "An internal error occurred. Please try again." and keeps the
+ * database's text in `internalDetail`, retained server-side for logging (S13):
+ * that text, redacted and cut to 500 characters. Read by its shape, because
+ * this module is isomorphic and cannot import server/services/context.ts; only
+ * ServiceError has the field. Any other Error: its message.
+ */
+export function reportedMessage(error: Error): string {
+  const detail = (error as { internalDetail?: unknown }).internalDetail;
+  return typeof detail === 'string' && detail.trim()
+    ? clip(detail.trim(), MESSAGE_MAX)
+    : error.message;
 }

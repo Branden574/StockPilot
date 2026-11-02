@@ -34,9 +34,14 @@
  * a code, a hint and, for a request that got no answer, its first "Caused
  * by:" line. A server error's `details` are never forwarded: a unique or
  * check violation quotes the row's values there.
+ *
+ * AN INTERNAL ERROR: a ServiceError('internal_error') says only "An internal
+ * error occurred. Please try again." and keeps the database's text in
+ * `internalDetail` for logging (S13). The report's message is that text
+ * (reportedMessage); the stack is the error's own, so it keeps the throw site.
  */
 
-import { asReportableError } from './error-text';
+import { asReportableError, reportedMessage } from './error-text';
 import { redactTokens, redactTokensDeep } from './redact-urls';
 
 export interface ErrorContext {
@@ -121,7 +126,7 @@ export async function reportError(err: unknown, context: ErrorContext): Promise<
     // MED-1: message/stack routinely carry the URL of whatever request
     // failed. Redact before the value is stored on the payload at all, so
     // there is no un-redacted copy for a later edit to accidentally ship.
-    message: redactTokens(error.message),
+    message: redactTokens(reportedMessage(error)),
     stack: error.stack ? redactTokens(error.stack) : null,
     digest: (error as Error & { digest?: string }).digest ?? null,
     extra: redactTokensDeep({
