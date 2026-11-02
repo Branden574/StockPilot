@@ -68,6 +68,24 @@ const exporter: ReleaseViewer = {
   permissions: ['items:export'],
   enabledModules: [],
 };
+/**
+ * Added by docs/whats-new-s43a-2026-11 (2026-11-02): the authenticator code
+ * release reaches every member and the integration retries release reaches
+ * whoever manages integrations with the Integrations module on (the owner
+ * here); both are published later, above the lists-delivery-sites-and-fixes
+ * release. A test that expects this release in an old phone build's list of
+ * three, or as a notice, sees or reads them first (a read of a release a
+ * reader is not told changes nothing).
+ */
+const NEWER_IDS = ['authenticator-code-requests-2026-11', 'integration-retries-2026-11'];
+const newerReads = NEWER_IDS.map((id) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-02T15:50:00Z',
+  read_at: '2026-11-02T15:50:00Z',
+}));
+const newerSeen: Record<string, boolean> = Object.fromEntries(NEWER_IDS.map((id) => [id, true]));
 
 /** A file in the repository, as written. */
 const REPO = resolve(__dirname, '../../../../..');
@@ -118,7 +136,8 @@ describe('the export fixes release', () => {
     expect(release().revision).toBe(1);
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: nothing seen): an old phone build lists at most three unseen releases, and the authenticator code, integration retries and lists-delivery-sites-and-fixes releases, all published later, reach the owner first; once the two newest are seen, this one is in the list again.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newerSeen).map((a) => a.id)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
     expect(registryFingerprint(RELEASES)).not.toBe(
@@ -127,12 +146,21 @@ describe('the export fixes release', () => {
   });
 
   // Renamed by fix/b44-update-restart-prompt (2026-10-31; was: "is the newest entry, at the top, directly above the small-fixes-8 release, and dated after every other release on a whole minute", with ID at RELEASES[0], the small-fixes-8 release at RELEASES[1] and every release from RELEASES[1] dated before it): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, directly above it, so it and the small-fixes-8 release move down by one. Claim kept: directly above the small-fixes-8 release, dated after every release below it, on a whole minute.
-  it('sits directly below the B44 phone update draft, directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
+  // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "sits directly below the B44 phone update draft, directly above the small-fixes-8 release, and is dated after every release below it on a whole minute", with ID at RELEASES[1], the small-fixes-8 release at RELEASES[2] and every release from RELEASES[2] dated before it): the lists-delivery-sites-and-fixes release is published later, directly below the B44 phone update draft and directly above this one, so it and the small-fixes-8 release move down by one. Claim kept: directly above the small-fixes-8 release, dated after every release below it, on a whole minute.
+  it('sits directly below the lists-delivery-sites-and-fixes release (published later, below the B44 phone update draft), directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
+    // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: the lists-delivery-sites-and-fixes release at 1, ID at 2, the small-fixes-8 release at 3 and slice(3)): the authenticator code and integration retries releases are published later, directly below the B44 phone update draft, above the lists-delivery-sites-and-fixes release, so every position below them moves down by two.
     expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
     expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('small-fixes-8-2026-10');
-    for (const r of RELEASES.slice(2)) {
+    expect(RELEASES[1]?.id).toBe('authenticator-code-requests-2026-11');
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES[2]?.id).toBe('integration-retries-2026-11');
+    expect(RELEASES[2]?.status).toBe('published');
+    expect(RELEASES[3]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[3]?.status).toBe('published');
+    expect(Date.parse(RELEASES[3]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES[5]?.id).toBe('small-fixes-8-2026-10');
+    for (const r of RELEASES.slice(5)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
@@ -248,10 +276,23 @@ describe('the export fixes release', () => {
   // An old phone build shows the title, the summary and the first linked line
   // the reader can reach as its button; the phone draws the button only when
   // the link opens one of its own screens (whats-new.tsx).
-  it('is the first notice for whoever can export, and an old phone build shows its title and summary with Open Items', () => {
+  // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "is the first notice for whoever can export, and an old phone build shows its title and summary with Open Items", with nothing read or seen): the lists-delivery-sites-and-fixes release is published later, directly above it, and reaches every member, so every reader here reads or sees it first. Claim kept: it is the first notice for whoever can export once that release is read, an old phone build shows its title and summary with Open Items once that release is seen, and a member who cannot export is not told it.
+  // Renamed by docs/whats-new-s43a-2026-11 (2026-11-02; was: "is the first notice for whoever can export once the lists-delivery-sites-and-fixes release is read, and an old phone build shows its title and summary with Open Items once that release is seen", with that release alone read or seen): the authenticator code release (every member) and the integration retries release (the owner here) are published later, above it, so every reader here reads or sees them with it. Claim kept: it is the first notice for whoever can export once the newer releases that reach them are read, an old phone build shows its title and summary with Open Items once those are seen, and a member who cannot export is not told it.
+  it('is the first notice for whoever can export once the lists-delivery-sites-and-fixes release and the newer releases are read, and an old phone build shows its title and summary with Open Items once those are seen', () => {
+    const listsRead = {
+      release_id: 'lists-delivery-sites-and-fixes-2026-11',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-02T06:10:00Z',
+      read_at: '2026-11-02T06:10:00Z',
+    };
+    const listsSeen = { ...newerSeen, 'lists-delivery-sites-and-fixes-2026-11': true };
     for (const v of [everyone, exporter]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(
+        buildReleaseList(RELEASES, v, [...newerReads, listsRead], null).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, listsSeen)[0], v.role).toEqual({
         id: ID,
         date: '2026-10-31',
         title: release().title,
@@ -260,8 +301,10 @@ describe('the export fixes release', () => {
       });
     }
     // Not told to a member who cannot export.
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).not.toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, member, {}).map((a) => a.id)).not.toContain(ID);
+    expect(
+      buildReleaseList(RELEASES, member, [...newerReads, listsRead], null).latestUnread?.id,
+    ).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, member, listsSeen).map((a) => a.id)).not.toContain(ID);
     // On the phone, Open Items opens its Inventory screen, so the phone shows
     // the button.
     expect(phone('src/components/onboarding/whats-new.tsx')).toContain(

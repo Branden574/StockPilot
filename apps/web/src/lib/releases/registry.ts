@@ -65,6 +65,725 @@ export const RELEASES: Release[] = [
     ],
   },
   {
+    id: 'authenticator-code-requests-2026-11',
+    revision: 1,
+    // S43a, #447 (squash dd7cc1458, merged 2026-11-02 06:49Z; web only, no
+    // migration), release 1 of S43, from the draft in #447's description. Live
+    // in production web build 2f1ae1d0e877. It is the newest published
+    // release and sits directly below the B44 phone update draft, which is
+    // left as it is for its own release: that draft is dated later, and
+    // releaseRegistrySchema keeps dates from increasing down the list.
+    // Phone: NO phone update ships with this release, and no line says the
+    // app was or needs to be updated. Every phone sentence is how the app
+    // already installed answers the server's new 401 (read at 472fca631):
+    // - a 401 keeps a queued change to try again, where the 403 the server
+    //   sent before put it in Unsent work (apps/mobile/src/lib/
+    //   drain-failure.ts:57 and :66-67; a queued stock adjustment,
+    //   adjust-outbox.ts:155-162);
+    // - queued count lines are tried at a sync every 60 s
+    //   (cycle-count-sync.ts:111-113), but each line first waits out its own
+    //   backoff, which grows with every refused try up to 5 minutes
+    //   (cycle-count-cache.ts:665-675; a line not yet due is skipped,
+    //   cycle-count-sync.ts:304-306), so a waiting change goes at a later
+    //   sync after the code, not always the next one;
+    // - the app goes in without the code screen when its check for an
+    //   authenticator fails (apps/mobile/src/lib/auth-context.tsx:121-139),
+    //   at sign-in and when it opens with a saved session (:221-224);
+    // - a stock adjustment answered 401 says "Your session has ended. Sign in
+    //   again, then retry." (item-adjust.ts:174-184), and the order screens
+    //   say "Your session has expired." (edit-order-line.ts:459,
+    //   add-order-items.ts:260);
+    // - the signature hand-over answers every refusal with its one 404
+    //   (apps/web/src/app/api/orders/sign/route.ts:75-79), which the app words
+    //   as "That is not available on this version of the app. Update the app
+    //   and try again." (apps/mobile/src/lib/api-error-body.ts:58).
+    // The server side (apps/web/src/lib/auth/api-context.ts): withApiContext
+    // returns null for an account with a verified factor whose session is not
+    // aal2, before anything is read, on the bearer path (:583-587) and the
+    // cookie path (:731-734), by core's stepUpOwed
+    // (packages/core/src/auth/step-up.ts); each route answers it as its own
+    // 401. Before, such a session got a context, and assertPermission refused
+    // its writes with a 403 (server/services/context.ts:316-341, the gate at
+    // :338-340), and the signature hand-over refused it with its own 403
+    // (apps/web/src/app/api/orders/sign/route.ts:261-272, unchanged by #447):
+    // its changes, a signature included, were already refused, and for those
+    // only the wording changed. What is new is the refusal of the phone's
+    // sync, which answered 200 before.
+    // Walks and checks:
+    // - the pre-merge lab walk (PASS), with synthetic users: with a password
+    //   alone, an enrolled account's /api requests answered 401 on the bearer
+    //   and the cookie paths and read nothing; after the code they answered
+    //   200. On a phone running main's app: the code screen showed (4.1); a
+    //   count line queued before a sign-out stayed waiting at the code screen,
+    //   never moved to Unsent work, and was sent at the sync after the code
+    //   (4.3); the app stayed on the code screen for over two minutes with no
+    //   sign-out (4.4); a member with no authenticator signed in straight to
+    //   Home, opened Items and an order and saved a count (4.6); the
+    //   phone's signature request sent with a password-only session of an
+    //   enrolled account got the one 404 and wrote nothing (4.7);
+    // - the production check after the deploy (PASS, independently
+    //   reviewed): the demo organization's QA account, with no authenticator,
+    //   saw no change on the web (dashboard, Items, Orders, Cycle counts and
+    //   Settings, Security, with no code page) or through the phone's API
+    //   (200); signed-out requests answered 401 as before; the logs to 14:20Z
+    //   showed no warning or error line from the new checks, no rise in 401s
+    //   and no 5xx. No enrolled member called the API without the code in
+    //   that window. The hand check with an account that has an
+    //   authenticator is not done yet, and no line rests on it.
+    // Changed from the draft (each re-read against the code and the walk):
+    // - the summary said changes are "no longer refused" and a phone "is
+    //   asked to sign in again": the server still answers those requests
+    //   401, the phone keeps the changes; and no prompt asks, screens stop
+    //   loading or say to sign in again. It now says so, and adds that
+    //   nothing changes without an authenticator (walk 4.6, the production
+    //   check). The second title says "needs to", for the same reason;
+    // - phone-waiting-changes-kept-for-code said "a moment after you enter
+    //   your code": each waiting line goes at a sync once its own backoff
+    //   has passed (at most 5 minutes, cycle-count-cache.ts:665-675; 53 s
+    //   after the code in walk 4.3), so it says a later sync;
+    // - phone-without-code-signs-in-again said a phone could also end up
+    //   without the code "if you turned the authenticator on after signing
+    //   in on the phone": in walk 4.7, turning it on ended the phone's
+    //   session and the app went back to sign-in, so that case is gone. Its
+    //   whyItMatters now names opening the app too: a saved session runs the
+    //   same check (auth-context.tsx:221-224). Its whatChanged named "that
+    //   phone's requests": it now says the sync is refused as well, and that
+    //   the phone's changes, such as collecting a signature, already were
+    //   (a 403 before #447: context.ts:338-340, sign/route.ts:261-272), so
+    //   only their wording changed; "ended" is now "ended or expired" (the
+    //   order screens' words). Its whatToDo said "tells you to update the app
+    //   when you collect a signature": updating would not help (signing in
+    //   again with the code does), and no line may point to a phone update,
+    //   so it quotes the alert's first sentence as the app shows it. It now
+    //   starts "If you use an authenticator app", since every member is told
+    //   it.
+    // Left out on purpose: no line may claim more than the entries describe
+    // (see #447's What's New note); the web pages already went to the code
+    // page, and a tab left open gets a 401 only until its next page load; the
+    // QuickBooks and Sage Intacct connect from such a session (the existing
+    // forbidden error); the crash reports; the log line (operators).
+    // Who is told: every member (no entry has a link or an audience), so the
+    // summary starts "If you use an authenticator app" and its last sentence
+    // speaks to everyone else.
+    status: 'published',
+    title: 'Changes waiting on the phone are kept until you enter your authenticator code',
+    summary:
+      'If you use an authenticator app, changes waiting on your phone are kept while the code screen shows and are sent after you enter your 6-digit code. A phone signed in without your code needs to sign in again and enter it. Nothing changes if you do not use an authenticator app.',
+    publishedAt: '2026-11-02T15:43:00Z',
+    entries: [
+      {
+        // drain-failure.ts:66 (a 401 is tried again), adjust-outbox.ts:162,
+        // cycle-count-sync.ts:111-113 (the 60 s drain) and :304-306 with
+        // cycle-count-cache.ts:665-675 (each line's backoff); walk 4.3.
+        id: 'phone-waiting-changes-kept-for-code',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'Changes waiting on the phone are sent after your authenticator code',
+        whatChanged:
+          'If you use an authenticator app and sign back in on your phone while changes are still waiting to be sent, such as count lines or stock adjustments, the phone now keeps them while the code screen shows. It sends them at a later sync after you enter your 6-digit code.',
+        whyItMatters:
+          'Before, those changes were refused while the code screen showed, and the phone stopped sending them. They stayed in Unsent work instead of being saved.',
+        howItAffectsYou:
+          'Changes waiting on the phone no longer end up in Unsent work because the code screen was showing.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // api-context.ts:583-587 and :731-734; context.ts:338-340 and
+        // sign/route.ts:261-272 (the 403 before); auth-context.tsx:121-139
+        // and :221-224 (the failed check); item-adjust.ts:181,
+        // edit-order-line.ts:459 and api-error-body.ts:58 (the words); walk
+        // 4.7 and 4.1 to 4.4.
+        id: 'phone-without-code-signs-in-again',
+        category: 'improved',
+        area: 'Mobile app',
+        title: 'A phone signed in without your authenticator code needs to sign in again',
+        whatChanged:
+          "If you use an authenticator app and your phone is signed in without your 6-digit code, StockPilot now also refuses that phone's sync until you sign in again with the code, as it already refused its changes, such as collecting a signature. Some screens stop loading, and some messages now say your session has ended or expired.",
+        whyItMatters:
+          'A phone could end up signed in without the code if it could not check for your authenticator when you signed in or opened the app. The web already asked for the code in that case.',
+        howItAffectsYou:
+          'Phones that signed in with your code work as before, and nothing changes for anyone who does not use an authenticator app.',
+        whatToDo:
+          'If you use an authenticator app and the app says your session has ended or expired, says “That is not available on this version of the app” when you save a signature, or a screen will not load, sign out, then sign back in and enter your code.',
+      },
+    ],
+  },
+  {
+    id: 'integration-retries-2026-11',
+    revision: 1,
+    // B49, B81 and B82, #454 (squash 472fca631, merged 2026-11-02 15:33Z;
+    // web only, no migration, no phone code). Live in production web build
+    // 7a9a39fee322. From the draft in #454's description, published as its
+    // own release directly below S43a's, one minute earlier. No phone update:
+    // the phone's Integrations screen shows the server's last_error as it
+    // comes, and no line here says more about the phone.
+    // Claims checked against the code at 472fca631 (apps/web/src):
+    // - eight tries: server/connectors/drainer.ts:23 (MAX_ATTEMPTS = 8), dead
+    //   at that count or when not retryable (:455-456); later syncs: the
+    //   drain-outbox cron every 10 minutes (apps/web/vercel.json:24-27);
+    // - QuickBooks: anything that is not a QuickBooks answer tries again, and
+    //   429, 5xx and 401 do; any other refusal stops
+    //   (server/connectors/quickbooks/index.ts:35-51); every call stops after
+    //   15 s (quickbooks/client.ts:22, :111, :131);
+    // - Sage Intacct: 15 s (sage-intacct/client.ts:15, :204, the connector's
+    //   client at sage-intacct/index.ts:213 and :327); a call with no answer
+    //   tries again for a read or a create that never left, else stops with
+    //   the quoted sentence first (client.ts:24-25, :208-210); 429, 503 and
+    //   401 try again, a create answered with another 5xx stops
+    //   (index.ts:50-67); the item import builds its client with no timeout
+    //   (server/services/intacct-import.ts:135) and its error reaches the
+    //   card's message (server/actions/intacct-import.ts:44,
+    //   components/settings/sage-intacct-card.tsx:174);
+    // - the status words and Replay: components/settings/integrations-panel.tsx
+    //   :349-362 (Error, Dead), :375 (Failed exports), :439 (Replay);
+    // - webhooks: a failed host lookup is a failure tried again with backoff,
+    //   a refused address is final (server/services/integration-events.ts
+    //   :399-412, lib/ssrf-guard.ts:122); the endpoint read and the delivery
+    //   insert are tried up to three times, a refusal a retry cannot change
+    //   once (integration-events.ts:133, :505-537, :540-619); Slack and Teams
+    //   are endpoint types (:84). Before #454 a host's HTTP error or timeout
+    //   was already tried again with backoff; only a refused address, and a
+    //   failed lookup with it, was final (integration-events.ts at
+    //   472fca631^1, :380-385). A delivery is tried up to 6 times
+    //   (MAX_ATTEMPTS, :86), with backoff of 1, 2, 4, 8 and 16 minutes
+    //   (:134-137), at the drain every 10 minutes, so the last try can come
+    //   about an hour after the event.
+    // The production check (drain-outbox ticks, the new report tags, Demo Co
+    // Integrations read-only) was running when this was written; the
+    // integrator merges this only after it passes. A provider or DNS failure
+    // cannot be produced in production: those lines rest on #454's tests.
+    // Changed from the draft:
+    // - integration-export-retries-network-failure's whatChanged was 610
+    //   characters, over the 600 releaseEntrySchema allows: its three
+    //   sentences on the 15-second stop are now one, with the same facts;
+    // - "QuickBooks recognizes a repeat, so its exports always try again" now
+    //   says "in these cases": QuickBooks still stops an export it answered
+    //   with a refusal (quickbooks/index.ts:50), which the entry's last
+    //   sentence says;
+    // - the summary said an alert "that met a brief failure is retried
+    //   instead of dropped": an HTTP error or a timeout was already retried
+    //   (see webhooks above), so it says the brief failure "used to drop it";
+    // - integration-alerts-retry-brief-failure's howItAffectsYou said "some
+    //   minutes late": a failed lookup's last try can come about an hour
+    //   later (see webhooks above), so it says late, at a later sync.
+    // Who is told: whoever manages integrations where the Integrations module
+    // is on. The page shows QuickBooks, Sage Intacct, Failed exports and
+    // Webhooks & alerts only with both (app/(dashboard)/dashboard/settings/
+    // integrations/page.tsx:47 and :103).
+    status: 'published',
+    title: 'Exports and alerts try again after a network failure',
+    summary:
+      'A QuickBooks or Sage Intacct export that could not reach the service now tries again on its own instead of stopping, and a webhook, Slack or Teams alert is now retried after a brief failure that used to drop it.',
+    publishedAt: '2026-11-02T15:42:00Z',
+    audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
+    entries: [
+      {
+        id: 'integration-export-retries-network-failure',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'QuickBooks and Sage Intacct exports try again after a network failure',
+        whatChanged:
+          'When StockPilot could not reach QuickBooks or Sage Intacct, for example because the connection failed, the export now shows Error and tries again on its own at later syncs, up to eight tries, as it already did when the service was busy. An export call to either service that gets no answer within 15 seconds is now stopped: a QuickBooks export then tries again, and a Sage Intacct export only when Intacct cannot have received it (see below). An item import from Sage Intacct that cannot reach Intacct now says which request to Intacct got no answer, instead of “fetch failed”.',
+        whyItMatters:
+          'Before, one network failure marked the export Dead on its first try, and it stayed in Failed exports until someone pressed Replay. A call that got no answer could also hold up the whole sync.',
+        howItAffectsYou:
+          'Sage Intacct cannot tell a repeated document from a new one. So when Intacct may already have received an export (the connection dropped after it was sent, no answer came within 15 seconds, or Intacct reported an error while handling it), the export stops at Dead and says: “This export may have reached Sage Intacct. Check Intacct for it before you press Replay, or it may be posted twice.” QuickBooks recognizes a repeat, so its exports try again in these cases. An export the service turned down, such as for a wrong account, still stops as before.',
+        whatToDo:
+          'If an export in Failed exports shows that sentence, look for the purchase order or journal entry in Sage Intacct, and press Replay only if it is not there. An export that stopped at Dead with “fetch failed” before this change stays there: press Replay on it, and for Sage Intacct look in Intacct first.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
+      },
+      {
+        id: 'integration-alerts-retry-brief-failure',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'Webhook, Slack and Teams alerts are retried after a brief failure',
+        whatChanged:
+          'A webhook alert is now retried when the address of its server could not be looked up for a moment. Any alert is also retried when StockPilot could not read which of your webhooks, Slack or Teams channels want the event, or could not queue it, because of a brief failure on our side.',
+        whyItMatters:
+          'Before, a webhook alert whose address failed to look up once was given up for good, and an event that met a brief failure while it was being queued was never sent to any of your channels.',
+        howItAffectsYou:
+          'A retried alert can arrive late, at a later sync. A webhook whose address is refused, such as one on a private network, is still not sent, as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: { anyPermission: ['integrations:manage'], modules: ['integrations'] },
+      },
+    ],
+  },
+  {
+    id: 'lists-delivery-sites-and-fixes-2026-11',
+    revision: 1,
+    // The web changes merged on 2026-11-02 from 04:12Z to 05:28Z, and S4
+    // (merged 02:00Z), in one release, the newest published one. It sits
+    // directly below the B44 phone update draft, which is left as it is for
+    // its own release: that draft is dated later, and releaseRegistrySchema
+    // keeps dates from increasing down the list. Every line is live in
+    // production web build a16bcfe6d994 (90f4f354b, #437's squash, answering
+    // /api/version from 05:29:49Z), the main this release was written and
+    // checked against:
+    // - S4 #379, 3d458cff4 (02:00:05Z; build 81b449e1342f; migration 0415
+    //   pushed 02:27:30Z, every post-push check passing);
+    // - B41, B42 and B45 #423, 1c852efa7 (04:12:20Z; build 0740b0cfdc51);
+    // - B23 #406, 7b86bb343 (04:15:37Z; build 38bc0a7cb340);
+    // - B50 #426, 058572cbc (04:18:01Z; build 41ebb7fb2661);
+    // - B62 #425, 94e0424de (04:20:16Z; build b68df476d8bc);
+    // - B63 #427, 5d614034c (04:21:47Z; build 77d5ef4e39d0);
+    // - B80 #436, b3abc74be (04:25:15Z; build 8d4c8c46d39e);
+    // - B75 #435, 6aaa8d109 (04:29:17Z; build 641394287519), its route part
+    //   (E) only;
+    // - B47 #443, bda7774cd (04:36:57Z; build 48a4e152d165), parts 1 and 3
+    //   of its draft;
+    // - B46 #445, 6af839a8d (04:39:46Z; build f1baaf0516a1);
+    // - B1 #437, 90f4f354b (05:28:31Z; build a16bcfe6d994).
+    // Phone: NO phone update ships with this release, and no line says the
+    // app was or needs to be updated. Installed phones run EAS update group
+    // c5b4d663-7c84-4ad2-bbfd-b3a0307b6eff (runtime 1.4.0, from f584141ba,
+    // published 2026-11-02 04:02Z). Each phone sentence below is a server
+    // answer that code already reads: Choose a site lists the sites in the
+    // server's order (apps/mobile/src/components/order-storefront/sheets.tsx
+    // :359, the same at f584141ba); New count and Scan a PO show the server's
+    // own message (at f584141ba: apps/mobile/app/cycle-count/new.tsx:92 and
+    // apps/mobile/app/scan-po/index.tsx:420-422); the AI chat adopts the
+    // session the route now names first (apps/mobile/app/ai/chat.tsx:130-131
+    // at f584141ba). The summary says "On the web" and "in the mobile app",
+    // because a phone shows only the title and the summary, with the first
+    // linked entry the reader can reach as its button.
+    // Walks and checks:
+    // - S4 on production, in Demo Co, to 2026-11-02 03:25Z (its release step
+    //   7): 1 kit assembled and 1 distributed on the web as before, a bundle
+    //   edit saved and put back, every component marked Optional refused with
+    //   the sentence (in the browser), and 1 kit distributed from the phone;
+    //   every write reversed. Its step 5 (Demo Co had no in-progress event
+    //   with a kit) in the lab, to 04:09Z, with 0402 and 0413 to 0415
+    //   applied: one save setting Completed and Linked bundle None handed out
+    //   nothing and drew nothing; completing with the kit kept handed it out
+    //   exactly once, for a manager who holds bundles:distribute and a kit
+    //   with required components; saving the completed event again handed
+    //   out nothing more. An independent checker confirmed both walks.
+    // - B1, lab walks on 2026-11-01, read-only: an ISBN that several books
+    //   share keeps its search; a search, a stock view and a filter that find
+    //   nothing keep the filter bar and the list's message; a shared view
+    //   keeps its search; Rentals items in server mode; at 390 px every part
+    //   of the message on screen. Not walkable there: the stock and Expected
+    //   messages for staff and viewers.
+    // - B46, lab walk to 2026-11-02 01:36Z: "+N more" opens the day's list,
+    //   a row opens its event, the keyboard and Close, at 1280 px and at
+    //   390 px with touch, light and dark; the screen reader names read on
+    //   Chrome's accessibility tree.
+    // - B50, lab walk on 2026-10-31 at its head: the code box, a wrong code,
+    //   the right code, the same password refused, no box without an
+    //   authenticator, an invite, 390 px with 123 456 pasted into the reset
+    //   box, and a signed-out press. Not walked: the breached-password words
+    //   and the paste in the sign-in, step-up and Settings boxes (tests). The
+    //   production reset proof was not run.
+    // - Every other line rests on the code and its tests, quoted in its
+    //   comment. The production read-only check of all fourteen merges, in
+    //   Demo Co, was running when this was written: the integrator applies it
+    //   before this merges, and a line whose check fails is removed then.
+    // Merged to fit twelve entries: S4's two drafted entries into
+    // bundle-required-component; B47 part 1 and B23's Orders lines into
+    // delivery-sites-by-name-and-deleted-driver; B23's saved view line into
+    // lists-keep-search-and-filters; B50's draft entry and its two proposed
+    // extras into one. workspace-time-zone-and-charter-removal holds B47 part
+    // 3 alone: it was written with B41's half too, and keeps that id (B41,
+    // below).
+    // Left out on purpose:
+    // - the phone halves, for the next phone update and its own release:
+    //   B42's (the phone's count start, Review and Select, New count's
+    //   notice), B23's deleted-driver line on the phone's order screen, B75's
+    //   part A (New chat, and a sentence in Chat error) and C20's;
+    // - B47 part 2 (lists past 1,000 categories, tags, charters and
+    //   suppliers): it waits for a read-only count; the 10,000-row ceiling's
+    //   refusals (no organization known near it) and its report (operators);
+    // - S4: assembling or distributing kits from a bundle with no required
+    //   component is refused unless enough kits are pre-assembled
+    //   (0415_bundle_component_checks.sql:450 and :717), but the census read
+    //   before the push found no such bundle (0 rows, read twice) and the app
+    //   can no longer save one (components/bundles/bundle-form.tsx:96,
+    //   server/services/bundles.ts:573 and :729), so no reader can meet it;
+    //   the checks 0415 adds for writes made outside the app are not
+    //   described;
+    // - B41 (Settings, Organization shows a saved time zone outside the list,
+    //   and a line under the box says when the saved value cannot be used):
+    //   it changes the screen only for a workspace whose saved zone is
+    //   outside the list or not one the app can use, and the fact-check
+    //   publishes it only if a read-only count finds at least one such
+    //   workspace. No count was recorded for this release (the production
+    //   check read Demo Co, whose zone is listed), so it is out until one is
+    //   (B41, below). Its zone check when a workspace is created stays out
+    //   either way (onboarding is for platform admins since S20; the console
+    //   is platform staff only);
+    // - B63's 400 for an API caller, the barcode route's statuses, the
+    //   platform organization page, and six pages that already showed Page
+    //   not found and now answer before any read (they look the same);
+    // - B23's queued support tickets and resolved emails, which nobody who
+    //   remains sees, and "Shared by a deleted user", which needs its
+    //   database half (not shipped);
+    // - B75's remaining refusals, which show raw text on the phone until its
+    //   phone update, and the transcript installed phones still send (now
+    //   unread);
+    // - #430 S33, #441 S23, #438 C20 and #442 B73: nothing a person sees.
+    // B41: if the integrator's read-only count before this merges finds one
+    // or more workspaces whose saved zone is outside the list or not one the
+    // app can use, its half goes back into
+    // workspace-time-zone-and-charter-removal as this release first had it:
+    // the title, the area, the four answers and the entry's comment (#461's
+    // description holds the text), and it leaves the list above. If the
+    // count is 0, or none is run, nothing here changes.
+    // Who is told: every member (pdf-photos-on-white, mistyped-link-not-found
+    // and password-reset-asks-for-authenticator-code have no audience), so it
+    // is the first notice for each of them until it is read; each other entry
+    // names the role or permission, and the module, that its page or action
+    // checks, quoted in its comment.
+    status: 'published',
+    title:
+      'Lists keep your search and filters when nothing matches, delivery sites are listed by name, and other fixes',
+    summary:
+      'On the web, Items, Books and Rentals items keep your search and filters on screen when nothing matches, photos with a see-through background print on white in slips and report PDFs, a mistyped link to a record shows Page not found, a busy day on the team calendar lists all its events, and a password reset asks for your authenticator code if you use one. On the web and in the mobile app, delivery sites are listed by name. In the mobile app, long AI Assistant chats keep answering.',
+    publishedAt: '2026-11-02T05:53:00Z',
+    entries: [
+      {
+        // platform: web (#437 and #406's saved views changed no phone file; the phone's lists
+        // keep their search and filters on screen and have no saved views). From: B1 #437 and
+        // B23 #406. Checked at 90f4f354b: one rule for a narrowed list,
+        // lib/inventory/list-filter-active.ts:30, used by inventory/page.tsx:1157,
+        // books/page.tsx:833 and rentals/items/page.tsx:198, so each renders the table's empty
+        // area with the filter bar; the messages, lib/inventory/list-empty-message.ts:66, word
+        // for word as the pages had them; a saved view's search, inventory-table.tsx:2957; the
+        // scan shortcut, components/books/books-scan-shortcut.tsx:36-49 (one match opens the
+        // book, none offers to create one, several push the searched list); one press of Clear
+        // all filters, inventory-table.tsx:1296; the Discontinued chip, :2893, and the type
+        // chips, :1187; Books' warehouse line, books/page.tsx:819-821, with
+        // list-filter-active.ts:85-93. Saved views: server/services/saved-views.ts:244 and :260,
+        // toasted at inventory-table.tsx:5883 and :5898; only a view's owner has those buttons
+        // (a view with no owner needs B23's database half, not shipped), so the case a reader
+        // meets is a view already deleted. Walked: B1's lab walks (release comment). Code only:
+        // the saved view line. Audience: who can read items, as on the Items page.
+        id: 'lists-keep-search-and-filters',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Items, Books and Rentals items keep your search and filters when nothing matches',
+        whatChanged:
+          'When a search or filter finds nothing on Items, Books or Rentals items, the list now keeps the search box, your filters and Clear all filters on screen, also after a reload, from a link, and for staff and viewers. Its message, such as “No items match your search” or “No low-stock items”, shows inside the list. A saved view with a search now fills the search box and narrows the list, and on Books, scanning an ISBN that several books share now narrows the list to them. The Discontinued view and an Items type such as Asset show as a chip you can press to go back.',
+        whyItMatters:
+          'The list said “No items yet” (or “No books yet”, “No rental items yet”) and hid the filters, so a filter that left nothing could not be seen or cleared. A saved view lost its search, and the scan could open the whole list instead of the books that share the ISBN.',
+        howItAffectsYou:
+          '“No items yet” now shows only when a list has nothing in it. One press of Clear all filters clears both the search and the filters, and applying a saved view without a search clears what you typed. On Books, when the warehouse picked at the top is what leaves the list empty and other warehouses hold matching books, the list says so and offers Search all warehouses, as Items does. Sharing, unsharing or deleting a saved view you already deleted, for example in another tab, now says it could not be changed or deleted.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:read'] },
+      },
+      {
+        // platform: web and phone (the sites), web only (the driver). From: B47 #443 part 1
+        // and B23 #406. Checked at 90f4f354b: the sites by name, then id,
+        // server/loaders/orders-new-catalog.ts:452, for the web's Deliver to (core
+        // orders/storefront/copy.ts:70) and, through server/services/order-storefront.ts:444,
+        // the phone's Choose a site (copy.ts:71), which lists them as given (sheets.tsx:359;
+        // the returns exchange chooser already sorted them). The driver:
+        // orders/page.tsx:379 with core orders/delivery-driver.ts:43-66 (a delivery that went
+        // in transit and names no driver; else the name, else the dash, orders/page.tsx:428-433);
+        // the order page's line, components/orders/manager-actions-panel.tsx:1070-1081 (in
+        // transit, the driver deleted, an approver who may hand this order over, Collect
+        // signature enabled), its words delivery-driver.ts:75-81, Physical signature named for
+        // managers only (manager-actions-panel.tsx:338). Not walked: no delivery's driver has
+        // deleted their account in Demo Co; the production check reads Deliver to. Audience:
+        // the Orders list checks the Orders module (orders/page.tsx:90); who places or
+        // approves orders.
+        id: 'delivery-sites-by-name-and-deleted-driver',
+        category: 'improved',
+        area: 'Orders',
+        title:
+          'Delivery sites are listed by name, and a delivery whose driver deleted their account says so',
+        whatChanged:
+          'When you place an order for delivery, the sites a warehouse serves are now listed by name: under Deliver to on the web, and under Choose a site in the mobile app. On the web, the Driver column on Orders now shows Deleted user for a delivery whose driver deleted their StockPilot account after it went out, instead of a dash. While such a delivery is in transit, its order page tells approvers who can hand it over that the driver deleted their account, and which buttons record the hand-over.',
+        whyItMatters:
+          'The sites came in no set order, so finding one meant reading the whole list. When a driver deleted their account, their deliveries lost their driver and nothing said why, so an order out for delivery looked unassigned.',
+        howItAffectsYou:
+          'The same sites are offered as before, in name order. Nothing is blocked: if you approve orders, hand such a delivery over with Collect signature as for any delivery, or Physical signature if you are a manager. A delivery that has not gone out and has no driver still shows a dash until a driver is assigned, as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders', label: 'Open Orders' },
+        audience: { anyPermission: ['orders:request', 'orders:approve'], modules: ['orders'] },
+      },
+      {
+        // platform: web, and the server's refusal words on the phone. From: B42 #423 (its web
+        // and server half; the phone half waits for its phone update). Checked at 90f4f354b:
+        // cycle-counts/page.tsx:91 (core countStartAllowed: a manager with
+        // cycle_counts:assign and stock:adjust, Cycle Counts on), with "+ Start a count" at
+        // :189, "Start your first count" at :248 and "Counts a manager starts appear here." at
+        // :243; the bar's Cycle count, components/inventory/bulk-actions.tsx:617, which Items
+        // and Books hand the same answer and Rentals items never does
+        // (rentals/items/page.tsx:260); Start a count, cycle-counts/new/page.tsx:35 and :53,
+        // after its stock:adjust redirect (:25). The refusal, core
+        // warehouse/exception-recount.ts:84-85, thrown by
+        // server/services/lib/count-start-preflight.ts:60 and forwarded by
+        // api/v1/cycle-counts/route.ts:157 to the phone's alert (new.tsx:92 at f584141ba).
+        // Not walked yet (the production check reads the page as an admin). Audience: who
+        // reads Items, Books or Rentals items (the bar) and the Cycle counts page's own gate,
+        // with no module, because a workspace with Cycle Counts off changes too.
+        id: 'count-start-managers-only',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'On the web, Start a count is offered only to people who can start one',
+        whatChanged:
+          'On the web, Start a count on Cycle counts, and Cycle count in the bar for selected items and books, now show only for managers who can assign counts and adjust stock, where Cycle Counts is turned on. Rentals items no longer offers Cycle count, as rental equipment is left out of counts. Someone who can adjust stock but cannot start counts and opens Start a count is now told who can start one, with Back to cycle counts.',
+        whyItMatters:
+          "Staff were offered a count start that was always refused, with a message that began “Missing permission”. Where Cycle Counts is turned off, the bar's Cycle count could not start a count for anyone, and on Rentals items it could not count rental equipment.",
+        howItAffectsYou:
+          'If you cannot start a count, those buttons are gone, and an empty Cycle counts list says “Counts a manager starts appear here.” Counts you are given to enter work as before. In the mobile app, a refused start now says “Only a manager with permission to assign counts and adjust stock can start a count.”',
+        whatToDo: 'No action needed. Ask a manager when a count needs starting.',
+        audience: { anyPermission: ['items:read', 'cycle_counts:read', 'stock:adjust'] },
+      },
+      {
+        // platform: web (the server makes every PDF; the phone's Book Order Totals download
+        // uses the same route). From: B62 #425. Checked at 90f4f354b:
+        // lib/pdf/image-prefetch.ts:34 (flattened onto white before JPEG), :64 (PNG passes
+        // through and keeps its transparency, as before), :69 (WebP, AVIF and GIF), and :239
+        // (the converted copies are keyed anew, so none stored before the fix is reused); the
+        // callers, api/orders/[id]/pick-slip.pdf, packing-slip-warehouse.pdf and
+        // packing-slip-customer.pdf (Print warehouse slip and Print customer slip,
+        // manager-actions-panel.tsx:968-972), api/reports/inventory-snapshot/pdf (the PDF
+        // button at the top of Reports, reports/page.tsx:143), api/reports/[slug]/pdf for the
+        // seven reports with photos (reports/page.tsx:40-88 names them) and
+        // api/v1/reports/book-order-totals/export (its logo). Not walked yet (Demo Co may have
+        // no see-through photo on a picking order). No audience: these PDFs reach several
+        // permissions, and there is no link.
+        id: 'pdf-photos-on-white',
+        category: 'fixed',
+        area: 'Orders and Reports',
+        title: 'Photos with a see-through background print on white in slips and report PDFs',
+        whatChanged:
+          'Item photos with a see-through background that printed on a black square now print on white in the pick slip, the warehouse and customer packing slips, the Inventory snapshot (the PDF button at the top of Reports) and the report PDFs that show photos: Inventory valuation, Stock movement summary, Reorder forecast, Shrinkage & adjustments, Velocity classes (ABC), Dead stock and Bundle shortages. A see-through logo at the top of a Book Order Totals PDF prints on white too.',
+        whyItMatters:
+          'Such a photo printed on a black square, so a dark item could not be seen on the slip a picker works from or on the slip that goes in the box.',
+        howItAffectsYou:
+          'Slips and reports you open from now on show these photos on white. An item that is itself white or very pale shows less of its outline on white than it did on black. A slip or report printed or saved before this fix keeps its black squares: open it again for a new copy. Other photos, and every photo on screen, look as they did.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web (no phone file changed; the phone's own handling is B65). From: B63
+        // #427. Checked at 90f4f354b: server/lib/path-id.ts:27 (Page not found for an id that
+        // is not a uuid, before anything is read), called first on each record page, for
+        // example orders/[id]/page.tsx:203; app/not-found.tsx:21 "Page not found"; before,
+        // the (dashboard) error page, error.tsx:71 "Something broke loading this page". A
+        // well-formed id whose read fails still reaches the error page. Not walked yet (the
+        // production check opens a mistyped and a cut-off link for an order, an item and a
+        // purchase order); the other pages rest on their page tests and the path id guard
+        // test. No audience and no link: any member can open a broken link.
+        id: 'mistyped-link-not-found',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'A mistyped or cut-off link to a record shows Page not found',
+        whatChanged:
+          'On the web, opening a link to an order, an item or book, a purchase order, a PO import, a cycle count, a rental, a Schedule event, a warehouse or a procedure whose address had been mistyped or cut short showed Something broke loading this page, and Try again could not fix it. It now shows Page not found, as a link to a record that does not exist does.',
+        whyItMatters:
+          'The error page made a broken link look like a fault in StockPilot, and its Try again could never work.',
+        howItAffectsYou:
+          'If a link shows Page not found, check that the whole link was copied, or open the record from its list.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        // platform: web; the phone's Schedule cards open this page in the phone's browser
+        // (apps/mobile/app/(drawer)/schedule.tsx:150, unchanged; the app claims no web links,
+        // apps/mobile/app.config.ts). From: B46 #445. Checked at 90f4f354b:
+        // components/schedule/schedule-calendar.tsx:200 (DayMore: a button that opens every
+        // event starting that day, in the page's start order, each row linking to its event),
+        // its name at :218 ("2 more events on Tuesday, July 14"), Close at :247; before, a
+        // link to ?day=, which the page never read. Walked: B46's lab walk (release comment).
+        // Audience: the Schedule page checks its module and schedule:read or schedule:manage
+        // (schedule/page.tsx:29 and :39).
+        id: 'calendar-more-lists-the-day',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar lists every event of a busy day',
+        whatChanged:
+          'A date on the team calendar shows its first three events and then, for example, “+2 more”. Choosing “+2 more” opened the same month again. It now opens a list of every event that starts that day, in the order they start, each with its time as on the calendar, and choosing an event opens it. With a keyboard, Tab to “+2 more” and press Enter; Escape or Close shuts the list.',
+        whyItMatters:
+          'The fourth and later events of a busy day were on the schedule but could not be opened from the calendar.',
+        howItAffectsYou:
+          "Every event that starts on a date the calendar shows can now be opened from the calendar, and a screen reader names the date and how many more events it has. A Schedule card in the mobile app opens this calendar in your phone's browser.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        // platform: web; a reset link opened on a phone opens this web page in the browser (the
+        // app claims no web links, apps/mobile/app.config.ts), and the phone's own code box
+        // waits for its phone update (B57). From: B50 #426, its draft entry and its two
+        // proposed extras. Checked at 90f4f354b: components/auth/reset-complete-form.tsx:87
+        // (the box appears when the server asks for the code), :143 "Authentication code",
+        // :167 Contact support, :175 the reason kept on the page; the plain words,
+        // server/actions/auth.ts:534 (the current password) and :550 (a spent link), and any
+        // other refusal keeps its words, so "for example"; the paste, keeping the first six
+        // digits, mfa-challenge-form.tsx:155, step-up-modal.tsx:206 and
+        // settings/mfa-enrollment.tsx:196. Walked: B50's lab walk (release comment). No
+        // audience and no link: anyone can reset a password from the sign-in page.
+        id: 'password-reset-asks-for-authenticator-code',
+        category: 'fixed',
+        area: 'Account',
+        title:
+          'A password reset asks for your authenticator code, and says in plain words why a new password was not set',
+        whatChanged:
+          'If you use an authenticator app, a password reset could not be finished: the page asked for the 6-digit code from your app but had no box for it. It now shows an Authentication code box when the code is needed; enter it and select Update password again. The reason a new password was not set now stays on the page, in plain words, for example when the password matches your current one or the link has expired or was already used. On the web, a code pasted with a space, such as 123 456, now keeps all six digits when you sign in, when an action asks for a fresh code, and in Settings, Security.',
+        whyItMatters:
+          'If you use an authenticator app and forgot your password, you could not set a new one yourself. A refused reset showed its reason only briefly, sometimes in technical words, and a pasted code lost its last digit, so its Verify button stayed off.',
+        howItAffectsYou:
+          "Your new password is set only after the code is accepted, and a wrong code changes nothing. Then sign in with your new password and a new code from your app, as usual. A reset link opened on your phone works the same way, in the phone's browser. Without an authenticator app, a reset finishes in one step, as before.",
+        whatToDo:
+          'No action needed. If a reset did not work for you before, choose Forgot? on the sign-in page to get a new link and try again. If you no longer have your authenticator app, contact support.',
+      },
+      {
+        // platform: phone, through the server (B75's route part E; its phone part A waits for
+        // its phone update). From: B75 #435. Checked at 90f4f354b: app/api/ai/chat/route.ts:101
+        // (the history sent beside a session id is dropped unread, so a long chat is no longer
+        // refused) and :320 (every answer names its session first), which installed phones
+        // adopt and send back (apps/mobile/app/ai/chat.tsx:130-131 at f584141ba); before, the
+        // route named it last and the phone never read it, so each message began a chat of
+        // its own (a new session, :279, named from its message). The web's list:
+        // lib/ai/sessions.ts:37-50 (the reader's own chats in this workspace). The line names
+        // no length of chat: installed phones still send the whole on-screen chat with every
+        // message (apps/mobile/app/ai/chat.tsx:78-80 and :93-97 at f584141ba), and the route
+        // reads that body in full (route.ts:222) before it drops the history, so a long enough
+        // chat can still meet the platform's request size limit (#435's known limits); the
+        // route's tests cover a held session of 42 turns and a 9,000-character turn. Not
+        // walked yet (the integrator's check sends one chat after the deploy). Audience: the
+        // route checks the AI module and items:update (route.ts:165 and :178).
+        id: 'phone-ai-long-chats-keep-answering',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'Long AI Assistant chats in the mobile app keep answering',
+        whatChanged:
+          'In the mobile app, a long AI Assistant chat now keeps answering. Before, from about the 22nd message of one chat, or after a very long answer, every message showed Chat error until you left the chat and opened it again. Each chat in the app is now also saved as one conversation.',
+        whyItMatters:
+          'A long chat in the app stopped answering, and the only way to go on was to leave it and start again from an empty screen. On the web, every message sent from the app was listed as a chat of its own, with a single question and its answer.',
+        howItAffectsYou:
+          'In the AI Assistant on the web, in the same workspace, a chat from the app is listed once, named after its first message, and you can open it there.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // platform: web and phone, through the server. From: B80 #436. Checked at 90f4f354b:
+        // lib/po-scan/extract.ts:490-493 (a refusal in the person's words, now a ServiceError),
+        // which api/po-imports/scan/route.ts answers in both of its branches. The combined
+        // branch (one file, or several as One multi-page PO): :336-346 answer a ServiceError's
+        // words; since S16 (live 2026-11-01) the refusal, then a plain Error, was answered
+        // UNEXPECTED_ERROR_MESSAGE (:348, server/lib/api-error-response.ts:16), and before S16
+        // its own words. The separate branch (Separate POs): :292-296 put "Could not read this
+        // file as a purchase order." in place of anything but a ServiceError, before and since
+        // S16, and :307-316 answer a 400 with the first file's words only when no file was
+        // read; when some were, the web and the phone only count the files not read
+        // (components/po-imports/po-scan-form.tsx:165-171; apps/mobile/app/scan-po/index.tsx
+        // :436-446 at f584141ba). So the line names both old sentences and drops "again".
+        // Separate POs is the default for two or more files on both (po-scan-form.tsx:47 and
+        // :133; index.tsx:110 and :388 at f584141ba). Shown by the web form
+        // (po-scan-form.tsx:155-159) and by the phone's Scan a PO (index.tsx:420-423 at
+        // f584141ba). The phone sends photos, library images and scanned page images, never a
+        // PDF or another file (index.tsx:195-196 and :601-609, and
+        // src/lib/document-scanner.ts:34-37, at f584141ba), so only the web can upload a
+        // purchase order's file. No import row is created for such a page (the scan service's
+        // test pins it); its file is still kept in storage, so the line says no import, not
+        // nothing saved. Not walked: a scan writes a file; the route tests cover it. Audience:
+        // the scan checks the PO imports module and purchase_orders:manage
+        // (server/services/po-imports.ts:984-985).
+        id: 'po-scan-not-a-purchase-order',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title: 'Scanning a page that is not a purchase order says so',
+        whatChanged:
+          "When Scan with AI on the web, or Scan a PO in the mobile app, cannot read a page as a purchase order, it says “This doesn't look like a purchase order — try a clearer photo of the full document.” For a short time before this fix, scanning one page, or several as one multi-page PO, said “Something went wrong. Please try again.” instead. With Separate POs, when no page could be read, it said “Could not read this file as a purchase order.”",
+        whyItMatters:
+          '“Something went wrong” did not say that the page was not read as a purchase order, or what to try next.',
+        howItAffectsYou: 'No import is created for such a page, and other scans work as before.',
+        whatToDo:
+          'If you see the message, take a clearer photo of the whole purchase order, or on the web upload its file, and scan again.',
+        audience: { anyPermission: ['purchase_orders:manage'], modules: ['po_imports'] },
+      },
+      {
+        // platform: web (the bundle form and Edit event); no phone file changed. From: S4
+        // #379, its draft's two entries, with the fact-check's fixes: "hands it out once, as
+        // before" only for a bundle with a required component, and the audience. Checked at
+        // 90f4f354b: lib/bundles/component-set.ts:24-25 (the sentence),
+        // components/bundles/bundle-form.tsx:96 (create and edit; Optional is the column at
+        // :249, so a component is required while its Optional box is clear), and
+        // server/services/bundles.ts:573 and :729 (the same check on the server); the
+        // Schedule, server/services/schedule.ts:543 (the kit the event was just saved with;
+        // before, `patch.bundleId ?? before` handed out the old one), with Linked bundle and
+        // None at components/schedule/schedule-event-form.tsx:493 and :521. Walked: S4's
+        // production and lab walks (release comment). Audience: owners, admins and managers
+        // (assembling, distributing and the Schedule's hand-out need a manager,
+        // 0415_bundle_component_checks.sql:325 and :526; staff hold bundles:distribute by
+        // default but are not offered Distribute, core constants/permissions.ts:280) who can
+        // manage or distribute bundles or manage the Schedule, where Bundles is on.
+        id: 'bundle-required-component',
+        category: 'improved',
+        area: 'Bundles',
+        title:
+          'A bundle needs at least one required component, and a completed event hands out only the bundle it still names',
+        whatChanged:
+          'Saving a bundle whose components are all marked Optional is now refused, and the form asks you to mark at least one as required. On the Schedule, saving an in-progress event as Completed with Linked bundle set to None in the same save now hands out nothing. Before, the bundle the event used to name was handed out.',
+        whyItMatters:
+          'A bundle with only optional components could be assembled or handed out without drawing any stock, so kit counts and distributions could show kits that were never put together. A completed event could hand out a bundle it no longer named.',
+        howItAffectsYou:
+          'Bundles with at least one required component work as before. Completing an event whose bundle has a required component hands it out once, as before.',
+        whatToDo:
+          'If saving a bundle says a component must be required, clear Optional for the components every kit must contain, which marks them as required, and save again.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['bundles:manage', 'bundles:distribute', 'schedule:manage'],
+          modules: ['bundles'],
+        },
+      },
+      {
+        // platform: web. From: B47 #443 part 3. B41 #423's half is out until a read-only count
+        // finds a workspace it changes (release comment); the id, chosen with both halves in
+        // it, is kept. Checked at 90f4f354b: server/services/warehouse-charters.ts:246
+        // (deleted items counted, how to clear it, "Nothing was saved."), checked before the
+        // warehouse row is written (server/services/warehouses.ts:356), shown by
+        // components/admin/warehouses-manager.tsx:423; before, the other changes were saved
+        // first and a charter only deleted items held failed with the internal error. Restore
+        // from Settings, Recovery: settings/recovery/page.tsx:52 (items:delete). Not walked yet
+        // (the refusal needs a write). Audience: owners and admins (admin/layout.tsx:16 checks
+        // organization:update, which owners and admins hold).
+        id: 'workspace-time-zone-and-charter-removal',
+        category: 'fixed',
+        area: 'Admin',
+        title: 'A refused charter removal on Warehouses saves nothing',
+        whatChanged:
+          'On the Warehouses page in Admin, when a charter cannot be removed from a warehouse because items there are still tagged to it, deleted items are now counted too, the message says how to clear it, and nothing in that save is saved.',
+        whyItMatters:
+          'A refused charter removal still saved the other changes, such as a new name, and a charter that only deleted items used failed with “An internal error occurred”.',
+        howItAffectsYou:
+          'A refused warehouse save leaves the warehouse as it was: move the items to another charter or warehouse, or restore deleted ones from Settings, Recovery and retag them, then save again.',
+        whatToDo: 'No action needed.',
+        audience: { roles: ['owner', 'admin'] },
+      },
+      {
+        // platform: web (the phone has no such switch). From: B45 #423. Checked at 90f4f354b:
+        // components/settings/notification-preferences-form.tsx:127; the reminder,
+        // api/cron/maintenance-draft-reminders/route.ts:92 (a day after saving) and :143 (only
+        // while the request reads Saved; core maintenance/constants.ts:141-142 names Saved and
+        // Email draft opened). The reminder's rule was told in
+        // manage-order-items-and-app-fixes-2026-10; this line tells only the new words. Not
+        // walked yet (the production check reads the hint). Audience: who can save a
+        // maintenance request, where the module is on; the page is open to every member.
+        id: 'maintenance-draft-reminder-setting-words',
+        category: 'fixed',
+        area: 'Maintenance',
+        title: 'The Maintenance draft reminders setting now says when the reminder comes',
+        whatChanged:
+          'On the web, in Settings, Notifications, the words under Maintenance draft reminders now read: “One in-app reminder to open the email draft for a maintenance request you saved, if the request still reads Saved a day or more later.”',
+        whyItMatters:
+          'The words said the reminder came when you had opened an email draft that StockPilot could not confirm was sent. It comes only while a request you saved still reads Saved, not once it reads Email draft opened.',
+        howItAffectsYou: 'The reminder and its switch work as before.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/notifications', label: 'Open notification settings' },
+        audience: {
+          anyPermission: ['maintenance_requests:submit'],
+          modules: ['maintenance_requests'],
+        },
+      },
+    ],
+  },
+  {
     id: 'export-fixes-2026-10',
     revision: 1,
     // The export part of docket C9: #414 (squash 75f5b0fe1, merged 2026-10-31

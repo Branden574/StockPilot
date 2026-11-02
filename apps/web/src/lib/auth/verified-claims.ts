@@ -109,6 +109,14 @@ function isVerdictOnToken(error: { name?: string; status?: number }): boolean {
 export async function readVerifiedSessionClaims(
   supabase: AuthReader,
 ): Promise<VerifiedSessionClaims | null> {
+  return (await readVerifiedSession(supabase))?.claims ?? null;
+}
+
+/**
+ * The cookie session's access token with its verified claims, or null: the
+ * file's one session load, then the checks described above. Never throws.
+ */
+async function readVerifiedSession(supabase: AuthReader): Promise<VerifiedSessionToken | null> {
   // The access token only: never `session.user`, the stored object auth-js
   // warns about.
   let token: string | undefined;
@@ -119,7 +127,15 @@ export async function readVerifiedSessionClaims(
     return null;
   }
   if (!token) return null;
+  const claims = await readVerifiedTokenClaims(supabase, token);
+  return claims ? { token, claims } : null;
+}
 
+/** The verified claims of `token` (see readVerifiedSessionClaims), or null. Never throws. */
+async function readVerifiedTokenClaims(
+  supabase: AuthReader,
+  token: string,
+): Promise<VerifiedSessionClaims | null> {
   try {
     const { data, error } = await supabase.auth.getClaims(token);
     // No error: the claims of a token whose signature checked out.
@@ -142,6 +158,65 @@ export async function readVerifiedSessionClaims(
 }
 
 /**
+ * readVerifiedSessionClaims held to ONE account: the claims only when the
+ * verified token's subject is `userId`, the user this request already
+ * validated (getUser(), the context, the verified email). Anything else is
+ * null, which every caller treats as "not verified": not AAL2, no step-up.
+ *
+ * WHY THE SUBJECT MUST BE CHECKED. Each read of the cookie session LOADS it
+ * again, and a load refreshes the session, with the cookie's own refresh
+ * token, whenever the cookie's own `expires_at` says it is within 90 s of
+ * expiry (auth-js __loadSession); @supabase/ssr then hands the refreshed
+ * session to every later read on that client, and the cookie store to every
+ * later client. Nothing signs either field, so whoever sends the cookie
+ * chooses both: one account's access token, which the identity read
+ * validates, and the refresh token of ANOTHER account's session, with
+ * `expires_at` set to pass the margin after the identity read. The claims read
+ * that follows then verifies the other account's token, and its `aal2` would
+ * count for the first account. A refresh of the same account's session keeps
+ * its subject, so it still answers.
+ */
+export async function readVerifiedSessionClaimsOf(
+  supabase: AuthReader,
+  userId: string,
+): Promise<VerifiedSessionClaims | null> {
+  return (await readVerifiedSessionTokenOf(supabase, userId))?.claims ?? null;
+}
+
+/** A verified cookie session: its access token, and that token's verified claims. */
+export interface VerifiedSessionToken {
+  /**
+   * The access token the claims are of. A client built for this token alone
+   * (lib/supabase/access-token-client) never loads a session, so a call made
+   * with it runs as this token's subject and no one else.
+   */
+  token: string;
+  claims: VerifiedSessionClaims;
+}
+
+/**
+ * readVerifiedSessionClaimsOf with the access token the claims are of (docket
+ * S50a): the token and its claims only when the verified token's subject is
+ * `userId`, the user the request already validated; null otherwise. The same
+ * one session load. A caller that must act as that account and no other (a
+ * recovery code is spent and minted for whoever the call runs as) makes its
+ * database call with `token`, on a client that never loads a session.
+ */
+export async function readVerifiedSessionTokenOf(
+  supabase: AuthReader,
+  userId: string,
+): Promise<VerifiedSessionToken | null> {
+  const session = await readVerifiedSession(supabase);
+  if (!session) return null;
+  if (session.claims.userId === userId) return session;
+  // Never the ids: one fixed line, which the runtime logs can count.
+  console.warn(
+    '[verified-claims] the session now holds another account than the one this request validated',
+  );
+  return null;
+}
+
+/**
  * This request's verified session claims (readVerifiedSessionClaims on the
  * cookie session), read ONCE per page render and shared through React
  * cache().
@@ -158,6 +233,12 @@ export async function readVerifiedSessionClaims(
  *
  * Inside a Server Action or a Route Handler cache() does not memoize, so each
  * call reads again (a local check once the key set is cached).
+ *
+ * The claims are those of whatever account the cookie session holds when this
+ * read loads it, which is not always the account the request validated (see
+ * readVerifiedSessionClaimsOf). A caller that decides anything on them first
+ * compares `userId` with that user: the dashboard layout's gate and
+ * resolveMfaState in withContext() do.
  *
  * Never rejects: the layout awaits it only at its enrolled-member gate, and a
  * client that cannot be made is as unverified as a forged token (null).

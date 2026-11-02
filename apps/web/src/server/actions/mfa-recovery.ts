@@ -3,13 +3,15 @@
 import { revalidatePath } from 'next/cache';
 
 import { requireSession } from '@/lib/auth/session';
-import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
+import { SESSION_CHANGED } from '@/server/services/step-up-held';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -34,9 +36,13 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     // The level is the access token's `aal` claim once its signature checks
     // out (lib/auth/verified-claims), not getAuthenticatorAssuranceLevel()'s
     // unchecked decode of the cookie: a token that does not verify is refused.
+    // It is the level of the account requireSession() validated, and only of
+    // that account (readVerifiedSessionTokenOf, docket S50a); the codes are
+    // then minted with that same verified token, so the level that allows the
+    // call and the account the codes belong to are one account.
     const supabase = await createClient();
-    const claims = await readVerifiedSessionClaims(supabase);
-    if (claims?.aal !== 'aal2') {
+    const held = await readVerifiedSessionTokenOf(supabase, session.userId);
+    if (held?.claims.aal !== 'aal2') {
       return err('forbidden', 'Re-authenticate with MFA before regenerating recovery codes.');
     }
     // Rate-limit regeneration: defends against a loop that repeatedly invalidates
@@ -45,7 +51,12 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     if (!rl.allowed) {
       return err('validation_error', 'Too many recovery-code regenerations. Wait a few minutes and try again.');
     }
-    const { data, error } = await supabase.rpc('generate_mfa_recovery_codes');
+    // The RPC mints for auth.uid(). It runs on a client that acts as the
+    // verified token alone and never loads or renews the cookie session, so
+    // auth.uid() is the account checked above.
+    const { data, error } = await createAccessTokenClient(held.token).rpc(
+      'generate_mfa_recovery_codes',
+    );
     if (error) throw new ServiceError('internal_error', error.message);
     const codes = ((data ?? []) as Array<{ code: string }>).map((r) => r.code);
     revalidatePath('/dashboard/settings/security');
@@ -143,11 +154,20 @@ export async function consumeMfaRecoveryCodeAction(input: {
       );
     }
 
+    // The code is checked against auth.uid()'s own set, so the RPC runs as
+    // the account requireSession() validated and only as that account (docket
+    // S50a): with that account's verified access token, on a client that acts
+    // as that token alone and never loads or renews the cookie session. A
+    // cookie session that no longer verifies as that account is refused before
+    // any code is checked; the factors removed below are that account's.
     const supabase = await createClient();
+    const held = await readVerifiedSessionTokenOf(supabase, session.userId);
+    if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
 
-    const { data: ok_, error } = await supabase.rpc('consume_mfa_recovery_code', {
-      p_code: input.code,
-    });
+    const { data: ok_, error } = await createAccessTokenClient(held.token).rpc(
+      'consume_mfa_recovery_code',
+      { p_code: input.code },
+    );
     if (error) throw new ServiceError('internal_error', error.message);
     if (!ok_) return err('validation_error', 'That recovery code is invalid or already used.');
 

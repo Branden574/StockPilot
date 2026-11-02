@@ -23,7 +23,11 @@ import { quickbooksConnector } from './index';
  * index.test.ts).
  */
 const { postSpy, querySpy } = vi.hoisted(() => ({ postSpy: vi.fn(), querySpy: vi.fn() }));
-vi.mock('./client', () => ({ QboClient: vi.fn() }));
+// The real QboApiError stays: the connector classifies a failure by that class.
+vi.mock('./client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./client')>()),
+  QboClient: vi.fn(),
+}));
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 

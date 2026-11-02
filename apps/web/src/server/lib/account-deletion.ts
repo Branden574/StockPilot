@@ -2,6 +2,7 @@ import 'server-only';
 
 import { headers } from 'next/headers';
 
+import { isUserNotFound } from '@/lib/auth/gotrue-user-not-found';
 import { reportError } from '@/lib/error-reporter';
 import type { createAdminClient } from '@/lib/supabase/admin';
 import type { createClient } from '@/lib/supabase/server';
@@ -234,12 +235,6 @@ export async function checkAccountDeletable(
  * a2-evidence/review-gotrue-shapes.log) counts as proof. Never throws.
  */
 export type FailedDeleteSettlement = 'deleted' | 'deleted_elsewhere' | 'not_deleted';
-
-function isUserNotFound(e: unknown): boolean {
-  if (!e || typeof e !== 'object') return false;
-  const o = e as { status?: unknown; code?: unknown };
-  return o.status === 404 && o.code === 'user_not_found';
-}
 
 export async function settleFailedDelete(
   admin: AdminClient,
