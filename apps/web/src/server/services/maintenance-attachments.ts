@@ -756,9 +756,9 @@ export class MaintenanceAttachmentsService {
     // manager by role whatever maintenance_requests:manage says, and once the
     // database refuses that caller (docket S47's photo guard, 42501) the
     // refusal would reach them as an internal_error 500. The requester is
-    // read only when it decides the answer, with the parent read the
-    // closed-request message below makes. A failed read deletes nothing, and
-    // a missing requester (a deleted account leaves it null) is never the
+    // read only when it decides the answer, by the request's organization and
+    // id like the closed-request read below. A failed read deletes nothing,
+    // and a missing requester (a deleted account leaves it null) is never the
     // caller.
     const isManager = can(this.ctx, 'maintenance_requests:manage');
     if (!isManager) {
