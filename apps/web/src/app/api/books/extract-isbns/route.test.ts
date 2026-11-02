@@ -43,6 +43,16 @@ describe('POST /api/books/extract-isbns', () => {
     expect(await res.json()).toMatchObject({ ok: true, kind: 'txt', isbns: ['9780262033848'] });
   });
 
+  it('reads an ISBN-13 written with dashes once, with no made-up ISBN-10 beside it (B76)', async () => {
+    // The ISBN-10 pass also matched "0-262-03384-8", ten of its digits, and
+    // Bulk ISBN import showed a failed lookup row for it.
+    const res = await POST(upload('order.txt', 'text/plain', 'ISBN 978-0-262-03384-8'));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { isbns: string[]; totalFound: number };
+    expect(body.isbns).toEqual(['9780262033848']);
+    expect(body.totalFound).toBe(1);
+  });
+
   it('an unsupported file type is a 400 with its sentence, and is not reported', async () => {
     const res = await POST(upload('order.rtf', 'application/rtf'));
     expect(res.status).toBe(400);
