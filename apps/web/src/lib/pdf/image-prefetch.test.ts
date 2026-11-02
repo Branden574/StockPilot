@@ -11,13 +11,16 @@ import sharp from 'sharp';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  AVIF_8192_CROPPED_TO_64,
   EXIF_JPEGS,
   gifHeader,
   IMAGE_LOOKALIKE_SVGS,
   MALFORMED_PNGS,
   pngWithOversizedData,
+  SLOW_TO_PARSE_JPEGS,
   SVG_16000,
   SVG_UNDER_A_WEBP_HEADER,
+  WEBP_100_BY_1000000,
   WEBP_7072,
 } from '@/test/image-decode-fixtures';
 import {
@@ -338,7 +341,7 @@ describe('photos with a see-through background (B62)', () => {
  * GIF or AVIF, and sizes over the decoder's caps, print the placeholder.
  */
 describe('photos through the capped decoder (S45)', () => {
-  const CHECKED = { ...MALFORMED_PNGS, ...EXIF_JPEGS };
+  const CHECKED = { ...MALFORMED_PNGS, ...EXIF_JPEGS, ...SLOW_TO_PARSE_JPEGS };
 
   async function prefetchOne(bytes: Buffer, contentType = 'image/png', url = SIGNED) {
     // A fresh answer for each request: the cached function is called again below.
@@ -369,8 +372,13 @@ describe('photos through the capped decoder (S45)', () => {
     expect(uri).toBeNull();
   });
 
-  it('a WebP or GIF whose header states more pixels than the cap: no image, and sharp is not called', async () => {
-    for (const bytes of [WEBP_7072, gifHeader(4097, 4096)]) {
+  it('a WebP, GIF or AVIF whose header states more pixels than the cap: no image, and sharp is not called', async () => {
+    for (const bytes of [
+      WEBP_7072,
+      WEBP_100_BY_1000000,
+      gifHeader(4097, 4096),
+      AVIF_8192_CROPPED_TO_64,
+    ]) {
       sharpCalls.length = 0;
       expect(await prefetchOne(bytes, 'image/webp')).toBeNull();
       expect(callsWith(bytes)).toEqual([]);
@@ -488,7 +496,7 @@ describe('photos through the capped decoder (S45)', () => {
     }
   });
 
-  it('the sized path (Book Order Totals covers) refuses an AVIF over 4096 x 4096', async () => {
+  it('the sized path (Book Order Totals covers) refuses an AVIF over 4096 x 4096 before sharp', async () => {
     const avif = await sharp({
       create: { width: 4096, height: 4097, channels: 3, background: { r: 1, g: 2, b: 3 } },
     })
@@ -498,9 +506,12 @@ describe('photos through the capped decoder (S45)', () => {
     sharpCalls.length = 0;
     const out = await prefetchImagesAsDataUris([['cover', SIGNED] as const], { maxEdgePx: 40 });
     expect(out.get('cover')).toBeNull();
-    expect(callsWith(avif).map((call) => call[1])).toEqual([
-      { limitInputPixels: 16_777_216, autoOrient: true },
-    ]);
+    expect(callsWith(avif)).toEqual([]);
+    // Nor one coded over the cap and cropped under it.
+    fetchSpy.mockResolvedValue(response(AVIF_8192_CROPPED_TO_64, { 'content-type': 'image/avif' }));
+    const cropped = await prefetchImagesAsDataUris([['cover', SIGNED] as const], { maxEdgePx: 40 });
+    expect(cropped.get('cover')).toBeNull();
+    expect(callsWith(AVIF_8192_CROPPED_TO_64)).toEqual([]);
   }, 30_000);
 });
 
@@ -702,7 +713,7 @@ describe('prefetchPdfLogo', () => {
     expect(cacheKeys).not.toContainEqual(['pdf-logo-data-uri-v1']);
   });
 
-  it.each(Object.entries({ ...MALFORMED_PNGS, ...EXIF_JPEGS }))(
+  it.each(Object.entries({ ...MALFORMED_PNGS, ...EXIF_JPEGS, ...SLOW_TO_PARSE_JPEGS }))(
     '%s: no logo, and the cached function stores nothing',
     async (_label, bytes) => {
       serveLogo(bytes);
@@ -792,10 +803,18 @@ describe('prefetchPdfLogo', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     serveLogo(await avif(4097), 'image/avif');
     expect(await prefetchPdfLogo(LOGO)).toBeNull();
-    expect(warn.mock.calls.flat().join(' ')).toContain('Input image exceeds pixel limit');
+    expect(warn.mock.calls.flat().join(' ')).toContain('avif 4096x4097 is over 16777216 pixels');
     await expect(cachedFns.get('pdf-logo-data-uri-v2')!(LOGO)).rejects.toThrow(
-      /Input image exceeds pixel limit/,
+      /^avif 4096x4097 is over 16777216 pixels$/,
     );
+    // Coded over the cap and cropped under it: refused before sharp.
+    sharpCalls.length = 0;
+    serveLogo(AVIF_8192_CROPPED_TO_64, 'image/avif');
+    expect(await prefetchPdfLogo(LOGO)).toBeNull();
+    await expect(cachedFns.get('pdf-logo-data-uri-v2')!(LOGO)).rejects.toThrow(
+      /^avif 8192x8192 is over 16777216 pixels$/,
+    );
+    expect(callsWith(AVIF_8192_CROPPED_TO_64)).toEqual([]);
   }, 30_000);
 
   it('the cached function stores the PNG made from a WebP logo', async () => {

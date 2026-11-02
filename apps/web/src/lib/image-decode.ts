@@ -18,10 +18,12 @@ import { sniffImage } from '@/lib/image-signature';
  * unchanged, on the strength of a few leading bytes:
  *
  *   - readImageHeader reads the format from the bytes (PNG, JPEG, WebP, GIF or
- *     AVIF, nothing else: no SVG, TIFF, HEIC or BMP) and, where the header
- *     states it, the size, at fixed offsets or by a bounded walk.
+ *     AVIF, nothing else: no SVG, TIFF, HEIC or BMP) and the size, at fixed
+ *     offsets or by a bounded walk. For AVIF that is the largest size an item
+ *     is coded at (its ispe), not the size after a crop: libheif decodes the
+ *     coded size, while sharp's own pixel limit sees the cropped one.
  *   - withCappedImage refuses, before sharp is called, a format the caller
- *     does not read, any other bytes, and a stated size over the format's cap
+ *     does not read, any other bytes, and a size over the format's cap
  *     (DECODE_MAX_INPUT_PIXELS); then it opens sharp with that cap (which
  *     libvips checks from the header as well), the EXIF orientation applied,
  *     and a time limit. Decodes that hold the whole image in memory before any
@@ -31,7 +33,11 @@ import { sniffImage } from '@/lib/image-signature';
  *     bytes reach react-pdf as they are. react-pdf and pdfkit read a PNG's
  *     chunks and a JPEG's segments themselves and take the lengths and sizes
  *     in them as given, so these checks walk the same structure first, with
- *     size and byte limits. Bytes that fail are re-made by sharp instead.
+ *     size and byte limits: every PNG row starts with a filter type png-js
+ *     knows (it throws on any other inside zlib's callback, where nothing can
+ *     catch it), and a JPEG holds only segments jay-peg reads at their stated
+ *     length, few enough to parse in well under a millisecond. Bytes that
+ *     fail are re-made by sharp instead.
  */
 
 export type ImageKind = 'png' | 'jpeg' | 'webp' | 'gif' | 'avif';
@@ -69,9 +75,10 @@ export class DecodeRefused extends Error {
 
 export interface ImageHeader {
   kind: ImageKind;
-  /** null when the header does not state the size (AVIF). */
-  width: number | null;
-  height: number | null;
+  /** The size the decoder holds: for AVIF, the largest coded size of any of
+   *  its items, before a crop. */
+  width: number;
+  height: number;
   /** Decoded at full size before any resize: runs one at a time. */
   heavy: boolean;
 }
@@ -87,6 +94,8 @@ const PNG_BIT_DEPTHS: Readonly<Record<number, readonly number[]>> = {
   6: [8, 16],
 };
 const PNG_CHANNELS: Readonly<Record<number, number>> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+/** A PNG row's first byte names its filter: None, Sub, Up, Average, Paeth. */
+const PNG_LAST_FILTER_TYPE = 4;
 
 const INT31_MAX = 0x7fffffff;
 
@@ -227,15 +236,87 @@ function gifHeader(bytes: Uint8Array): ImageHeader | null {
   return { kind: 'gif', width, height, heavy: true };
 }
 
+interface IsoBox {
+  type: string;
+  /** Where the box's contents start, after its size and type. */
+  body: number;
+  end: number;
+}
+
+/** The boxes that exactly fill `start` to `end`, or null when a box's size
+ *  is under its header or runs past `end`. A size of 0 runs to `end`; a
+ *  64-bit size must fit in 32 bits. */
+function isoBoxes(bytes: Uint8Array, start: number, end: number): IsoBox[] | null {
+  const view = viewOf(bytes);
+  const boxes: IsoBox[] = [];
+  for (let at = start; at < end;) {
+    if (at + 8 > end) return null;
+    let size = view.getUint32(at);
+    let header = 8;
+    if (size === 1) {
+      if (at + 16 > end || view.getUint32(at + 8) !== 0) return null;
+      size = view.getUint32(at + 12);
+      header = 16;
+    } else if (size === 0) {
+      size = end - at;
+    }
+    if (size < header || at + size > end) return null;
+    boxes.push({ type: ascii(bytes, at + 4, 4), body: at + header, end: at + size });
+    at += size;
+  }
+  return boxes;
+}
+
+/**
+ * The largest size any item of an AVIF is coded at: every ispe property in
+ * meta > iprp > ipco (meta and ispe are full boxes, so their contents start
+ * after 4 bytes of version and flags). libheif decodes an item at this size
+ * and refuses data of any other, then applies a crop (clap); sharp's pixel
+ * limit compares against the size after the crop, so a 64 x 64 crop of an
+ * 8192 x 8192 image would pass it. A grid's own ispe states the whole grid.
+ * null when the boxes do not fill their parents, or there is no ispe.
+ */
+function avifCodedSize(
+  bytes: Uint8Array,
+  ftypEnd: number,
+): { width: number; height: number } | null {
+  const meta = isoBoxes(bytes, ftypEnd, bytes.length)?.find((b) => b.type === 'meta');
+  if (!meta) return null;
+  const inMeta = isoBoxes(bytes, meta.body + 4, meta.end);
+  if (!inMeta) return null;
+  const view = viewOf(bytes);
+  let largest: { width: number; height: number } | null = null;
+  for (const iprp of inMeta.filter((b) => b.type === 'iprp')) {
+    const inIprp = isoBoxes(bytes, iprp.body, iprp.end);
+    if (!inIprp) return null;
+    for (const ipco of inIprp.filter((b) => b.type === 'ipco')) {
+      const properties = isoBoxes(bytes, ipco.body, ipco.end);
+      if (!properties) return null;
+      for (const ispe of properties.filter((b) => b.type === 'ispe')) {
+        if (ispe.end - ispe.body < 12) return null;
+        const width = view.getUint32(ispe.body + 4);
+        const height = view.getUint32(ispe.body + 8);
+        if (width < 1 || height < 1) return null;
+        if (!largest || width * height > largest.width * largest.height) {
+          largest = { width, height };
+        }
+      }
+    }
+  }
+  return largest;
+}
+
 /** An ftyp box the upload sniffer calls AVIF, of 16 to AVIF_FTYP_MAX_BYTES
- *  bytes, a multiple of 4, inside the buffer. Its size sits in a box tree
- *  this does not walk: sharp checks it against the cap from the header. */
+ *  bytes, a multiple of 4, inside the buffer, and the largest coded size of
+ *  its items (avifCodedSize). */
 function avifHeader(bytes: Uint8Array): ImageHeader | null {
   if (bytes.length < 16) return null;
   const box = viewOf(bytes).getUint32(0);
   if (box < 16 || box > AVIF_FTYP_MAX_BYTES || box % 4 !== 0 || box > bytes.length) return null;
   if (sniffImage(bytes)?.kind !== 'avif') return null;
-  return { kind: 'avif', width: null, height: null, heavy: true };
+  const coded = avifCodedSize(bytes, box);
+  if (!coded) return null;
+  return { kind: 'avif', width: coded.width, height: coded.height, heavy: true };
 }
 
 /**
@@ -270,9 +351,8 @@ function inHeavySlot<T>(decode: () => Promise<T>): Promise<T> {
  * Hands `work` a sharp instance of `bytes`, opened with exactly
  * `{ limitInputPixels: cap, autoOrient: true }` and DECODE_TIMEOUT_SECONDS,
  * and returns what `work` returns. Throws DecodeRefused, without calling sharp,
- * for bytes readImageHeader does not read, a kind not in `kinds`, or a stated
- * size over the kind's cap; sharp's own errors (an AVIF over its cap, a
- * damaged file) reject as they are.
+ * for bytes readImageHeader does not read, a kind not in `kinds`, or a size
+ * over the kind's cap; sharp's own errors (a damaged file) reject as they are.
  */
 export async function withCappedImage<T>(
   bytes: Uint8Array,
@@ -283,7 +363,7 @@ export async function withCappedImage<T>(
   if (!header) throw new DecodeRefused('not a PNG, JPEG, WebP, GIF or AVIF image');
   if (!kinds.includes(header.kind)) throw new DecodeRefused(`${header.kind} is not read here`);
   const cap = DECODE_MAX_INPUT_PIXELS[header.kind];
-  if (header.width !== null && header.height !== null && header.width * header.height > cap) {
+  if (header.width * header.height > cap) {
     throw new DecodeRefused(
       `${header.kind} ${header.width}x${header.height} is over ${cap} pixels`,
     );
@@ -326,7 +406,10 @@ const inflateAsync = promisify(inflate);
  * readPngIhdr reads it (not interlaced, both sides within maxEdgePx), at most
  * maxBytes, every chunk inside the file, no IHDR but the first, IEND reached,
  * and the IDAT data (every IDAT before IEND, joined) inflating to exactly the
- * rows the IHDR states. The inflate stops at that many bytes.
+ * rows the IHDR states, each starting with a filter type from 0 to 4. The
+ * inflate stops at that many bytes. png-js, which pdfkit runs over every
+ * pixel of a PNG with transparency, throws on any other filter type inside
+ * zlib's callback, which ends the process.
  */
 export async function pngPassesUnchanged(
   bytes: Uint8Array,
@@ -355,28 +438,125 @@ export async function pngPassesUnchanged(
   if (!ended || idat.length === 0) return false;
   const rowBytes = Math.ceil((ihdr.width * ihdr.bitDepth * PNG_CHANNELS[ihdr.colourType]!) / 8);
   const expected = ihdr.height * (1 + rowBytes);
+  let rows: Buffer;
   try {
-    const rows = await inflateAsync(Buffer.concat(idat), { maxOutputLength: expected });
-    return rows.length === expected;
+    rows = await inflateAsync(Buffer.concat(idat), { maxOutputLength: expected });
   } catch {
     return false;
+  }
+  if (rows.length !== expected) return false;
+  for (let row = 0; row < expected; row += 1 + rowBytes) {
+    if (rows[row]! > PNG_LAST_FILTER_TYPE) return false;
+  }
+  return true;
+}
+
+/**
+ * The most parts of one JPEG that passes unchanged: its marker segments, and
+ * the frame and scan components and Huffman and quantization tables inside
+ * them. react-pdf reads a JPEG with jay-peg, which turns every one of these
+ * into an object, synchronously, at about a microsecond each, with nothing
+ * else on the server running meanwhile. JPEGs sharp makes have 22 (baseline)
+ * to 54 (progressive); a 1 MiB file of nothing but empty comment segments has
+ * over 262,000, which took jay-peg 0.3 to 0.5 s each time it was drawn.
+ */
+export const JPEG_MAX_PARSED_PARTS = 256;
+
+/** Where a scan's entropy-coded data, from `start`, ends: at the first FF
+ *  followed by anything but 00 or a restart marker (RST0-7), as jay-peg
+ *  looks for it. -1 when there is no such FF. */
+function scanDataEnd(bytes: Uint8Array, start: number): number {
+  const whole = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let at = whole.indexOf(0xff, start); at !== -1; at = whole.indexOf(0xff, at + 1)) {
+    const next = whole[at + 1];
+    if (next === undefined || (next !== 0x00 && (next < 0xd0 || next > 0xd7))) return at;
+  }
+  return -1;
+}
+
+/**
+ * A JPEG's frame when the whole file, SOI to EOI, reads exactly as jay-peg
+ * reads it (react-pdf's JPEG reader, which parses every segment and skips
+ * whatever follows EOI), and cheaply:
+ *   - each marker exactly where the segment before it ends or, after a scan
+ *     (SOS) header, where its entropy-coded data ends (scanDataEnd);
+ *   - only markers encoders write: one frame (SOF0, SOF1 or SOF2) before
+ *     any scan, DHT, DQT, DRI, SOS, APP0, APP2 to APP15 and COM, nothing else
+ *     (no APP1, whose EXIF jay-peg parses entry by entry, no DAC, no second
+ *     SOI, no restart marker outside a scan);
+ *   - each segment jay-peg reads field by field exactly as long as that
+ *     reading (a frame 8 + 3 per component, a scan header 6 + 2 per
+ *     component, DRI 4, APP0 16 for its JFIF fields, DQT 2 + 65 per table),
+ *     so it never reads a segment's contents as markers;
+ *   - at least one scan, and at most JPEG_MAX_PARSED_PARTS parts.
+ * null when any of these fails.
+ */
+function jpegFrameAsJayPegReadsIt(bytes: Uint8Array): JpegFrame | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null;
+  let frame: JpegFrame | null = null;
+  let scans = 0;
+  let parts = 1;
+  let at = 2;
+  for (;;) {
+    if (at + 2 > bytes.length || bytes[at] !== 0xff) return null;
+    const marker = bytes[at + 1]!;
+    parts += 1;
+    if (marker === 0xd9) return frame && scans > 0 && parts <= JPEG_MAX_PARSED_PARTS ? frame : null;
+    if (at + 4 > bytes.length) return null;
+    const length = (bytes[at + 2]! << 8) | bytes[at + 3]!;
+    const end = at + 2 + length;
+    if (length < 2 || end > bytes.length) return null;
+    let next = end;
+    if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+      const components = bytes[at + 9] ?? 0;
+      if (frame || scans > 0 || length !== 8 + 3 * components) return null;
+      parts += components;
+      frame = {
+        marker,
+        height: (bytes[at + 5]! << 8) | bytes[at + 6]!,
+        width: (bytes[at + 7]! << 8) | bytes[at + 8]!,
+        components,
+      };
+    } else if (marker === 0xc4) {
+      // jay-peg's DHT reader: tables of an id, 16 code counts and the codes,
+      // one after another until the segment ends.
+      for (let table = at + 4; table < end && parts <= JPEG_MAX_PARSED_PARTS; parts += 1) {
+        let codes = 0;
+        for (let i = table + 1; i < Math.min(table + 17, end); i += 1) codes += bytes[i]!;
+        table += 17 + codes;
+      }
+    } else if (marker === 0xdb) {
+      if ((length - 2) % 65 !== 0) return null;
+      parts += (length - 2) / 65;
+    } else if (marker === 0xda) {
+      const components = bytes[at + 4] ?? 0;
+      if (!frame || length !== 6 + 2 * components) return null;
+      parts += components;
+      scans += 1;
+      next = scanDataEnd(bytes, end);
+      if (next === -1) return null;
+    } else if (marker === 0xdd || marker === 0xe0) {
+      if (length !== (marker === 0xdd ? 4 : 16)) return null;
+    } else if (!(marker >= 0xe2 && marker <= 0xef) && marker !== 0xfe) {
+      return null;
+    }
+    if (parts > JPEG_MAX_PARSED_PARTS) return null;
+    at = next;
   }
 }
 
 /**
- * Whether JPEG bytes may reach react-pdf unchanged: at most maxBytes, no byte
- * pair FF E1 anywhere (so no APP1 segment, EXIF or XMP; inside the
- * entropy-coded data FF is only ever followed by 00 or a restart marker), and
- * a strict marker walk (strictJpegFrame) to a baseline, extended or
- * progressive Huffman frame (SOF0, SOF1, SOF2) of 1 or 3 components with both
- * sides within maxEdgePx. Anything else is re-made, its orientation applied.
+ * Whether JPEG bytes may reach react-pdf unchanged: at most maxBytes, the
+ * whole file reading as jay-peg reads it within JPEG_MAX_PARSED_PARTS
+ * (jpegFrameAsJayPegReadsIt: so no APP1 segment, EXIF or XMP, and no
+ * orientation to apply), and a baseline, extended or progressive Huffman
+ * frame (SOF0, SOF1, SOF2) of 1 or 3 components with both sides within
+ * maxEdgePx. Anything else is re-made, its orientation applied.
  */
 export function jpegPassesUnchanged(bytes: Uint8Array, limits: PassThroughLimits): boolean {
   if (bytes.length > limits.maxBytes) return false;
-  const whole = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (whole.indexOf(Buffer.from([0xff, 0xe1])) !== -1) return false;
-  const frame = strictJpegFrame(bytes);
-  if (!frame || frame.marker > 0xc2) return false;
+  const frame = jpegFrameAsJayPegReadsIt(bytes);
+  if (!frame) return false;
   if (frame.components !== 1 && frame.components !== 3) return false;
   return (
     frame.width >= 1 &&

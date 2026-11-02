@@ -11,7 +11,7 @@ vi.mock('sharp', async (importOriginal) => {
   return { default: recordingSharp(real, sharpCalls) };
 });
 
-import { IMAGE_LOOKALIKE_SVGS } from '@/test/image-decode-fixtures';
+import { AVIF_8192_CROPPED_TO_64, IMAGE_LOOKALIKE_SVGS } from '@/test/image-decode-fixtures';
 
 import { IMAGE_VARIANTS } from './image-variants.config';
 import { makeItemPhotoThumbnail } from './item-photo-thumbnail';
@@ -115,7 +115,7 @@ describe('makeItemPhotoThumbnail', () => {
     expect(sharpCalls).toEqual([]);
   });
 
-  it('answers null for an AVIF over 4096 x 4096, refused by sharp from its header', async () => {
+  it('answers null, without calling sharp, for an AVIF over 4096 x 4096', async () => {
     const avif = await sharp({
       create: { width: 4096, height: 4097, channels: 3, background: { r: 1, g: 2, b: 3 } },
     })
@@ -123,10 +123,14 @@ describe('makeItemPhotoThumbnail', () => {
       .toBuffer();
     sharpCalls.length = 0;
     expect(await makeItemPhotoThumbnail(new Uint8Array(avif))).toBeNull();
-    expect(sharpCalls.map((args) => args[1])).toEqual([
-      { limitInputPixels: 16_777_216, autoOrient: true },
-    ]);
+    expect(sharpCalls).toEqual([]);
   }, 30_000);
+
+  it('answers null, without calling sharp, for an AVIF coded at 8192 x 8192 and cropped to 64 x 64', async () => {
+    sharpCalls.length = 0;
+    expect(await makeItemPhotoThumbnail(new Uint8Array(AVIF_8192_CROPPED_TO_64))).toBeNull();
+    expect(sharpCalls).toEqual([]);
+  });
 
   it('answers null for bytes that are not an image', async () => {
     expect(

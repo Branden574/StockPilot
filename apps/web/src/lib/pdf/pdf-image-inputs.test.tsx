@@ -4,7 +4,7 @@ import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 
 import { fetchExportImageBytes } from '@/lib/exports/export-images';
-import { EXIF_JPEGS, MALFORMED_PNGS } from '@/test/image-decode-fixtures';
+import { EXIF_JPEGS, MALFORMED_PNGS, SLOW_TO_PARSE_JPEGS } from '@/test/image-decode-fixtures';
 import { countInPdf, STORAGE_PHOTO_URL, withStoragePhoto } from '@/test/see-through-images';
 
 import { BrandedHeader } from './branding';
@@ -19,7 +19,9 @@ import { toPdfImageSrc } from './inventory-export-pdf';
  * and Books PDF export (fetchExportImageBytes, toPdfImageSrc).
  *
  * For PNG and JPEG files whose chunks or segments do not hold what their
- * header states, each path first gives no image (that is asserted before any
+ * header states, or that react-pdf's readers (png-js, jay-peg) would throw
+ * on out of reach of any catch or take far longer over than a photo, each
+ * path first gives no image (that is asserted before any
  * render, so a run against code that passes such bytes on stops there); the
  * document then renders with the placeholder or no logo. Ordinary PNG and
  * JPEG files still render one image.
@@ -88,6 +90,9 @@ const PATHS: readonly Path[] = ['photo', 'logo', 'export'];
 const CHECKED = [
   ...Object.entries(MALFORMED_PNGS).map(([label, bytes]) => [label, bytes, 'image/png'] as const),
   ...Object.entries(EXIF_JPEGS).map(([label, bytes]) => [label, bytes, 'image/jpeg'] as const),
+  ...Object.entries(SLOW_TO_PARSE_JPEGS).map(
+    ([label, bytes]) => [label, bytes, 'image/jpeg'] as const,
+  ),
 ];
 
 describe('images in PDFs (S45)', () => {

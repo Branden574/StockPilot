@@ -69,8 +69,9 @@ async function jpegOnWhite(
  *      400 px and 1 MiB), unchanged: react-pdf keeps its transparency;
  *   2. any other PNG, re-made as a PNG by the capped decoder, its
  *      transparency kept;
- *   3. a JPEG that jpegPassesUnchanged allows (no EXIF or XMP, a strict
- *      marker walk, within 400 px and 1 MiB), unchanged;
+ *   3. a JPEG that jpegPassesUnchanged allows (no EXIF or XMP, every
+ *      segment read as react-pdf reads it and few enough to parse quickly,
+ *      within 400 px and 1 MiB), unchanged;
  *   4. anything else the decoder reads (JPEG, WebP, AVIF, GIF), re-made as a
  *      JPEG on white with its EXIF orientation applied.
  * Other bytes (SVG, TIFF, HEIC, damaged files) and sizes over the decoder's

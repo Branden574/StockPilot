@@ -74,12 +74,15 @@ import {
 } from './export-images';
 import { webpToPng } from './webp-to-png';
 import {
+  AVIF_8192_CROPPED_TO_64,
   EXIF_JPEGS,
   IMAGE_LOOKALIKE_SVGS,
   MALFORMED_PNGS,
   PNG_8X8,
   pngWithOversizedData,
+  SLOW_TO_PARSE_JPEGS,
   SVG_16000,
+  WEBP_100_BY_1000000,
   WEBP_7072,
 } from '@/test/image-decode-fixtures';
 import { inventoryExportRequestSchema, resolveExportFields } from './export-request';
@@ -132,19 +135,23 @@ function makeRow(id: string): InventoryExportSourceRow {
 }
 
 /**
- * A JPEG's leading bytes: SOI and an 8 x 8 baseline frame header (SOF0). A
- * body that starts with them and is zero after is a JPEG the export passes
- * through unchanged (jpegPassesUnchanged reads the markers up to the frame),
- * so the size and network tests below need no real photo.
+ * A JPEG's leading bytes: SOI, an 8 x 8 baseline frame header (SOF0) and a
+ * scan header (SOS). A body that starts with them, is zero after (scan data)
+ * and ends with EOI is a JPEG the export passes through unchanged
+ * (jpegPassesUnchanged reads its markers from SOI to EOI), so the size and
+ * network tests below need no real photo.
  */
 const JPEG_HEAD = [
   0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x08, 0x00, 0x08, 0x03, 1, 0x11, 0, 2, 0x11, 0, 3,
-  0x11, 0,
+  0x11, 0, 0xff, 0xda, 0x00, 0x0c, 0x03, 1, 0x00, 2, 0x11, 3, 0x11, 0, 0x3f, 0,
 ];
 
 function jpegBody(bytes: number): Uint8Array {
   const body = new Uint8Array(bytes);
-  if (bytes >= JPEG_HEAD.length) body.set(JPEG_HEAD);
+  if (bytes >= JPEG_HEAD.length + 2) {
+    body.set(JPEG_HEAD);
+    body.set([0xff, 0xd9], bytes - 2);
+  }
   return body;
 }
 
@@ -168,6 +175,10 @@ function streamedResponse(
 ): { response: Response; pulledSizes: number[] } {
   const pulledSizes: number[] = [];
   let index = 0;
+  // One JPEG body cut at the chunk sizes: the first chunk starts with its
+  // leading bytes and the last ends with EOI (see jpegBody).
+  const whole = jpegBody(chunkSizes.reduce((sum, size) => sum + size, 0));
+  let offset = 0;
   const stream = new ReadableStream<Uint8Array>({
     // Real undici: cancelling a reader whose request was just aborted REJECTS
     // with AbortError. Opt in to model that, so the oversize branch is proven
@@ -182,8 +193,8 @@ function streamedResponse(
       }
       const size = chunkSizes[index]!;
       pulledSizes.push(size);
-      // The first chunk starts with a JPEG's leading bytes (see jpegBody).
-      controller.enqueue(index === 0 ? jpegBody(size) : new Uint8Array(size));
+      controller.enqueue(whole.slice(offset, offset + size));
+      offset += size;
       index++;
     },
   });
@@ -1201,7 +1212,7 @@ describe('fetchExportImageBytes — shared adaptive rate gate', () => {
       // ...while every sibling's first request is still in flight for a
       // real tick, so the gate is already set when they go for their next.
       await new Promise((resolve) => setTimeout(resolve, 1));
-      return jpegResponse(32);
+      return jpegResponse(64);
     });
     const urls = new Map(
       Array.from({ length: 12 }, (_, i) => [`i${i}`, `https://signed.example/${i}.jpg`] as const),
@@ -1238,7 +1249,7 @@ describe('fetchExportImageBytes — whole-call deadline', () => {
     const fetchImpl = vi.fn(async () => {
       startedAt.push(clock.now());
       clock.advance(1000);
-      return jpegResponse(32);
+      return jpegResponse(64);
     });
     const urls = new Map(
       Array.from({ length: 10 }, (_, i) => [`i${i}`, `https://signed.example/${i}.jpg`] as const),
@@ -1275,7 +1286,7 @@ describe('fetchExportImageBytes — whole-call deadline', () => {
   });
 
   it('with no deadline pressure nothing is counted as deadline and truncated stays false', async () => {
-    const fetchImpl = vi.fn(async () => jpegResponse(32));
+    const fetchImpl = vi.fn(async () => jpegResponse(64));
     const { skippedReasons, truncated } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.jpg']]),
       { fetchImpl: fetchImpl as unknown as typeof fetch },
@@ -1500,7 +1511,7 @@ describe('fetchExportImageBytes — the capped decoder (S45)', () => {
     );
   }
 
-  const CHECKED = { ...MALFORMED_PNGS, ...EXIF_JPEGS };
+  const CHECKED = { ...MALFORMED_PNGS, ...EXIF_JPEGS, ...SLOW_TO_PARSE_JPEGS };
 
   it.each(Object.entries(CHECKED))(
     '%s is skipped as unsupported under any image type',
@@ -1528,9 +1539,11 @@ describe('fetchExportImageBytes — the capped decoder (S45)', () => {
     expect(skippedReasons.unsupported).toBe(1);
   });
 
-  it('a WebP over the cap and SVG served as image/webp are unsupported, and sharp is not called', async () => {
+  it('a WebP or AVIF over the cap and SVG served as image/webp are unsupported, and sharp is not called', async () => {
     for (const bytes of [
       WEBP_7072,
+      WEBP_100_BY_1000000,
+      AVIF_8192_CROPPED_TO_64,
       SVG_16000,
       IMAGE_LOOKALIKE_SVGS['SVG after a comment holding ftypavif']!,
     ]) {
