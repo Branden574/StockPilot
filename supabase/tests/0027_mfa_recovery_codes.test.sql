@@ -17,6 +17,9 @@ insert into auth.users (id, email, raw_user_meta_data)
 -- auth.uid() returns it inside SECURITY DEFINER functions.
 set local "request.jwt.claim.sub" to '11111111-1111-1111-1111-111111111111';
 set local "request.jwt.claim.role" to 'authenticated';
+-- generate_mfa_recovery_codes() asks for an aal2 claim (0427), as a session
+-- that has passed its authenticator step carries; auth.jwt() reads these.
+set local "request.jwt.claims" to '{"sub": "11111111-1111-1111-1111-111111111111", "role": "authenticated", "aal": "aal2"}';
 set local role to 'authenticated';
 
 -- ─────────────────────────────────────────────────────────────────────

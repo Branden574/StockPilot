@@ -793,6 +793,19 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Recovery codes at aal2 (0427, docket S50b; the number is provisional and
+  # no check reads it): the database now asks for the same two-step sign-in
+  # level the app already asks for before it makes new recovery codes.
+  # generate_mfa_recovery_codes() refuses an aal1 token, a token with no aal
+  # claim and the request.jwt.claim.sub-only setup (42501, hint aal2_required,
+  # the Settings action's sentence) before it touches a row, so the person's
+  # codes stay as they were; an aal2 token still makes ten that replace the old
+  # set. The body is 0103's plus the five lines tagged S50b (taking them out
+  # lets the refused call through), the header and the ACL are byte for byte
+  # as before, consume_mfa_recovery_code() is not changed, and the migration's
+  # own preflight is replayed from the recorded statements. The lock footprint
+  # is scripts/db-concurrency/0427_migration_lock_footprint.sh.
+  supabase/tests/0427_recovery_codes_need_aal2.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
