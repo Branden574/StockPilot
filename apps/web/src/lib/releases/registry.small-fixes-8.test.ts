@@ -135,9 +135,8 @@ describe('the small fixes slice 8 release', () => {
     // A real time: never the draft's placeholder date (2026-10-31T17:00Z).
     expect(release().publishedAt).not.toBe('2026-10-31T17:00:00Z');
     expect(release().revision).toBe(1);
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
-      'mobile-app-asks-before-restarting',
-    ]);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ['mobile-app-asks-before-restarting']): the B44 phone update draft is folded into the update-ready-and-fixes release, published at the top in its place, so no draft is left.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
   });
 
   it('has a line for each user-visible change, in this order', () => {
@@ -257,7 +256,8 @@ describe('the small fixes slice 8 release', () => {
   // reach as its button; the phone draws the button only when the link opens
   // one of its own screens (whats-new.tsx).
   // Renamed by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: "is the first notice for every member, and an old phone build ...", ID first for the owner with every permission and for a member with no permission, with nothing read or seen): the export fixes release is published later, at the top, and reaches whoever holds the items:export permission, so that owner is told it first and this one once it is read or seen. A member with no permission is not told it. Claim kept: it is the first notice for every member the export fixes release does not reach, and an old phone build shows its title and summary with the same buttons.
-  it('is the first notice for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build shows its title and summary, with Open purchase orders for whoever can open the list', () => {
+  // Renamed by docs/whats-new-2026-11-02 (2026-11-02; was: "is the first notice for every member the export fixes release does not reach, and the next for whoever it reaches, and an old phone build ...", ID first for a member with no permission and for whoever can open the team calendar with nothing read or seen, and next for the owner with every permission once the export fixes release was read or seen): the update-ready-and-fixes release is published later still, at the top, and reaches every member, so each is told it first and this one once it is read or seen (and the export fixes release too, for whoever that reaches). Claim kept: this one is told next once the newer releases that reach the reader are read, and an old phone build shows its title and summary with the same buttons.
+  it('is the next notice once the newer releases that reach the reader are read (the update-ready-and-fixes release for every member, and the export fixes release for whoever it reaches), and an old phone build shows its title and summary, with Open purchase orders for whoever can open the list', () => {
     const exportRead = {
       release_id: 'export-fixes-2026-10',
       revision: 1,
@@ -265,32 +265,69 @@ describe('the small fixes slice 8 release', () => {
       opened_at: '2026-10-31T10:40:00Z',
       read_at: '2026-10-31T10:40:00Z',
     };
+    // Added by docs/whats-new-2026-11-02 (2026-11-02): the update-ready-and-fixes release is published at the top and reaches every member.
+    const updateReadyRead = {
+      ...exportRead,
+      release_id: 'update-ready-and-fixes-2026-11',
+      opened_at: '2026-11-02T04:40:00Z',
+      read_at: '2026-11-02T04:40:00Z',
+    };
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: export-fixes-2026-10 for the owner and ID for the member with nothing read, ID for the owner once the export fixes release was read, and the seen sets below without the update-ready-and-fixes release): it comes first for both until it is read or seen, then the export fixes release for the owner and this one for the member, as before.
     expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(buildReleaseList(RELEASES, everyone, [updateReadyRead], null).latestUnread?.id).toBe(
       'export-fixes-2026-10',
     );
-    expect(buildReleaseList(RELEASES, everyone, [exportRead], null).latestUnread?.id).toBe(ID);
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe('export-fixes-2026-10');
-    expect(legacyAnnouncementsFor(RELEASES, everyone, { 'export-fixes-2026-10': true })[0]).toEqual(
-      {
-        id: ID,
-        date: '2026-10-31',
-        title: release().title,
-        body: release().summary,
-        cta: { href: OVERDUE_VIEW, label: 'Open purchase orders' },
-      },
+    expect(
+      buildReleaseList(RELEASES, everyone, [updateReadyRead, exportRead], null).latestUnread?.id,
+    ).toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(
+      'update-ready-and-fixes-2026-11',
     );
+    expect(buildReleaseList(RELEASES, member, [updateReadyRead], null).latestUnread?.id).toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(
+      legacyAnnouncementsFor(RELEASES, everyone, { 'update-ready-and-fixes-2026-11': true })[0]?.id,
+    ).toBe('export-fixes-2026-10');
+    expect(
+      legacyAnnouncementsFor(RELEASES, everyone, {
+        'update-ready-and-fixes-2026-11': true,
+        'export-fixes-2026-10': true,
+      })[0],
+    ).toEqual({
+      id: ID,
+      date: '2026-10-31',
+      title: release().title,
+      body: release().summary,
+      cta: { href: OVERDUE_VIEW, label: 'Open purchase orders' },
+    });
     // Whoever can open the team calendar, and not the purchase orders list.
     const scheduler: ReleaseViewer = {
       role: 'staff',
       permissions: ['schedule:read'],
       enabledModules: ['schedule'],
     };
-    expect(legacyAnnouncementsFor(RELEASES, scheduler, {})[0]?.cta).toEqual({
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: with nothing seen): the update-ready-and-fixes release, at the top, has no link, so it is first with no button until it is seen.
+    expect(legacyAnnouncementsFor(RELEASES, scheduler, {})[0]?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(
+      legacyAnnouncementsFor(RELEASES, scheduler, { 'update-ready-and-fixes-2026-11': true })[0]
+        ?.cta,
+    ).toEqual({
       href: '/dashboard/schedule',
       label: 'Open the team calendar',
     });
-    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: with nothing seen): the same, for a member with no permission.
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]?.id).toBe(
+      'update-ready-and-fixes-2026-11',
+    );
+    expect(
+      legacyAnnouncementsFor(RELEASES, member, { 'update-ready-and-fixes-2026-11': true })[0],
+    ).toEqual({
       id: ID,
       date: '2026-10-31',
       title: release().title,
