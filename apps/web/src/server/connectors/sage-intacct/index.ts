@@ -15,6 +15,7 @@ import {
   IntacctApiError,
   IntacctClient,
   IntacctNoAnswerError,
+  IntacctNotSentError,
 } from './client';
 import {
   buildIntacctPurchaseOrder,
@@ -55,6 +56,8 @@ function isRetryableIntacctError(e: unknown): boolean {
   // left, tries again; a create that may have arrived stops at dead, its
   // message starting with INTACCT_MAY_HAVE_POSTED (client.ts).
   if (e instanceof IntacctNoAnswerError) return e.retryable;
+  // Held back by the cron run's deadline: nothing was sent.
+  if (e instanceof IntacctNotSentError) return true;
   // A create answered with a 5xx other than 503 may have been committed.
   if (e instanceof IntacctApiError && e.mayHavePosted) return false;
   const status = (e as { status?: number })?.status ?? 0;
@@ -192,7 +195,10 @@ async function handlePurchaseOrderOrdered(
   // builder uses so a sub-cent total is acked, not posted.
   if (round2(amount) <= 0) return { ok: true };
 
-  const client = new IntacctClient(secrets, { requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS });
+  const client = new IntacctClient(secrets, {
+    requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS,
+    deadlineAt: deps.deadlineAt,
+  });
 
   try {
     const vendorId = supplier
@@ -307,7 +313,10 @@ async function handleReturnClosed(
   const totalAmount = creditLines.reduce((sum, l) => sum + l.quantity * l.unitCost, 0);
   if (round2(totalAmount) <= 0) return { ok: true };
 
-  const client = new IntacctClient(secrets, { requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS });
+  const client = new IntacctClient(secrets, {
+    requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS,
+    deadlineAt: deps.deadlineAt,
+  });
 
   try {
     const body = buildReturnJournalEntry({

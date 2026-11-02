@@ -55,6 +55,12 @@ export interface ConnectorDeps {
     externalId: string,
     externalMeta?: Record<string, unknown>,
   ): Promise<void>;
+  /**
+   * Epoch ms by which the cron run must be done (docket B81). A connector that
+   * cannot repeat a create safely starts none it could not finish, with its
+   * writes, before then. Absent outside the cron.
+   */
+  deadlineAt?: number;
 }
 
 export interface Connector {

@@ -25,6 +25,16 @@ export const INTACCT_MAY_HAVE_POSTED =
   'This export may have reached Sage Intacct. Check Intacct for it before you press Replay, or it may be posted twice.';
 
 /**
+ * Time kept after a create's own timeout for the writes that record it (its
+ * mapping and the export's outcome row) before the cron run's deadline.
+ */
+export const INTACCT_CREATE_WRITE_RESERVE_MS = 5_000;
+
+/** Why a create was held back by the cron run's deadline (docket B81). */
+export const INTACCT_CREATE_NOT_STARTED =
+  'Not sent to Sage Intacct: this sync ran out of time. It is sent at a later sync.';
+
+/**
  * A failed request's cause codes that mean no request byte left StockPilot:
  * the host lookup failed, or the connect did (refused, or timed out before
  * the connection opened). Loopback probe, Node 22 and undici 6, 2026-11-01.
@@ -104,6 +114,18 @@ export class IntacctNoAnswerError extends Error {
   }
 }
 
+/**
+ * A create held back because the cron run's deadline left too little time to
+ * send it and record it (docket B81). Nothing was sent, so it is always safe
+ * to try again.
+ */
+export class IntacctNotSentError extends Error {
+  constructor() {
+    super(INTACCT_CREATE_NOT_STARTED);
+    this.name = 'IntacctNotSentError';
+  }
+}
+
 /** One page of Intacct query-service results. */
 export interface IntacctQueryPage {
   records: Record<string, unknown>[];
@@ -138,8 +160,9 @@ export class IntacctClient {
   constructor(
     private readonly secrets: ConnectorSecrets,
     /** `requestTimeoutMs`: stop each call after this long (the connector's
-     *  INTACCT_REQUEST_TIMEOUT_MS). Absent: no timeout (the import). */
-    private readonly opts: { requestTimeoutMs?: number } = {},
+     *  INTACCT_REQUEST_TIMEOUT_MS). Absent: no timeout (the import).
+     *  `deadlineAt`: the cron run's (ConnectorDeps.deadlineAt); see post(). */
+    private readonly opts: { requestTimeoutMs?: number; deadlineAt?: number } = {},
   ) {}
 
   private headers(): Record<string, string> {
@@ -208,8 +231,22 @@ export class IntacctClient {
     }
   }
 
-  /** POST a create against an object path (e.g. `/objects/purchasing/document`). */
+  /**
+   * POST a create against an object path (e.g. `/objects/purchasing/document`).
+   * Every create goes through here, so this is the one place that refuses to
+   * start one the cron run could not finish: with less than the call's timeout
+   * plus INTACCT_CREATE_WRITE_RESERVE_MS left before `deadlineAt`, nothing is
+   * sent (IntacctNotSentError). A run the platform ended mid-create left the
+   * export pending, and the next tick posted it again (docket B81).
+   */
   async post(path: string, body: unknown): Promise<Record<string, unknown>> {
+    const { deadlineAt, requestTimeoutMs } = this.opts;
+    if (
+      deadlineAt !== undefined &&
+      deadlineAt - Date.now() < (requestTimeoutMs ?? 0) + INTACCT_CREATE_WRITE_RESERVE_MS
+    ) {
+      throw new IntacctNotSentError();
+    }
     return this.request('POST', path, body, 'create');
   }
 

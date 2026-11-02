@@ -4,7 +4,13 @@ import { reportError } from '@/lib/error-reporter';
 import { json, realSupabaseClient, type ClientRequest } from '@/test/postgrest-answers';
 import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
-import { enabledIntegrationOrgIds, MAX_ATTEMPTS, nextBackoff, runDrain } from './drainer';
+import {
+  CONNECTOR_START_RESERVE_MS,
+  enabledIntegrationOrgIds,
+  MAX_ATTEMPTS,
+  nextBackoff,
+  runDrain,
+} from './drainer';
 import { quickbooksConnector } from './quickbooks';
 import { sageIntacctConnector } from './sage-intacct';
 import { INTACCT_MAY_HAVE_POSTED } from './sage-intacct/client';
@@ -1207,6 +1213,188 @@ describe('runDrain: a provider call that got no answer', () => {
       const run = await drain(INTACCT_PO_VENDOR_READ, { unmappedSupplier: true });
       expect(providerFetch).toHaveBeenCalledTimes(1);
       expectRetriedWithBackoff(run);
+    });
+  });
+});
+
+/**
+ * docket B81: the drain-outbox cron has maxDuration 60, and the connector
+ * drain started events with no regard to the time left. A run the platform
+ * ended mid-create left the event's row 'pending', and the next tick posted it
+ * again with no backoff: for Sage Intacct, a second document. The route now
+ * hands runDrain one deadline; no connection or event is started with less
+ * than CONNECTOR_START_RESERVE_MS left, and the deadline reaches each
+ * connector, which starts no create it could not finish before it.
+ */
+describe('runDrain: the cron run deadline', () => {
+  const CONN = {
+    id: 'conn-1',
+    organization_id: 'org-1',
+    provider_id: 'quickbooks',
+    status: 'active',
+    secret_id: 'sec-1',
+    settings: {},
+  };
+  const event = (id: string) => ({
+    id,
+    organization_id: 'org-1',
+    topic: 'receipt.posted',
+    aggregate_type: 'receipt',
+    aggregate_id: `r-${id}`,
+    payload: {},
+    created_at: new Date().toISOString(),
+  });
+
+  it('starts no event with less than the reserve left: one of two runs, the other stays a candidate', async () => {
+    expect(CONNECTOR_START_RESERVE_MS).toBe(25_000);
+    const deadlineAt = 1_000_000;
+    // 30 s left at the start; each event takes 6 s.
+    let now = deadlineAt - 30_000;
+    const connector = {
+      ...okConnector(),
+      handleOutboxEvent: vi.fn(async () => {
+        now += 6_000;
+        return { ok: true, externalId: 'ext-1' };
+      }),
+    };
+    const admin = makeFakeAdmin({ conns: [CONN], events: [event('evt-1'), event('evt-2')] });
+
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date(), {
+      deadlineAt,
+      clock: () => now,
+    });
+
+    expect(connector.handleOutboxEvent).toHaveBeenCalledTimes(1);
+    expect(res.processed).toBe(1);
+    const pending = (admin.__writes as any[]).filter(
+      (w) => w.table === 'connection_sync_log' && w.op === 'upsert',
+    );
+    // The event not started gets no pending row, so it stays a candidate.
+    expect(pending.map((w) => w.values.outbox_event_id)).toEqual(['evt-1']);
+  });
+
+  it('starts no connection with less than the reserve left: no candidate read at all', async () => {
+    const deadlineAt = 1_000_000;
+    const connector = okConnector();
+    const admin = makeFakeAdmin({ conns: [CONN], events: [event('evt-1')] });
+
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date(), {
+      deadlineAt,
+      clock: () => deadlineAt - 24_000,
+    });
+
+    expect(admin.__candidateCalls).toHaveLength(0);
+    expect(connector.handleOutboxEvent).not.toHaveBeenCalled();
+    expect(res).toEqual({ processed: 0, succeeded: 0, failed: 0, deadlettered: 0 });
+  });
+
+  it('hands the deadline to the connector', async () => {
+    const deadlineAt = Date.now() + 50_000;
+    const connector = okConnector();
+    const admin = makeFakeAdmin({ conns: [CONN], events: [event('evt-1')] });
+
+    await runDrain(admin as any, { quickbooks: connector } as any, new Date(), { deadlineAt });
+
+    expect(connector.handleOutboxEvent).toHaveBeenCalledTimes(1);
+    const deps = (connector.handleOutboxEvent.mock.calls[0] as unknown[])[3] as {
+      deadlineAt?: number;
+    };
+    expect(deps.deadlineAt).toBe(deadlineAt);
+  });
+
+  it('without a deadline, every event runs (tests and other callers)', async () => {
+    const connector = okConnector();
+    const admin = makeFakeAdmin({ conns: [CONN], events: [event('evt-1'), event('evt-2')] });
+    const res = await runDrain(admin as any, { quickbooks: connector } as any, new Date());
+    expect(res.processed).toBe(2);
+    const deps = (connector.handleOutboxEvent.mock.calls[0] as unknown[])[3] as {
+      deadlineAt?: number;
+    };
+    expect(deps.deadlineAt).toBeUndefined();
+  });
+});
+
+/**
+ * docket B81: putMapping wrote the connection_mappings row and ignored the
+ * write's error. For Sage Intacct that row is the idempotency guard (no
+ * requestid), so a failed write was never seen. It is reported now, and never
+ * thrown: the create already happened, and a throw inside the connector's try
+ * would turn a posted document into a dead export whose Replay posts it again.
+ */
+describe('runDrain: a failed mapping write after a create', () => {
+  const NOW = new Date('2026-11-01T12:00:00Z');
+  const CONN = {
+    id: 'conn-si',
+    organization_id: 'org-1',
+    provider_id: 'sage_intacct',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'company-1',
+    settings: { intacct: { defaultItemId: 'NONINV', defaultVendorId: 'VDEF' } },
+  };
+  const EVENT = {
+    id: 'evt-1',
+    organization_id: 'org-1',
+    topic: 'purchase_order.ordered',
+    aggregate_type: 'purchase_order',
+    aggregate_id: 'po-1',
+    payload: {},
+    dedupe_key: null,
+    created_at: NOW.toISOString(),
+  };
+  const intacctFetch = vi.fn(async () => json({ 'ia::result': { key: 'DOC-8' } }, 201));
+
+  beforeEach(() => {
+    vi.mocked(reportError).mockClear();
+    intacctFetch.mockClear();
+    vi.stubGlobal('fetch', intacctFetch);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('is reported, and the export still succeeds', async () => {
+    const requests: ClientRequest[] = [];
+    const admin = realSupabaseClient((req) => {
+      requests.push(req);
+      const path = req.url.pathname.replace(/^\/rest\/v1\//, '');
+      if (req.method === 'GET' && path === 'org_connections') return json([CONN]);
+      if (req.method === 'GET' && path === 'organization_modules')
+        return json([{ organization_id: 'org-1' }]);
+      if (path === 'rpc/connector_drain_candidates') return json([EVENT]);
+      if (req.method === 'GET' && path === 'connection_sync_log') return json([]);
+      if (req.method === 'GET' && path === 'connection_mappings') return json([]);
+      if (req.method === 'GET' && path === 'purchase_orders') {
+        return json([
+          { id: 'po-1', po_number: 'PO-1', supplier_id: null, subtotal: 120, total: 120 },
+        ]);
+      }
+      if (req.method === 'POST' && path === 'connection_mappings') {
+        return json(
+          { code: '57014', message: 'canceling statement due to statement timeout' },
+          500,
+        );
+      }
+      // The other writes: the pending row, the outcome, last_synced_at.
+      return new Response(null, { status: 204 });
+    });
+
+    const result = await runDrain(admin, { sage_intacct: sageIntacctConnector }, NOW);
+
+    expect(intacctFetch).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ processed: 1, succeeded: 1, failed: 0, deadlettered: 0 });
+    const outcome = requests
+      .filter((r) => r.method === 'PATCH' && r.url.pathname.endsWith('/connection_sync_log'))
+      .map((r) => JSON.parse(r.body ?? '{}') as Record<string, unknown>);
+    expect(outcome).toEqual([expect.objectContaining({ status: 'success', external_id: 'DOC-8' })]);
+    const writeReports = vi
+      .mocked(reportError)
+      .mock.calls.filter(([, context]) => context?.tag === 'cron.drain-outbox.mapping-write');
+    expect(writeReports).toHaveLength(1);
+    expect((writeReports[0]?.[0] as Error).message).toBe(
+      'connection_mappings upsert: canceling statement due to statement timeout',
+    );
+    expect(writeReports[0]?.[1]).toEqual({
+      tag: 'cron.drain-outbox.mapping-write',
+      extra: { connectionId: 'conn-si', entityType: 'purchase_order' },
     });
   });
 });

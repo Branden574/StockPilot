@@ -8,7 +8,12 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { CONNECTORS } from '@/server/connectors';
-import { enabledIntegrationOrgIds, runDrain } from '@/server/connectors/drainer';
+import {
+  CONNECTOR_START_RESERVE_MS,
+  DRAIN_OUTBOX_DEADLINE_MS,
+  enabledIntegrationOrgIds,
+  runDrain,
+} from '@/server/connectors/drainer';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
 import { drainIntegrationDeliveries } from '@/server/services/integration-events';
 import { sweepExpiredImpersonations } from '@/server/services/platform/impersonation';
@@ -48,10 +53,15 @@ function secretsEqual(a: string, b: string): boolean {
  * FAIL-OPEN: any failure here is reported and swallowed — it must NEVER fail the
  * drain response. The drain already did the load-bearing work; a valuation hiccup
  * shouldn't 500 the cron.
+ *
+ * No connection is started with less than CONNECTOR_START_RESERVE_MS left before
+ * the run's `deadlineAt` (docket B81). The pass is month-gated and posts with a
+ * fixed requestid, so a connection skipped now is posted at a later tick.
  */
 async function runMonthlyValuation(
   admin: ReturnType<typeof createAdminClient>,
   now: Date,
+  deadlineAt: number,
 ): Promise<void> {
   const { data: conns, error } = await admin
     .from('org_connections')
@@ -79,6 +89,7 @@ async function runMonthlyValuation(
   }
 
   for (const c of (conns ?? []) as Array<Record<string, any>>) {
+    if (deadlineAt - Date.now() < CONNECTOR_START_RESERVE_MS) break;
     try {
       // Skip orgs whose integrations module is disabled — no JournalEntry post.
       if (!enabledOrgIds.has(c.organization_id)) continue;
@@ -151,13 +162,18 @@ export async function GET(req: Request) {
   try {
     const admin = createAdminClient();
     const now = new Date();
-    const result = await runDrain(admin, CONNECTORS, now);
+    // One deadline for every stage of this run (docket B81): each starts
+    // nothing it could not finish before it, inside maxDuration.
+    const deadlineAt = now.getTime() + DRAIN_OUTBOX_DEADLINE_MS;
+    const result = await runDrain(admin, CONNECTORS, now, { deadlineAt });
     // Monthly valuation runs AFTER the drain and must never fail the response —
     // runMonthlyValuation swallows + reports its own errors.
-    await runMonthlyValuation(admin, now);
+    await runMonthlyValuation(admin, now, deadlineAt);
     // Retry any pending webhook/Slack/Teams deliveries with backoff. Self-
     // contained + never throws (mirrors the valuation fail-open posture).
-    const webhooks = await drainIntegrationDeliveries(admin, now).catch(() => ({
+    const webhooks = await drainIntegrationDeliveries(admin, now, undefined, {
+      deadlineAt,
+    }).catch(() => ({
       attempted: 0,
       delivered: 0,
     }));

@@ -10,6 +10,7 @@ import type {
 import { reportError } from '@/lib/error-reporter';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { ListReadError, listRows } from '@/server/services/lib/list-rows';
+import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 
 import { MappingReadError } from './mapping-read-error';
 import { getConnectionSecret, putConnectionSecret } from './secret-store';
@@ -51,6 +52,21 @@ export function nextBackoff(attempt: number): number {
  * unbounded NOT-IN exclusion list to truncate or blow the request URL.
  */
 const CANDIDATE_LIMIT = 200;
+
+/**
+ * How long after the drain-outbox cron starts its work must be done (docket
+ * B81). The route has maxDuration 60: nothing is started that could not finish
+ * by this long after the route starts, and the last 10 s stay spare for the
+ * response and a cold start. The route hands this deadline to every stage.
+ */
+export const DRAIN_OUTBOX_DEADLINE_MS = 50_000;
+
+/**
+ * No connection's candidate read and no outbox event is started with less than
+ * this left before the deadline. An event not started gets no pending row, so
+ * it stays a candidate for the next tick.
+ */
+export const CONNECTOR_START_RESERVE_MS = 25_000;
 
 export interface DrainResult {
   processed: number;
@@ -137,13 +153,24 @@ export async function enabledIntegrationOrgIds(
  *
  * `now` is injected so the orchestrator stays testable; app runtime passes
  * `new Date()`.
+ *
+ * `opts.deadlineAt` (epoch ms, from the cron route): no connection or event is
+ * started with less than CONNECTOR_START_RESERVE_MS left, and every connector
+ * gets it in its deps. Absent (tests, other callers): no deadline.
+ * `opts.clock` is a test seam for the time the deadline is measured against.
  */
 export async function runDrain(
   admin: { from: (t: string) => any; rpc: (...args: any[]) => any },
   connectors: Partial<Record<ConnectorProviderId, Connector>>,
   now: Date,
+  opts: { deadlineAt?: number; clock?: () => number } = {},
 ): Promise<DrainResult> {
   const res: DrainResult = { processed: 0, succeeded: 0, failed: 0, deadlettered: 0 };
+  const clock = opts.clock ?? Date.now;
+  const { deadlineAt } = opts;
+  /** Whether too little time is left to start another connection or event. */
+  const outOfTime = () =>
+    deadlineAt !== undefined && deadlineAt - clock() < CONNECTOR_START_RESERVE_MS;
   // 1. active connections. Fail-closed (throw) on a query error so a DB outage
   //    surfaces as a 500 instead of a silent {processed:0}.
   const { data: conns, error: connsErr } = await admin
@@ -173,7 +200,7 @@ export async function runDrain(
     enabledOrgIds = new Set();
   }
 
-  for (const c of (conns ?? []) as any[]) {
+  connections: for (const c of (conns ?? []) as any[]) {
     const connector = connectors[c.provider_id as ConnectorProviderId];
     if (!connector) continue;
     // SKIP any connection whose org's integrations module is not enabled. A
@@ -207,6 +234,7 @@ export async function runDrain(
     //    CANDIDATE_LIMIT. Bounding by work-REMAINING (not a NOT-IN list of all
     //    work-done) means the window advances and can never truncate at the
     //    PostgREST max-rows cap (head-of-line starvation fix). Fail-closed.
+    if (outOfTime()) break;
     const { data: events, error: eventsErr } = await admin.rpc('connector_drain_candidates', {
       p_connection_id: conn.id,
       p_organization_id: c.organization_id,
@@ -217,6 +245,8 @@ export async function runDrain(
     if (eventsErr) throw new Error(`connector_drain_candidates: ${eventsErr.message}`);
 
     for (const e of (events ?? []) as any[]) {
+      // Not started: no pending row, so the event stays a candidate (docket B81).
+      if (outOfTime()) break connections;
       // The candidate set already excludes terminal rows; we still point-read
       // the ledger to recover the attempt count + the backoff gate for 'error'.
       const { data: existing, error: existingErr } = await admin
@@ -303,7 +333,12 @@ export async function runDrain(
             }
           }
         }
-        const out = await connector.handleOutboxEvent(event, conn, secrets, makeDeps(admin));
+        const out = await connector.handleOutboxEvent(
+          event,
+          conn,
+          secrets,
+          makeDeps(admin, deadlineAt),
+        );
         if (out.ok) {
           const { error: successErr } = await admin
             .from('connection_sync_log')
@@ -337,6 +372,10 @@ export async function runDrain(
           // so no further attempt is ever scheduled. Retryable/unknown failures
           // keep the backoff path and only dead-letter at MAX_ATTEMPTS. (The catch
           // block below stays fail-closed: a THROWN error is always retryable.)
+          // One network outcome is permanent on purpose: a Sage Intacct create
+          // that may have reached Intacct (sage-intacct/client.ts
+          // INTACCT_MAY_HAVE_POSTED). Intacct cannot dedupe a repeat, so it
+          // stops here for an admin to check Intacct before Replay (docket B81).
           const permanent = out.retryable === false;
           const dead = permanent || attempts >= MAX_ATTEMPTS;
           const { error: errUpdateErr } = await admin
@@ -397,11 +436,13 @@ export async function runDrain(
 /**
  * Builds the injected service-layer seam handed to each connector. Keeps the
  * connector implementations free of the supabase dependency and unit-testable.
+ * `deadlineAt` is the cron run's (ConnectorDeps.deadlineAt), or undefined.
  */
-function makeDeps(admin: any) {
+function makeDeps(admin: any, deadlineAt: number | undefined) {
   return {
     admin,
     fetch,
+    deadlineAt,
     async getMapping(connectionId: string, entityType: string, localId: string | null) {
       let q = admin
         .from('connection_mappings')
@@ -456,7 +497,7 @@ function makeDeps(admin: any) {
       externalId: string,
       externalMeta: Record<string, unknown> = {},
     ) {
-      await admin.from('connection_mappings').upsert(
+      const res = await admin.from('connection_mappings').upsert(
         {
           connection_id: connectionId,
           organization_id: organizationId,
@@ -468,6 +509,17 @@ function makeDeps(admin: any) {
         },
         { onConflict: 'connection_id,entity_type,local_id' },
       );
+      // Reported, never thrown (docket B81). For a connector with no
+      // provider-side dedupe key (Intacct) this row is the idempotency guard,
+      // so a failed write must be seen. But the create it records already
+      // happened: a throw inside the connector's try would turn a posted
+      // document into a dead export, and its Replay would post it again.
+      if (res.error) {
+        void reportError(
+          new Error(`connection_mappings upsert: ${postgrestErrorText(res.error, res)}`),
+          { tag: 'cron.drain-outbox.mapping-write', extra: { connectionId, entityType } },
+        );
+      }
     },
   };
 }

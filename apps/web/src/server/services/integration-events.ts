@@ -530,18 +530,30 @@ async function dispatchEventNow(
 /**
  * Cron entry: deliver due pending rows (oldest first), retrying with backoff.
  * Called from the drain-outbox cron. Returns a small summary; never throws.
+ *
+ * `opts.deadlineAt` is the cron run's deadline (docket B81): no delivery is
+ * started with less than CLAIM_LEASE_MS left, so a delivery it starts ends
+ * (8 s timeout) before the deadline, and with less than that left at the
+ * start nothing is read at all. The rows stay pending for the next tick.
  */
 export async function drainIntegrationDeliveries(
   admin: Admin,
   now: Date = new Date(),
   limit = 100,
-  /** Test seam: the clock the time budget is measured with. */
-  opts: { clock?: () => number } = {},
+  opts: {
+    /** Test seam: the clock the time budget and the deadline are measured with. */
+    clock?: () => number;
+    deadlineAt?: number;
+  } = {},
 ): Promise<{ attempted: number; delivered: number }> {
   const clock = opts.clock ?? Date.now;
   const startedAt = clock();
+  const { deadlineAt } = opts;
+  /** Whether a delivery started now could outlast the cron run's deadline. */
+  const pastDeadline = () => deadlineAt !== undefined && deadlineAt - clock() < CLAIM_LEASE_MS;
   let attempted = 0;
   let delivered = 0;
+  if (pastDeadline()) return { attempted, delivered };
   try {
     const { data: due } = await admin
       .from('integration_deliveries')
@@ -586,11 +598,14 @@ export async function drainIntegrationDeliveries(
     // Attempt due deliveries CONCURRENTLY (was sequential — a single slow/hung
     // webhook blocked every later row for up to the 8s timeout), at most
     // DRAIN_DELIVERY_CONCURRENCY at once (it was all 100 at once), and none
-    // started after DRAIN_TIME_BUDGET_MS. `run` never throws (a failed attempt
-    // counts as not claimed, as Promise.allSettled's rejection did), so
-    // mapWithConcurrency's stop-on-first-error never applies.
+    // started after DRAIN_TIME_BUDGET_MS or too close to the cron run's
+    // deadline. `run` never throws (a failed attempt counts as not claimed, as
+    // Promise.allSettled's rejection did), so mapWithConcurrency's
+    // stop-on-first-error never applies.
     const results = await mapWithConcurrency(live, DRAIN_DELIVERY_CONCURRENCY, async (d) => {
-      if (clock() - startedAt >= DRAIN_TIME_BUDGET_MS) return { claimed: false, ok: false };
+      if (clock() - startedAt >= DRAIN_TIME_BUDGET_MS || pastDeadline()) {
+        return { claimed: false, ok: false };
+      }
       try {
         return await attemptDelivery(admin, epById.get(d.endpoint_id)!, d);
       } catch {
