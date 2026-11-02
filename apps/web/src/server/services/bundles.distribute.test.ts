@@ -25,15 +25,19 @@ vi.mock('./context', () => ({
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined) }));
 vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn(async () => undefined) }));
 
+import { makeSupabaseStub } from '@/test/supabase-mock';
+
 import { BundlesService } from './bundles';
 import { ServiceError } from './context';
 
 const rpc = vi.fn();
+// The kit is read in the organization before the function (S39) and is found.
+const reads = makeSupabaseStub({ 'bundles.select': { data: { id: 'b-1' }, error: null } });
 const ctx = {
   organizationId: 'org-1',
   userId: 'u-1',
   role: 'manager',
-  supabase: { rpc },
+  supabase: { rpc, from: reads.client.from },
 } as unknown as ConstructorParameters<typeof BundlesService>[0];
 
 beforeEach(() => {
