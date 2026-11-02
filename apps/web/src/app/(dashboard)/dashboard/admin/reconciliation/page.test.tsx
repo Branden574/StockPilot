@@ -12,6 +12,11 @@ const summary = vi.hoisted(() => vi.fn());
 vi.mock('@/server/services/reconciliation', () => ({
   ReconciliationService: { forCurrentUser: async () => ({ summary }) },
 }));
+// The caller's effective permissions (the page gates on purchase_orders:read).
+const session = vi.hoisted(() => ({
+  ctx: { role: 'admin', permissions: new Set<string>(['purchase_orders:read']) },
+}));
+vi.mock('@/lib/auth/session', () => ({ requireOrgContext: vi.fn(async () => session.ctx) }));
 const navLabel = vi.hoisted(() => ({ override: null as string | null }));
 vi.mock('@/lib/nav-labels', () => ({
   effectiveNavLabel: vi.fn(
@@ -67,6 +72,7 @@ const DATA = {
 beforeEach(() => {
   vi.clearAllMocks();
   navLabel.override = null;
+  session.ctx = { role: 'admin', permissions: new Set<string>(['purchase_orders:read']) };
   summary.mockResolvedValue(DATA);
 });
 
@@ -172,6 +178,21 @@ describe('/dashboard/admin/reconciliation', () => {
     expect(screen.getByText('No vendor data yet.')).toBeInTheDocument();
     expect(screen.getByText('No POs in this filter.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Closed' })).toHaveAttribute('aria-current', 'page');
+  });
+
+  // Its numbers are purchase order totals, read through the caller's purchase
+  // order access (security_invoker views). Since migration 0423 an admin whose
+  // 'View purchase orders' is off reads no purchase order there, so the page
+  // says what is needed instead of showing zeros.
+  it('an admin without View purchase orders gets the purchase order access message, and nothing is read', async () => {
+    session.ctx = { role: 'admin', permissions: new Set<string>(['organization:update']) };
+    render(await ReconciliationPage({ searchParams: Promise.resolve({}) }));
+    expect(
+      screen.getByRole('heading', { level: 1, name: "You don't have access to purchase orders" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/View purchase orders/)).toBeInTheDocument();
+    expect(summary).not.toHaveBeenCalled();
+    expect(screen.queryByRole('table')).toBeNull();
   });
 
   it('a Settings > Navigation rename reaches the heading', async () => {

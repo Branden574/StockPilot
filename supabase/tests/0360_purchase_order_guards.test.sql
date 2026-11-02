@@ -152,8 +152,12 @@ select ok(
 select ok(
   has_function_privilege('authenticated', 'public.approve_po_import_commit(uuid, text, uuid, uuid, uuid, timestamptz, text, jsonb)', 'execute')
   and has_function_privilege('authenticated', 'public.po_over_approval_threshold(uuid, numeric)', 'execute')
-  and has_function_privilege('authenticated', 'public.po_status_in_org(uuid, uuid)', 'execute'),
-  '5: authenticated may call the import commit and the helpers the INVOKER guards use');
+  -- Changed by 0423 (S46): po_status_in_org has had no caller since 0364 (the
+  -- line guard reads po_status_for_line_write) and answered any member the
+  -- status of any purchase order of the organization, so authenticated lost
+  -- EXECUTE; the service role keeps it (0423 PS1).
+  and not has_function_privilege('authenticated', 'public.po_status_in_org(uuid, uuid)', 'execute'),
+  '5: authenticated may call the import commit and the threshold helper the INVOKER guards use, and no longer po_status_in_org (0423)');
 select ok(
   not has_function_privilege('authenticated', 'public._po_approval_threshold(uuid)', 'execute')
   and not exists (

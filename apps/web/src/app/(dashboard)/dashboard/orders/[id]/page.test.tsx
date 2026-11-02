@@ -3069,6 +3069,21 @@ describe('orders/[id]: draft a PO for what is short (F2-5)', () => {
     }
   });
 
+  it("a manager holding purchase_orders:manage without purchase_orders:read gets core's sentence and no dialog (the database refuses them since 0423)", async () => {
+    as('manager', ['orders:approve', 'purchase_orders:manage']);
+    readinessResult.mockResolvedValue(factsWith());
+
+    await renderPage();
+
+    expect(
+      within(strip()).queryByRole('button', { name: 'Draft PO for what is short' }),
+    ).toBeNull();
+    expect(within(strip()).getByTestId('readiness-shortfall-po-permission')).toHaveTextContent(
+      'Drafting a PO needs a manager with purchase-order access.',
+    );
+    expect(handedOffers()).toEqual([null]);
+  });
+
   it('nothing when nothing may be drafted: all covered by a PO, the PO module off, a failed read', async () => {
     as('manager', ['orders:approve', 'purchase_orders:manage', 'purchase_orders:read']);
     const cases = [

@@ -755,7 +755,17 @@ select is(
   'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)|f044c3a1ea7b125a094a42f736db77c8|false|{"search_path=public, extensions"}|postgres\n'
   'ledger.transfer_stock(uuid,uuid,uuid,numeric,text)|c7863c809eab4fc8e7698b421bf37587|false|{search_path=public}|postgres\n'
   'location_holdings_visible(uuid)|fb5dc7aa7d0acd81e7752f0b163a9002|false|{search_path=public}|postgres\n'
-  'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0423 (docket S46; was b6bebc9ae8b1ec3a9ba6d89b73e39d91, SQL,
+  -- SECURITY INVOKER): plpgsql SECURITY DEFINER with a manager or
+  -- purchase_orders:manage gate, so the count is every purchase order of the
+  -- organization, not only the ones the caller may read; the number it gives
+  -- a manager is unchanged (0423 N1). F2-2's holds read no PO number.
+  -- Computed on the local stack after 0423.
+  -- 0423's decisions round (2026-11-02; was 104bd06a21cd31164ab4aa1dbc64433c):
+  -- with no user, only the service role and a call with no request claims
+  -- pass the gate (anon or a token with no subject: 42501, 0423 N3-N5);
+  -- a signed-in caller's gate and the count are unchanged.
+  'next_po_number(uuid)|ac32e00ece826f72f7046fca0bcc2a9b|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'

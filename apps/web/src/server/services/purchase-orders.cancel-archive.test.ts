@@ -44,7 +44,10 @@ import { PurchaseOrdersService } from './purchase-orders';
 
 beforeEach(() => vi.clearAllMocks());
 
-function stubFor(keepCheck: { data: unknown; error: { message: string } | null }) {
+function stubFor(
+  keepCheck: { data: unknown; error: { message: string } | null },
+  archived: Array<{ id: string; name: string }> = [{ id: 'item-new', name: 'Never used' }],
+) {
   let poItemsReads = 0;
   return makeSupabaseStub({
     'purchase_orders.select': {
@@ -64,7 +67,7 @@ function stubFor(keepCheck: { data: unknown; error: { message: string } | null }
       ],
       error: null,
     },
-    'inventory_items.update': { data: [{ id: 'item-new', name: 'Never used' }], error: null },
+    'inventory_items.update': { data: archived, error: null },
   });
 }
 
@@ -96,6 +99,36 @@ describe('PurchaseOrdersService.updateStatus(cancelled) — orphaned custom item
     expect(updateArgs).toContain('item-new');
     expect(updateArgs).not.toContain('item-received');
     expect(archivedAudits().map((a) => a.entityId)).toEqual(['item-new']);
+  });
+
+  it('keeps an item whose line sits on a purchase order the canceller cannot read (left embed, po null)', async () => {
+    // Since migration 0423 purchase orders are read through
+    // purchase_orders_select alone, so a writer limited to some warehouses no
+    // longer sees another warehouse's purchase order. Its lines stay readable
+    // (purchase_order_items_select is member-wide). An inner embed dropped such
+    // a line, and the item that purchase order still expects was archived.
+    const stub = stubFor(
+      {
+        data: [
+          { item_id: 'item-new', quantity_received: 0, po: null },
+          { item_id: 'item-received', quantity_received: 0, po: { status: 'cancelled' } },
+        ],
+        error: null,
+      },
+      [{ id: 'item-received', name: 'Received on another PO' }],
+    );
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
+
+    await svc.updateStatus('po-1', 'cancelled');
+
+    const keepCheckSelects = (stub.chainArgsAll.get('purchase_order_items.select') ?? [])
+      .slice(1)
+      .map((chain) => chain[0]?.[0]);
+    expect(keepCheckSelects).toEqual(['item_id, quantity_received, po:purchase_orders(status)']);
+    const updateArgs = (stub.chainArgsAll.get('inventory_items.update') ?? []).flat(Infinity);
+    expect(updateArgs).not.toContain('item-new');
+    expect(updateArgs).toContain('item-received');
+    expect(archivedAudits().map((a) => a.entityId)).toEqual(['item-received']);
   });
 
   it('archives NOTHING when the keep-check read fails, and the cancel still lands', async () => {

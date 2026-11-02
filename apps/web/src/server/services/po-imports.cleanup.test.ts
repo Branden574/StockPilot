@@ -93,6 +93,43 @@ describe('PoImportsService.cancel — cleanup of auto-created items (Fix #2)', (
     ).toBe(true);
   });
 
+  it('keeps an item whose line sits on a purchase order the canceller cannot read (left embed, po null)', async () => {
+    // Since migration 0423 a writer limited to some warehouses no longer reads
+    // another warehouse's purchase order, while its lines stay readable. An
+    // inner embed dropped such a line, and the item that purchase order still
+    // expects was archived. Now the line comes back with po null and keeps it.
+    const stub = makeSupabaseStub({
+      'po_imports.update': { data: { id: IMPORT_ID }, error: null },
+      'po_import_lines.select': {
+        data: [{ item_id: 'item-A' }, { item_id: 'item-B' }],
+        error: null,
+      },
+      'inventory_items.select': {
+        data: [
+          { id: 'item-A', name: 'Created A' },
+          { id: 'item-B', name: 'Created B' },
+        ],
+        error: null,
+      },
+      'purchase_order_items.select': {
+        data: [{ item_id: 'item-B', po: null }],
+        error: null,
+      },
+      'inventory_items.update': { data: [{ id: 'item-A', name: 'Created A' }], error: null },
+    });
+    const svc = new PoImportsService(makeServiceContext(stub.client) as never);
+
+    await svc.cancel(IMPORT_ID);
+
+    const keepCheckSelects = (stub.chainArgsAll.get('purchase_order_items.select') ?? []).map(
+      (chain) => chain[0]?.[0],
+    );
+    expect(keepCheckSelects).toEqual(['item_id, po:purchase_orders(status)']);
+    const updateArgs = (stub.chainArgsAll.get('inventory_items.update') ?? []).flat(Infinity);
+    expect(updateArgs).toContain('item-A');
+    expect(updateArgs).not.toContain('item-B');
+  });
+
   it('archives NOTHING when the keep-check read fails, and still cancels', async () => {
     // Same items as above, but the purchase_order_items read errors. Before
     // the fix `poLines` came back null, the keep set stayed empty and BOTH

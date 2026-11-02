@@ -18,8 +18,9 @@
 --    is disclosed. A line whose item belongs to another org is hidden even
 --    from a member of both orgs (mutation: drop the item's org filter).
 --    purchase_order_visible equals purchase_orders_select for
---    every persona and PO (and the one known widening, the FOR ALL write
---    policy, is pinned in the conservative direction). pendingOthers is null
+--    every persona and PO (the one known widening, the FOR ALL write policy,
+--    was pinned here until 0423 split it; V15 now pins it closed, and the
+--    sweep includes that persona). pendingOthers is null
 --    for staff without orders:approve, set for a manager and for staff with
 --    an orders:approve override (mutation: drop the gate). inbound and drafts
 --    are null with the purchase_orders module off.
@@ -973,21 +974,26 @@ begin
   end loop;
   perform set_config('request.jwt.claim.sub', '', true);
 end $$;
+-- Since 0423 no FOR ALL write policy widens purchase_orders_select, so the
+-- sweep includes annex staff holding a purchase_orders:manage override
+-- (stfPm), whom V13 and V14 used to leave out and V15 pinned apart.
 select is(
   (select coalesce(string_agg(who || ':' || po, ', '), '') from pv
-    where who <> 'stfPm' and fn is distinct from rls),
+    where fn is distinct from rls),
   '',
-  'V13: purchase_order_visible says exactly which POs purchase_orders RLS shows, for the owner, an admin, a manager, staff in A, in the annex and in no warehouse, viewers with and without purchase_orders:read, charter-scoped staff, a wrong-org assignment, a disabled member, another org''s manager and a non-member');
+  'V13: purchase_order_visible says exactly which POs purchase_orders RLS shows, for the owner, an admin, a manager, staff in A, in the annex and in no warehouse, annex staff with a purchase_orders:manage override, viewers with and without purchase_orders:read, charter-scoped staff, a wrong-org assignment, a disabled member, another org''s manager and a non-member');
 select is(
   (select row(count(*) filter (where fn), count(*) filter (where not fn), count(distinct who))::text
-     from pv where who <> 'stfPm'),
-  row(59, 58, 13)::text,
-  'V14 (control): the sweep is not vacuous: 13 personas x 9 POs, 117 answers, both true and false');
+     from pv),
+  -- Was row(59, 58, 13) over 13 personas without stfPm; stfPm's 9 answers
+  -- (5 visible, 4 not) are in since 0423. Computed on the local stack.
+  row(64, 62, 14)::text,
+  'V14 (control): the sweep is not vacuous: 14 personas x 9 POs, 126 answers, both true and false');
 select is(
   (select string_agg(po::text || '=' || fn || '/' || rls, ',' order by po) from pv
     where who = 'stfPm' and po in (:poA, :poA2)),
-  :poA::text || '=false/true,' || :poA2::text || '=true/true',
-  'V15 (known gap, pinned in the safe direction): annex staff with a purchase_orders:manage override read warehouse A''s PO through the FOR ALL write policy; readiness still treats it as a PO they cannot open (quantity only)');
+  :poA::text || '=false/false,' || :poA2::text || '=true/true',
+  'V15 (closed by 0423, was the known gap): annex staff with a purchase_orders:manage override no longer read warehouse A''s PO (purchase_orders_write''s FOR ALL read is gone); RLS and purchase_order_visible agree');
 
 -- ═══ F. Facts ════════════════════════════════════════════════════════════
 select is(
@@ -1194,7 +1200,17 @@ select is(
   'ledger.post_receipt_v2(uuid,uuid,jsonb,text,text,text)|f044c3a1ea7b125a094a42f736db77c8|false|{"search_path=public, extensions"}|postgres\n'
   'ledger.transfer_stock(uuid,uuid,uuid,numeric,text)|c7863c809eab4fc8e7698b421bf37587|false|{search_path=public}|postgres\n'
   'location_holdings_visible(uuid)|fb5dc7aa7d0acd81e7752f0b163a9002|false|{search_path=public}|postgres\n'
-  'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0423 (docket S46; was b6bebc9ae8b1ec3a9ba6d89b73e39d91, SQL,
+  -- SECURITY INVOKER): plpgsql SECURITY DEFINER with a manager or
+  -- purchase_orders:manage gate, so the count is every purchase order of the
+  -- organization, not only the ones the caller may read; the number it gives
+  -- a manager is unchanged (0423 N1). F2 reads no PO number. Computed on the
+  -- local stack after 0423.
+  -- 0423's decisions round (2026-11-02; was 104bd06a21cd31164ab4aa1dbc64433c):
+  -- with no user, only the service role and a call with no request claims
+  -- pass the gate (anon or a token with no subject: 42501, 0423 N3-N5);
+  -- a signed-in caller's gate and the count are unchanged.
+  'next_po_number(uuid)|ac32e00ece826f72f7046fca0bcc2a9b|true|{search_path=public}|postgres\n'
   'partial_pick_line(uuid,numeric)|b52a9877d54f13fb17ba44dafe5645c9|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0395 (was efc01e2e0ea98531c92c7db27f17695c): the wrapper refuses a direct
   -- call without stock:adjust before raising the flag (0395 R9); its body and

@@ -2516,7 +2516,10 @@ export class PoImportsService {
 
       // Keep any item still referenced by a non-cancelled PO (it may yet receive
       // stock there). The just-cancelled import has no PO, so nothing to exclude
-      // on that account.
+      // on that account. A LEFT embed, and a line whose PO the caller cannot
+      // read keeps its item: since 0423 a writer limited to some warehouses
+      // does not read another warehouse's PO, while its lines stay readable,
+      // and an inner embed dropped that line and archived the item.
       let poLines: Array<Record<string, unknown>>;
       try {
         poLines = await fetchAllRowsByIds<Record<string, unknown>>(
@@ -2524,7 +2527,7 @@ export class PoImportsService {
           (batch) => (from, to) =>
             ctx.supabase
               .from('purchase_order_items')
-              .select('item_id, po:purchase_orders!inner(status)')
+              .select('item_id, po:purchase_orders(status)')
               .eq('organization_id', ctx.organizationId) // defense-in-depth: keep the keep-check single-org
               .in('item_id', batch)
               .order('id')
@@ -2539,7 +2542,8 @@ export class PoImportsService {
       for (const row of poLines) {
         const poField = row.po as { status?: string } | { status?: string }[] | null;
         const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
-        if (poStatus && poStatus !== 'cancelled') keep.add(row.item_id as string);
+        // No status: a PO the caller cannot read. Keep (fail closed).
+        if (poStatus !== 'cancelled') keep.add(row.item_id as string);
       }
       const toArchive = cand.filter((c) => !keep.has(c.id));
       if (toArchive.length === 0) return;

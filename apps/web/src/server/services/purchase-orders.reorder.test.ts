@@ -943,3 +943,62 @@ describe('createDraftsFromReorderForecast — the unassigned count is what is ON
   });
 });
 
+
+// ─── View purchase orders is needed to draft (docket S46) ───────────────────
+//
+// Since migration 0423 the database refuses a purchase order insert from a
+// member without purchase_orders:read. Without a check at entry, each
+// supplier's draft failed on its own and came back as a per-supplier
+// internal error; the batch now stops once, in the permission's words, before
+// it reads anything.
+describe('draft batches need purchase_orders:read as well as manage', () => {
+  const readless = (stub: ReturnType<typeof makeSupabaseStub>) =>
+    new PurchaseOrdersService(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        permissions: new Set(['purchase_orders:manage']),
+      }),
+    );
+
+  it('createDraftsFromItems refuses once, before any read or save', async () => {
+    const stub = stubFor([belowPar('i-1')], [{ id: 'sup-a', name: 'Supplier A' }]);
+
+    const err = await readless(stub)
+      .createDraftsFromItems(['i-1'])
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('forbidden');
+    expect((err as ServiceError).message).toBe('Missing permission: purchase_orders:read');
+    expect(stub.fromCalls).toEqual([]);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('createDraftsFromReorderForecast refuses once, before any read or save', async () => {
+    const stub = stubFor([belowPar('i-1')], [{ id: 'sup-a', name: 'Supplier A' }]);
+
+    const err = await readless(stub)
+      .createDraftsFromReorderForecast()
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('forbidden');
+    expect((err as ServiceError).message).toBe('Missing permission: purchase_orders:read');
+    expect(stub.fromCalls).toEqual([]);
+    expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it("the daily auto-reorder's owner context (no override set) still drafts", async () => {
+    const stub = stubFor([belowPar('i-1')], [{ id: 'sup-a', name: 'Supplier A' }]);
+    const svc = new PurchaseOrdersService(makeServiceContext(stub.client, { role: 'owner' }));
+
+    const result = await svc.runAutoReorder({
+      enabled: true,
+      mode: 'draft',
+      maxAutoSendCents: null,
+    });
+
+    expect(result.created).toBe(1);
+    expect(saves(stub)).toHaveLength(1);
+  });
+});

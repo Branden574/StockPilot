@@ -24,8 +24,10 @@ export interface PoAttachment {
 /**
  * File attachments on purchase orders (supplier packing slips, etc.). Mirrors
  * OrderAttachmentsService. Upload/delete gate on purchase_orders:manage (so a
- * member granted that permission can attach); view rides RLS (any org member —
- * the PO section already gates purchase_orders:read).
+ * member granted that permission can attach) and purchase_orders:read; view
+ * rides RLS, which since 0423 follows the purchase order: the rows and the
+ * stored files are read and written only by someone who may read it (the PO
+ * section already gates purchase_orders:read).
  */
 export class PoAttachmentsService {
   constructor(private readonly ctx: ServiceContext) {}
@@ -101,6 +103,9 @@ export class PoAttachmentsService {
     sizeBytes: number | null;
   }): Promise<{ id: string }> {
     assertPermission(this.ctx, 'purchase_orders:manage');
+    // An attachment follows its purchase order (0423): the row and the stored
+    // file are written only by someone who may read that purchase order.
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     // Org-verify the PO before attaching — the attachment row's org must own the
     // PO (defense-in-depth alongside the RLS purchase_order_in_org guard).
@@ -171,6 +176,19 @@ export class PoAttachmentsService {
 
   async delete(attachmentId: string, purchaseOrderId: string): Promise<void> {
     assertPermission(this.ctx, 'purchase_orders:manage');
+    assertPermission(this.ctx, 'purchase_orders:read'); // as add()
+
+    // The purchase order first, read as the caller, as add() does: one they
+    // may not read is not found, and nothing is removed. (0423 holds the row
+    // and the stored file to the same rule.)
+    const { data: po, error: poErr } = await this.ctx.supabase
+      .from('purchase_orders')
+      .select('id')
+      .eq('id', purchaseOrderId)
+      .eq('organization_id', this.ctx.organizationId)
+      .maybeSingle();
+    if (poErr) throw new ServiceError('internal_error', poErr.message);
+    if (!po) throw new ServiceError('not_found', 'Purchase order not found.');
 
     const { data: row, error: selErr } = await this.ctx.supabase
       .from('po_attachments')

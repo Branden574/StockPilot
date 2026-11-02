@@ -219,6 +219,10 @@ export class ReceivingService {
   async postReceipt(input: PostReceiptInput): Promise<ReceiptRow> {
     assertModuleEnabled(this.ctx, 'receiving');
     assertPermission(this.ctx, 'stock:adjust');
+    // A purchase order is received only by someone who may read it (0423):
+    // the database refuses anyone else with po_not_found. Asked here first so
+    // the refusal names the permission.
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     const requestHash = hashReceiptRequest(input);
 
@@ -582,6 +586,11 @@ export class ReceivingService {
   async reverseReceipt(input: ReverseReceiptInput): Promise<ReceiptRow> {
     assertModuleEnabled(this.ctx, 'receiving');
     assertPermission(this.ctx, 'stock:adjust');
+    // Reversing changes the purchase order's line and status, so it needs
+    // View purchase orders too (0423). The database refuses the reversal
+    // whole (po_not_found) for anyone who may not read the purchase order;
+    // asked here first so the refusal names the permission.
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     const { data, error } = await this.ctx.supabase.rpc('reverse_receipt', {
       p_receipt_id: input.receiptId,
@@ -600,6 +609,13 @@ export class ReceivingService {
       }
       if (error.message.includes('receipt_not_found')) {
         throw new ServiceError('not_found', 'Receipt not found.');
+      }
+      // 0423: the reversal locks the purchase order as the caller first, and
+      // checks the PO line it gives the units back to, so a purchase order or
+      // line the caller cannot read or change refuses the whole reversal
+      // (P0002) instead of leaving them as they were. Same words as a post.
+      if (error.message.includes('po_not_found') || error.message.includes('po_line_not_found')) {
+        throw new ServiceError('not_found', 'PO or line not found.');
       }
       // adjust_stock raises this when the reversal would push on-hand below 0 —
       // i.e. some of the received stock was already shipped/used. The most

@@ -872,9 +872,14 @@ export default async function OrderDetailPage({
   // no round trip), core's sentence to anyone on the full strip who is not a
   // manager holding purchase_orders:manage. The dialog is mounted once at the
   // top of the page with the page's view, so it opens at once; supplier names
-  // are read only when it opens.
+  // are read only when it opens. purchase_orders:read too (0423: the drafts'
+  // insert needs it), so the dialog is offered only to someone the database
+  // will accept.
   const shortfallView = readinessAssessment ? shortfallPoView(readinessAssessment) : null;
-  const shortfallDrafterRole = isManagerOrAbove(ctx.role) && can(ctx, 'purchase_orders:manage');
+  const shortfallDrafterRole =
+    isManagerOrAbove(ctx.role) &&
+    can(ctx, 'purchase_orders:manage') &&
+    can(ctx, 'purchase_orders:read');
   const viewerCanDraftShortfall =
     shortfallView !== null && shortfallView.draftableCount > 0 && shortfallDrafterRole
       ? await contextStarted

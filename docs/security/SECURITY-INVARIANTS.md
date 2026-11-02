@@ -539,16 +539,41 @@ actually fire.
   in the catalog flagged it; it was found by review (2026-09-25) and closed by
   0371, which split it into `FOR INSERT` and `FOR UPDATE` policies.
 - **Enforced by**: write policies on scoped tables are written per command.
-  Allowlist G holds two entries: `warehouses` (its admin `USING` is narrower
-  than its SELECT, so it cannot widen reads) and `purchase_orders`, a **known
-  gap deferred to 0372** (`purchase_orders_write`, manager or
-  `purchase_orders:manage`, widens reads past `purchase_orders:read` and the
-  warehouse scope; a plain split breaks PO numbering, because
-  `next_po_number` is invoker and counts only visible POs).
+  Allowlist G holds one entry: `warehouses` (its admin `USING` is narrower
+  than its SELECT, so it cannot widen reads). `purchase_orders` was the known
+  gap (`purchase_orders_write`, manager or `purchase_orders:manage`, widened
+  reads past `purchase_orders:read` and the warehouse scope) until 0423
+  (docket S46) replaced it with `purchase_orders_insert` and
+  `purchase_orders_update`, each needing the writer floor,
+  `purchase_orders:read` and `purchase_orders_select`'s warehouse rule at
+  write level (`user_can_access_warehouse(..., 'write')`, where the read
+  policy asks `my_warehouse_ids()`: a viewer reads their warehouses' purchase
+  orders and changes none of them), with no `DELETE` policy (`DELETE` is
+  revoked, 0360). `purchase_order_items_write` became
+  `purchase_order_items_insert`, `_update` and `_delete`, which need the
+  parent purchase order readable by the caller and, below manager, its
+  destination's warehouse writable; the recurring template write policies
+  take the same rule. A plain split would have broken PO numbering, because
+  `next_po_number` was invoker and counted only visible POs, so 0423 first
+  made it `SECURITY DEFINER` with its own gate (a manager or
+  `purchase_orders:manage`; with no user, only the service role and a call
+  with no request claims). Purchase orders are read through
+  `purchase_orders_select` alone. Every one of these rules reads the
+  destination's warehouse from `locations.warehouse_id`, which
+  `locations_update` (0212) lets `locations:manage` change for any place, so
+  0423 also adds `tg_location_warehouse_move_guard` (`BEFORE UPDATE OF
+  warehouse_id` on `locations`): a Data API caller below manager cannot move a
+  place to another warehouse, and so cannot carry a place, and what is sent to
+  it, across the boundary (security review round, 2026-11-02).
 - **Tested at**: INV-35 (the sweep, plus a stale-entry audit of allowlist G)
   and INV-36 (plants a scoped table with a `FOR ALL` policy and a stale
   allowlist row; both must be caught). 0371's own test pins the exact policy
-  set on `item_stock_levels` (A1-A4).
+  set on `item_stock_levels` (A1-A4), and 0423's
+  ([`0423_po_write_scope.test.sql`](../../supabase/tests/0423_po_write_scope.test.sql))
+  the set on `purchase_orders` and `purchase_order_items` (C1, C2) and the
+  write-level warehouse rule of every write policy (C11), with the reads and
+  writes of each persona (R, W, L, V), the numbering (N) and the place-move
+  guard (LM1-LM4, C12).
 
 ### INV-C5 — `order_submissions` is owner-only, and only the two writers insert into it
 
@@ -1924,10 +1949,13 @@ checked.
 - **One known gap is recorded**: five storage-path columns lack the database
   traversal floor (INV-D2). They are in the test's allowlist, so they are visible
   in every CI run rather than forgotten.
-- **One more known gap is recorded (0371)**: `purchase_orders_write` is a
-  `FOR ALL` policy on a warehouse-scoped table, so a member holding
-  `purchase_orders:manage` reads every warehouse's POs (INV-C4). It is on
-  allowlist G as deferred to 0372, so it too is visible in every run.
+- **One more known gap was recorded (0371) and is closed (0423)**:
+  `purchase_orders_write` was a `FOR ALL` policy on a warehouse-scoped table,
+  so a member holding `purchase_orders:manage` read every warehouse's POs
+  (INV-C4). 0423 split it into `INSERT` and `UPDATE` policies and removed its
+  allowlist G row. The PO-import approval (`approve_po_import_commit`,
+  `SECURITY DEFINER`) can still create a purchase order outside the
+  approver's warehouses; 0423's pgTAP IMP1 pins it until its own fix.
 - **The tests have been mutation-checked**: a deliberate violation of six
   distinct invariants turned 10 of the 23 assertions that existed at the time
   red, and the database was restored afterwards. The recipes for repeating that

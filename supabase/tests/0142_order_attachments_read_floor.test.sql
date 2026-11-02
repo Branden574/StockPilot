@@ -1,6 +1,8 @@
 -- supabase/tests/0142_order_attachments_read_floor.test.sql
 -- Proves the READ floor of both attachment surfaces is ANY ORG MEMBER
--- (is_org_member) — not owner/manager/uploader-gated. Written while chasing an
+-- (is_org_member) — not owner/manager/uploader-gated. (Since 0423 the
+-- purchase order side is any member who may read the purchase order; see the
+-- 0423 note at the bucket pins.) Written while chasing an
 -- "only the owner can see attachments on mobile" report: mobile lists rows via
 -- RLS (order_request_attachments / po_attachments) and mints signed URLs under
 -- the USER's JWT via the bucket SELECT policies, so if any of these four
@@ -100,16 +102,23 @@ select ok(
     not like '%has_org_role%',
   'order-attachments bucket SELECT = is_org_member (no role gate)'
 );
+-- Changed by 0423 (docket S46): the purchase order side follows the purchase
+-- order instead of bare membership. The bucket read asks
+-- po_attachment_object_visible(name) and the row read is an EXISTS on
+-- purchase_orders, both under the reader's own row security. Still no role
+-- gate: whoever may read the purchase order (a viewer or staff member in its
+-- warehouse included) reads its files and rows (0423's AT2 and AT5 prove it
+-- with those personas).
 select ok(
   (select qual from pg_policies
      where schemaname = 'storage' and tablename = 'objects'
        and policyname = 'po-attachments read')
-    like '%is_org_member%'
+    like '%po_attachment_object_visible%'
   and (select qual from pg_policies
      where schemaname = 'storage' and tablename = 'objects'
        and policyname = 'po-attachments read')
     not like '%has_org_role%',
-  'po-attachments bucket SELECT = is_org_member (no role gate)'
+  'po-attachments bucket SELECT follows the purchase order (po_attachment_object_visible; no role gate)'
 );
 select ok(
   (select qual from pg_policies
@@ -126,12 +135,12 @@ select ok(
   (select qual from pg_policies
      where schemaname = 'public' and tablename = 'po_attachments'
        and policyname = 'po_attachments read')
-    like '%is_org_member%'
+    like '%FROM purchase_orders%'
   and (select qual from pg_policies
      where schemaname = 'public' and tablename = 'po_attachments'
        and policyname = 'po_attachments read')
     not like '%has_org_role%',
-  'po_attachments SELECT = is_org_member (no role gate)'
+  'po_attachments SELECT follows the purchase order (an EXISTS on purchase_orders; no role gate)'
 );
 
 select * from finish();

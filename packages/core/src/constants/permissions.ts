@@ -415,6 +415,8 @@ export const FULLY_GRANTABLE_PERMISSIONS: ReadonlySet<Permission> = new Set<Perm
   'locations:read',
   'categories:read',
   'suppliers:read',
+  // RLS enforces it (0322, purchase_orders_select), and binds managers and
+  // admins since 0423 (docket S46: no purchase order policy widens the read).
   'purchase_orders:read',
   'reports:read',
   'activity_logs:read',

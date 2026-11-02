@@ -524,3 +524,50 @@ describe('PurchaseOrdersService.create — cancelled PO number reuse', () => {
     expect(saveArgs(stub)?.p_po_number).toBe('MLA-001071');
   });
 });
+
+// ─── View purchase orders is needed to create one (docket S46) ──────────────
+//
+// Since migration 0423 the database's insert policy needs purchase_orders:read
+// beside the manager role or purchase_orders:manage, so a manage-only member
+// without read is refused there. The service asks first, so the refusal is
+// the permission's own sentence, before any read, number or save.
+describe('PurchaseOrdersService.create — needs purchase_orders:read as well as manage', () => {
+  it('refuses a manager holding manage without read, before any read, number or save', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:save_purchase_order_draft': SAVED('po-should-not-exist'),
+      'rpc:next_po_number': { data: 'PO-NOPE', error: null },
+    });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        permissions: new Set(['purchase_orders:manage']),
+      }) as never,
+    );
+
+    const err = await svc.create({ lines: MINIMAL_LINE }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ServiceError);
+    expect((err as ServiceError).code).toBe('forbidden');
+    expect((err as ServiceError).message).toBe('Missing permission: purchase_orders:read');
+    expect(stub.fromCalls).toEqual([]);
+    expect(stub.rpcCalls).toEqual([]);
+    expect(mockInvCreate).not.toHaveBeenCalled();
+  });
+
+  it('still creates for a manager holding both', async () => {
+    const stub = makeSupabaseStub({
+      'rpc:save_purchase_order_draft': SAVED('po-both'),
+      'rpc:next_po_number': { data: 'PO-BOTH-1', error: null },
+    });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, {
+        role: 'manager',
+        permissions: new Set(['purchase_orders:manage', 'purchase_orders:read']),
+      }) as never,
+    );
+
+    const result = await svc.create({ lines: MINIMAL_LINE });
+
+    expect(result).toEqual({ id: 'po-both', poNumber: 'PO-BOTH-1' });
+  });
+});

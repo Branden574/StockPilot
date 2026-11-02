@@ -550,8 +550,15 @@ begin
 end $$;
 select is(
   pg_temp.ledger_fp() || ' / ' || pg_temp.ledger_fp_after(pg_temp.pre(array['fn_assemble', 'fn_distribute'])),
-  'cfc031524c8052a69fceab91be550768|18 / 1c283e932202295a91e5c118f0873689|18',
-  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is cfc03152|18 after 0415, and with the two restated ledger bodies taken back to their pre-0415 text it is their old pin (1c283e93|18) exactly: nothing else in ledger moved');
+  -- Re-pinned by 0423 (docket S46, review round; was
+  -- 'cfc031524c8052a69fceab91be550768|18 / 1c283e932202295a91e5c118f0873689|18'):
+  -- 0423 restates ledger.reverse_receipt (three marked additions; header,
+  -- owner and ACL unchanged), so both sides move by that one body. 0423's
+  -- pgTAP C9 takes the additions out and gets 0195's md5, and its C10 shows
+  -- ledger.* is cfc03152|18 again with that body. Both values recomputed on
+  -- the local stack.
+  'b76b4b1a398e0293450ef16c915271e9|18 / 02569ae85e8d9c9c438f0c15573a8d4d|18',
+  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is b76b4b1a|18 after 0423, and with the two restated ledger bodies taken back to their pre-0415 text it is 02569ae8|18 (cfc03152|18 and 1c283e93|18 before 0423; 0423''s C9 and C10 tie the move to ledger.reverse_receipt alone)');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(

@@ -809,7 +809,17 @@ select is(
   -- Re-pinned by 0390 (was c38fe9b12af77fdaa2d372f4fd324a43): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'hold_order_stock(uuid)|3b0691d604823164daaa7f248616f00f|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
-  'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0423 (docket S46; was b6bebc9ae8b1ec3a9ba6d89b73e39d91, SQL,
+  -- SECURITY INVOKER): plpgsql SECURITY DEFINER with a manager or
+  -- purchase_orders:manage gate, so the count is every purchase order of the
+  -- organization, not only the ones the caller may read; the number it gives
+  -- a manager is unchanged (0423 N1). The needed-by revision reads no PO
+  -- number. Computed on the local stack after 0423.
+  -- 0423's decisions round (2026-11-02; was 104bd06a21cd31164ab4aa1dbc64433c):
+  -- with no user, only the service role and a call with no request claims
+  -- pass the gate (anon or a token with no subject: 42501, 0423 N3-N5);
+  -- a signed-in caller's gate and the count are unchanged.
+  'next_po_number(uuid)|ac32e00ece826f72f7046fca0bcc2a9b|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'
@@ -882,7 +892,15 @@ select is(
   -- revise_order_needed_by calls neither. 0415's pgTAP R3 takes those two
   -- bodies back to their pre-0415 text and gets 1c283e93|18 exactly, so
   -- nothing else in ledger moved.
-  'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
+  -- Re-pinned by 0423 (docket S46, review round; was cfc031524c8052a69fceab91be550768|18):
+  -- ledger.reverse_receipt restated with three marked additions (it locks the
+  -- purchase order as the caller first, po_not_found, and a PO line update
+  -- that matches no row raises po_line_not_found); header, owner and ACL
+  -- unchanged. 0423's pgTAP C9 takes the additions out and gets 0195's md5,
+  -- and C10 shows ledger.* is cfc03152|18 again with that body, so nothing
+  -- else in ledger moved. Recomputed on the local stack.
+  -- revise_order_needed_by reverses no receipt.
+  'ledger.*|b76b4b1a398e0293450ef16c915271e9|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier

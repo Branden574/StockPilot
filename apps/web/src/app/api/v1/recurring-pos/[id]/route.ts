@@ -38,7 +38,8 @@ export const dynamic = 'force-dynamic';
  * direct write never did.
  *
  * Gate order mirrors the web action's runGate() exactly:
- *   MFA (inside assertPermission) -> purchase_orders:manage -> module enabled
+ *   MFA (inside assertPermission) -> purchase_orders:manage
+ *   -> purchase_orders:read (0423) -> module enabled
  *   -> Pro+ plan (ENABLE only) -> service call (which re-asserts + audits).
  * Permission is checked BEFORE the plan read on purpose: gating on plan first
  * would answer `plan_limit_exceeded` to a caller whose real problem is that
@@ -112,6 +113,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
   try {
     assertPermission(ctx, 'purchase_orders:manage');
+    // A template is a standing purchase order: since 0423 changing either
+    // needs View purchase orders too (the service asks again).
+    assertPermission(ctx, 'purchase_orders:read');
     assertModuleEnabled(ctx, 'purchase_orders');
     // Plan gate on ENABLE only — turning a template OFF must always be
     // possible, including for an org that has dropped off Pro (same carve-out
@@ -135,6 +139,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
   try {
     assertPermission(ctx, 'purchase_orders:manage');
+    assertPermission(ctx, 'purchase_orders:read'); // as PATCH (0423)
     assertModuleEnabled(ctx, 'purchase_orders');
 
     await new RecurringPoTemplatesService(ctx).remove(id);

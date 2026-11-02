@@ -240,10 +240,13 @@ insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
 -- write policy admits. That is exactly how staff read every warehouse's
 -- item_stock_levels until 0371. INV-35 forbids the shape; an entry here must
 -- say why its FOR ALL USING cannot widen reads, or record a known gap.
+-- purchase_orders was the known gap until 0423 split purchase_orders_write
+-- into INSERT and UPDATE policies (and made next_po_number SECURITY DEFINER
+-- first, so PO numbers still count every purchase order); its row is gone,
+-- and INV-35 would call it stale.
 create temporary table _sec_inv_forall_on_scoped_allow (relname text primary key, why text not null);
 insert into _sec_inv_forall_on_scoped_allow (relname, why) values
-  ('warehouses',      'warehouses_admin_write USING is has_org_role(admin), narrower than warehouses_select (member AND (manager+ OR user_can_access_warehouse read)), so it cannot widen reads'),
-  ('purchase_orders', 'KNOWN GAP, deferred to 0372: purchase_orders_write (manager OR purchase_orders:manage) widens reads past purchase_orders:read and the warehouse scope. A plain split breaks PO numbering (next_po_number is INVOKER and counts only visible POs), so it needs its own prerequisite');
+  ('warehouses',      'warehouses_admin_write USING is has_org_role(admin), narrower than warehouses_select (member AND (manager+ OR user_can_access_warehouse read)), so it cannot widen reads');
 
 -- ── H. Functions that still call the NON-recording public.apply_level_delta
 --       (0373) ──────────────────────────────────────────────────────────────
@@ -1169,8 +1172,9 @@ drop function public._sec_inv_probe_invoker_comment_only();
 -- an unscoped read. item_stock_levels_write did exactly that for staff until
 -- 0371 split it into INSERT and UPDATE policies. A table counts as
 -- warehouse-scoped when a permissive SELECT policy's qual calls one of the
--- warehouse-scope helpers. Allowlist G holds the defended exceptions and the
--- one known gap; an entry that no longer matches the shape is stale.
+-- warehouse-scope helpers. Allowlist G holds the defended exceptions (the
+-- one known gap, purchase_orders, was closed by 0423); an entry that no
+-- longer matches the shape is stale.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- INV-35. The sweep, plus allowlist G's stale-entry audit.
