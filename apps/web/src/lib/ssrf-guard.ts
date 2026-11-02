@@ -113,6 +113,17 @@ export class SsrfLookupFailedError extends SsrfBlockedError {
 }
 
 /**
+ * Whether `err` is the guard refusing the URL itself: a bad scheme, a private
+ * address, a host off the allowlist, too many redirects. A refusal is the same
+ * every time, so it is final. A failed lookup is a network failure, not a
+ * refusal: the same URL can resolve on the next try. The one rule for every
+ * caller that retries network failures (docket B49).
+ */
+export function isSsrfRefusal(err: unknown): boolean {
+  return err instanceof SsrfBlockedError && !(err instanceof SsrfLookupFailedError);
+}
+
+/**
  * node's lookup takes no signal (getaddrinfo cannot be cancelled), so on its
  * own a slow resolver held the caller past its own timeout: the abort was only
  * seen once the lookup settled, and again on every redirect hop. This settles

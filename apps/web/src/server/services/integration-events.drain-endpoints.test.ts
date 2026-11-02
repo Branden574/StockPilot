@@ -11,7 +11,7 @@ const reportError = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 import { NOT_A_LIST } from '@/test/postgrest-answers';
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
 
 import { drainIntegrationDeliveries } from './integration-events';
 
@@ -107,5 +107,70 @@ describe('drainIntegrationDeliveries — endpoint read', () => {
     const updates = stub.chainArgsAll.get('integration_deliveries.update') ?? [];
     expect(updates).toHaveLength(1);
     expect(updates[0]?.[0]?.[0]).toEqual({ status: 'dead', error: 'endpoint removed' });
+  });
+});
+
+/**
+ * docket B82: a gateway answering 502 with an empty body gives postgrest-js an
+ * error whose message is the empty string, and the drain reported that empty
+ * text: a log line with no cause and no status. The due-deliveries read also
+ * ignored its error, and read an answer that is not a list as "nothing due",
+ * reporting nothing at all.
+ */
+describe('drainIntegrationDeliveries — the reports say what failed', () => {
+  const BAD_GATEWAY = {
+    data: null,
+    error: { message: '', code: '' },
+    status: 502,
+    statusText: 'Bad Gateway',
+  } as unknown as QueryResult;
+
+  async function drainReport(results: Record<string, QueryResult>) {
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const stub = makeSupabaseStub({
+      'integration_deliveries.update': { data: [], error: null },
+      ...results,
+    });
+    const summary = await drainIntegrationDeliveries(stub.client, new Date('2026-09-23T12:00:00Z'));
+    expect(summary).toEqual({ attempted: 0, delivered: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('integration_deliveries.update') ?? []).toHaveLength(0);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [err, context] = reportError.mock.calls[0] as unknown as [Error, unknown];
+    expect(context).toEqual({ tag: 'integration-events.drain' });
+    return err.message;
+  }
+
+  it('an endpoint read answered 502 with an empty body names the status', async () => {
+    const message = await drainReport({
+      'integration_deliveries.select': { data: DUE_ROWS, error: null },
+      'integration_endpoints.select': BAD_GATEWAY,
+    });
+    expect(message).toBe(
+      'integration_endpoints select: HTTP 502 Bad Gateway (empty error message)',
+    );
+  });
+
+  it('a due read answered 502 with an empty body is reported, naming the status', async () => {
+    const message = await drainReport({ 'integration_deliveries.select': BAD_GATEWAY });
+    expect(message).toBe(
+      'integration_deliveries select: HTTP 502 Bad Gateway (empty error message)',
+    );
+  });
+
+  it.each(NOT_A_LIST)(
+    '%s from the due read is reported, never read as "nothing due"',
+    async (_shape, answer) => {
+      const message = await drainReport({ 'integration_deliveries.select': answer as QueryResult });
+      expect(message).toBe(`integration_deliveries answered no list (status ${answer.status})`);
+    },
+  );
+
+  it('a due read with no rows due reports nothing (unchanged)', async () => {
+    const stub = makeSupabaseStub({ 'integration_deliveries.select': { data: [], error: null } });
+    const summary = await drainIntegrationDeliveries(stub.client, new Date('2026-09-23T12:00:00Z'));
+    expect(summary).toEqual({ attempted: 0, delivered: 0 });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

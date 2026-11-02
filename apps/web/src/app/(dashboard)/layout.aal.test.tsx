@@ -69,8 +69,12 @@ vi.mock('@/lib/auth/session', () => ({
   getSessionMemberships: vi.fn(async () => []),
 }));
 // An enrolled member: the layout's gate applies under the 'optional' policy.
+// The list is the member's own (the context's user).
 vi.mock('@/lib/dashboard/request-cache', () => ({
-  getMfaFactorsForRequest: vi.fn(async () => [{ status: 'verified' }]),
+  getMfaFactorsForRequest: vi.fn(async () => ({
+    userId: '11111111-1111-4111-8111-111111111111',
+    factors: [{ status: 'verified' }],
+  })),
   getModulesForRequest: vi.fn(async () => new Set()),
   getOrgRowForRequest: vi.fn(async () => ({
     terminology: null,
@@ -97,6 +101,7 @@ import {
   INSECURE_USER_WARNING,
   fakeAuthServer,
   makeSigningKey,
+  refreshGrant,
   sessionClaims,
   sessionCookies,
   signAccessToken,
@@ -106,11 +111,13 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
-import { getMfaFactorsForRequest } from '@/lib/dashboard/request-cache';
+import { getMfaFactorsForRequest, getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 
 import DashboardLayout from './layout';
 
 const TO_CHALLENGE = 'REDIRECT:/signin/mfa?redirect=%2Fdashboard%2Fpurchase-orders';
+/** The member whose context the layout resolves (the requireOrgContext stub above). */
+const MEMBER = '11111111-1111-4111-8111-111111111111';
 
 let projectKey: SigningKey;
 let attackerKey: SigningKey;
@@ -179,6 +186,119 @@ describe('DashboardLayout — the enrolled member AAL2 gate reads a verified lev
 });
 
 /**
+ * The gate counts only the claims of the member whose context this layout
+ * resolved (ctx.userId; the context here is that member, user 1111...).
+ *
+ * The claims read loads the cookie session on a client of its own, and a load
+ * refreshes the session, with the cookie's own refresh token, whenever the
+ * cookie's own `expires_at` is within 90 s (auth-js __loadSession). Nothing
+ * signs either field. So a cookie can hold the member's aal1 token (their
+ * password alone gives it) beside the refresh token of ANOTHER enrolled
+ * account's aal2 session, and the read then verifies that other account's aal2
+ * token. Checking `aal` alone let it through for the member. Where the layout
+ * starts the read today, requireOrgContext()'s identity read refreshes the
+ * same way and refutes the proxy's header first (layout.refresh-swap.test.tsx),
+ * but the gate must hold whatever order its reads run in.
+ */
+describe("DashboardLayout — the enrolled member gate counts only the resolved member's own claims", () => {
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+  const OTHER_SESSION = '44444444-4444-4444-8444-444444444444';
+  const OTHER_REFRESH = 'other-account-refresh';
+  const MEMBER_REFRESH = 'member-own-refresh';
+
+  const otherClaims = () =>
+    sessionClaims({
+      aal: 'aal2',
+      sub: OTHER,
+      sessionId: OTHER_SESSION,
+      email: 'other@example.test',
+      totpAgeSeconds: 30,
+    });
+
+  /** The member's own session at `aal`, its cookie carrying `refreshToken` and an expiry inside auth-js's 90 s margin. */
+  async function memberCookieDueForRefresh(aal: 'aal1' | 'aal2', refreshToken: string) {
+    const claims = sessionClaims({ aal, ...(aal === 'aal2' ? { totpAgeSeconds: 60 } : {}) });
+    jar = sessionCookies(await signAccessToken(projectKey, claims), claims, {
+      refreshToken,
+      expiresAt: Date.now() / 1000 + 30,
+    });
+  }
+
+  it("another enrolled account's aal2 session, refreshed in from the cookie, sends the member to the MFA challenge", async () => {
+    await memberCookieDueForRefresh('aal1', OTHER_REFRESH);
+    const other = otherClaims();
+    server.refreshGrants.set(
+      OTHER_REFRESH,
+      refreshGrant(await signAccessToken(projectKey, other), other, 'other-account-refresh-2'),
+    );
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+    // The read did swap accounts: one refresh grant, answered with the other session.
+    expect(server.calls['/token']).toBe(1);
+  });
+
+  it("a cookie that holds another account's own aal2 token sends the member whose context resolved to the MFA challenge", async () => {
+    await signIn(otherClaims());
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+  });
+
+  it("control: the member's own aal2 session refreshing during the render renders the dashboard", async () => {
+    await memberCookieDueForRefresh('aal2', MEMBER_REFRESH);
+    const renewed = sessionClaims({ aal: 'aal2', totpAgeSeconds: 61 });
+    server.refreshGrants.set(
+      MEMBER_REFRESH,
+      refreshGrant(await signAccessToken(projectKey, renewed), renewed, 'member-own-refresh-2'),
+    );
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    expect(server.calls['/token']).toBe(1);
+  });
+
+  it('a member with no authenticator is never held by the gate, whoever the claims are about', async () => {
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce({ userId: MEMBER, factors: [] });
+    await signIn(otherClaims());
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+  });
+});
+
+/**
+ * The gate's other input (S43a, review round s43ar): whether the member has a
+ * verified factor at all. The list is a read of the cookie session too, so it
+ * can be the list of another account the session refreshed into; the list of
+ * an account with NO factor read as "no authenticator" and the gate was
+ * skipped for an enrolled member at aal1. Only the member's own list may say
+ * they have none (layout.refresh-swap.test.tsx runs it with the real reads).
+ */
+describe("DashboardLayout — the gate counts only the resolved member's own factor list", () => {
+  const OTHER = '55555555-5555-4555-8555-555555555555';
+
+  it('the factor list of another account with no factor sends the member to the MFA challenge, not into the dashboard', async () => {
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce({ userId: OTHER, factors: [] });
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+  });
+
+  it('under the strictest policy it goes to the MFA challenge too, not to enrollment', async () => {
+    vi.mocked(getOrgRowForRequest).mockResolvedValueOnce({
+      terminology: null,
+      mfa_policy: 'all_required',
+      logo_url: null,
+      timezone: null,
+      nav_overrides: null,
+      dashboard_layout: null,
+      order_status_config: null,
+    } as Awaited<ReturnType<typeof getOrgRowForRequest>>);
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce({ userId: OTHER, factors: [] });
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+  });
+
+  it("control: the member's own list with no factor renders the dashboard at aal1", async () => {
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce({ userId: MEMBER, factors: [] });
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+  });
+});
+
+/**
  * Page renders run in their own server function, apart from the proxy, so
  * they keep their own key set: auth-js caches it per instance for 10 minutes.
  * The first read in an instance (and the first after the cache expires)
@@ -193,7 +313,7 @@ describe('DashboardLayout — the verified claims read starts with the batch, no
     const coldKey = await makeSigningKey('project-kid-cold-layout');
     server = fakeAuthServer([projectKey, coldKey]);
     vi.stubGlobal('fetch', server.fetch);
-    let answerFactors!: (factors: Array<{ status: string }>) => void;
+    let answerFactors!: (list: { userId: string; factors: Array<{ status: string }> }) => void;
     vi.mocked(getMfaFactorsForRequest).mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -208,7 +328,7 @@ describe('DashboardLayout — the verified claims read starts with the batch, no
       expect(server.calls['/.well-known/jwks.json']).toBeGreaterThanOrEqual(1),
     );
     // Only now does the factor list answer: the key set was already on its way.
-    answerFactors([{ status: 'verified' }]);
+    answerFactors({ userId: MEMBER, factors: [{ status: 'verified' }] });
     await expect(rendering).resolves.toBeTruthy();
     expect(server.calls['/.well-known/jwks.json']).toBe(1);
     expect(server.calls['/user']).toBeUndefined();
@@ -219,7 +339,7 @@ describe('DashboardLayout — the verified claims read starts with the batch, no
     server = fakeAuthServer([projectKey, heldKey]);
     server.jwksGate = new Promise(() => {});
     vi.stubGlobal('fetch', server.fetch);
-    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce([]);
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce({ userId: MEMBER, factors: [] });
     const claims = sessionClaims({ aal: 'aal1' });
     await signIn(claims, await signAccessToken(heldKey, claims));
 

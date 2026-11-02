@@ -127,12 +127,16 @@ describe('the export fixes release', () => {
   });
 
   // Renamed by fix/b44-update-restart-prompt (2026-10-31; was: "is the newest entry, at the top, directly above the small-fixes-8 release, and dated after every other release on a whole minute", with ID at RELEASES[0], the small-fixes-8 release at RELEASES[1] and every release from RELEASES[1] dated before it): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, directly above it, so it and the small-fixes-8 release move down by one. Claim kept: directly above the small-fixes-8 release, dated after every release below it, on a whole minute.
-  it('sits directly below the B44 phone update draft, directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
+  // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "sits directly below the B44 phone update draft, directly above the small-fixes-8 release, and is dated after every release below it on a whole minute", with ID at RELEASES[1], the small-fixes-8 release at RELEASES[2] and every release from RELEASES[2] dated before it): the lists-delivery-sites-and-fixes release is published later, directly below the B44 phone update draft and directly above this one, so it and the small-fixes-8 release move down by one. Claim kept: directly above the small-fixes-8 release, dated after every release below it, on a whole minute.
+  it('sits directly below the lists-delivery-sites-and-fixes release (published later, below the B44 phone update draft), directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
     expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
     expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('small-fixes-8-2026-10');
-    for (const r of RELEASES.slice(2)) {
+    expect(RELEASES[1]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(Date.parse(RELEASES[1]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
+    expect(RELEASES[2]?.id).toBe(ID);
+    expect(RELEASES[3]?.id).toBe('small-fixes-8-2026-10');
+    for (const r of RELEASES.slice(3)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
@@ -248,10 +252,19 @@ describe('the export fixes release', () => {
   // An old phone build shows the title, the summary and the first linked line
   // the reader can reach as its button; the phone draws the button only when
   // the link opens one of its own screens (whats-new.tsx).
-  it('is the first notice for whoever can export, and an old phone build shows its title and summary with Open Items', () => {
+  // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "is the first notice for whoever can export, and an old phone build shows its title and summary with Open Items", with nothing read or seen): the lists-delivery-sites-and-fixes release is published later, directly above it, and reaches every member, so every reader here reads or sees it first. Claim kept: it is the first notice for whoever can export once that release is read, an old phone build shows its title and summary with Open Items once that release is seen, and a member who cannot export is not told it.
+  it('is the first notice for whoever can export once the lists-delivery-sites-and-fixes release is read, and an old phone build shows its title and summary with Open Items once that release is seen', () => {
+    const listsRead = {
+      release_id: 'lists-delivery-sites-and-fixes-2026-11',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-02T06:10:00Z',
+      read_at: '2026-11-02T06:10:00Z',
+    };
+    const listsSeen = { 'lists-delivery-sites-and-fixes-2026-11': true };
     for (const v of [everyone, exporter]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(buildReleaseList(RELEASES, v, [listsRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, listsSeen)[0], v.role).toEqual({
         id: ID,
         date: '2026-10-31',
         title: release().title,
@@ -260,8 +273,8 @@ describe('the export fixes release', () => {
       });
     }
     // Not told to a member who cannot export.
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).not.toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, member, {}).map((a) => a.id)).not.toContain(ID);
+    expect(buildReleaseList(RELEASES, member, [listsRead], null).latestUnread?.id).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, member, listsSeen).map((a) => a.id)).not.toContain(ID);
     // On the phone, Open Items opens its Inventory screen, so the phone shows
     // the button.
     expect(phone('src/components/onboarding/whats-new.tsx')).toContain(

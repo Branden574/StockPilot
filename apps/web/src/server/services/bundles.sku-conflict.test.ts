@@ -37,7 +37,11 @@ describe('bundle SKU already taken', () => {
   });
 
   it('update: a duplicate SKU is the same conflict', async () => {
-    const svc = service({ 'bundles.update': { data: null, error: DUP } });
+    const svc = service({
+      // The kit is read in the organization first (S39) and is found.
+      'bundles.select': { data: { id: 'b-1' }, error: null },
+      'bundles.update': { data: null, error: DUP },
+    });
     await expect(svc.update('b-1', { sku: 'NHB' })).rejects.toMatchObject({
       code: 'conflict',
       message: BUNDLE_SKU_TAKEN,
