@@ -253,7 +253,7 @@ describe('POST /api/v1/auth/signed-in — the body', () => {
     expect(h.emitAuthAudit).not.toHaveBeenCalled();
   });
 
-  it('a field outside the allowlist is dropped, not trusted: no label, no install id; the row is still written', async () => {
+  it('a field outside the allowlist is dropped, not trusted: no label in the row, no install id; the row is still written', async () => {
     await POST(
       req({
         installId: 'not-a-uuid',
@@ -268,8 +268,32 @@ describe('POST /api/v1/auth/signed-in — the body', () => {
     expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { device_label: null } });
     await runAfter();
     expect(h.noteLoginDevice).toHaveBeenCalledWith(
-      expect.objectContaining({ deviceKey: null, deviceLabel: null }),
+      expect.objectContaining({ deviceKey: null, deviceLabel: 'StockPilot app' }),
     );
+  });
+
+  it('no model that passes: the device note calls it "StockPilot app", never by the request’s own User-Agent', async () => {
+    // The device note shows its label in the Slack or Teams security feed,
+    // which renders it as markup (security review of S5a). The User-Agent is
+    // whatever the caller typed; it goes to the note for the device hash only.
+    const hostile = '<!channel> <https://phish.example/login|Review this sign-in now>';
+    for (const device of [{}, { model: '<!here>' }, { osName: 'iOS', osVersion: '18.1' }]) {
+      h.noteLoginDevice.mockClear();
+      h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: crypto.randomUUID() }));
+      await POST(
+        req(
+          { installId: INSTALL, device },
+          { authorization: 'Bearer token-1', 'user-agent': hostile },
+        ),
+      );
+      await runAfter();
+      expect(h.noteLoginDevice).toHaveBeenCalledTimes(1);
+      expect(h.noteLoginDevice.mock.calls[0]![0]).toMatchObject({
+        userAgent: hostile,
+        deviceKey: INSTALL,
+        deviceLabel: 'StockPilot app',
+      });
+    }
   });
 
   it('length caps: an over-long model is dropped', async () => {

@@ -43,6 +43,14 @@ export const dynamic = 'force-dynamic';
  * Body: { installId?, device?: { model?, osName?, osVersion?, appVersion? } },
  * each field checked against an allowlist and a length cap. A field that
  * fails is dropped, never trusted, and the row is still written.
+ *
+ * What the device is called comes from those fields only, never from the
+ * request's User-Agent: noteLoginDevice shows the name as the stored device,
+ * in the email and in the organization's Slack or Teams security feed, which
+ * renders it as markup. With no model that passed it is "StockPilot app"
+ * (security review of S5a: a User-Agent of `<!channel>` and a masked link
+ * reached that feed). The User-Agent still goes to the note, where it is
+ * only hashed into the device's identity when the install id is missing.
  */
 
 const INSTALL_ID = z.string().uuid();
@@ -75,6 +83,9 @@ function readDevice(raw: unknown) {
     appVersion: checked(APP_VERSION, d.appVersion),
   };
 }
+
+/** The device note's name for a phone that named no model that passed. */
+const UNNAMED_PHONE = 'StockPilot app';
 
 /** "StockPilot app on iPhone 15 Pro (iOS 18.1)"; no model, no label. */
 function deviceLabel(d: ReturnType<typeof readDevice>): string | null {
@@ -152,8 +163,16 @@ export async function POST(req: Request) {
     const email = claims.email;
     const userAgent = req.headers.get('user-agent');
     const ip = requestIp(req);
+    const deviceName = label ?? UNNAMED_PHONE;
     defer(() =>
-      noteLoginDevice({ userId, email, userAgent, ip, deviceKey: installId, deviceLabel: label }),
+      noteLoginDevice({
+        userId,
+        email,
+        userAgent,
+        ip,
+        deviceKey: installId,
+        deviceLabel: deviceName,
+      }),
     );
 
     return NextResponse.json({ ok: true });

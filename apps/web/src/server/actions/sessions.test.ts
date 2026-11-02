@@ -17,6 +17,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  * listed before the revoke. Both listeners already sign a device out when its
  * own session is named and leave the kept one alone
  * (session-revocation-listener.test.tsx, use-session-revocation.test.ts).
+ *
+ * And only after a revoke that answered (security review of S5a): the ids
+ * named are the sessions the revoke ENDS, so a broadcast ahead of the revoke,
+ * or after a revoke that failed, would put live session ids on the public
+ * channel. One call log records the database calls and the broadcast in the
+ * order they happen.
  */
 
 let jar = new Map<string, string>();
@@ -35,7 +41,11 @@ vi.mock('@/lib/env', async () => {
 });
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
-const broadcastToChannel = vi.fn(async () => undefined);
+/** The database calls and the broadcast, in the order they happen. */
+const calls: string[] = [];
+const broadcastToChannel = vi.fn(async () => {
+  calls.push('broadcast');
+});
 vi.mock('@/lib/realtime/broadcast', () => ({
   broadcastToChannel: (...args: unknown[]) => broadcastToChannel(...(args as [])),
 }));
@@ -44,8 +54,11 @@ const OTHER_B = '66666666-6666-4666-8666-666666666666';
 /** The caller's sessions as list_my_sessions answers (the kept one included). */
 let listed: Array<{ id: string }> = [];
 let listError: { code: string; message: string } | null = null;
+let revokeError: { code: string; message: string } | null = null;
 const rpc = vi.fn(async (name: string, _args?: unknown) => {
+  calls.push(name);
   if (name === 'list_my_sessions') return { data: listError ? null : listed, error: listError };
+  if (name === 'revoke_my_other_sessions' && revokeError) return { data: null, error: revokeError };
   return { data: 1, error: null };
 });
 vi.mock('@/server/services/context', async (importOriginal) => {
@@ -95,8 +108,10 @@ beforeAll(async () => {
 beforeEach(() => {
   rpc.mockClear();
   broadcastToChannel.mockClear();
+  calls.length = 0;
   listed = [];
   listError = null;
+  revokeError = null;
   server = fakeAuthServer(projectKey);
   vi.stubGlobal('fetch', server.fetch);
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -138,6 +153,23 @@ describe('revokeOtherSessionsAction — which session it keeps', () => {
     expect(warn.mock.calls.some((c: unknown[]) => INSECURE_USER_WARNING.test(String(c[0])))).toBe(
       false,
     );
+  });
+
+  it('in order: list the sessions, revoke the others, and only then name them on the channel', async () => {
+    await signIn(sessionClaims());
+    listed = [{ id: OTHER_A }, { id: FIXTURE_SESSION_ID }, { id: OTHER_B }];
+    expect((await revokeOtherSessionsAction()).ok).toBe(true);
+    expect(calls).toEqual(['list_my_sessions', 'revoke_my_other_sessions', 'broadcast']);
+  });
+
+  it('a revoke that answers an error: the action fails and nothing is broadcast, so no live session is named', async () => {
+    await signIn(sessionClaims());
+    listed = [{ id: OTHER_A }, { id: FIXTURE_SESSION_ID }, { id: OTHER_B }];
+    revokeError = { code: '57014', message: 'canceling statement due to statement timeout' };
+    const res = await revokeOtherSessionsAction();
+    expect(res.ok).toBe(false);
+    expect(calls).toEqual(['list_my_sessions', 'revoke_my_other_sessions']);
+    expect(broadcastToChannel).not.toHaveBeenCalled();
   });
 
   it('no other device: nothing to name, nothing broadcast', async () => {

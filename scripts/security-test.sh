@@ -1000,12 +1000,16 @@ WEB_TESTS=(
   # the sessions channel only after the revoke answered. That channel is
   # public, so no path names a live session on it: "Sign out all other devices",
   # Change password and the phone name the sessions they ended, never the one
-  # that stays (the guard holds every server keepId to the literal null). The
-  # new-device email goes out only for a device the call itself recorded (one
-  # per phone install) and its webhook event reaches accepted, non-act-as
-  # memberships only. The auth audit helpers are server code, never Server
-  # Actions.
+  # that stays (the guard holds every server keepId to the literal null), and
+  # "Sign out all other devices" names them only after its revoke answered
+  # without error. The new-device email goes out only for a device the call
+  # itself recorded (one per phone install) and its webhook event reaches
+  # accepted, non-act-as memberships only. The phone's device name comes from
+  # the allowlisted fields alone, never its User-Agent, so no text the caller
+  # typed reaches the organization's Slack or Teams feed. The auth audit
+  # helpers are server code, never Server Actions.
   src/app/api/v1/auth/signed-in/route.test.ts
+  src/app/api/v1/auth/signed-in/route.device-feed.test.ts
   src/app/api/v1/auth/signed-out/route.test.ts
   src/lib/auth/login-device.test.ts
   src/test/session-revoked-payload.guard.test.ts
