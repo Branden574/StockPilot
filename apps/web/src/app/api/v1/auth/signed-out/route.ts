@@ -49,9 +49,10 @@ export const dynamic = 'force-dynamic';
  * its next launch), and refused there, its other devices would stay signed in
  * for up to an hour and the row would be lost. The context it gets is
  * labelled unsatisfied, so no permission check passes it; the route needs
- * none. A token
- * with no session id revokes nothing (revoke_my_other_sessions(null) would end
- * EVERY session) and its row says so.
+ * none.
+ *
+ * A token with no session id revokes nothing (revoke_my_other_sessions(null)
+ * would end EVERY session) and its row says so.
  */
 
 const unauthenticated = () => NextResponse.json({ error: 'unauthenticated' }, { status: 401 });

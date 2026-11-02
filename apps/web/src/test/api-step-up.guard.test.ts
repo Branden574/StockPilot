@@ -296,8 +296,9 @@ const AAL1_AUTH: Record<string, Listed> = {
 /**
  * Routes whose withApiContext call passes allowStepUpPending: they must answer
  * before the code. Reviewed 2026-11-01; S5a's two phone notes joined 2026-11-02
- * (plans/S5.md; each served at aal1 and every other route refused in
- * app/api/v1/auth/step-up-pending.test.ts).
+ * (plans/S5.md). app/api/v1/auth/step-up-pending.test.ts serves each at aal1
+ * through the real withApiContext; rules 1 and 3 here keep every other route
+ * refusing.
  */
 const AAL1_ROUTES: Record<string, { reason: string }> = {
   'api/client-error/route.ts': {
@@ -306,7 +307,7 @@ const AAL1_ROUTES: Record<string, { reason: string }> = {
   },
   'api/v1/auth/signed-in/route.ts': {
     reason:
-      "The phone's sign-in note, sent right after the password and before the authenticator code, so a sign-in with a stolen password still writes its Audit log row and sends the new-device email. It accepts only a verified bearer token of the account itself, reads nothing of the organization, and writes one row per session.",
+      "The phone's sign-in note, sent right after the password and before the authenticator code, so a sign-in with a stolen password still writes its Audit log row and sends the new-device email. It accepts only a verified bearer token of the account itself, asks for no permission, and writes one row per session and the account's device note.",
   },
   'api/v1/auth/signed-out/route.ts': {
     reason:
