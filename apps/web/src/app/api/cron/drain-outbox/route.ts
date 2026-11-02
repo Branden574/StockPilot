@@ -22,7 +22,11 @@ import {
 import { sweepExpiredImpersonations } from '@/server/services/platform/impersonation';
 import { quickbooksConnector } from '@/server/connectors/quickbooks';
 import { QboClient, type QboEnv } from '@/server/connectors/quickbooks/client';
-import { maybePostMonthlyValuation } from '@/server/connectors/quickbooks/valuation';
+import {
+  maybePostMonthlyValuation,
+  valuationDue,
+  type ValuationSettings,
+} from '@/server/connectors/quickbooks/valuation';
 import { getConnectionSecret, putConnectionSecret } from '@/server/connectors/secret-store';
 
 export const runtime = 'nodejs';
@@ -60,13 +64,18 @@ function secretsEqual(a: string, b: string): boolean {
  * No connection is started with less than CONNECTOR_START_RESERVE_MS left before
  * the run's `deadlineAt` (docket B81). The pass is month-gated and posts with a
  * fixed requestid, so a connection skipped now is posted at a later tick.
- * Answers true when the deadline left a connection to post for the next tick.
+ * Answers true when the deadline left a connection with valuation work for the
+ * next tick (valuationDue). One that already posted this month, or has no
+ * accounts and its skip reason recorded, is still visited when time allows
+ * (this pass is what refreshes the token of a connection with nothing to
+ * export), but skipping it leaves nothing waiting, so it is not reported.
  */
 async function runMonthlyValuation(
   admin: ReturnType<typeof createAdminClient>,
   now: Date,
   deadlineAt: number,
 ): Promise<boolean> {
+  let left = false;
   const { data: conns, error } = await admin
     .from('org_connections')
     .select('*')
@@ -98,8 +107,13 @@ async function runMonthlyValuation(
     // An active connection without a Vault handle is malformed (the OAuth
     // callback must set secret_id). Skip rather than throwing the whole pass.
     if (!c.secret_id || !c.external_account_id) continue;
-    // A connection left for time is posted at a later tick.
-    if (deadlineAt - Date.now() < CONNECTOR_START_RESERVE_MS) return true;
+    // A connection left for time is posted at a later tick. It is work left
+    // only when it has this month's valuation still to do: on most ticks every
+    // connection has already posted, and a tick reporting it would be noise.
+    if (deadlineAt - Date.now() < CONNECTOR_START_RESERVE_MS) {
+      if (valuationDue((c.settings ?? {}) as ValuationSettings, now)) left = true;
+      continue;
+    }
     try {
       const conn: ConnectionRef = {
         id: c.id,
@@ -140,7 +154,7 @@ async function runMonthlyValuation(
       });
     }
   }
-  return false;
+  return left;
 }
 
 type WebhookDrainResult = Awaited<ReturnType<typeof drainIntegrationDeliveries>>;

@@ -36,7 +36,8 @@ vi.mock('@/server/services/platform/impersonation', () => ({
 }));
 vi.mock('@/server/connectors/quickbooks', () => ({ quickbooksConnector: { id: 'quickbooks' } }));
 vi.mock('@/server/connectors/quickbooks/client', () => ({ QboClient: vi.fn() }));
-vi.mock('@/server/connectors/quickbooks/valuation', () => ({
+vi.mock('@/server/connectors/quickbooks/valuation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/connectors/quickbooks/valuation')>()),
   maybePostMonthlyValuation: vi.fn(async () => undefined),
 }));
 vi.mock('@/server/connectors/secret-store', () => ({

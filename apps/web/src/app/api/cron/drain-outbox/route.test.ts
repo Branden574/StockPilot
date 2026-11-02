@@ -41,18 +41,31 @@ vi.mock('@/server/services/integration-events', async (importOriginal) => ({
 }));
 const sweepExpiredImpersonations = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock('@/server/services/platform/impersonation', () => ({ sweepExpiredImpersonations }));
+const refreshAuth = vi.hoisted(() =>
+  vi.fn(async () => ({
+    accessToken: 'a2',
+    refreshToken: 'r2',
+    expiresAt: '2099-01-01T00:00:00.000Z',
+  })),
+);
 vi.mock('@/server/connectors/quickbooks', () => ({
-  quickbooksConnector: { id: 'quickbooks', refreshAuth: vi.fn() },
+  quickbooksConnector: { id: 'quickbooks', refreshAuth },
 }));
 vi.mock('@/server/connectors/quickbooks/client', () => ({ QboClient: vi.fn() }));
 const maybePostMonthlyValuation = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock('@/server/connectors/quickbooks/valuation', () => ({ maybePostMonthlyValuation }));
-vi.mock('@/server/connectors/secret-store', () => ({
-  getConnectionSecret: vi.fn(async () => ({
+vi.mock('@/server/connectors/quickbooks/valuation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/connectors/quickbooks/valuation')>()),
+  maybePostMonthlyValuation,
+}));
+const getConnectionSecret = vi.hoisted(() =>
+  vi.fn(async () => ({
     accessToken: 'a',
     refreshToken: 'r',
     expiresAt: '2099-01-01T00:00:00.000Z',
   })),
+);
+vi.mock('@/server/connectors/secret-store', () => ({
+  getConnectionSecret,
   putConnectionSecret: vi.fn(async () => 'secret-1'),
 }));
 
@@ -70,28 +83,28 @@ function cronRequest() {
   });
 }
 
-/** An admin client with one active QuickBooks connection in an organization
- *  whose integrations module is on. */
-function adminWithOneQuickBooksConnection() {
-  const stub = makeSupabaseStub({
-    'org_connections.select': {
-      data: [
-        {
-          id: 'conn-1',
-          organization_id: 'org-1',
-          provider_id: 'quickbooks',
-          status: 'active',
-          secret_id: 'secret-1',
-          external_account_id: 'realm-1',
-          settings: {},
-        },
-      ],
-      error: null,
-    },
-  });
+/** An admin client with an active QuickBooks connection for each `settings`
+ *  given (one with none set by default), in organizations whose integrations
+ *  module is on. */
+function adminWithQuickBooksConnections(...settingsList: Array<Record<string, unknown>>) {
+  const conns = (settingsList.length > 0 ? settingsList : [{}]).map((settings, i) => ({
+    id: `conn-${i + 1}`,
+    organization_id: `org-${i + 1}`,
+    provider_id: 'quickbooks',
+    status: 'active',
+    secret_id: `secret-${i + 1}`,
+    external_account_id: `realm-${i + 1}`,
+    settings,
+  }));
+  const stub = makeSupabaseStub({ 'org_connections.select': { data: conns, error: null } });
   adminHolder.client = stub.client;
-  enabledIntegrationOrgIds.mockResolvedValue(new Set(['org-1']));
+  enabledIntegrationOrgIds.mockResolvedValue(new Set(conns.map((c) => c.organization_id)));
   return stub;
+}
+
+/** An admin client with one active QuickBooks connection that has no settings. */
+function adminWithOneQuickBooksConnection() {
+  return adminWithQuickBooksConnections();
 }
 
 beforeEach(() => {
@@ -169,6 +182,8 @@ describe('GET /api/cron/drain-outbox: work left for the next tick is said', () =
   });
 
   it('each stage the deadline cut short answers skipped: deadline, and one warn line names them', async () => {
+    // A connection with no settings still has this month's work: it records
+    // that its accounts are not set.
     const stub = adminWithOneQuickBooksConnection();
     // Its share and the time left after the other stages both end with due
     // deliveries unstarted.
@@ -241,6 +256,93 @@ describe('GET /api/cron/drain-outbox: work left for the next tick is said', () =
     const res = await GET(cronRequest());
 
     expect(await res.json()).toEqual({ ...EMPTY_DRAIN, webhooks: { attempted: 0, delivered: 0 } });
+    expect(maybePostMonthlyValuation).toHaveBeenCalledTimes(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * docket B81 review (2026-11-02): the valuation checked the time before it
+ * knew whether a connection had anything to do, so on any tick whose earlier
+ * stages ran past 25 s it answered valuation: { skipped: 'deadline' } and
+ * named the valuation in the warn line, though a connection that already
+ * posted this month (most ticks, since it posts once a month) had nothing
+ * waiting for the next tick.
+ */
+describe('GET /api/cron/drain-outbox: the valuation is named only when work was left', () => {
+  const ACCOUNTS = { inventoryAsset: 'acct-asset', valuationOffset: 'acct-offset' };
+  const POSTED_THIS_MONTH = { accountIds: ACCOUNTS, lastValuationMonth: '2026-11' };
+  let warn: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // The export drain used 26 s and finished: 24 s are left, under the reserve.
+    runDrain.mockImplementation(async () => {
+      vi.setSystemTime(START.getTime() + 26_000);
+      return EMPTY_DRAIN;
+    });
+  });
+  afterEach(() => {
+    warn.mockRestore();
+  });
+
+  it('a late tick names no valuation when the connection already posted this month', async () => {
+    adminWithQuickBooksConnections(POSTED_THIS_MONTH);
+
+    const res = await GET(cronRequest());
+
+    expect(await res.json()).toEqual({ ...EMPTY_DRAIN, webhooks: { attempted: 0, delivered: 0 } });
+    expect(maybePostMonthlyValuation).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a late tick names no valuation for a connection without accounts whose reason is already recorded', async () => {
+    adminWithQuickBooksConnections({
+      lastValuationSkipReason:
+        'Inventory valuation skipped: inventoryAsset/valuationOffset account not configured',
+    });
+
+    const res = await GET(cronRequest());
+
+    expect(await res.json()).toEqual({ ...EMPTY_DRAIN, webhooks: { attempted: 0, delivered: 0 } });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a late tick still names the valuation when a connection it left has this month to post (unchanged)', async () => {
+    // The first connection is done for the month; the second last posted in October.
+    adminWithQuickBooksConnections(POSTED_THIS_MONTH, {
+      accountIds: ACCOUNTS,
+      lastValuationMonth: '2026-10',
+    });
+
+    const res = await GET(cronRequest());
+
+    expect(await res.json()).toEqual({
+      ...EMPTY_DRAIN,
+      webhooks: { attempted: 0, delivered: 0 },
+      valuation: { skipped: 'deadline' },
+    });
+    expect(maybePostMonthlyValuation).not.toHaveBeenCalled();
+    expect(warn.mock.calls).toEqual([
+      ['[drain-outbox] stopped at the run deadline, the rest waits for the next tick: valuation'],
+    ]);
+  });
+
+  it('with the reserve left, a connection that already posted this month is still visited and its token refreshed near expiry (unchanged)', async () => {
+    runDrain.mockResolvedValue(EMPTY_DRAIN);
+    adminWithQuickBooksConnections(POSTED_THIS_MONTH);
+    // The access token expires in a minute. This pass is the only one that
+    // refreshes the token of a connection with nothing to export, so what is
+    // due decides only what a late tick reports, never which connection is
+    // visited.
+    getConnectionSecret.mockResolvedValueOnce({
+      accessToken: 'a',
+      refreshToken: 'r',
+      expiresAt: new Date(START.getTime() + 60_000).toISOString(),
+    });
+
+    await GET(cronRequest());
+
+    expect(refreshAuth).toHaveBeenCalledTimes(1);
     expect(maybePostMonthlyValuation).toHaveBeenCalledTimes(1);
     expect(warn).not.toHaveBeenCalled();
   });
