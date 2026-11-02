@@ -5,7 +5,7 @@ import { cache } from 'react';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import {
   getVerifiedSessionClaimsForRequest,
-  readVerifiedSessionClaims,
+  readVerifiedSessionClaimsOf,
 } from '@/lib/auth/verified-claims';
 import {
   heldMembership,
@@ -18,9 +18,9 @@ import {
   getMfaFactorsForRequest,
   getModulesForRequest,
   getOrgRowForRequest,
-  type MfaFactor,
   type OrgRow,
 } from '@/lib/dashboard/request-cache';
+import { factorsOf, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { createClient } from '@/lib/supabase/server';
 
 import type { Permission, PlanId, Role } from '@stockpilot/core';
@@ -115,14 +115,28 @@ export interface ServiceContext {
 async function resolveMfaState(
   role: Role,
   readOrgRow: () => OrgRow | null | Promise<OrgRow | null>,
-  factorsRead: Promise<MfaFactor[]>,
+  factorsRead: Promise<MfaFactorList>,
+  // The member the context resolved: the factor list and the claims count
+  // only as THEIR session's.
+  userId: string,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   try {
     // The org row (incl. mfa_policy) comes from the membership that resolved the
     // context when it can, else from the request-cached helper the dashboard
     // layout shares. The factor list has been in flight since before the
     // context resolved (see withContext).
-    const [org, factors] = await Promise.all([readOrgRow(), factorsRead]);
+    const [org, factorList] = await Promise.all([readOrgRow(), factorsRead]);
+    // Only THIS member's list says whether they have an authenticator (S43a,
+    // review round s43ar). The list is a read of the cookie session, and a load
+    // can refresh it into another account (see the claims note below): the
+    // list of an account with no factor read as "not enrolled", which under an
+    // 'optional' policy is "not required", and assertPermission let the
+    // enrolled member through at AAL1. Started before the context, the list
+    // loads alongside its identity read; this holds whatever the order. A list
+    // of another account is no answer, so the gate fails CLOSED, as for an
+    // unreadable one.
+    const factors = factorsOf(factorList, userId);
+    if (!factors) return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: false };
     // A row this member cannot read is held to the STRICTEST policy, never
     // 'optional' (see lib/auth/mfa-policy.ts). A read ERROR already threw above.
     const policy = enforcedMfaPolicy(org);
@@ -156,10 +170,17 @@ async function resolveMfaState(
     // is the read the dashboard layout started first thing, so a cold key
     // set is fetched once, alongside the layout's reads, not again here after
     // the factor list. In a Server Action it reads afresh.
+    //
+    // And only as the session of the member the context resolved (S43a review
+    // round 1). In a Server Action this read loads the cookie session AFTER the
+    // context settled, and a load refreshes the session with the cookie's own
+    // refresh token when the cookie's own `expires_at` says so; nothing signs
+    // either field. A member's password alone (an aal1 token), beside another
+    // account's aal2 refresh token, verified the other account's aal2 here.
     const claims = await getVerifiedSessionClaimsForRequest();
     return {
       mfaRequired: true,
-      mfaSatisfied: claims?.aal === 'aal2',
+      mfaSatisfied: claims?.userId === userId && claims.aal === 'aal2',
       mfaEnrolled: true,
     };
   } catch (err) {
@@ -220,6 +241,7 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
       ctx.role,
       () => orgRowFromMembership(held) ?? getOrgRowForRequest(ctx.organizationId),
       factorsRead,
+      ctx.userId,
     ),
     modulesFromMembership(held) ?? getModulesForRequest(ctx.organizationId),
   ]);
@@ -412,7 +434,11 @@ export function serviceErrorStatus(code: ServiceError['code']): number {
  * verified (forged, expired, no session) is refused like an unreadable one.
  */
 export async function assertCurrentAal2(ctx: ServiceContext): Promise<void> {
-  const claims = await readVerifiedSessionClaims(ctx.supabase);
+  // Only as the session of ctx's member (S43a review round 1): this read loads
+  // the cookie session again, and a load can refresh it into another account's
+  // session (see readVerifiedSessionClaimsOf). Another account's claims are
+  // refused like unverifiable ones.
+  const claims = await readVerifiedSessionClaimsOf(ctx.supabase, ctx.userId);
   if (!claims) {
     throw new ServiceError(
       'forbidden',
