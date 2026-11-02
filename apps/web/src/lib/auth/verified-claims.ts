@@ -193,6 +193,12 @@ export async function readVerifiedSessionClaimsOf(
  * Inside a Server Action or a Route Handler cache() does not memoize, so each
  * call reads again (a local check once the key set is cached).
  *
+ * The claims are those of whatever account the cookie session holds when this
+ * read loads it, which is not always the account the request validated (see
+ * readVerifiedSessionClaimsOf). A caller that decides anything on them first
+ * compares `userId` with that user: the dashboard layout's gate and
+ * resolveMfaState in withContext() do.
+ *
  * Never rejects: the layout awaits it only at its enrolled-member gate, and a
  * client that cannot be made is as unverified as a forged token (null).
  */

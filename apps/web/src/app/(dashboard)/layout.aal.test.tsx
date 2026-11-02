@@ -97,6 +97,7 @@ import {
   INSECURE_USER_WARNING,
   fakeAuthServer,
   makeSigningKey,
+  refreshGrant,
   sessionClaims,
   sessionCookies,
   signAccessToken,
@@ -175,6 +176,80 @@ describe('DashboardLayout — the enrolled member AAL2 gate reads a verified lev
   it('an expired AAL2 token that cannot be refreshed is sent to the MFA challenge', async () => {
     await signIn(sessionClaims({ aal: 'aal2', expiresIn: -120 }));
     await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+  });
+});
+
+/**
+ * The gate counts only the claims of the member whose context this layout
+ * resolved (ctx.userId; the context here is that member, user 1111...).
+ *
+ * The claims read loads the cookie session on a client of its own, and a load
+ * refreshes the session, with the cookie's own refresh token, whenever the
+ * cookie's own `expires_at` is within 90 s (auth-js __loadSession). Nothing
+ * signs either field. So a cookie can hold the member's aal1 token (their
+ * password alone gives it) beside the refresh token of ANOTHER enrolled
+ * account's aal2 session, and the read then verifies that other account's aal2
+ * token. Checking `aal` alone let it through for the member. Where the layout
+ * starts the read today, requireOrgContext()'s identity read refreshes the
+ * same way and refutes the proxy's header first (layout.refresh-swap.test.tsx),
+ * but the gate must hold whatever order its reads run in.
+ */
+describe("DashboardLayout — the enrolled member gate counts only the resolved member's own claims", () => {
+  const OTHER = '33333333-3333-4333-8333-333333333333';
+  const OTHER_SESSION = '44444444-4444-4444-8444-444444444444';
+  const OTHER_REFRESH = 'other-account-refresh';
+  const MEMBER_REFRESH = 'member-own-refresh';
+
+  const otherClaims = () =>
+    sessionClaims({
+      aal: 'aal2',
+      sub: OTHER,
+      sessionId: OTHER_SESSION,
+      email: 'other@example.test',
+      totpAgeSeconds: 30,
+    });
+
+  /** The member's own session at `aal`, its cookie carrying `refreshToken` and an expiry inside auth-js's 90 s margin. */
+  async function memberCookieDueForRefresh(aal: 'aal1' | 'aal2', refreshToken: string) {
+    const claims = sessionClaims({ aal, ...(aal === 'aal2' ? { totpAgeSeconds: 60 } : {}) });
+    jar = sessionCookies(await signAccessToken(projectKey, claims), claims, {
+      refreshToken,
+      expiresAt: Date.now() / 1000 + 30,
+    });
+  }
+
+  it("another enrolled account's aal2 session, refreshed in from the cookie, sends the member to the MFA challenge", async () => {
+    await memberCookieDueForRefresh('aal1', OTHER_REFRESH);
+    const other = otherClaims();
+    server.refreshGrants.set(
+      OTHER_REFRESH,
+      refreshGrant(await signAccessToken(projectKey, other), other, 'other-account-refresh-2'),
+    );
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+    // The read did swap accounts: one refresh grant, answered with the other session.
+    expect(server.calls['/token']).toBe(1);
+  });
+
+  it("a cookie that holds another account's own aal2 token sends the member whose context resolved to the MFA challenge", async () => {
+    await signIn(otherClaims());
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CHALLENGE);
+  });
+
+  it("control: the member's own aal2 session refreshing during the render renders the dashboard", async () => {
+    await memberCookieDueForRefresh('aal2', MEMBER_REFRESH);
+    const renewed = sessionClaims({ aal: 'aal2', totpAgeSeconds: 61 });
+    server.refreshGrants.set(
+      MEMBER_REFRESH,
+      refreshGrant(await signAccessToken(projectKey, renewed), renewed, 'member-own-refresh-2'),
+    );
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    expect(server.calls['/token']).toBe(1);
+  });
+
+  it('a member with no authenticator is never held by the gate, whoever the claims are about', async () => {
+    vi.mocked(getMfaFactorsForRequest).mockResolvedValueOnce([]);
+    await signIn(otherClaims());
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
   });
 });
 

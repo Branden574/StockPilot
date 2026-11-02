@@ -201,9 +201,19 @@ export default async function DashboardLayout({ children }: { children: ReactNod
   // read has been under way since the top of this layout. An unverifiable
   // token fails CLOSED into the challenge page, which itself skips straight
   // to /dashboard when the session is really AAL2.
+  //
+  // And only the level of THIS member's session counts: the claims' subject
+  // must be the user the context resolved (S43a). The read loads the cookie
+  // session on a client of its own, and a load refreshes it with the cookie's
+  // own refresh token when the cookie's own `expires_at` says so; nothing
+  // signs either field. A member's password alone (an aal1 token) beside the
+  // refresh token of another enrolled account's session would verify THAT
+  // account's aal2. Started where it is, the read loads alongside the
+  // context's identity read, which then refutes such a session; the gate does
+  // not rely on that order.
   if (hasVerifiedFactor) {
     const claims = await claimsRead;
-    if (claims?.aal !== 'aal2') {
+    if (claims?.userId !== ctx.userId || claims.aal !== 'aal2') {
       const h = await headers();
       const pathname = h.get('x-pathname') ?? '';
       const qs = pathname.startsWith('/dashboard')

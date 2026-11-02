@@ -991,6 +991,12 @@ WEB_TESTS=(
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
   'src/app/(dashboard)/layout.aal.test.tsx'
+  # The dashboard layout's gate for an enrolled member holds the claims to the
+  # member its context resolved (S43a): another account's aal2 session,
+  # refreshed in from the cookie's own refresh token, sends the member to the
+  # code page. The real server client, auth-js, requireOrgContext() and
+  # get_request_context(), with the shared claims read in both orders.
+  'src/app/(dashboard)/layout.refresh-swap.test.tsx'
 
   # Output safety and information leakage.
   src/server/services/service-error.test.ts
