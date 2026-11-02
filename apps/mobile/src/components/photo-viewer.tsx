@@ -1,9 +1,10 @@
 import { X } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
+import { Pressable, ScrollView, useWindowDimensions, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { CachedImage } from '@/components/ui/cached-image';
+import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
 import { Mono } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';
