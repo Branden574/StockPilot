@@ -186,7 +186,7 @@ describe('completePasswordResetAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     checkRateLimit.mockResolvedValue({ allowed: true });
-    getUser.mockResolvedValue({ data: { user: { id: 'u1', email: 'u@e.com' } } });
+    getUser.mockResolvedValue({ data: { user: { id: 'u1', email: 'u@example.test' } } });
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
     // Default: no MFA enrolled.

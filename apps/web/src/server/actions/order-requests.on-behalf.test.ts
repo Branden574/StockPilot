@@ -45,8 +45,8 @@ const ORDER = {
   needed_by: null,
   created_at: '2026-10-04T10:00:00+00:00',
   requester_user_id: null,
-  requester_name: 'Maria Lopez',
-  requester_email: 'maria@example.test',
+  requester_name: 'Pixie Quill',
+  requester_email: 'pixie@example.test',
   line_count: 1,
   unit_count: 2,
 };
@@ -70,7 +70,7 @@ const onBehalf = {
   warehouseId: WH,
   fulfillmentType: 'pickup' as const,
   deliveryCharterId: null,
-  onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.test' },
+  onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.test' },
   notes: null,
   neededByLocal: null,
   lines: [{ itemId: ITEM, quantity: 2 }],
@@ -101,8 +101,8 @@ describe('createOrderRequestAction: on behalf of someone else follows orders:app
     // and records it under the key so a late original gets the same answer.
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['place_order_request']);
     expect((stub.rpcCalls[0]?.args as { p_request: Record<string, unknown> }).p_request).toMatchObject({
-      on_behalf_name: 'Maria Lopez',
-      on_behalf_email: 'maria@example.test',
+      on_behalf_name: 'Pixie Quill',
+      on_behalf_email: 'pixie@example.test',
     });
   });
 
@@ -114,7 +114,7 @@ describe('createOrderRequestAction: on behalf of someone else follows orders:app
       data: {
         result: {
           replay: false,
-          order: { id: ORDER.id, orderNumber: 7, requestedFor: { self: false, name: 'Maria Lopez', email: 'maria@example.test' } },
+          order: { id: ORDER.id, orderNumber: 7, requestedFor: { self: false, name: 'Pixie Quill', email: 'pixie@example.test' } },
         },
       },
     });
