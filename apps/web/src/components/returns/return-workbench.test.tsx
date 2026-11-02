@@ -9,14 +9,16 @@ import type { RestockOptionsLine, RestockSource } from '@stockpilot/core';
 
 const runSteps = vi.hoisted(() => vi.fn());
 const planAction = vi.hoisted(() => vi.fn());
+const denyAction = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true, data: { changed: true } }) as unknown));
 vi.mock('@/server/actions/returns', () => ({
   runReturnStepsAction: runSteps,
-  denyReturnAction: vi.fn(async () => ({ ok: true, data: { changed: true } })),
+  denyReturnAction: denyAction,
   cancelReturnAction: vi.fn(async () => ({ ok: true, data: { changed: true } })),
   planReturnDispositionsAction: planAction,
   buyReturnLabelAction: vi.fn(),
 }));
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
+const refresh = vi.hoisted(() => vi.fn());
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push: vi.fn() }) }));
 vi.mock('next/link', async () => {
   const React = await import('react');
   return { default: ({ href, children }: { href: string; children: React.ReactNode }) => React.createElement('a', { href }, children) };
@@ -355,6 +357,42 @@ describe('ReturnWorkbench states', () => {
     expect(screen.getByText(/pat@example\.com/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
     expect(screen.getByText(/The requester is told the request was declined, never the reason./)).toBeInTheDocument();
+  });
+
+  // B21 (2026-11-02): Deny starts "Nothing moves." from core (the phone's
+  // words too); a refusal stays inside the Deny dialog (pattern 20), and a
+  // stale one closes it with the notice at the top of the return.
+  it('a Deny refused for a permission shows inside its dialog; a stale one closes it with the notice', async () => {
+    denyAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'forbidden', message: "You don't have permission to manage returns.", details: { reason: 'returns_manage' } },
+    });
+    const { unmount } = render(<ReturnWorkbench workbench={bench('requested')} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Nothing moves. Required. The reason is kept on the return. Nobody is notified.')).toBeInTheDocument();
+    fireEvent.change(within(dialog).getByLabelText('Reason for denying'), { target: { value: 'Outside the window' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Deny' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent("You don't have permission to manage returns.");
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    unmount();
+    toast.error.mockClear();
+    refresh.mockClear();
+
+    denyAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'This return changed. It now shows the latest.', details: { reason: 'invalid_status_transition' } },
+    });
+    render(<ReturnWorkbench workbench={bench('requested')} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
+    const again = await screen.findByRole('dialog');
+    fireEvent.change(within(again).getByLabelText('Reason for denying'), { target: { value: 'Outside the window' } });
+    fireEvent.click(within(again).getByRole('button', { name: 'Deny' }));
+    const notice = await screen.findByRole('alert', { name: 'This return changed' });
+    expect(notice).toHaveTextContent('This return changed. It now shows the latest.');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(refresh).toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
   });
 
   it('closed, denied and cancelled offer nothing; a reader without returns:manage sees why', () => {

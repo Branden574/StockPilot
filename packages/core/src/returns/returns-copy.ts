@@ -211,6 +211,9 @@ export const RETURNS_COPY = {
   cancelReturnPartHandedOver:
     'The return closes as cancelled. What was already handed over stays handed over; the rest of the replacement is never sent.',
   cancelReturnAllHandedOver: 'The return closes as cancelled. The replacement was already handed over and stays as it is.',
+  // B21 (1.8): no live replacement (a return only, or its replacement was
+  // cancelled): what does happen. The phone's sheet said nothing at all.
+  cancelReturnNothingMoves: 'Nothing moves. The return closes as cancelled.',
   cancelReplacementEffect:
     'The replacement order is cancelled and its reserved items are freed. The return itself does not change: afterwards, issue a new replacement or close it as a return only.',
   cancelReplacementEffectNothingHeld:
@@ -310,6 +313,10 @@ export const RETURNS_COPY = {
   // RX-3: a requester's exchange request whose every line the warehouse
   // declined at approval (the return goes on): the 3.10 requester sentence.
   requesterExchangeDeclined: 'Exchange declined. Your return was approved.',
+  // B21 (1.7): the in-app title of the two approvals with a replacement the
+  // warehouse added (requesterNoticeWords); their first sentence alone would
+  // hide the news.
+  requesterReturnApprovedReplacementAddedTitle: 'Return approved, replacement added.',
 
   // RX-3: the requester's tracking, the return's own status in their words
   // (core requesterReturnStatusSentence). The exchange's sentence follows it
@@ -835,6 +842,97 @@ export function earlierReplacementsLine(
   return `${RETURNS_COPY.earlierReplacements}: ${earlierReplacementEntries(history, opts)
     .map((e) => e.text)
     .join(', ')}`;
+}
+
+/**
+ * The Deny dialog's help (B21): "Nothing moves." and then who hears of it.
+ * Only a requester's RMA tells anyone (review fix); a staff RMA notifies
+ * nobody. The web's dialog and the phone's sheet, one sentence.
+ */
+export function denyDialogHelp(source: string | null | undefined): string {
+  return `Nothing moves. ${source === 'requester' ? RETURNS_COPY.denyReasonHelp : RETURNS_COPY.denyReasonHelpInternal}`;
+}
+
+/**
+ * The RMA's own events a requester hears in the app (RX-1, RX-2, RX-3). The
+ * web's RequesterReturnEvent (server/services/returns-notify.ts) is the same
+ * union, and a type test keeps the two equal.
+ */
+export const REQUESTER_NOTICE_EVENTS = [
+  'request_received',
+  'exchange_request_received',
+  'approved',
+  'received',
+  'denied',
+  'cancelled',
+  'replacement_changed',
+  'exchange_approved',
+  'exchange_approved_short',
+  'replacement_cancelled',
+  'replacement_closed_return_only',
+  'exchange_declined',
+  'return_approved_replacement_added',
+  'return_approved_replacement_added_short',
+] as const;
+export type RequesterNoticeEvent = (typeof REQUESTER_NOTICE_EVENTS)[number];
+
+/** "First sentence." and the rest, split at the first ". " (no word changed). */
+function splitAtFirstSentence(sentence: string): { title: string; detail: string | null } {
+  const at = sentence.indexOf('. ');
+  return at < 0 ? { title: sentence, detail: null } : { title: sentence.slice(0, at + 1), detail: sentence.slice(at + 2) };
+}
+
+/**
+ * A requester's in-app notification about their own return (B21, 1.7): a
+ * short title, and the rest of the sentence for the body. The whole sentence
+ * was the title, up to 202 characters, so a phone's lock screen cut the news
+ * off.
+ *   - One-sentence events keep the sentence as the title; detail null (the
+ *     body stays the RMA or SO number).
+ *   - The others split at the first sentence, no word changed.
+ *   - The two approvals with a replacement the warehouse added would read
+ *     "Your return was approved." alone, which hides the news: their title
+ *     says both, and the detail is the rest of the sentence.
+ * Every title is at most 40 characters. The emails keep the whole sentence.
+ */
+export function requesterNoticeWords(event: RequesterNoticeEvent): { title: string; detail: string | null } {
+  const C = RETURNS_COPY;
+  switch (event) {
+    case 'request_received':
+      return { title: C.requesterReceivedReturnRequest, detail: null };
+    case 'exchange_request_received':
+      return { title: C.requesterReceivedExchangeRequest, detail: null };
+    case 'approved':
+      return { title: C.requesterReturnApproved, detail: null };
+    case 'received':
+      return { title: C.requesterItemReceived, detail: null };
+    case 'denied':
+      return { title: C.requesterReturnDeclined, detail: null };
+    case 'cancelled':
+      return { title: C.requesterReturnCancelled, detail: null };
+    case 'replacement_changed':
+      return { title: C.requesterReplacementChanged, detail: null };
+    case 'exchange_approved':
+      return splitAtFirstSentence(C.requesterExchangeApprovedReserved);
+    case 'exchange_approved_short':
+      return splitAtFirstSentence(C.requesterExchangeApprovedShort);
+    case 'replacement_cancelled':
+      return splitAtFirstSentence(C.requesterReplacementCancelled);
+    case 'replacement_closed_return_only':
+      return splitAtFirstSentence(C.requesterReplacementClosedReturnOnly);
+    case 'exchange_declined':
+      return splitAtFirstSentence(C.requesterExchangeDeclined);
+    case 'return_approved_replacement_added':
+      return {
+        title: C.requesterReturnApprovedReplacementAddedTitle,
+        detail: splitAtFirstSentence(C.requesterReturnApprovedReplacementAdded).detail,
+      };
+    case 'return_approved_replacement_added_short':
+      return {
+        title: C.requesterReturnApprovedReplacementAddedTitle,
+        detail: splitAtFirstSentence(C.requesterReturnApprovedReplacementAddedShort).detail,
+      };
+  }
 }
 
 /**

@@ -331,6 +331,47 @@ describe('order slips — locationFor (pick slip + warehouse packing slip)', () 
   });
 });
 
+// B21 (2026-11-02): the two order slips name the ONE rack an item's stock is
+// on when nothing is saved on the item ("No rack set" before), or when its
+// saved rack holds none of that stock (the saved rack before), as a return's
+// "Get replacement ready" already did. Core's opt-in `singleHoldingCheck`,
+// passed by slip-location.ts alone. These fixtures stay OUT of FIXTURES on
+// purpose: the cycle-count sheet and core's default keep the old rule, so the
+// agreement arm below would fail by design (taking every surface over is a
+// separate placement item).
+describe('order slips only — the single-holding check (B21)', () => {
+  const SLIP_ONLY: Fixture[] = [
+    {
+      what: 'item on one rack, nothing saved',
+      itemType: 'product',
+      customFields: {},
+      binLocation: null,
+      holdings: [{ name: '41-A', quantity: 3, kind: 'rack' }],
+      walkTo: ['41-A'],
+    },
+    {
+      what: 'item moved off its saved rack',
+      itemType: 'product',
+      customFields: { rack_number: '38', rack_row: 'A' },
+      binLocation: '38-A',
+      holdings: [{ name: '41-A', quantity: 3, kind: 'rack' }],
+      walkTo: ['41-A'],
+    },
+  ];
+
+  it.each(SLIP_ONLY.map((f) => [f.what, f] as const))('%s -> the rack the stock is on', (_what, f) => {
+    const slip = sharedLocationFor(asLine(f), holdingsMap(f));
+    expect(slip).toEqual({ primary: '41-A ×3', secondary: null });
+    expect(namesIn(slip.primary)).toEqual(f.walkTo);
+  });
+
+  it("the moved item's slip never names the rack it left", () => {
+    const f = SLIP_ONLY[1]!;
+    const slip = sharedLocationFor(asLine(f), holdingsMap(f));
+    expect(`${slip.primary ?? ''} ${slip.secondary ?? ''}`).not.toContain('38-A');
+  });
+});
+
 describe('inventory table, BOOKS view — bookRackLabelFor', () => {
   const label = (f: Fixture) =>
     bookRackLabelFor({ custom_fields: f.customFields, placed_holdings: f.holdings });

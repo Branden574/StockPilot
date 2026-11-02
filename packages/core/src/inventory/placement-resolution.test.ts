@@ -5,7 +5,9 @@ import {
   placementPhysicalNames,
   resolvePlacement,
   type PlacementInput,
+  type PlacementResolution,
 } from './placement-resolution';
+import type { RackHoldingLike } from './rack-holdings';
 
 const label = (input: PlacementInput) => formatPlacementLabel(resolvePlacement(input));
 
@@ -291,5 +293,113 @@ describe('placementPhysicalNames — what the guard compares', () => {
         }),
       ),
     ).toEqual(['39-B']);
+  });
+});
+
+describe('resolvePlacement — the slips\' single-holding check (B21, opt-in)', () => {
+  // B21 (2026-11-02): a pick slip printed "No rack set" for an item with no
+  // saved rack whose stock sits on one rack, and the saved rack for an item
+  // whose one holding had moved off it, while the return's "Get replacement
+  // ready" named the holding. Only the two order slips opt in
+  // (apps/web/src/lib/pdf/slip-location.ts); every other caller keeps the
+  // precedence above.
+  const ON_41A: RackHoldingLike[] = [{ name: '41-A', quantity: 3, kind: 'rack' }];
+  const cases: Array<{ what: string; input: PlacementInput; withCheck: PlacementResolution; today: PlacementResolution }> = [
+    {
+      what: 'one rack holding, nothing saved',
+      input: { itemType: 'product', customFields: {}, holdings: ON_41A },
+      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A },
+      today: { source: 'none' },
+    },
+    {
+      what: 'saved 38-A, the one holding on 41-A',
+      input: { itemType: 'product', customFields: { rack_number: '38', rack_row: 'A' }, holdings: ON_41A },
+      withCheck: { source: 'holdings', reason: 'single', holdings: ON_41A },
+      today: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+    },
+    {
+      what: 'saved 38-A, the one holding on 38-A',
+      input: { itemType: 'product', customFields: { rack_number: '38', rack_row: 'A' }, holdings: [{ name: '38-A', quantity: 3, kind: 'rack' }] },
+      withCheck: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+      today: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+    },
+    {
+      what: 'a book on its saved 39-B with crate Red 5: the crate summary stays',
+      input: {
+        itemType: 'book',
+        customFields: { book_rack_number: '39', book_rack_row: 'B', book_crate_color: 'red', book_crate_number: '5' },
+        holdings: [{ name: '39-B', quantity: 4, kind: 'rack' }],
+      },
+      withCheck: { source: 'structured', rackLabel: '39-B', crateLabel: 'Red 5' },
+      today: { source: 'structured', rackLabel: '39-B', crateLabel: 'Red 5' },
+    },
+    {
+      what: 'a rack holding and a crate holding: more than one row is the split rule',
+      input: {
+        itemType: 'product',
+        customFields: {},
+        holdings: [
+          { name: '41-A', quantity: 3, kind: 'rack' },
+          { name: 'Blue Shelf', quantity: 2, kind: 'crate' },
+        ],
+      },
+      withCheck: {
+        source: 'holdings',
+        reason: 'split',
+        holdings: [
+          { name: '41-A', quantity: 3, kind: 'rack' },
+          { name: 'Blue Shelf', quantity: 2, kind: 'crate' },
+        ],
+      },
+      today: {
+        source: 'holdings',
+        reason: 'split',
+        holdings: [
+          { name: '41-A', quantity: 3, kind: 'rack' },
+          { name: 'Blue Shelf', quantity: 2, kind: 'crate' },
+        ],
+      },
+    },
+    {
+      what: 'one crate holding: the crate rule, as before',
+      input: { itemType: 'product', customFields: { rack_number: '38', rack_row: 'A' }, holdings: [{ name: 'Blue Shelf', quantity: 2, kind: 'crate' }] },
+      withCheck: { source: 'holdings', reason: 'crate', holdings: [{ name: 'Blue Shelf', quantity: 2, kind: 'crate' }] },
+      today: { source: 'holdings', reason: 'crate', holdings: [{ name: 'Blue Shelf', quantity: 2, kind: 'crate' }] },
+    },
+    {
+      what: 'one holding the caller carried no kind for: never assumed to be a rack',
+      input: { itemType: 'product', customFields: { rack_number: '38', rack_row: 'A' }, holdings: [{ name: '41-A', quantity: 3 }] },
+      withCheck: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+      today: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+    },
+    {
+      what: 'no holdings known: the saved rack stands',
+      input: { itemType: 'product', customFields: { rack_number: '38', rack_row: 'A' }, holdings: [] },
+      withCheck: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+      today: { source: 'structured', rackLabel: '38-A', crateLabel: null },
+    },
+  ];
+
+  it.each(cases.map((c) => [c.what, c] as const))('with the check: %s', (_what, c) => {
+    expect(resolvePlacement({ ...c.input, singleHoldingCheck: true })).toEqual(c.withCheck);
+  });
+
+  it('names the rack and how many are there', () => {
+    expect(label({ ...cases[0]!.input, singleHoldingCheck: true })).toBe('41-A ×3');
+    expect(label({ ...cases[1]!.input, singleHoldingCheck: true })).toBe('41-A ×3');
+  });
+
+  it.each(cases.map((c) => [c.what, c] as const))('without it, today\'s answer: %s', (_what, c) => {
+    expect(resolvePlacement(c.input)).toEqual(c.today);
+    expect(resolvePlacement({ ...c.input, singleHoldingCheck: false })).toEqual(c.today);
+  });
+
+  it("never says 'single' without the opt-in, so the phone's split-or-crate rows never see it", () => {
+    // apps/mobile/src/lib/placement-rows.ts and the scan sheet read `reason`
+    // as split-or-crate; neither passes the opt-in.
+    for (const c of cases) {
+      const res = resolvePlacement(c.input);
+      expect(res.source === 'holdings' ? res.reason : null, c.what).not.toBe('single');
+    }
   });
 });

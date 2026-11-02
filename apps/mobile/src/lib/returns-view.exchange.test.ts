@@ -1,4 +1,4 @@
-import { exchangeRail, type ExchangeReviewState } from '@stockpilot/core';
+import { exchangeRail, refusalMeansStaleScreen, RETURN_STALE_SCREEN_REASONS, type ExchangeReviewState } from '@stockpilot/core';
 import { describe, expect, it } from 'vitest';
 
 import { FX_ITEM_A, fxFacts, fxItem, fxLine, fxResult } from './__fixtures__/readiness-facts';
@@ -8,6 +8,7 @@ import {
   actionHelp,
   actionLabel,
   cancelReplacementMessage,
+  earlierReplacementLinks,
   shortBackorderLabel,
   shownReplacementStatus,
   itemPhotoUrl,
@@ -405,7 +406,8 @@ describe('the REPLACEMENT side and the replacement order', () => {
   // Review fixes P19 and P22: after a pick the block read "· reserved 0"
   // (nothing is reserved once picked), and earlier replacements were listed
   // on the web only. Each line is core's replacementLineSummary, and the
-  // earlier ones are core's earlierReplacementsLine (order status words).
+  // earlier ones are core's earlierReplacementEntries (order status words;
+  // B21: as links, earlierReplacementLinks).
   it('a picked replacement reads picked, a part hand-over both numbers; earlier replacements are listed (review fixes P19, P22)', () => {
     const block = (status: string, line: Partial<MobileReplacement['lines'][number]>, history: MobileReturnExchange['history'] = []) =>
       replacementOrderLines(
@@ -434,15 +436,36 @@ describe('the REPLACEMENT side and the replacement order', () => {
     expect(block('backordered', { requested: 2, fulfilled: 1 })[1]).toBe('Walk New Hire Shirt, L ×2 · handed over 1 · reserved 0');
     expect(block('completed', { fulfilled: 1 })[1]).toBe('Walk New Hire Shirt, L ×1 · handed over 1');
     expect(block('approved', { held: 1 })[1]).toBe('Walk New Hire Shirt, L ×1 · reserved 1');
-    const earlier = block('approved', { held: 1 }, [
+    // Re-pinned by B21 (1.9, 2026-11-02; claim kept, the earlier ones are
+    // listed in status words): they are links now (earlierReplacementLinks,
+    // below), so the text block no longer ends with them as plain words.
+    const history = [
       { orderId: '0b000000-0000-0000-0000-000000000098', orderNumber: 98, status: 'cancelled' },
       { orderId: '0b000000-0000-0000-0000-000000000097', orderNumber: 97, status: 'staged_for_pickup' },
-    ]);
-    expect(earlier.at(-1)).toBe('Earlier replacements: SO-000098 (cancelled), SO-000097 (staged (pickup))');
+    ];
+    const earlier = block('approved', { held: 1 }, history);
+    expect(earlier.some((t) => t.startsWith('Earlier replacements'))).toBe(false);
+    expect(earlierReplacementLinks(history).map((l) => l.label)).toEqual(['SO-000098 (cancelled)', 'SO-000097 (staged (pickup))']);
     // Never a raw status code.
-    expect(block('approved', {}, [{ orderId: '0b000000-0000-0000-0000-000000000096', orderNumber: 96, status: 'some_new_status' }]).at(-1)).toBe(
-      'Earlier replacements: SO-000096',
-    );
+    expect(earlierReplacementLinks([{ orderId: '0b000000-0000-0000-0000-000000000096', orderNumber: 96, status: 'some_new_status' }])).toEqual([
+      { orderId: '0b000000-0000-0000-0000-000000000096', label: 'SO-000096', href: '/order/0b000000-0000-0000-0000-000000000096' },
+    ]);
+  });
+
+  // B21 (1.9, 2026-11-02): the web links each earlier replacement to its
+  // order; the phone printed plain text. Each is a link to its order screen.
+  it('each earlier replacement is a link to its order (B21)', () => {
+    expect(
+      earlierReplacementLinks([
+        { orderId: '0b000000-0000-0000-0000-000000000098', orderNumber: 98, status: 'cancelled' },
+        { orderId: '0b000000-0000-0000-0000-000000000099', orderNumber: null, status: 'cancelled' },
+      ]),
+    ).toEqual([
+      { orderId: '0b000000-0000-0000-0000-000000000098', label: 'SO-000098 (cancelled)', href: '/order/0b000000-0000-0000-0000-000000000098' },
+      { orderId: '0b000000-0000-0000-0000-000000000099', label: '0B000000 (cancelled)', href: '/order/0b000000-0000-0000-0000-000000000099' },
+    ]);
+    expect(earlierReplacementLinks([])).toEqual([]);
+    expect(earlierReplacementLinks(undefined)).toEqual([]);
   });
 
   // Review fix P23: "Return approved." after approving an exchange said
@@ -506,6 +529,15 @@ describe('the REPLACEMENT side and the replacement order', () => {
     for (const reason of ['reason_required', 'replacement_unavailable', 'replacement_site_not_available', 'exchange_already_sent', 'busy', null]) {
       expect(refusalRefreshesWorkbench(reason), String(reason)).toBe(false);
     }
+  });
+
+  // B21 (13.17, 2026-11-02): one list for the web and the phone, in core.
+  it("answers as core's refusalMeansStaleScreen (B21)", () => {
+    for (const reason of [...RETURN_STALE_SCREEN_REASONS, 'replacement_already_drawn', 'replacement_handed_over', 'orders_approve']) {
+      expect(refusalRefreshesWorkbench(reason), reason).toBe(refusalMeansStaleScreen(reason));
+    }
+    expect(refusalRefreshesWorkbench('replacement_already_drawn')).toBe(false);
+    expect(RETURN_STALE_SCREEN_REASONS).toHaveLength(4);
   });
 
   // Returns RX-2 review (counter taps): Hand over opens the replacement's
@@ -645,9 +677,13 @@ describe('what each sheet says happens to the replacement (review fix P2)', () =
     ]);
   });
 
-  it('Cancel return of a return only, or after the replacement was cancelled, says nothing about one', () => {
-    expect(words('cancel', undefined)).toEqual([]);
-    expect(words('cancel', live({ live: false, status: 'cancelled', class: 'none' }))).toEqual([]);
+  // Re-pinned by B21 (1.8, 2026-11-02; claim kept, nothing is said about a
+  // replacement): the sheet said nothing at all, while the web's dialog said
+  // what does happen. Core's sentence now, on both.
+  it('Cancel return of a return only, or after the replacement was cancelled, says nothing moves', () => {
+    const nothingMoves = [{ key: 'effect', text: 'Nothing moves. The return closes as cancelled.' }];
+    expect(words('cancel', undefined)).toEqual(nothingMoves);
+    expect(words('cancel', live({ live: false, status: 'cancelled', class: 'none' }))).toEqual(nothingMoves);
   });
 
   it('Cancel replacement keeps the picked and in-transit warnings first, then says what it does', () => {

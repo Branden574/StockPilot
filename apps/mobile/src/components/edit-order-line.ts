@@ -535,7 +535,9 @@ export function lineEditErrorIsReservationSync(e: unknown): boolean {
 }
 
 export const LINE_EDIT_RESERVATION_SYNC_TITLE = 'Change saved — check the reserved stock';
+// B21: completing the pick releases every hold (0365), never delivery; the
+// order page's Active reservations says the same.
 export const LINE_EDIT_RESERVATION_SYNC_COPY =
   'The line was changed, but the stock still held for this item could not be updated to match. ' +
-  'The order has been refreshed. Nothing is lost — the hold is released when the order is ' +
-  'delivered or cancelled — but availability for this item stays low until then.';
+  'The order has been refreshed. Nothing is lost — the hold is released when picking is ' +
+  'complete or the order is cancelled — but availability for this item stays low until then.';

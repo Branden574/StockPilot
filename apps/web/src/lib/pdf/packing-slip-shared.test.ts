@@ -139,8 +139,14 @@ describe('locationFor', () => {
     });
   });
 
-  it('a single RACK holding still keeps the structured label — the narrowing is crates only', () => {
-    const holdings = new Map([['i1', [{ name: '9-Z', quantity: 3, kind: 'rack' }]]]);
-    expect(locationFor(productLine, holdings)).toEqual({ primary: 'Rack 2-C', secondary: null });
+  // Re-pinned by B21 (2026-11-02; the claim narrowed): the slips check the
+  // one rack holding against the saved rack (core rule 0c, the slips' opt-in).
+  // On it, the structured label stands; off it, the slip names where the
+  // stock is, never the rack it left.
+  it('a single RACK holding keeps the structured label only when it is on the saved rack', () => {
+    const on = new Map([['i1', [{ name: '2-C', quantity: 3, kind: 'rack' }]]]);
+    expect(locationFor(productLine, on)).toEqual({ primary: 'Rack 2-C', secondary: null });
+    const moved = new Map([['i1', [{ name: '9-Z', quantity: 3, kind: 'rack' }]]]);
+    expect(locationFor(productLine, moved)).toEqual({ primary: '9-Z ×3', secondary: null });
   });
 });

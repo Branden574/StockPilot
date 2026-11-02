@@ -297,6 +297,8 @@ export function ManagerActionsPanel({
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [releaseOpen, setReleaseOpen] = React.useState(false);
+  // B21 (13.17): a refused release, kept inside its dialog (pattern 20).
+  const [releaseError, setReleaseError] = React.useState<string | null>(null);
   const gated = replacement?.waitingForReturn === true;
   // Desk check F3: a replacement whose RMA was cancelled or denied is never
   // picked again (the gate refuses it), so the pick slip and Resume go too.
@@ -305,12 +307,17 @@ export function ManagerActionsPanel({
   async function releaseEarly(reason: string) {
     if (!replacement) return;
     setBusy('release-early');
+    setReleaseError(null);
     // This order is the replacement the page shows (desk check F7: a stale
     // page never releases a newer replacement).
     const res = await releaseReturnReplacementAction({ id: replacement.returnId, orderId, reason });
     setBusy(null);
     if (!res.ok) {
+      // B21 (13.17): the refusal shows inside the dialog, which stays open,
+      // and the page reads the order again behind it (the phone order
+      // screen's release sheet does the same).
       toast.error(res.error.message);
+      setReleaseError(res.error.message);
       router.refresh();
       return;
     }
@@ -1345,8 +1352,12 @@ export function ManagerActionsPanel({
       {replacement ? (
         <ReleaseEarlyDialog
           open={releaseOpen}
-          onOpenChange={setReleaseOpen}
+          onOpenChange={(v) => {
+            setReleaseOpen(v);
+            setReleaseError(null);
+          }}
           busy={busy === 'release-early'}
+          error={releaseError}
           onConfirm={(reason) => void releaseEarly(reason)}
         />
       ) : null}

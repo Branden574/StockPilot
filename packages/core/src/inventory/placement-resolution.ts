@@ -40,7 +40,8 @@
  * ───────────────────────────────────────────────────────────────────────────
  *
  *   0. HOLDINGS (`item_stock_levels`) when they are known to CONTRADICT a
- *      single label. Two ways that happens, and only these two:
+ *      single label. Two ways that happens for every caller, and a third
+ *      (c) only for a caller that asks for it:
  *
  *        a. SPLIT — stock sits on more than one holding. One label names one
  *           rack while the stock sits on several; a picker walking to just
@@ -67,6 +68,20 @@
  *      A single RACK holding falls through: the label and the holding name the
  *      same shelf, and the label is the richer render (it carries the book's
  *      crate summary alongside).
+ *
+ *        c. SINGLE (opt-in, `singleHoldingCheck`; B21) — exactly one holding,
+ *           a RACK, and the item has no saved rack, or its saved rack holds
+ *           none of the stock (`holdingsContradictRack`). The fall-through
+ *           above ASSUMES the label and the holding name the same shelf; this
+ *           checks. A saved rack the holding sits on still answers STRUCTURED,
+ *           so a book keeps its crate summary. The ONLY caller that opts in is
+ *           apps/web/src/lib/pdf/slip-location.ts (the pick slip and the
+ *           warehouse packing slip, which printed "No rack set", or a rack the
+ *           stock had left, while the return named the holding). Every other
+ *           surface keeps the precedence without it; taking the rule to all of
+ *           them is a separate placement item, and the guard test keeps the
+ *           slip cases out of its cross-surface agreement arm on purpose. A
+ *           holding of unknown `kind` is never assumed to be a rack.
  *
  *   1. STRUCTURED rack/crate from `custom_fields` — books read the
  *      `book_rack_*` / `book_crate_*` keys, everything else the neutral
@@ -104,8 +119,14 @@ export type PlacementResolution =
    * The holdings contradict any single label. `reason` records WHICH
    * contradiction so a caller can label the row honestly (the native scan
    * sheet says "Split stock" for one and "In crate" for the other).
+   * 'single' (rule 0c) only for a caller that passed `singleHoldingCheck`,
+   * which the native rows never do.
    */
-  | { source: 'holdings'; reason: 'split' | 'crate'; holdings: readonly RackHoldingLike[] }
+  | {
+      source: 'holdings';
+      reason: 'split' | 'crate' | 'single';
+      holdings: readonly RackHoldingLike[];
+    }
   /**
    * The item's own structured rack/crate keys. At least one of the two is
    * non-null — a resolution with both null is never produced.
@@ -129,6 +150,11 @@ export interface PlacementInput {
    * cannot fire and a stale rack keeps printing.
    */
   holdings?: readonly RackHoldingLike[];
+  /**
+   * Rule 0c (B21): name the one rack holding when the saved rack is missing
+   * or holds none of the stock. Only the order slips pass it (slip-location.ts).
+   */
+  singleHoldingCheck?: boolean;
 }
 
 /**
@@ -174,6 +200,18 @@ export function resolvePlacement(input: PlacementInput): PlacementResolution {
   }
 
   const { rackLabel, crateLabel } = readStructured(input.itemType, input.customFields);
+
+  // Rule 0c (opt-in): one RACK holding, and no saved rack or a saved rack it
+  // refutes. `kind === 'rack'` is a positive assertion, like rule 0b's.
+  if (
+    input.singleHoldingCheck === true &&
+    holdings.length === 1 &&
+    holdings[0]!.kind === 'rack' &&
+    (!rackLabel || holdingsContradictRack(rackLabel, holdings))
+  ) {
+    return { source: 'holdings', reason: 'single', holdings };
+  }
+
   if (rackLabel || crateLabel) return { source: 'structured', rackLabel, crateLabel };
 
   const bin = input.binLocation?.trim();

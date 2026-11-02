@@ -11,6 +11,7 @@ import {
   CancelReplacementDialog,
   CloseAsReturnOnlyDialog,
   CloseReplacementRestDialog,
+  DialogError,
   SiteChoiceDialog,
   ChangeReplacementDialog,
   ReleaseEarlyDialog,
@@ -76,6 +77,7 @@ import {
   choiceNeededSentence,
   choiceToDecision,
   defaultExchangeReviewState,
+  denyDialogHelp,
   exchangeActionConsequences,
   formatOrderNumber,
   isChoiceOffered,
@@ -84,6 +86,7 @@ import {
   preselectedChoice,
   processLabelFor,
   qtyReturningLabel,
+  refusalMeansStaleScreen,
   releaseOutcomeLine,
   replacementCancelledLines,
   returnActionLabel,
@@ -125,13 +128,6 @@ type ChangeBody = {
   reason: string;
   whenShort: 'refuse' | 'backorder';
 };
-
-/** Refusals that mean the screen was stale: the dialog closes and the page redraws. */
-const STALE_SCREEN_REASONS: ReadonlySet<string> = new Set([
-  'replacement_in_progress',
-  'return_changed',
-  'invalid_status_transition',
-]);
 
 /** A workbench payload from before RX-2 (or a test) has no exchange half. */
 const NO_EXCHANGE: ReturnWorkbenchExchange = {
@@ -244,6 +240,9 @@ export function ReturnWorkbench({
   // Fix round 1 (verification V1): after Cancel replacement, what to do with
   // what was picked or sent, from the database's answer, until dismissed.
   const [followUp, setFollowUp] = React.useState<string[] | null>(null);
+  // B21 (13.17): the words of a refusal that meant the screen was stale, at
+  // the top of the return until Done (the phone's notice).
+  const [staleNotice, setStaleNotice] = React.useState<string | null>(null);
   // Review fix P1: every returns manager reviews a requested exchange; without
   // order approval only the decline is open, and the review starts there
   // (core exchangeReviewOptions / defaultExchangeReviewState). Adding a
@@ -345,6 +344,7 @@ export function ReturnWorkbench({
     setBusy(key);
     setDialogError(null);
     setFollowUp(null);
+    setStaleNotice(null);
     try {
       return await call();
     } catch (e) {
@@ -491,22 +491,42 @@ export function ReturnWorkbench({
 
   // ── RX-2: the replacement actions ──────────────────────────────────────
 
+  /**
+   * B21 (13.17): a refusal that means the screen was stale (core
+   * refusalMeansStaleScreen, the phone's list) closes the open dialog (the
+   * caller's part); the page redraws and its words stay at the top of the
+   * return until Done, the phone's notice. Never also a toast: it would be
+   * announced twice.
+   */
+  function showStale(message: string) {
+    setDialogError(null);
+    setStaleNotice(message);
+    router.refresh();
+  }
+
+  /** 'done' and 'stale' close the dialog; 'refused' keeps it open with the words (C-3). */
   function afterReplacement(
     res:
-      { ok: true; data: { workbench: unknown } } | { ok: false; error: { message: string } } | null,
+      | { ok: true; data: { workbench: unknown } }
+      | { ok: false; error: { message: string; details?: Record<string, unknown> } }
+      | null,
     done: string,
-  ) {
-    if (!res) return false;
+  ): 'done' | 'stale' | 'refused' {
+    if (!res) return 'refused';
     if (!res.ok) {
+      if (refusalMeansStaleScreen(String(res.error.details?.reason ?? ''))) {
+        showStale(res.error.message);
+        return 'stale';
+      }
       toast.error(res.error.message);
       setDialogError(res.error.message);
       router.refresh();
-      return false;
+      return 'refused';
     }
     adopt(res.data.workbench as Workbench);
     toast.success(done);
     router.refresh();
-    return true;
+    return 'done';
   }
 
   async function releaseEarly(reason: string) {
@@ -515,11 +535,11 @@ export function ReturnWorkbench({
     const shownOrderId = ex.replacement?.live ? ex.replacement.orderId : null;
     if (!shownOrderId) {
       // The screen shows no live replacement (its read failed, or it changed):
-      // nothing is sent; say so outside the dialog and redraw, never a
-      // silent click (the phone's sheet says the same words).
+      // nothing is sent, never a silent click. B21 (13.17): a stale screen,
+      // as on the phone: the dialog closes, the page redraws and the notice
+      // says why.
       setReleaseOpen(false);
-      toast.error(RETURN_ERROR_WORDS.returnChanged);
-      router.refresh();
+      showStale(RETURN_ERROR_WORDS.returnChanged);
       return;
     }
     const res = await guarded('release', () =>
@@ -531,7 +551,7 @@ export function ReturnWorkbench({
       setReleaseOpen(false);
       return;
     }
-    if (afterReplacement(res, RETURNS_COPY.releasedForPicking)) setReleaseOpen(false);
+    if (afterReplacement(res, RETURNS_COPY.releasedForPicking) !== 'refused') setReleaseOpen(false);
   }
 
   async function cancelReplacement(reason: string) {
@@ -547,12 +567,13 @@ export function ReturnWorkbench({
     );
     if (res && res.ok) {
       const [done, ...after] = replacementCancelledLines(res.data.answer);
-      if (afterReplacement(res, done ?? RETURNS_COPY.replacementCancelledDone))
+      if (afterReplacement(res, done ?? RETURNS_COPY.replacementCancelledDone) === 'done')
         setCancelReplacementOpen(false);
       setFollowUp(after.length > 0 ? after : null);
       return;
     }
-    afterReplacement(res, RETURNS_COPY.replacementCancelledDone);
+    if (afterReplacement(res, RETURNS_COPY.replacementCancelledDone) === 'stale')
+      setCancelReplacementOpen(false);
   }
 
   // Desk check F9: after a replacement cancel the exchange ends for good.
@@ -560,7 +581,8 @@ export function ReturnWorkbench({
     const res = await guarded('close_as_return_only', () =>
       declineReturnReplacementAction({ id: r.id, body: { expectedRevision: wb.revision, reason } }),
     );
-    if (afterReplacement(res, RETURNS_COPY.closedAsReturnOnly)) setReturnOnlyOpen(false);
+    if (afterReplacement(res, RETURNS_COPY.closedAsReturnOnly) !== 'refused')
+      setReturnOnlyOpen(false);
   }
 
   // RX-4 (0397; RX-2 verification V3): "Close the rest" of a replacement
@@ -581,7 +603,8 @@ export function ReturnWorkbench({
       setCloseRestOpen(false);
       return;
     }
-    if (afterReplacement(res, RETURNS_COPY.closedReplacementRest)) setCloseRestOpen(false);
+    if (afterReplacement(res, RETURNS_COPY.closedReplacementRest) !== 'refused')
+      setCloseRestOpen(false);
   }
 
   async function changeReplacement(body: ChangeBody, site: ReplacementFulfilment | null = null) {
@@ -614,7 +637,7 @@ export function ReturnWorkbench({
       afterReplacement(
         res,
         changeMode === 'issue' ? 'New replacement issued.' : 'Replacement changed.',
-      )
+      ) !== 'refused'
     )
       setChangeMode(null);
   }
@@ -682,7 +705,16 @@ export function ReturnWorkbench({
     const res = await guarded('deny', () => denyReturnAction({ id: r.id, reason: denyReason }));
     if (!res) return;
     if (!res.ok) {
+      // B21 (13.17): a stale screen closes the dialog with the notice; any
+      // other refusal stays inside it too (pattern 20), never only a toast.
+      if (refusalMeansStaleScreen(String(res.error.details?.reason ?? ''))) {
+        setDenyOpen(false);
+        setDenyReason('');
+        showStale(res.error.message);
+        return;
+      }
       toast.error(res.error.message);
+      setDialogError(res.error.message);
       return;
     }
     toast.success(res.data.changed ? 'Return denied.' : 'Already denied.');
@@ -701,14 +733,18 @@ export function ReturnWorkbench({
     );
     if (!res) return;
     if (!res.ok) {
-      toast.error(res.error.message);
       // A stale screen (0396: the replacement was picked or left meanwhile,
-      // or the return changed): its words, the confirm closes and the page
-      // redraws from server truth.
-      if (STALE_SCREEN_REASONS.has(String(res.error.details?.reason ?? ''))) {
+      // or the return changed): the confirm closes, the page redraws from
+      // server truth and (B21) the notice at the top says why. Any other
+      // refusal stays inside the dialog too (pattern 20).
+      if (refusalMeansStaleScreen(String(res.error.details?.reason ?? ''))) {
         setCancelOpen(false);
         setCancelReason('');
+        showStale(res.error.message);
+        return;
       }
+      toast.error(res.error.message);
+      setDialogError(res.error.message);
       router.refresh();
       return;
     }
@@ -887,6 +923,7 @@ export function ReturnWorkbench({
     (Boolean(actions.primary) || actions.secondary.length > 0);
   const showShort = shortLines.length > 0 && r.status === 'requested';
   const hasNotes =
+    staleNotice !== null ||
     offersReady ||
     Boolean(stillWaiting) ||
     followUp !== null ||
@@ -1004,6 +1041,21 @@ export function ReturnWorkbench({
           <div
             className={cn('space-y-2.5 px-[18px] py-3', hasControls && 'border-border border-t')}
           >
+            {/* B21 (13.17): a refusal that meant this screen was stale closed
+                its dialog and the page redrew; the words stay here until
+                Done, like the phone's notice. */}
+            {staleNotice ? (
+              <div
+                className="border-warning/40 bg-warning-wash space-y-2 rounded-md border p-3"
+                role="alert"
+                aria-label="This return changed"
+              >
+                <p className="text-[13px]">{staleNotice}</p>
+                <Button variant="outline" size="sm" onClick={() => setStaleNotice(null)}>
+                  Done
+                </Button>
+              </div>
+            ) : null}
             {offersReady ? (
               <p id={readyHelpId} className="text-muted-foreground text-[12.5px]">
                 {RETURNS_COPY.getReplacementReadyHelp}
@@ -1346,19 +1398,16 @@ export function ReturnWorkbench({
         onOpenChange={(v) => {
           if (busy === 'deny') return;
           setDenyOpen(v);
+          setDialogError(null);
           if (!v) setDenyReason('');
         }}
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Deny this return?</DialogTitle>
-            <DialogDescription>
-              Nothing moves.{' '}
-              {/* Only a requester's RMA tells anyone (review fix): a staff RMA notifies nobody. */}
-              {r.source === 'requester'
-                ? RETURNS_COPY.denyReasonHelp
-                : RETURNS_COPY.denyReasonHelpInternal}
-            </DialogDescription>
+            {/* Only a requester's RMA tells anyone (review fix): a staff RMA
+                notifies nobody. B21: core's words, the phone's too. */}
+            <DialogDescription>{denyDialogHelp(r.source)}</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="return-deny-reason">{RETURNS_COPY.denyReasonLabel}</Label>
@@ -1371,6 +1420,7 @@ export function ReturnWorkbench({
               autoFocus
             />
           </div>
+          <DialogError error={dialogError} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setDenyOpen(false)} disabled={busy === 'deny'}>
               Keep it
@@ -1393,17 +1443,16 @@ export function ReturnWorkbench({
         onOpenChange={(v) => {
           if (busy === 'cancel') return;
           setCancelOpen(v);
+          setDialogError(null);
           if (!v) setCancelReason('');
         }}
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>Cancel this return?</DialogTitle>
-            <DialogDescription>
-              {cancelReturnWords.length > 0
-                ? cancelReturnWords.join(' ')
-                : 'Nothing moves. The return closes as cancelled.'}
-            </DialogDescription>
+            {/* B21 (1.8): core always says something, "Nothing moves." with no
+                replacement to deal with (the phone's sheet the same). */}
+            <DialogDescription>{cancelReturnWords.join(' ')}</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
             <Label htmlFor="return-cancel-reason">
@@ -1419,6 +1468,7 @@ export function ReturnWorkbench({
               maxLength={RETURN_REASON_MAX}
             />
           </div>
+          <DialogError error={dialogError} />
           <DialogFooter>
             <Button
               variant="outline"

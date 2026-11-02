@@ -21,6 +21,7 @@ import {
   type RestockOptions,
   type ReturnApproveDecision,
   type ReturnLineDecision,
+  type ReturnRefusalAction,
   type ReturnStatus as CoreReturnStatus,
   type ReturnStepsRequest,
 } from '@stockpilot/core';
@@ -421,11 +422,17 @@ async function loadOriginalExchangeLines(
 
 // ── Database refusals ─────────────────────────────────────────────────────
 
-/** A PostgREST error -> the ServiceError the plan's contract names. */
+/**
+ * A PostgREST error -> the ServiceError the plan's contract names. `action`
+ * (B21, 13.16) names the replacement action a function call can be refused
+ * orders_approve for, so the words say what needs order approval; every call
+ * of such a function passes it (a guard in returns-exchange.test.ts).
+ */
 export function returnRpcError(
   error: { code?: string | null; hint?: string | null; message?: string | null; details?: string | null },
+  opts: { action?: ReturnRefusalAction | null } = {},
 ): ServiceError {
-  const mapped = mapReturnError(error);
+  const mapped = mapReturnError(error, opts);
   if (mapped.code === 'internal_error') {
     return new ServiceError('internal_error', error.message ?? 'return rpc failed', { reason: 'failed' });
   }
@@ -891,7 +898,7 @@ export class RMAService {
       p_decision: parsed.value,
       p_receive_now: input.receiveNow === true,
     });
-    if (error) throw returnRpcError(error);
+    if (error) throw returnRpcError(error, { action: 'approve' });
     const answer = asObject(data);
     const status = (str(answer.status) ?? 'approved') as ReturnStatus;
     const result: ReturnApproveAnswer = {
@@ -1099,7 +1106,7 @@ export class RMAService {
       p_expected_revision: parsed.value.expectedRevision ?? null,
       p_reason: parsed.value.reason ?? null,
     });
-    if (error) throw returnRpcError(error);
+    if (error) throw returnRpcError(error, { action: 'cancel_return' });
     const answer = await this.transitionAnswer(data, 'cancelled', null, null);
     if (answer.changed) {
       if (liveBefore) {
@@ -1339,7 +1346,7 @@ export class RMAService {
       p_when_short: body.whenShort,
       p_replacement: body.replacement ?? null,
     });
-    if (error) throw returnRpcError(error);
+    if (error) throw returnRpcError(error, { action: 'change' });
     const answer = asObject(data);
     const mode = answer.mode === 'substitute' || answer.mode === 'reissue' ? answer.mode : null;
     const result: ReturnReplacementChangeAnswer = {
@@ -1412,7 +1419,7 @@ export class RMAService {
       // database refuses (return_changed) a replacement picked or sent since.
       p_shown_status: parsed.value.shownStatus ?? null,
     });
-    if (error) throw returnRpcError(error);
+    if (error) throw returnRpcError(error, { action: 'cancel_replacement' });
     const answer = asObject(data);
     const result: ReturnReplacementCancelAnswer = {
       changed: answer.changed === true,
@@ -1543,7 +1550,7 @@ export class RMAService {
       p_reason: parsed.value.reason,
       p_shown_status: parsed.value.shownStatus ?? null,
     });
-    if (error) throw returnRpcError(error);
+    if (error) throw returnRpcError(error, { action: 'close_rest' });
     const answer = asObject(data);
     const result: ReturnCloseReplacementRestAnswer = {
       changed: answer.changed === true,
@@ -1587,7 +1594,7 @@ export class RMAService {
       p_order_id: parsed.value.orderId,
       p_reason: parsed.value.reason,
     });
-    if (error) throw returnRpcError(error);
+    if (error) throw returnRpcError(error, { action: 'release' });
     const answer = asObject(data);
     const result: ReturnReleaseEarlyAnswer = {
       changed: answer.changed === true,

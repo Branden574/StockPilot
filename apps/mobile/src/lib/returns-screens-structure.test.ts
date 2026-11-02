@@ -508,9 +508,11 @@ describe('the workbench', () => {
   });
 
   // Mutation caught: an order link back to its 21pt line with hitSlop.
-  it('the two order links are links in 44pt frames', () => {
+  // Re-pinned by B21 (1.9, 2026-11-02; claim kept, every order link is a link
+  // in a 44pt frame): the earlier replacements are links now too, a third.
+  it('the three order links are links in 44pt frames', () => {
     const { sf, els } = elements(VIEW, (el, s) => attrText(el, 'accessibilityRole', s) === 'link');
-    expect(els).toHaveLength(2);
+    expect(els).toHaveLength(3);
     for (const { el } of els) {
       expect(tagOf(el, sf)).toBe('Pressable');
       expect(attrText(el, 'style', sf)).toBe(
@@ -519,6 +521,7 @@ describe('the workbench', () => {
     }
     expect(attrText(els[0]!.el, 'accessibilityLabel', sf)).toBe('`Against order ${so}`');
     expect(attrText(els[1]!.el, 'accessibilityLabel', sf)).toBe('t.text');
+    expect(attrText(els[2]!.el, 'accessibilityLabel', sf)).toBe('l.label');
     expect(styleBlock(VIEW, 'link')).toMatch(/minHeight: MIN_TAP, justifyContent: 'center'/);
   });
 
@@ -595,7 +598,11 @@ describe('the action sheet', () => {
         /style=\{\[styles\.input, \{ borderColor: c\.hair2, backgroundColor: c\.card, color: c\.ink/g,
       ),
     ).toHaveLength(2);
-    expect(code.match(/placeholderTextColor=\{c\.ink3\}/g)).toHaveLength(2);
+    // Re-pinned by B21 (1.6, 2026-11-02; claim kept, a placeholder is in the
+    // muted ink): the exchange review's box has no placeholder now (its name
+    // is a label above it), so the sheet's own box has the only one.
+    expect(code.match(/placeholderTextColor=\{c\.ink3\}/g)).toHaveLength(1);
+    expect(code.match(/placeholder=/g)).toHaveLength(1);
     expect(code).toContain(
       '<Mono size={11} color={reasonCount > reasonMax ? c.critText : c.ink3}>',
     );
@@ -656,8 +663,10 @@ describe('the release sheet, the replacement picker and its stepper', () => {
     expect(code).toContain(
       "borderColor: reason === preset ? c.ink : c.hair2, backgroundColor: reason === preset ? c.sunk : 'transparent', minHeight: MIN_TAP,",
     );
+    // Re-pinned by B21 (13.17, 2026-11-02; claim kept, the box on the Field
+    // recipe with the muted placeholder): who sees the reason is its hint.
     expect(code).toContain(
-      'placeholderTextColor={c.ink3} accessibilityLabel={RETURNS_COPY.releaseEarlyReasonLabel} style={[ styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }, ]}',
+      'placeholderTextColor={c.ink3} accessibilityLabel={RETURNS_COPY.releaseEarlyReasonLabel} accessibilityHint={RETURNS_COPY.replacementReasonHelp} style={[ styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }, ]}',
     );
     expect(code).toContain(
       '<Mono size={11} color={count > RETURN_RELEASE_REASON_MAX ? c.critText : c.ink3}>',

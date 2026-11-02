@@ -192,6 +192,11 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
             )}
             <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
               <FieldLabel>{RETURNS_COPY.releaseEarlyReasonLabel.toUpperCase()}</FieldLabel>
+              {/* B21 (13.17): who sees the reason, as the RMA's sheets and the
+                  web say; also the box's VoiceOver hint. */}
+              <Body size={13} muted>
+                {RETURNS_COPY.replacementReasonHelp}
+              </Body>
               <TextInput
                 value={reason}
                 onChangeText={setReason}
@@ -204,6 +209,7 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
                 placeholder="Why"
                 placeholderTextColor={c.ink3}
                 accessibilityLabel={RETURNS_COPY.releaseEarlyReasonLabel}
+                accessibilityHint={RETURNS_COPY.replacementReasonHelp}
                 style={[
                   styles.input,
                   { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },

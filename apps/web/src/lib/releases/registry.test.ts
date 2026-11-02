@@ -70,6 +70,7 @@ import {
   RETURNS_COPY,
   replacementCardQuantityLabel,
   replacementCardStatusLabel,
+  requesterNoticeWords,
   resolveSurface,
   returnLineLabel,
   returnToRackButton,
@@ -6253,14 +6254,19 @@ describe('returns remember the original rack (returns RX-1) is published', () =>
     );
     expect(notify).toContain("if (counterSilent && input.channel === 'counter') return false;");
     // The five events the words name.
-    for (const line of [
-      'request_received: RETURNS_COPY.requesterReceivedReturnRequest,',
-      'approved: RETURNS_COPY.requesterReturnApproved,',
-      'received: RETURNS_COPY.requesterItemReceived,',
-      'denied: RETURNS_COPY.requesterReturnDeclined,',
-      'cancelled: RETURNS_COPY.requesterReturnCancelled,',
-    ]) {
-      expect(notify).toContain(line);
+    // Re-pinned by B21 (1.7, 2026-11-02; claim kept, each of the five has the
+    // requester's words): the in-app words moved from returns-notify.ts's own
+    // table to core's requesterNoticeWords, which the notice takes; each of
+    // the five is one sentence, so it is the whole title, as before.
+    expect(notify).toContain('const { title, detail } = requesterNoticeWords(rma.event);');
+    for (const [event, words] of [
+      ['request_received', RETURNS_COPY.requesterReceivedReturnRequest],
+      ['approved', RETURNS_COPY.requesterReturnApproved],
+      ['received', RETURNS_COPY.requesterItemReceived],
+      ['denied', RETURNS_COPY.requesterReturnDeclined],
+      ['cancelled', RETURNS_COPY.requesterReturnCancelled],
+    ] as const) {
+      expect(requesterNoticeWords(event), event).toEqual({ title: words, detail: null });
     }
     // A member as a notification under their Order status changes setting,
     // anyone else (a portal requester too) by email.

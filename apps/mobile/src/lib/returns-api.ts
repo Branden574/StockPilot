@@ -12,6 +12,7 @@ import {
   type ReturnActions,
   type ReturnLineDecision,
   type ReturnListFilterId,
+  type ReturnRefusalAction,
 } from '@stockpilot/core';
 
 import { api, ApiError } from './api';
@@ -452,9 +453,11 @@ export function mintReturnKey(): string {
 /**
  * The sentence for a failed request: by `details.reason` through core's
  * error map; a network failure or a timeout says so; anything else the
- * route's own message, else a generic sentence.
+ * route's own message, else a generic sentence. `action` (B21, 13.16) names
+ * the replacement action the sheet sent, so an order approval refusal says
+ * what needs it (returns-view refusalActionFor).
  */
-export function describeReturnError(e: unknown): string {
+export function describeReturnError(e: unknown, opts: { action?: ReturnRefusalAction | null } = {}): string {
   if (e instanceof ApiError) {
     const details = e.details as { reason?: unknown; detail?: unknown } | undefined;
     const reason = details?.reason;
@@ -463,7 +466,10 @@ export function describeReturnError(e: unknown): string {
       // from it (exchange_already_sent: what the original line has left,
       // review fix S1).
       const detail = details?.detail;
-      const mapped = mapReturnError({ hint: reason, details: detail && typeof detail === 'object' ? JSON.stringify(detail) : null });
+      const mapped = mapReturnError(
+        { hint: reason, details: detail && typeof detail === 'object' ? JSON.stringify(detail) : null },
+        { action: opts.action },
+      );
       if (mapped.reason !== 'internal_error') return mapped.message;
     }
     if (e.status === 401) return mapReturnError({ hint: 'unauthenticated' }).message;

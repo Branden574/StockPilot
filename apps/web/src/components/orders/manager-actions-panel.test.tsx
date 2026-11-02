@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { act } from 'react';
 import { hydrateRoot } from 'react-dom/client';
@@ -1221,6 +1221,34 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
       orderId: 'order-1',
       reason: 'Customer is completing an in-person exchange today.',
     });
+  });
+
+  // B21 (2026-11-02): a refused release showed only in a toast. It shows
+  // inside the dialog (pattern 20), which stays open, and the page reads the
+  // order again (the phone order screen's behaviour); the dialog says who
+  // sees the reason, as the RMA's does.
+  it('a refused release shows inside the dialog, which stays open, and the page refreshes', async () => {
+    releaseReplacement.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'Another person changed this return. Review it again.',
+        details: { reason: 'return_changed' },
+      },
+    });
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: waiting })} />);
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Kept on the return. The requester is never shown it.')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Release before return is received/ }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Another person changed this return. Review it again.');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(routerRefresh).toHaveBeenCalled();
+    // The next attempt clears it while it is under way.
+    releaseReplacement.mockReturnValueOnce(new Promise(() => {}));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Release before return is received/ }));
+    await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull());
   });
 
   // RX-2 review fix P5: a replacement approved on backorder holds nothing,

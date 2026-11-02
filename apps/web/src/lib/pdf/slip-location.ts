@@ -56,6 +56,11 @@ export function locationFor(
     // to that embed changes every consumer of the detail payload, and the
     // holdings above already carry the crate by name for the case that matters.
     holdings: rackHoldingsByItemId?.get(item.id),
+    // B21: the slips name the ONE rack the stock is on when nothing is saved
+    // on the item ("No rack set" before) or its saved rack holds none of it,
+    // as the return's "Get replacement ready" does. Core's rule 0c; this file
+    // is its only caller (see placement-resolution.ts).
+    singleHoldingCheck: true,
   });
 
   switch (res.source) {
@@ -63,6 +68,7 @@ export function locationFor(
       // formatPlacementLabel IS formatRackHoldings for this branch — going
       // through it rather than re-spelling the join keeps the breakdown
       // byte-identical to the cycle-count sheet and the native scan sheet.
+      // Every reason renders the same: split, crate, or the single rack.
       return { primary: formatPlacementLabel(res), secondary: null };
     case 'structured':
       return {

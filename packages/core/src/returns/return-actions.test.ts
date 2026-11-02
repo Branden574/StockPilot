@@ -448,8 +448,16 @@ describe('exchangeActionConsequences (web dialogs and phone sheets)', () => {
       'effect: The return closes as cancelled. Its replacement order SO-000016 is cancelled too.',
     ]);
     // No live replacement (requested, declined, cancelled): nothing about one.
-    expect(exchangeActionConsequences('cancel', { replacementStatus: null })).toEqual([]);
-    expect(exchangeActionConsequences('cancel', { replacementStatus: 'cancelled' })).toEqual([]);
+    // Re-pinned by B21 (2026-11-02; claim kept, nothing is said about a
+    // replacement): it says what does happen, the web dialog's words, so the
+    // phone's Cancel return no longer says nothing at all.
+    expect(texts(exchangeActionConsequences('cancel', { replacementStatus: null }))).toEqual([
+      'effect: Nothing moves. The return closes as cancelled.',
+    ]);
+    expect(texts(exchangeActionConsequences('cancel', { replacementStatus: 'cancelled' }))).toEqual([
+      'effect: Nothing moves. The return closes as cancelled.',
+    ]);
+    expect(RETURNS_COPY.cancelReturnNothingMoves).toBe('Nothing moves. The return closes as cancelled.');
     // Picked or on its way: the database refuses the cancel (replacement_in_progress).
     expect(texts(exchangeActionConsequences('cancel', { replacementStatus: 'staged_for_pickup', replacementOrderNumber: 12 }))).toEqual([
       'effect: The replacement is already picked or on its way. Hand it over first. If none of it was handed over yet, you can cancel the replacement instead.',

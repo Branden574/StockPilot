@@ -12,6 +12,8 @@ import {
   initialChoices,
   processButtonLabel,
   processingHint,
+  reasonHelpFor,
+  refusalActionFor,
   returnRowItems,
   returnRowMeta,
   returnRowTitle,
@@ -221,12 +223,41 @@ describe('destinations and bodies', () => {
     ]);
   });
 
+  // Re-pinned by B21 (2026-11-02; claim kept): Deny starts "Nothing moves."
+  // as the web's does (core denyDialogHelp, one sentence for both).
   it('the deny help tells the requester rule only on a requester\'s RMA (review)', () => {
     const w = wb('requested');
-    expect(denyHelp(w)).toBe('Required. The reason is kept on the return. Nobody is notified.');
+    expect(denyHelp(w)).toBe('Nothing moves. Required. The reason is kept on the return. Nobody is notified.');
     expect(denyHelp({ ...w, return: { ...w.return, source: 'requester' } })).toBe(
-      'Required. The requester is told the request was declined, never the reason.',
+      'Nothing moves. Required. The requester is told the request was declined, never the reason.',
     );
+  });
+
+  // B21 (13.17, 2026-11-02): the web says who sees a replacement reason; the
+  // phone's reason boxes said nothing. The help for each sheet, and the action
+  // its refusals name.
+  it('a replacement reason box says who sees it; the other sheets have their own words or none', () => {
+    const KEPT = 'Kept on the return. The requester is never shown it.';
+    for (const mode of ['release', 'cancel_replacement', 'change_replacement', 'issue_replacement', 'close_as_return_only', 'close_replacement_rest']) {
+      expect(reasonHelpFor(mode), mode).toBe(KEPT);
+    }
+    for (const mode of ['approve', 'process', 'destination', 'deny', 'cancel', 'something_new']) {
+      expect(reasonHelpFor(mode), mode).toBeNull();
+    }
+  });
+
+  it("a sheet's refusal names its action (B21, 13.16)", () => {
+    expect(refusalActionFor('approve')).toBe('approve');
+    expect(refusalActionFor('cancel')).toBe('cancel_return');
+    expect(refusalActionFor('release')).toBe('release');
+    expect(refusalActionFor('cancel_replacement')).toBe('cancel_replacement');
+    expect(refusalActionFor('change_replacement')).toBe('change');
+    expect(refusalActionFor('issue_replacement')).toBe('change');
+    expect(refusalActionFor('close_replacement_rest')).toBe('close_rest');
+    // These never need order approval.
+    for (const mode of ['process', 'destination', 'deny', 'close_as_return_only']) {
+      expect(refusalActionFor(mode), mode).toBeNull();
+    }
   });
 });
 

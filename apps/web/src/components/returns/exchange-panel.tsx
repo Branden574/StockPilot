@@ -471,6 +471,9 @@ function ReasonField({
   onChange: (v: string) => void;
   max?: number;
 }) {
+  // B21 (13.17): the help is the box's description, so a screen reader reads
+  // who sees the reason with the box, as the phone reads it as the box's hint.
+  const helpId = `${id}-help`;
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id} className="text-[12.5px]">
@@ -482,8 +485,13 @@ function ReasonField({
         onChange={(e) => onChange(e.target.value)}
         rows={2}
         maxLength={max}
+        aria-describedby={help ? helpId : undefined}
       />
-      {help ? <p className="text-muted-foreground text-[12px]">{help}</p> : null}
+      {help ? (
+        <p id={helpId} className="text-muted-foreground text-[12px]">
+          {help}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -592,7 +600,7 @@ export function ReplacementOrderSection({
 // ── Dialogs ─────────────────────────────────────────────────────────────────
 
 /** A refusal kept inside the open dialog, announced (pattern 20; fix round 1, completeness C-3). */
-function DialogError({ error }: { error: string | null }) {
+export function DialogError({ error }: { error: string | null }) {
   if (!error) return null;
   return (
     <p className="text-destructive text-[13px]" role="alert">
@@ -647,6 +655,8 @@ export function ReleaseEarlyDialog({
         <ReasonField
           id="release-early-reason"
           label={RETURNS_COPY.releaseEarlyReasonLabel}
+          // B21: who sees the reason, as every other replacement reason box says.
+          help={RETURNS_COPY.replacementReasonHelp}
           value={reason}
           onChange={setReason}
           max={RETURN_RELEASE_REASON_MAX}
