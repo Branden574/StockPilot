@@ -3,8 +3,15 @@ import 'server-only';
 import { z } from 'zod';
 
 import { audit } from './audit';
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { ServiceError, withContext, type ServiceContext } from './context';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import {
+  assertCanEditOrganizationSetup,
+  isPolicyRefusal,
+  setupNothingSaved,
+  setupPartlySaved,
+  WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY,
+} from './lib/organization-setup-gate';
 import { fetchAllRows } from './lib/paginate';
 
 export const createWarehouseSchema = z.object({
@@ -33,6 +40,13 @@ export type CreateWarehouseInput = z.infer<typeof createWarehouseSchema>;
 
 export const updateWarehouseSchema = createWarehouseSchema.partial();
 export type UpdateWarehouseInput = z.infer<typeof updateWarehouseSchema>;
+
+/** A save's fields without its charter list: what an audit row may claim when
+ *  the row was written and the links were not. */
+function withoutCharterIds<T extends { charterIds?: unknown }>(input: T): Omit<T, 'charterIds'> {
+  const { charterIds: _charterIds, ...fields } = input;
+  return fields;
+}
 
 export interface WarehouseRow {
   id: string;
@@ -277,8 +291,14 @@ export class WarehousesService {
     };
   }
 
+  /**
+   * Owner or admin only, checked before any write: the write policies ask the
+   * admin role (B99). A refused INSERT says nothing was saved. When the
+   * warehouse is created and its charter links are not, the audit row records
+   * the warehouse without them and the save says part of it was not saved.
+   */
   async create(input: CreateWarehouseInput) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const { data, error } = await this.ctx.supabase
       .from('warehouses')
       .insert({
@@ -300,6 +320,7 @@ export class WarehousesService {
       if (error.code === '23505') {
         throw new ServiceError('conflict', `A warehouse with code "${input.code}" already exists.`);
       }
+      if (isPolicyRefusal(error)) throw setupNothingSaved();
       throw new ServiceError('internal_error', error.message);
     }
     const newId = data.id as string;
@@ -312,7 +333,20 @@ export class WarehousesService {
           charter_id,
         })),
       );
-      if (linkErr) throw new ServiceError('internal_error', linkErr.message);
+      if (linkErr) {
+        // The warehouse exists; its links do not.
+        await audit(
+          {
+            event: 'warehouse.created',
+            entityType: 'warehouse',
+            entityId: newId,
+            warehouseId: newId,
+            after: withoutCharterIds(input),
+          },
+          this.ctx,
+        );
+        throw setupPartlySaved();
+      }
     }
 
     await audit(
@@ -328,8 +362,17 @@ export class WarehousesService {
     return { id: newId };
   }
 
+  /**
+   * Owner or admin only, checked before any read or write (B99). The row
+   * UPDATE asks for its row back: when it changed no row (the id is not this
+   * organization's, as from a tab left on another one, or the policy hid it)
+   * the save says nothing was saved, before any link is written and with no
+   * audit row. When the row lands and a link write then fails, the audit row
+   * records the row change without the charter list, and the save says part
+   * of it was not saved.
+   */
   async update(id: string, patch: UpdateWarehouseInput) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.code !== undefined) updates.code = patch.code;
@@ -356,16 +399,40 @@ export class WarehousesService {
       applyCharters = await svc.prepareSetForWarehouse(id, patch.charterIds);
     }
 
+    let rowLanded = false;
     if (Object.keys(updates).length > 0) {
-      const { error } = await this.ctx.supabase
+      const { data: row, error } = await this.ctx.supabase
         .from('warehouses')
         .update(updates)
         .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id);
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
       if (error) throw new ServiceError('internal_error', error.message);
+      if (!row) throw setupNothingSaved();
+      rowLanded = true;
     }
 
-    if (applyCharters) await applyCharters();
+    if (applyCharters) {
+      try {
+        await applyCharters();
+      } catch (e) {
+        if (!rowLanded) throw e;
+        // The row change is saved; the charter list is not, or only in part
+        // (the link writes record what landed of it themselves).
+        await audit(
+          {
+            event: 'warehouse.updated',
+            entityType: 'warehouse',
+            entityId: id,
+            warehouseId: id,
+            after: withoutCharterIds(patch),
+          },
+          this.ctx,
+        );
+        throw setupPartlySaved();
+      }
+    }
 
     await audit(
       {
@@ -380,7 +447,7 @@ export class WarehousesService {
   }
 
   async archive(id: string) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ status: 'archived' })
@@ -395,12 +462,12 @@ export class WarehousesService {
 
   /**
    * Restore an archived warehouse — sets status back to 'active' so it
-   * shows up again in pick lists and reports. Same permission gate as
+   * shows up again in pick lists and reports. Same owner-or-admin gate as
    * archive(). Note: we deliberately set 'active' (not 'inactive') —
    * restoring an archived warehouse means it goes back into active use.
    */
   async restore(id: string) {
-    assertPermission(this.ctx, 'organization:update');
+    assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
     const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ status: 'active' })

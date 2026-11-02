@@ -1,5 +1,5 @@
 import type { Role } from './roles';
-import { isManagerOrAbove } from './terminology';
+import { isAdminRole, isManagerOrAbove } from './terminology';
 
 export const PERMISSIONS = [
   'organization:update',
@@ -278,6 +278,26 @@ export function canDistributeBundles(ctx: {
   readonly permissions?: ReadonlySet<Permission>;
 }): boolean {
   return isManagerOrAbove(ctx.role) && can(ctx, 'bundles:distribute');
+}
+
+/**
+ * Whether to OFFER changes to the organization's setup: its warehouses, its
+ * charters and their links, and the public request settings (the message on
+ * every public request page and which warehouses take public requests). The
+ * permission alone is not enough: an owner or admin can give
+ * organization:update ('Edit organization details') to a manager, staff member
+ * or viewer, but every write policy on these rows asks the admin role
+ * (organizations_update, charters_admin_write and warehouses_admin_write in
+ * 0140, wc_admin_write in 0321). Such a member's change was refused, or
+ * changed no row while the screen said it was saved (B99). The controls and
+ * the services follow both: owner or admin AND the permission, so a revoked
+ * admin is refused too.
+ */
+export function canEditOrganizationSetup(ctx: {
+  readonly role: Role;
+  readonly permissions?: ReadonlySet<Permission>;
+}): boolean {
+  return isAdminRole(ctx.role) && can(ctx, 'organization:update');
 }
 
 export function assertPermission(role: Role, permission: Permission): void {

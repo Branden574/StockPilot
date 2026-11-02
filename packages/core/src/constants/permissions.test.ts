@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   can,
   canDistributeBundles,
+  canEditOrganizationSetup,
   effectivePermissions,
   FULLY_GRANTABLE_PERMISSIONS,
   hasPermission,
@@ -243,6 +244,48 @@ describe('canDistributeBundles', () => {
   it('a manager whose bundles:distribute was revoked is not offered it', () => {
     const revoked = effectivePermissions('manager', [{ permission: 'bundles:distribute', granted: false }]);
     expect(canDistributeBundles({ role: 'manager', permissions: revoked })).toBe(false);
+  });
+});
+
+describe('canEditOrganizationSetup', () => {
+  // Every write policy on warehouses, charters, their links and the
+  // organization row asks the admin role (0140, 0321), so changes to them are
+  // offered only to owners and admins who hold organization:update (B99).
+  const grant = [{ permission: 'organization:update' as const, granted: true }];
+  const revoke = [{ permission: 'organization:update' as const, granted: false }];
+
+  it('offers changes to the owner and to an admin', () => {
+    for (const role of ['owner', 'admin'] as const) {
+      expect(
+        canEditOrganizationSetup({ role, permissions: effectivePermissions(role) }),
+        role,
+      ).toBe(true);
+    }
+  });
+
+  it('never to an admin whose organization:update was revoked', () => {
+    const revoked = effectivePermissions('admin', revoke);
+    expect(revoked.has('organization:update')).toBe(false);
+    expect(canEditOrganizationSetup({ role: 'admin', permissions: revoked })).toBe(false);
+  });
+
+  it('never to a manager, staff member or viewer, even one granted organization:update', () => {
+    for (const role of ['manager', 'staff', 'viewer'] as const) {
+      const granted = effectivePermissions(role, grant);
+      expect(granted.has('organization:update'), role).toBe(true);
+      expect(canEditOrganizationSetup({ role, permissions: granted }), role).toBe(false);
+    }
+  });
+
+  it('never to a manager by default', () => {
+    expect(
+      canEditOrganizationSetup({ role: 'manager', permissions: effectivePermissions('manager') }),
+    ).toBe(false);
+  });
+
+  it('a context with no permission set answers from the role: admin yes, manager no', () => {
+    expect(canEditOrganizationSetup({ role: 'admin' })).toBe(true);
+    expect(canEditOrganizationSetup({ role: 'manager' })).toBe(false);
   });
 });
 

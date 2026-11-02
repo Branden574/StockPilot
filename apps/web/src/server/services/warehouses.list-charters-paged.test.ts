@@ -19,6 +19,7 @@ vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
 
 import {
   countedLikePostgrest,
+  inFilters,
   makeServiceContext,
   makeSupabaseStub,
   servedLikePostgrest,
@@ -210,16 +211,26 @@ describe('Admin > Warehouses at LOOKUP_ROW_CEILING, and the order of the save', 
 
   function stubWith(opts: { items?: Array<Record<string, unknown>> } = {}) {
     const itemsCounted = countedLikePostgrest(opts.items ?? []);
-    const record = (into: MockCall[]) => (call: MockCall) => {
-      into.push(call);
-      return { data: null, error: null };
-    };
+    const record =
+      (
+        into: MockCall[],
+        answer: (call: MockCall) => QueryResult = () => ({ data: null, error: null }),
+      ) =>
+      (call: MockCall) => {
+        into.push(call);
+        return answer(call);
+      };
     return makeSupabaseStub({
       'warehouses.select': servedLikePostgrest(WAREHOUSES),
-      'warehouses.update': record(writes.rows),
+      // An admin's writes, answered as PostgREST answers a write that asks
+      // for its rows back (B99): the warehouse's row, and each link removed.
+      'warehouses.update': record(writes.rows, () => ({ data: [{ id: W1 }], error: null })),
       'warehouse_charters.select': countedLikePostgrest(LINKS),
       'warehouse_charters.insert': record(writes.links),
-      'warehouse_charters.delete': record(writes.links),
+      'warehouse_charters.delete': record(writes.links, (call) => ({
+        data: ((inFilters(call)[0]?.[1] ?? []) as string[]).map((charter_id) => ({ charter_id })),
+        error: null,
+      })),
       'inventory_items.select': (call) => {
         writes.counts.push(call);
         return itemsCounted(call);
