@@ -30,6 +30,14 @@ vi.mock('undici', () => ({
   fetch: (...args: unknown[]) => undiciFetchMock(...args),
 }));
 
+/** Every sharp(...) call's arguments, the real sharp doing the work (S45). */
+const { sharpCalls } = vi.hoisted(() => ({ sharpCalls: [] as unknown[][] }));
+vi.mock('sharp', async (importOriginal) => {
+  const { recordingSharp } = await import('@/test/image-decode-fixtures');
+  const real = (await importOriginal<{ default: (...a: never[]) => unknown }>()).default;
+  return { default: recordingSharp(real, sharpCalls) };
+});
+
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: vi.fn().mockImplementation(function () {
     return { primaryImagesForServerDecoding };
@@ -65,6 +73,15 @@ import {
   type EmbeddedImage,
 } from './export-images';
 import { webpToPng } from './webp-to-png';
+import {
+  EXIF_JPEGS,
+  IMAGE_LOOKALIKE_SVGS,
+  MALFORMED_PNGS,
+  PNG_8X8,
+  pngWithOversizedData,
+  SVG_16000,
+  WEBP_7072,
+} from '@/test/image-decode-fixtures';
 import { inventoryExportRequestSchema, resolveExportFields } from './export-request';
 import type { InventoryExportSourceRow } from './source-row';
 
@@ -114,8 +131,25 @@ function makeRow(id: string): InventoryExportSourceRow {
   };
 }
 
+/**
+ * A JPEG's leading bytes: SOI and an 8 x 8 baseline frame header (SOF0). A
+ * body that starts with them and is zero after is a JPEG the export passes
+ * through unchanged (jpegPassesUnchanged reads the markers up to the frame),
+ * so the size and network tests below need no real photo.
+ */
+const JPEG_HEAD = [
+  0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x08, 0x00, 0x08, 0x03, 1, 0x11, 0, 2, 0x11, 0, 3,
+  0x11, 0,
+];
+
+function jpegBody(bytes: number): Uint8Array {
+  const body = new Uint8Array(bytes);
+  if (bytes >= JPEG_HEAD.length) body.set(JPEG_HEAD);
+  return body;
+}
+
 function jpegResponse(bytes: number, contentType = 'image/jpeg'): Response {
-  return new Response(new Uint8Array(bytes), {
+  return new Response(jpegBody(bytes) as unknown as BodyInit, {
     status: 200,
     headers: { 'content-type': contentType, 'content-length': String(bytes) },
   });
@@ -147,9 +181,10 @@ function streamedResponse(
         return;
       }
       const size = chunkSizes[index]!;
-      index++;
       pulledSizes.push(size);
-      controller.enqueue(new Uint8Array(size));
+      // The first chunk starts with a JPEG's leading bytes (see jpegBody).
+      controller.enqueue(index === 0 ? jpegBody(size) : new Uint8Array(size));
+      index++;
     },
   });
   const headers: Record<string, string> = { 'content-type': opts.contentType ?? 'image/jpeg' };
@@ -1312,7 +1347,7 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
   it('forwards targetWidth to the decoder seam (default 200)', async () => {
     const webp = await makeWebp(8);
     const fetchImpl = vi.fn(async () => bytesResponse(webp, 'image/webp'));
-    const decodeWebp = vi.fn(
+    const decodeImage = vi.fn(
       async (_bytes: Uint8Array, _targetWidth: number): Promise<EmbeddedImage | null> => ({
         data: new Uint8Array(PNG_SIGNATURE),
         extension: 'png',
@@ -1320,16 +1355,16 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
     );
     await fetchExportImageBytes(new Map([['a', 'https://signed.example/a.webp']]), {
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      decodeWebp,
+      decodeImage,
       targetWidth: 320,
     });
-    expect(decodeWebp).toHaveBeenCalledTimes(1);
-    expect(decodeWebp.mock.calls[0]![1]).toBe(320);
+    expect(decodeImage).toHaveBeenCalledTimes(1);
+    expect(decodeImage.mock.calls[0]![1]).toBe(320);
     await fetchExportImageBytes(new Map([['a', 'https://signed.example/a.webp']]), {
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      decodeWebp,
+      decodeImage,
     });
-    expect(decodeWebp.mock.calls[1]![1]).toBe(200);
+    expect(decodeImage.mock.calls[1]![1]).toBe(200);
   });
 
   it('a decoder that returns null: skipped as unsupported, no retry, batch continues', async () => {
@@ -1337,13 +1372,13 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
     const fetchImpl = vi.fn(async (url: string) =>
       url.endsWith('.webp') ? bytesResponse(webp, 'image/webp') : jpegResponse(64),
     );
-    const decodeWebp = vi.fn(async () => null);
+    const decodeImage = vi.fn(async () => null);
     const { images, skipped, skippedReasons } = await fetchExportImageBytes(
       new Map([
         ['a', 'https://signed.example/a.webp'],
         ['b', 'https://signed.example/b.jpg'],
       ]),
-      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeWebp },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeImage },
     );
     expect(images.has('a')).toBe(false);
     expect(images.has('b')).toBe(true);
@@ -1359,7 +1394,7 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
       new Map([['a', 'https://signed.example/a.webp']]),
       {
         fetchImpl: fetchImpl as unknown as typeof fetch,
-        decodeWebp: async () => {
+        decodeImage: async () => {
           throw new Error('sharp exploded');
         },
       },
@@ -1381,31 +1416,33 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
   });
 
   it('magic wins over the header: PNG bytes under image/webp pass through UNTOUCHED', async () => {
-    const png = new Uint8Array(64);
-    png.set(PNG_SIGNATURE);
-    png[20] = 0x42;
+    const png = new Uint8Array(PNG_8X8);
     const fetchImpl = vi.fn(async () => bytesResponse(png, 'image/webp'));
-    const decodeWebp = vi.fn(async () => null);
+    const decodeImage = vi.fn(async () => null);
     const { images, skipped } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.webp']]),
-      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeWebp },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeImage },
     );
     expect(skipped).toBe(0);
-    expect(decodeWebp).not.toHaveBeenCalled();
+    expect(decodeImage).not.toHaveBeenCalled();
     expect(images.get('a')!.extension).toBe('png');
     expect(images.get('a')!.data).toEqual(png);
   });
 
   it('JPEG bytes under image/webp pass through untouched as jpeg', async () => {
-    const jpg = new Uint8Array(64);
-    jpg.set([0xff, 0xd8, 0xff, 0xe0]);
+    const sharp = (await import('sharp')).default;
+    const jpg = new Uint8Array(
+      await sharp({ create: { width: 8, height: 8, channels: 3, background: '#c81e1e' } })
+        .jpeg()
+        .toBuffer(),
+    );
     const fetchImpl = vi.fn(async () => bytesResponse(jpg, 'image/webp'));
-    const decodeWebp = vi.fn(async () => null);
+    const decodeImage = vi.fn(async () => null);
     const { images } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.webp']]),
-      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeWebp },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeImage },
     );
-    expect(decodeWebp).not.toHaveBeenCalled();
+    expect(decodeImage).not.toHaveBeenCalled();
     expect(images.get('a')!.extension).toBe('jpeg');
     expect(images.get('a')!.data).toEqual(jpg);
   });
@@ -1414,14 +1451,14 @@ describe('fetchExportImageBytes — WebP is decoded server-side (sharp)', () => 
     const fetchImpl = vi.fn(async () =>
       bytesResponse(new Uint8Array(64), 'application/octet-stream'),
     );
-    const decodeWebp = vi.fn(async () => null);
+    const decodeImage = vi.fn(async () => null);
     const { skipped, skippedReasons } = await fetchExportImageBytes(
       new Map([['a', 'https://signed.example/a.bin']]),
-      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeWebp },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, decodeImage },
     );
     expect(skipped).toBe(1);
     expect(skippedReasons.unsupported).toBe(1);
-    expect(decodeWebp).not.toHaveBeenCalled();
+    expect(decodeImage).not.toHaveBeenCalled();
   });
 });
 
@@ -1436,5 +1473,122 @@ describe('webpToPng (default decoder)', () => {
     expect(out).not.toBeNull();
     expect(out!.extension).toBe('png');
     expect(readImageDimensions(out!.data)).toEqual({ width: 10, height: 10 });
+  });
+});
+
+/**
+ * S45: the export reads images through the capped decoder (lib/image-decode.ts).
+ * PNG and JPEG bodies are embedded as they are only when their structure
+ * checks pass and they are within 1024 px and MAX_EMBEDDED_IMAGE_BYTES; any
+ * other PNG, JPEG, WebP, GIF or AVIF body is decoded to a PNG at the target
+ * width. Anything else is skipped as unsupported, whatever its content type
+ * says, and SVG never reaches sharp.
+ */
+describe('fetchExportImageBytes — the capped decoder (S45)', () => {
+  async function fetchAs(bytes: Uint8Array, contentType: string, targetWidth?: number) {
+    const fetchImpl = vi.fn(async () => bytesResponse(new Uint8Array(bytes), contentType));
+    return fetchExportImageBytes(new Map([['a', 'https://signed.example/a.img']]), {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      targetWidth,
+    });
+  }
+
+  function callsWith(input: Uint8Array): unknown[][] {
+    const bytes = Buffer.from(input);
+    return sharpCalls.filter(
+      ([first]) => first instanceof Uint8Array && Buffer.from(first).equals(bytes),
+    );
+  }
+
+  const CHECKED = { ...MALFORMED_PNGS, ...EXIF_JPEGS };
+
+  it.each(Object.entries(CHECKED))(
+    '%s is skipped as unsupported under any image type',
+    async (_label, bytes) => {
+      for (const type of ['image/png', 'image/jpeg', 'image/webp']) {
+        const { images, skippedReasons } = await fetchAs(bytes, type);
+        expect(images.has('a'), type).toBe(false);
+        expect(skippedReasons.unsupported, type).toBe(1);
+      }
+    },
+  );
+
+  it('a PNG whose data inflates past its rows is embedded as a fresh PNG, never as given', async () => {
+    const bytes = pngWithOversizedData();
+    const { images } = await fetchAs(bytes, 'image/png');
+    const image = images.get('a')!;
+    expect(image.extension).toBe('png');
+    expect(Buffer.from(image.data).equals(bytes)).toBe(false);
+    expect(readImageDimensions(image.data)).toEqual({ width: 64, height: 64 });
+  });
+
+  it('SVG text served as image/png is unsupported (it used to be embedded by its type)', async () => {
+    const { images, skippedReasons } = await fetchAs(SVG_16000, 'image/png');
+    expect(images.has('a')).toBe(false);
+    expect(skippedReasons.unsupported).toBe(1);
+  });
+
+  it('a WebP over the cap and SVG served as image/webp are unsupported, and sharp is not called', async () => {
+    for (const bytes of [
+      WEBP_7072,
+      SVG_16000,
+      IMAGE_LOOKALIKE_SVGS['SVG after a comment holding ftypavif']!,
+    ]) {
+      sharpCalls.length = 0;
+      const { images, skippedReasons } = await fetchAs(bytes, 'image/webp');
+      expect(images.has('a')).toBe(false);
+      expect(skippedReasons.unsupported).toBe(1);
+      expect(callsWith(bytes)).toEqual([]);
+    }
+  });
+
+  it('a see-through PNG over 1024 px comes back at the target width, its transparency kept', async () => {
+    const sharp = (await import('sharp')).default;
+    const big = await sharp({
+      create: {
+        width: 4096,
+        height: 4096,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+      .png()
+      .toBuffer();
+    expect(big.byteLength).toBeLessThan(MAX_EMBEDDED_IMAGE_BYTES);
+    const { images } = await fetchAs(big, 'image/png', 200);
+    const data = Buffer.from(images.get('a')!.data);
+    const meta = await sharp(data).metadata();
+    expect([meta.format, meta.width, meta.height, meta.hasAlpha]).toEqual(['png', 200, 200, true]);
+    const { data: raw } = await sharp(data).raw().toBuffer({ resolveWithObject: true });
+    expect(raw[3]).toBe(0);
+  }, 30_000);
+
+  it('a JPEG stored on its side comes back an upright PNG at the target width', async () => {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 600, height: 400, channels: 3, background: { r: 30, g: 90, b: 160 } },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const { images } = await fetchAs(jpeg, 'image/jpeg', 200);
+    const image = images.get('a')!;
+    expect(image.extension).toBe('png');
+    expect(readImageDimensions(image.data)).toEqual({ width: 133, height: 200 });
+  });
+
+  it('AVIF served as image/webp is decoded with the AVIF cap and the orientation applied', async () => {
+    const sharp = (await import('sharp')).default;
+    const avif = await sharp({
+      create: { width: 64, height: 32, channels: 3, background: { r: 30, g: 90, b: 160 } },
+    })
+      .avif({ effort: 0 })
+      .toBuffer();
+    sharpCalls.length = 0;
+    const { images } = await fetchAs(avif, 'image/webp', 16);
+    expect(readImageDimensions(images.get('a')!.data)).toEqual({ width: 16, height: 8 });
+    expect(callsWith(avif).map((call) => call[1])).toEqual([
+      { limitInputPixels: 16_777_216, autoOrient: true },
+    ]);
   });
 });

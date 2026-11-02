@@ -41,8 +41,8 @@ import 'server-only';
  *     thumbnail could show anything).
  *
  * `sharp` is already a dependency of apps/web and is loaded lazily, as in
- * lib/exports/webp-to-png.ts. Any failure resolves to null; the caller
- * rejects the upload and deletes the object.
+ * lib/image-decode.ts. Any failure resolves to null; the caller rejects the
+ * upload and deletes the object.
  */
 
 export type ReencodeKind = 'jpeg' | 'png' | 'webp';
@@ -109,7 +109,11 @@ export async function reencodeWithoutMetadata(
           ? oriented.png({ compressionLevel: 9 })
           : oriented.webp({ quality });
     const { data: master, info } = await encoded.toBuffer({ resolveWithObject: true });
-    const thumb = await sharp(master)
+    // The master is this function's own capped output; the thumbnail's
+    // decode carries the same limit (lib/sharp-input-limits.guard.test.ts).
+    const thumb = await sharp(master, {
+      limitInputPixels: options.maxInputPixels ?? MAX_INPUT_PIXELS,
+    })
       .resize({
         width: EVIDENCE_THUMB_MAX_EDGE,
         height: EVIDENCE_THUMB_MAX_EDGE,

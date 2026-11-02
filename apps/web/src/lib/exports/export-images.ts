@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
+import { jpegPassesUnchanged, pngPassesUnchanged } from '@/lib/image-decode';
 import { fetchItemImage, ItemImageUrlRefusedError } from '@/lib/item-image-fetch';
 import { SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -25,7 +26,10 @@ import { webpToPng } from './webp-to-png';
  * one batched signing call. WebP bodies are decoded HERE (sharp, see
  * webp-to-png.ts) rather than by asking Supabase's transform endpoint for a
  * PNG re-encode: on 2026-08-18 a single 272-image Excel export drew 30 HTTP
- * 429s from that endpoint and every one became a blank cell.
+ * 429s from that endpoint and every one became a blank cell. PNG and JPEG
+ * bodies are embedded as they are only when the capped decoder's
+ * pass-through checks allow it (lib/image-decode.ts, S45); otherwise they are
+ * decoded the same way.
  *
  * NEVER use primaryMasterUrlsForItems here. That resolver returns the 2048px
  * master for the public catalog's next/image pipeline; fetching hundreds of
@@ -44,6 +48,9 @@ export const EXPORT_IMAGE_TARGET_WIDTH_PX = {
 
 /** Per-image ceiling. A ~200px WebP is 20-50KB; 512KB is a generous outlier. */
 export const MAX_EMBEDDED_IMAGE_BYTES = 512 * 1024;
+/** The longest edge, in pixels, of a PNG or JPEG embedded as it is; a larger
+ *  one is decoded to the target width (S45). */
+const EMBED_UNCHANGED_MAX_EDGE_PX = 1024;
 /** Whole-export ceiling. Keeps one workbook inside the 60s / memory budget. */
 export const MAX_TOTAL_EMBEDDED_IMAGE_BYTES = 24 * 1024 * 1024;
 /** Hard count ceiling regardless of size. */
@@ -70,9 +77,12 @@ export const EXPORT_TOO_MANY_IMAGES_MESSAGE =
 /**
  * Content types we will READ. SVG is excluded deliberately: it is a script
  * carrier, and neither exceljs nor react-pdf needs it. WebP is read and then
- * decoded to PNG by `decodeWebp` (sharp) because exceljs and react-pdf cannot
+ * decoded to PNG by `decodeImage` (sharp) because exceljs and react-pdf cannot
  * decode it themselves. `application/octet-stream` is read so a mislabelled
- * body can be classified by its magic bytes below.
+ * body can be classified by its magic bytes below. A body is decoded only
+ * when its bytes are a PNG, JPEG, WebP, GIF or AVIF (the decoder reads the
+ * format from the bytes, never from this type), so SVG served as image/png or
+ * image/webp is skipped too.
  */
 const READABLE_CONTENT_TYPES: ReadonlyMap<string, 'png' | 'jpeg' | 'webp' | 'unknown'> = new Map([
   ['image/png', 'png'],
@@ -105,10 +115,11 @@ export interface FetchExportImageBytesOptions {
    *  redirect, for a Storage read on the project origin, safeFetch with the
    *  cover allowlist for any other URL. */
   fetchImpl?: typeof fetch;
-  /** Width the WebP decoder fits into (square box). Default 200. */
+  /** Width the decoder fits into (square box). Default 200. */
   targetWidth?: number;
-  /** WebP -> PNG seam. Default: sharp via webp-to-png.ts. */
-  decodeWebp?: (bytes: Uint8Array, targetWidth: number) => Promise<EmbeddedImage | null>;
+  /** Image -> PNG seam: WebP, and any PNG or JPEG not embedded as it is.
+   *  Default: the capped decoder via webp-to-png.ts. */
+  decodeImage?: (bytes: Uint8Array, targetWidth: number) => Promise<EmbeddedImage | null>;
   /** Clock/sleep/jitter seams for deterministic tests. Defaults are real. */
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -252,7 +263,7 @@ class RateGate {
 
 interface FetchDeps {
   fetchImpl: typeof fetch;
-  decodeWebp: (bytes: Uint8Array, targetWidth: number) => Promise<EmbeddedImage | null>;
+  decodeImage: (bytes: Uint8Array, targetWidth: number) => Promise<EmbeddedImage | null>;
   targetWidth: number;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
@@ -409,15 +420,27 @@ async function attemptOnce(url: string, deps: FetchDeps): Promise<AttemptOutcome
 
     // Magic wins over the header: a WebP served as octet-stream (or even as
     // image/png) is still WebP, and a PNG served as image/webp is still PNG.
-    // Only when the magic is unrecognised do we trust the declared type —
-    // that keeps png/jpeg bytes passing through byte-for-byte as before.
+    // Only when the magic is unrecognised do we trust the declared type.
+    // A PNG or JPEG is embedded byte-for-byte only when the capped decoder's
+    // pass-through check allows it (S45: its structure checked, within
+    // EMBED_UNCHANGED_MAX_EDGE_PX and the per-image cap); any other is
+    // decoded like a WebP, which reads the format from the bytes, so a body
+    // that is not really an image of these formats is skipped.
     const format = sniffImageFormat(buf) ?? declaredKind;
-    if (format === 'png' || format === 'jpeg')
-      return { kind: 'ok', image: { data: buf, extension: format } };
-    if (format === 'webp') {
+    const unchanged = {
+      maxEdgePx: EMBED_UNCHANGED_MAX_EDGE_PX,
+      maxBytes: MAX_EMBEDDED_IMAGE_BYTES,
+    };
+    if (format === 'png' && (await pngPassesUnchanged(buf, unchanged))) {
+      return { kind: 'ok', image: { data: buf, extension: 'png' } };
+    }
+    if (format === 'jpeg' && jpegPassesUnchanged(buf, unchanged)) {
+      return { kind: 'ok', image: { data: buf, extension: 'jpeg' } };
+    }
+    if (format === 'png' || format === 'jpeg' || format === 'webp') {
       // The seam is contracted never to throw, but a throw here is a decode
       // failure, not a network failure: final, never retried.
-      const decoded = await deps.decodeWebp(buf, deps.targetWidth).catch(() => null);
+      const decoded = await deps.decodeImage(buf, deps.targetWidth).catch(() => null);
       return decoded ? { kind: 'ok', image: decoded } : { kind: 'skip', reason: 'unsupported' };
     }
     return { kind: 'skip', reason: 'unsupported' };
@@ -504,7 +527,7 @@ export async function fetchExportImageBytes(
   const now = opts.now ?? (() => Date.now());
   const deps: FetchDeps = {
     fetchImpl: opts.fetchImpl ?? routedImageFetch,
-    decodeWebp: opts.decodeWebp ?? webpToPng,
+    decodeImage: opts.decodeImage ?? webpToPng,
     targetWidth: opts.targetWidth ?? EXPORT_IMAGE_TARGET_WIDTH_PX.medium,
     sleep: opts.sleep ?? defaultSleep,
     now,
