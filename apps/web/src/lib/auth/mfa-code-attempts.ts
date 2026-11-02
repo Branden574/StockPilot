@@ -31,11 +31,12 @@ import { emitAuthAudit } from '@/server/services/auth-audit';
  * verified one (the session's verified claims, or the reset's first account
  * read), never a value from the input.
  *
- * The trade-off of the account bucket: someone who already holds the password
- * (or the reset link) can spend it and pause the account's web code checks,
- * the reset's included, for at most an hour. A person at one place meets the
- * address bucket first (10 in 15 minutes); the account bucket only refuses
- * past 20 in an hour, from one address or many. The hourly security monitor
+ * The trade-off of the account bucket: it is shared by every address, so
+ * presses that are not the account holder's count toward it too. Only a
+ * session past the password (or a reset link) reaches a code press, and the
+ * pause it brings, the reset's code step included, lasts at most an hour. A
+ * person at one place meets the address bucket first (10 in 15 minutes); the
+ * account bucket only refuses past 20 in an hour. The hourly security monitor
  * reports refused codes on one account from 5 in an hour
  * (server/security/monitors.ts detectRefusedCodeBursts), well before the
  * account bucket is spent. Both are closed, as every auth front door: a
