@@ -137,10 +137,10 @@ export const RELEASES: Release[] = [
     // Merged to fit twelve entries: S4's two drafted entries into
     // bundle-required-component; B47 part 1 and B23's Orders lines into
     // delivery-sites-by-name-and-deleted-driver; B23's saved view line into
-    // lists-keep-search-and-filters; B41 and B47 part 3, both for owners and
-    // admins, into workspace-time-zone-and-charter-removal (B41's half is its
-    // first two sentences and their reasons, so it can be taken out alone);
-    // B50's draft entry and its two proposed extras into one.
+    // lists-keep-search-and-filters; B50's draft entry and its two proposed
+    // extras into one. workspace-time-zone-and-charter-removal holds B47 part
+    // 3 alone: it was written with B41's half too, and keeps that id (B41,
+    // below).
     // Left out on purpose:
     // - the phone halves, for the next phone update and its own release:
     //   B42's (the phone's count start, Review and Select, New count's
@@ -157,8 +157,16 @@ export const RELEASES: Release[] = [
     //   server/services/bundles.ts:573 and :729), so no reader can meet it;
     //   the checks 0415 adds for writes made outside the app are not
     //   described;
-    // - B41's zone check when a workspace is created (onboarding is for
-    //   platform admins since S20; the console is platform staff only);
+    // - B41 (Settings, Organization shows a saved time zone outside the list,
+    //   and a line under the box says when the saved value cannot be used):
+    //   it changes the screen only for a workspace whose saved zone is
+    //   outside the list or not one the app can use, and the fact-check
+    //   publishes it only if a read-only count finds at least one such
+    //   workspace. No count was recorded for this release (the production
+    //   check read Demo Co, whose zone is listed), so it is out until one is
+    //   (B41, below). Its zone check when a workspace is created stays out
+    //   either way (onboarding is for platform admins since S20; the console
+    //   is platform staff only);
     // - B63's 400 for an API caller, the barcode route's statuses, the
     //   platform organization page, and six pages that already showed Page
     //   not found and now answer before any read (they look the same);
@@ -169,12 +177,13 @@ export const RELEASES: Release[] = [
     //   phone update, and the transcript installed phones still send (now
     //   unread);
     // - #430 S33, #441 S23, #438 C20 and #442 B73: nothing a person sees.
-    // B41: its half changes the screen only for a workspace whose saved zone
-    // is outside the list or not one the app can use. The fact-check asked
-    // for a read-only count of such workspaces before publishing it; none was
-    // recorded for this release, so it says what changed, and that a listed
-    // zone shows nothing new. If the integrator's count is 0, take its half
-    // out of workspace-time-zone-and-charter-removal.
+    // B41: if the integrator's read-only count before this merges finds one
+    // or more workspaces whose saved zone is outside the list or not one the
+    // app can use, its half goes back into
+    // workspace-time-zone-and-charter-removal as this release first had it:
+    // the title, the area, the four answers and the entry's comment (#461's
+    // description holds the text), and it leaves the list above. If the
+    // count is 0, or none is run, nothing here changes.
     // Who is told: every member (pdf-photos-on-white, mistyped-link-not-found
     // and password-reset-asks-for-authenticator-code have no audience), so it
     // is the first notice for each of them until it is read; each other entry
@@ -384,15 +393,20 @@ export const RELEASES: Release[] = [
         // adopt and send back (apps/mobile/app/ai/chat.tsx:130-131 at f584141ba); before, the
         // route named it last and the phone never read it, so each message began a chat of
         // its own (a new session, :279, named from its message). The web's list:
-        // lib/ai/sessions.ts:37-50 (the reader's own chats in this workspace). Not walked yet
-        // (the integrator's check sends one chat after the deploy). Audience: the route checks
-        // the AI module and items:update (route.ts:165 and :178).
+        // lib/ai/sessions.ts:37-50 (the reader's own chats in this workspace). The line names
+        // no length of chat: installed phones still send the whole on-screen chat with every
+        // message (apps/mobile/app/ai/chat.tsx:78-80 and :93-97 at f584141ba), and the route
+        // reads that body in full (route.ts:222) before it drops the history, so a long enough
+        // chat can still meet the platform's request size limit (#435's known limits); the
+        // route's tests cover a held session of 42 turns and a 9,000-character turn. Not
+        // walked yet (the integrator's check sends one chat after the deploy). Audience: the
+        // route checks the AI module and items:update (route.ts:165 and :178).
         id: 'phone-ai-long-chats-keep-answering',
         category: 'fixed',
         area: 'AI Assistant',
         title: 'Long AI Assistant chats in the mobile app keep answering',
         whatChanged:
-          'In the mobile app, an AI Assistant chat now keeps answering however many messages you send. Before, from about the 22nd message of one chat, or after a very long answer, every message showed Chat error until you left the chat and opened it again. Each chat in the app is now also saved as one conversation.',
+          'In the mobile app, a long AI Assistant chat now keeps answering. Before, from about the 22nd message of one chat, or after a very long answer, every message showed Chat error until you left the chat and opened it again. Each chat in the app is now also saved as one conversation.',
         whyItMatters:
           'A long chat in the app stopped answering, and the only way to go on was to leave it and start again from an empty screen. On the web, every message sent from the app was listed as a chat of its own, with a single question and its answer.',
         howItAffectsYou:
@@ -402,26 +416,39 @@ export const RELEASES: Release[] = [
       },
       {
         // platform: web and phone, through the server. From: B80 #436. Checked at 90f4f354b:
-        // lib/po-scan/extract.ts:490-493 (a refusal in the person's words, answered as it is
-        // by api/po-imports/scan/route.ts), shown by the web form and by the phone's Scan a PO
-        // (apps/mobile/app/scan-po/index.tsx:420-422 at f584141ba). Since S16 (live
-        // 2026-11-01) a single scan answered UNEXPECTED_ERROR_MESSAGE
-        // (server/lib/api-error-response.ts:16) instead. No import row is created for such a
-        // page (the scan service's test pins it); its file is still kept in storage, so the
-        // line says no import, not nothing saved. Not walked: a scan writes a file; the route
-        // tests cover it. Audience: the scan checks the PO imports module and
-        // purchase_orders:manage (server/services/po-imports.ts:984-985).
+        // lib/po-scan/extract.ts:490-493 (a refusal in the person's words, now a ServiceError),
+        // which api/po-imports/scan/route.ts answers in both of its branches. The combined
+        // branch (one file, or several as One multi-page PO): :336-346 answer a ServiceError's
+        // words; since S16 (live 2026-11-01) the refusal, then a plain Error, was answered
+        // UNEXPECTED_ERROR_MESSAGE (:348, server/lib/api-error-response.ts:16), and before S16
+        // its own words. The separate branch (Separate POs): :292-296 put "Could not read this
+        // file as a purchase order." in place of anything but a ServiceError, before and since
+        // S16, and :307-316 answer a 400 with the first file's words only when no file was
+        // read; when some were, the web and the phone only count the files not read
+        // (components/po-imports/po-scan-form.tsx:165-171; apps/mobile/app/scan-po/index.tsx
+        // :436-446 at f584141ba). So the line names both old sentences and drops "again".
+        // Separate POs is the default for two or more files on both (po-scan-form.tsx:47 and
+        // :133; index.tsx:110 and :388 at f584141ba). Shown by the web form
+        // (po-scan-form.tsx:155-159) and by the phone's Scan a PO (index.tsx:420-423 at
+        // f584141ba). The phone sends photos, library images and scanned page images, never a
+        // PDF or another file (index.tsx:195-196 and :601-609, and
+        // src/lib/document-scanner.ts:34-37, at f584141ba), so only the web can upload a
+        // purchase order's file. No import row is created for such a page (the scan service's
+        // test pins it); its file is still kept in storage, so the line says no import, not
+        // nothing saved. Not walked: a scan writes a file; the route tests cover it. Audience:
+        // the scan checks the PO imports module and purchase_orders:manage
+        // (server/services/po-imports.ts:984-985).
         id: 'po-scan-not-a-purchase-order',
         category: 'fixed',
         area: 'Purchase orders',
-        title: 'Scanning a page that is not a purchase order says so again',
+        title: 'Scanning a page that is not a purchase order says so',
         whatChanged:
-          "When Scan with AI on the web, or Scan a PO in the mobile app, cannot read a page as a purchase order, it again says “This doesn't look like a purchase order — try a clearer photo of the full document.” For a short time before this fix it said “Something went wrong. Please try again.” instead.",
+          "When Scan with AI on the web, or Scan a PO in the mobile app, cannot read a page as a purchase order, it says “This doesn't look like a purchase order — try a clearer photo of the full document.” For a short time before this fix, scanning one page, or several as one multi-page PO, said “Something went wrong. Please try again.” instead. With Separate POs, when no page could be read, it said “Could not read this file as a purchase order.”",
         whyItMatters:
           '“Something went wrong” did not say that the page was not read as a purchase order, or what to try next.',
         howItAffectsYou: 'No import is created for such a page, and other scans work as before.',
         whatToDo:
-          'If you see the message, take a clearer photo of the whole purchase order, or upload its file, and scan again.',
+          'If you see the message, take a clearer photo of the whole purchase order, or on the web upload its file, and scan again.',
         audience: { anyPermission: ['purchase_orders:manage'], modules: ['po_imports'] },
       },
       {
@@ -460,32 +487,27 @@ export const RELEASES: Release[] = [
         },
       },
       {
-        // platform: web. From: B41 #423 and B47 #443 part 3. Checked at 90f4f354b: B41,
-        // components/settings/org-timezone-editor.tsx:69-73 (a zone outside the list shown by
-        // name with its offset now), :149 (Save measured against the saved zone, for a listed
-        // zone), :129 and :137-138 (the line under the box); before, a zone outside the list
-        // read "UTC (no offset)" (:30) and UTC could not be saved. B47 part 3,
-        // server/services/warehouse-charters.ts:246 (deleted items counted, how to clear it,
-        // "Nothing was saved."), checked before the warehouse row is written
-        // (server/services/warehouses.ts:356), shown by
+        // platform: web. From: B47 #443 part 3. B41 #423's half is out until a read-only count
+        // finds a workspace it changes (release comment); the id, chosen with both halves in
+        // it, is kept. Checked at 90f4f354b: server/services/warehouse-charters.ts:246
+        // (deleted items counted, how to clear it, "Nothing was saved."), checked before the
+        // warehouse row is written (server/services/warehouses.ts:356), shown by
         // components/admin/warehouses-manager.tsx:423; before, the other changes were saved
-        // first and a charter only deleted items held failed with the internal error. Not
-        // walked yet (the production check reads Settings, Organization; the refusal needs a
-        // write). Audience: owners and admins (settings/organization/page.tsx:17 checks the
-        // role; admin/layout.tsx:16 checks organization:update, which owners and admins hold).
+        // first and a charter only deleted items held failed with the internal error. Restore
+        // from Settings, Recovery: settings/recovery/page.tsx:52 (items:delete). Not walked yet
+        // (the refusal needs a write). Audience: owners and admins (admin/layout.tsx:16 checks
+        // organization:update, which owners and admins hold).
         id: 'workspace-time-zone-and-charter-removal',
         category: 'fixed',
-        area: 'Settings and Admin',
-        title:
-          'Settings shows your saved time zone, and a refused charter removal on Warehouses saves nothing',
+        area: 'Admin',
+        title: 'A refused charter removal on Warehouses saves nothing',
         whatChanged:
-          "Workspace timezone in Settings, Organization now shows your workspace's saved time zone even when it is not one of the zones in the list, with its offset from UTC, and you can switch to any listed zone, UTC included. If the saved value is not a time zone name StockPilot can use everywhere, a line under the box says so. On the Warehouses page in Admin, when a charter cannot be removed from a warehouse because items there are still tagged to it, deleted items are now counted too, the message says how to clear it, and nothing in that save is saved.",
+          'On the Warehouses page in Admin, when a charter cannot be removed from a warehouse because items there are still tagged to it, deleted items are now counted too, the message says how to clear it, and nothing in that save is saved.',
         whyItMatters:
-          'For a saved time zone outside the list, the box showed UTC (no offset), which was not the zone your dates and times used, and choosing UTC could not be saved. A refused charter removal still saved the other changes, such as a new name, and a charter that only deleted items used failed with “An internal error occurred”.',
+          'A refused charter removal still saved the other changes, such as a new name, and a charter that only deleted items used failed with “An internal error occurred”.',
         howItAffectsYou:
-          'If your workspace uses one of the listed zones, Settings shows nothing new. A refused warehouse save leaves the warehouse as it was: move the items to another charter or warehouse, or restore deleted ones from Settings, Recovery and retag them, then save again.',
-        whatToDo:
-          'No action needed. If a line under Workspace timezone asks you to choose a time zone, choose one and save.',
+          'A refused warehouse save leaves the warehouse as it was: move the items to another charter or warehouse, or restore deleted ones from Settings, Recovery and retag them, then save again.',
+        whatToDo: 'No action needed.',
         audience: { roles: ['owner', 'admin'] },
       },
       {
