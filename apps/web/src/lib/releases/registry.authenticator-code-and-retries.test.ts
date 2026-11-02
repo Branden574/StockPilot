@@ -1,0 +1,416 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+import { describe, expect, it } from 'vitest';
+
+import {
+  MODULE_REGISTRY,
+  PERMISSIONS,
+  type ModuleId,
+  type Release,
+  type ReleaseViewer,
+} from '@stockpilot/core';
+
+import { ANNOUNCEMENTS } from '@/lib/onboarding/announcements';
+
+import {
+  buildReleaseList,
+  legacyAnnouncementsFor,
+  registryFingerprint,
+  visibleReleases,
+} from './logic';
+import { RELEASES } from './registry';
+
+/**
+ * Added by docs/whats-new-s43a-2026-11 (2026-11-02): two releases published
+ * together, directly below the B44 phone update draft, which is dated later
+ * and stays a draft.
+ *
+ * - authenticator-code-requests-2026-11: S43a, #447 (squash dd7cc1458,
+ *   merged 06:49:05Z; web build 2f1ae1d0e877). No phone update ships with
+ *   it: every phone line is how the app already installed answers the
+ *   server's new 401.
+ * - integration-retries-2026-11: B49, B81 and B82, #454 (squash 472fca631,
+ *   merged 15:33:44Z; web build 7a9a39fee322), a minute older, directly below.
+ *
+ * Its own file, so the release tests other open branches edit stay as they
+ * are. These tests pin what a published release must hold (its id, status,
+ * revision and date, its entries, its links and who they reach, the notice
+ * and the old phone builds' list) and the code its words rest on.
+ */
+const AUTH_CODE_ID = 'authenticator-code-requests-2026-11';
+const RETRIES_ID = 'integration-retries-2026-11';
+const LISTS_ID = 'lists-delivery-sites-and-fixes-2026-11';
+const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
+
+const everyone: ReleaseViewer = {
+  role: 'owner',
+  permissions: [...PERMISSIONS],
+  enabledModules: Object.keys(MODULE_REGISTRY) as ModuleId[],
+};
+/** A member who holds no permission and no module. */
+const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules: [] };
+/** Manages integrations where the Integrations module is on. */
+const integrator: ReleaseViewer = {
+  role: 'admin',
+  permissions: ['integrations:manage'],
+  enabledModules: ['integrations'],
+};
+
+const read = (id: string) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-02T15:50:00Z',
+  read_at: '2026-11-02T15:50:00Z',
+});
+
+/** A file in the repository, as written. */
+const REPO = resolve(__dirname, '../../../../..');
+const repoFile = (rel: string) => readFileSync(resolve(REPO, rel), 'utf8');
+/** A source file under apps/web/src, as written. */
+const source = (rel: string) => repoFile(`apps/web/src/${rel}`);
+/** A file in the mobile app, as written. */
+const phone = (rel: string) => repoFile(`apps/mobile/${rel}`);
+
+/** '/dashboard/orders?x=y' -> does app/(dashboard)/dashboard/orders/page.tsx exist? */
+const DASHBOARD_APP_DIR = resolve(__dirname, '../../app/(dashboard)');
+function pageExistsFor(href: string): boolean {
+  const path = href.split('?')[0]!.replace(/\/+$/, '');
+  return existsSync(resolve(DASHBOARD_APP_DIR, `.${path}`, 'page.tsx'));
+}
+
+/** Every string a reader can see in a release. */
+function readerText(r: Release): string[] {
+  return [
+    r.title,
+    r.summary,
+    ...r.entries.flatMap((e) => [
+      e.title,
+      e.area ?? '',
+      e.whatChanged,
+      e.whyItMatters,
+      e.howItAffectsYou,
+      e.whatToDo,
+      e.link?.label ?? '',
+    ]),
+  ];
+}
+
+/** Each entry answers all four questions, with its own id. */
+function expectFourAnswers(r: Release): void {
+  expect(r.entries.length).toBeGreaterThan(0);
+  expect(r.entries.length).toBeLessThanOrEqual(12);
+  expect(new Set(r.entries.map((e) => e.id)).size).toBe(r.entries.length);
+  for (const e of r.entries) {
+    expect(e.whatChanged.length, e.id).toBeGreaterThan(0);
+    expect(e.whyItMatters.length, e.id).toBeGreaterThan(0);
+    expect(e.howItAffectsYou.length, e.id).toBeGreaterThan(0);
+    expect(e.whatToDo.length, e.id).toBeGreaterThan(0);
+  }
+}
+
+/** Every link opens a dashboard page that exists, and says who can reach it. */
+function expectLinksReachable(r: Release): void {
+  const known = new Set<string>(PERMISSIONS);
+  for (const e of r.entries.filter((x) => x.link)) {
+    expect(e.link!.href, e.id).toMatch(/^\/dashboard(\/|$)/);
+    expect(pageExistsFor(e.link!.href), `${e.id} -> ${e.link!.href}`).toBe(true);
+    const audience = e.audience ?? r.audience;
+    expect(audience, e.id).toBeDefined();
+    expect(audience?.anyPermission?.length ?? 0, e.id).toBeGreaterThan(0);
+    for (const p of audience?.anyPermission ?? []) {
+      expect(known.has(p), `${e.id}: ${p}`).toBe(true);
+    }
+    for (const m of audience?.modules ?? []) {
+      expect(Object.keys(MODULE_REGISTRY), `${e.id}: ${m}`).toContain(m);
+    }
+  }
+}
+
+describe('the authenticator code release (S43a, release 1)', () => {
+  const release = () => byId(AUTH_CODE_ID);
+
+  it('is published once, as revision 1, directly below the B44 phone update draft, the newest published release, above the integration retries release', () => {
+    expect(RELEASES.filter((r) => r.id === AUTH_CODE_ID)).toHaveLength(1);
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
+    expect(RELEASES[0]?.status).toBe('draft');
+    expect(RELEASES[1]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[2]?.id).toBe(RETRIES_ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(AUTH_CODE_ID);
+  });
+
+  it('is dated in the past on a whole minute, after #447 merged and #454 went live, and after every release below it', () => {
+    const at = Date.parse(release().publishedAt);
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(at).toBeLessThanOrEqual(Date.now());
+    // #447 merged at 06:49:05Z; this release is written below the B44 draft
+    // and above the integration retries release, which merged at 15:33:44Z.
+    expect(at).toBeGreaterThan(Date.parse('2026-11-02T06:49:05Z'));
+    expect(at).toBeGreaterThan(Date.parse('2026-11-02T15:33:44Z'));
+    expect(at).toBeLessThanOrEqual(Date.parse('2026-11-03T00:00:00Z'));
+    expect(at).toBeLessThan(Date.parse(RELEASES[0]!.publishedAt));
+    for (const r of RELEASES.slice(2)) {
+      expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('has its two entries, each with its own id and an answer to all four questions', () => {
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'phone-waiting-changes-kept-for-code',
+      'phone-without-code-signs-in-again',
+    ]);
+    expectFourAnswers(release());
+    expect(release().entries[0]!.whatToDo).toBe('No action needed.');
+  });
+
+  it('has no link and no audience, so every member is told it, and any link would open a page that exists', () => {
+    expect(release().audience).toBeUndefined();
+    for (const e of release().entries) {
+      expect(e.link, e.id).toBeUndefined();
+      expect(e.audience, e.id).toBeUndefined();
+    }
+    expectLinksReachable(release());
+  });
+
+  it('is the first notice for an owner and for a member with no permission, and an old phone build lists it first with its title and summary alone', () => {
+    for (const v of [everyone, member, integrator]) {
+      expect(
+        visibleReleases(RELEASES, v)
+          .find((r) => r.id === AUTH_CODE_ID)
+          ?.entries.map((e) => e.id),
+        v.role,
+      ).toEqual(release().entries.map((e) => e.id));
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(AUTH_CODE_ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+        id: AUTH_CODE_ID,
+        date: '2026-11-02',
+        title: release().title,
+        body: release().summary,
+      });
+    }
+  });
+
+  it('is in every feed and in the fingerprint, so publishing it changes what clients observe', () => {
+    expect(buildReleaseList(RELEASES, member, [], null).releases.map((r) => r.id)).toContain(
+      AUTH_CODE_ID,
+    );
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(AUTH_CODE_ID);
+    expect(registryFingerprint(RELEASES)).toContain(`${AUTH_CODE_ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== AUTH_CODE_ID)),
+    );
+  });
+
+  it('promises no phone update and never says an account or its data is now safe', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(
+      /App Store|TestFlight|update the (mobile )?app|after the latest update|update your app/i,
+    );
+    // The Data API still answers a session without the code until S6, so no
+    // line may say a password alone is harmless or that data is protected.
+    expect(text).not.toMatch(
+      /\bsafe|\bsecur|protect|harmless|stolen|password alone|cannot read|can no longer read/i,
+    );
+    expect(release().summary).toMatch(/^If you use an authenticator app, /);
+    expect(release().summary).toContain('Nothing changes if you do not use an authenticator app.');
+  });
+
+  it('rests on the server refusing a session that still owes its code with the 401 the installed phone tries again', () => {
+    const ctx = source('lib/auth/api-context.ts');
+    // Both paths refuse with null (each route's 401), before anything is read.
+    expect(ctx).toContain(
+      "if (!opts?.allowStepUpPending && stepUpOwed(userRes.user.factors, bearerAal)) {\n      logStepUpRefused(req, 'bearer');\n      return null;",
+    );
+    expect(ctx).toContain(
+      "if (!opts?.allowStepUpPending && (await owesStepUp(user.factors, level))) {\n    logStepUpRefused(req, 'cookie');\n    return null;",
+    );
+    expect(repoFile('packages/core/src/auth/step-up.ts')).toContain(
+      "return enrolled && aal !== 'aal2';",
+    );
+    // The installed phone: a 401 on a live account is tried again; a 403 went
+    // to Unsent work. A queued stock adjustment answered 401 is tried again too.
+    const drain = phone('src/lib/drain-failure.ts');
+    expect(drain).toContain(
+      "if (status === 401) return opts.accountDisabled ? 'rejected' : 'failed';",
+    );
+    expect(drain).toContain(
+      'const DEFINITIVE_REFUSALS: ReadonlySet<number> = new Set([400, 403, 409, 422]);',
+    );
+    expect(phone('src/lib/adjust-outbox.ts')).toContain(
+      "if (status === 401 || status === 429 || status === 404) return 'failed';",
+    );
+    // Queued count lines go every 60 s.
+    expect(phone('src/lib/cycle-count-sync.ts')).toContain('}, 60_000);');
+    expect(phone('app/(drawer)/settings.tsx')).toContain('title="Unsent work"');
+  });
+
+  it("quotes the phone's own words, and the phone goes in without the code only when it could not check", () => {
+    const text = readerText(release()).join(' ');
+    expect(text).toContain('Unsent work');
+    expect(text).toContain('your session has ended or expired');
+    expect(phone('src/lib/item-adjust.ts')).toContain(
+      "'Your session has ended. Sign in again, then retry. Nothing was changed.'",
+    );
+    expect(phone('src/components/edit-order-line.ts')).toContain(
+      "'Your session has expired. Sign in again to change this order.'",
+    );
+    expect(text).toContain('not available on this version of the app');
+    expect(phone('src/lib/api-error-body.ts')).toContain(
+      "'That is not available on this version of the app. Update the app and try again.'",
+    );
+    // The signature hand-over answers every refusal with its one 404.
+    expect(source('app/api/orders/sign/route.ts')).toContain(
+      'return NextResponse.json(NOT_FOUND_BODY, { status: 404 });',
+    );
+    // A failed check for an authenticator lets the app in without the code.
+    const auth = phone('src/lib/auth-context.tsx');
+    expect(auth).toContain("console.warn('[auth] MFA level check failed', e);");
+    expect(text).toContain('could not check for your authenticator when you signed in');
+  });
+});
+
+describe('the integration retries release (B49, B81 and B82)', () => {
+  const release = () => byId(RETRIES_ID);
+
+  it('is published once, as revision 1, directly below the authenticator code release and above the lists-delivery-sites-and-fixes release', () => {
+    expect(RELEASES.filter((r) => r.id === RETRIES_ID)).toHaveLength(1);
+    expect(release().status).toBe('published');
+    expect(release().revision).toBe(1);
+    expect(RELEASES[1]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[2]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[3]?.id).toBe(LISTS_ID);
+  });
+
+  it('is dated in the past on a whole minute, a minute before the authenticator code release, after #454 merged, and after every release below it', () => {
+    const at = Date.parse(release().publishedAt);
+    expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
+    expect(at).toBeLessThanOrEqual(Date.now());
+    expect(at).toBeGreaterThan(Date.parse('2026-11-02T15:33:44Z'));
+    expect(Date.parse(byId(AUTH_CODE_ID).publishedAt) - at).toBe(60_000);
+    for (const r of RELEASES.slice(3)) {
+      expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
+    }
+  });
+
+  it('has its two entries, each with its own id and an answer to all four questions', () => {
+    expect(release().entries.map((e) => e.id)).toEqual([
+      'integration-export-retries-network-failure',
+      'integration-alerts-retry-brief-failure',
+    ]);
+    expectFourAnswers(release());
+  });
+
+  it('links only to the Integrations page, which exists, and names the permission and the module that page checks', () => {
+    const gate = { anyPermission: ['integrations:manage'], modules: ['integrations'] };
+    expect(release().audience).toEqual(gate);
+    for (const e of release().entries) {
+      expect(e.link, e.id).toEqual({
+        href: '/dashboard/settings/integrations',
+        label: 'Open Integrations',
+      });
+      expect(e.audience, e.id).toEqual(gate);
+    }
+    expectLinksReachable(release());
+    const page = source('app/(dashboard)/dashboard/settings/integrations/page.tsx');
+    expect(page).toContain("checkModuleAccess('integrations'),");
+    expect(page).toContain(
+      "const showQbo = integrationsAccess.enabled && can(ctx, 'integrations:manage');",
+    );
+    expect(page).toContain(
+      "const showWebhooks = integrationsAccess.enabled && can(ctx, 'integrations:manage');",
+    );
+  });
+
+  it('reaches whoever manages integrations with the module on, the notice once the authenticator code release is read, and nobody else', () => {
+    for (const v of [everyone, integrator]) {
+      expect(
+        visibleReleases(RELEASES, v).map((r) => r.id),
+        v.role,
+      ).toContain(RETRIES_ID);
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(AUTH_CODE_ID);
+      expect(
+        buildReleaseList(RELEASES, v, [read(AUTH_CODE_ID)], null).latestUnread?.id,
+        v.role,
+      ).toBe(RETRIES_ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, { [AUTH_CODE_ID]: true })[0], v.role).toEqual({
+        id: RETRIES_ID,
+        date: '2026-11-02',
+        title: release().title,
+        body: release().summary,
+        cta: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+      });
+    }
+    // Not a member with no permission, not someone with the permission whose
+    // organization has the module off, and not the module without the
+    // permission.
+    const moduleOff: ReleaseViewer = {
+      role: 'admin',
+      permissions: ['integrations:manage'],
+      enabledModules: [],
+    };
+    const noPermission: ReleaseViewer = {
+      role: 'staff',
+      permissions: [],
+      enabledModules: ['integrations'],
+    };
+    for (const v of [member, moduleOff, noPermission]) {
+      expect(
+        visibleReleases(RELEASES, v).map((r) => r.id),
+        v.role,
+      ).not.toContain(RETRIES_ID);
+      expect(
+        legacyAnnouncementsFor(RELEASES, v, { [AUTH_CODE_ID]: true }).map((a) => a.id),
+        v.role,
+      ).not.toContain(RETRIES_ID);
+    }
+  });
+
+  it('is in every feed it reaches and in the fingerprint, so publishing it changes what clients observe', () => {
+    expect(buildReleaseList(RELEASES, integrator, [], null).releases.map((r) => r.id)).toContain(
+      RETRIES_ID,
+    );
+    expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(RETRIES_ID);
+    expect(registryFingerprint(RELEASES)).toContain(`${RETRIES_ID}@1:published`);
+    expect(registryFingerprint(RELEASES)).not.toBe(
+      registryFingerprint(RELEASES.filter((r) => r.id !== RETRIES_ID)),
+    );
+  });
+
+  it('makes no phone claim, and its numbers and quoted words are the code’s own', () => {
+    const text = readerText(release()).join(' ');
+    expect(text).not.toMatch(/App Store|TestFlight|update the (mobile )?app|mobile app|phone/i);
+    // Eight tries and the 15-second stop.
+    expect(text).toContain('up to eight tries');
+    expect(source('server/connectors/drainer.ts')).toContain('export const MAX_ATTEMPTS = 8;');
+    expect(text).toContain('within 15 seconds');
+    expect(source('server/connectors/quickbooks/client.ts')).toContain(
+      'export const QBO_REQUEST_TIMEOUT_MS = 15_000;',
+    );
+    const intacct = source('server/connectors/sage-intacct/client.ts');
+    expect(intacct).toContain('export const INTACCT_REQUEST_TIMEOUT_MS = 15_000;');
+    // The sentence an Intacct export that may have arrived stops with.
+    const sentence =
+      'This export may have reached Sage Intacct. Check Intacct for it before you press Replay, or it may be posted twice.';
+    expect(intacct).toContain(`'${sentence}'`);
+    expect(text).toContain(`“${sentence}”`);
+    // A failed host lookup is not a refusal of the address.
+    expect(source('lib/ssrf-guard.ts')).toContain(
+      'return err instanceof SsrfBlockedError && !(err instanceof SsrfLookupFailedError);',
+    );
+    // Three tries to read the endpoints and queue the deliveries.
+    expect(source('server/services/integration-events.ts')).toContain(
+      'export const DISPATCH_RETRY_DELAYS_MS = [1_000, 3_000];',
+    );
+    // The screen's own words: Failed exports, Replay, and the Error and Dead
+    // badges (the status, capitalised).
+    const panel = source('components/settings/integrations-panel.tsx');
+    expect(panel).toContain('title="Failed exports (dead-letter)"');
+    expect(panel).toContain("{replayed ? 'Re-queued' : replaying ? 'Replaying…' : 'Replay'}");
+    expect(panel).toContain('<Badge variant={map[status]} dot className="capitalize">');
+    expect(text).toContain('shows Error');
+    expect(text).toContain('stops at Dead');
+  });
+});
