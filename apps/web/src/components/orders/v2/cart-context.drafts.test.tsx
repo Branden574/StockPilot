@@ -8,6 +8,7 @@ import {
   ORDER_DRAFT_PREFIX,
   orderDraftPrefixFor,
   RENTAL_DRAFT_PREFIX,
+  rentalDraftPrefixFor,
   useCart,
 } from './cart-context';
 
@@ -252,6 +253,86 @@ describe('CartProvider — the New order draft is per account', () => {
     localStorage.setItem(`${ORDER_DRAFT_PREFIX}${WH}`, legacy());
     renderOrders(A);
     expect(screen.getByTestId('lines').textContent).toBe('tentx1');
+  });
+});
+
+// ═══ THE NEW RENTAL DRAFT BELONGS TO ONE ACCOUNT (B20a) ═══
+//
+// New rental saved its cart under rental-draft:<warehouse>, which belonged to
+// no account: on a shared computer the next person to open New rental for that
+// warehouse found the last person's items and quantities. It now saves under
+// rental-draft:v2:<userId>:<warehouse> (rentalDraftPrefixFor), and a draft left
+// under the old key is adopted once, by the first person who opens that
+// warehouse, and the old key is removed, as the New order draft's was (PO-2).
+describe('CartProvider — the New rental draft is per account', () => {
+  function renderRental(prefix: string) {
+    return render(
+      <CartProvider
+        initial={initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' })}
+        draftPrefix={prefix}
+        legacyDraftPrefix={RENTAL_DRAFT_PREFIX}
+      >
+        <Lines />
+      </CartProvider>,
+    );
+  }
+
+  beforeEach(() => localStorage.clear());
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  it('the prefix names the account', () => {
+    expect(rentalDraftPrefixFor('u1')).toBe('rental-draft:v2:u1:');
+  });
+
+  // Mutation caught: a prefix that does not carry the account.
+  it("one account's rental draft is not restored for another account on the same warehouse", () => {
+    const u1Key = `${rentalDraftPrefixFor('u1')}${WH}`;
+    localStorage.setItem(u1Key, draft([{ itemId: 'tent', quantity: 2 }]));
+    renderRental(rentalDraftPrefixFor('u2'));
+    expect(screen.getByTestId('lines').textContent).toBe('');
+    // Still there for its own account.
+    expect(localStorage.getItem(u1Key)).not.toBeNull();
+  });
+
+  // Mutation caught: no legacy prefix (the old cart vanishes at the deploy),
+  // or one that is read but not removed (every account adopts it).
+  it('a draft under the old shared key is adopted once, by the first account, and the old key is removed', () => {
+    localStorage.setItem(`${RENTAL_DRAFT_PREFIX}${WH}`, draft([{ itemId: 'tent', quantity: 2 }]));
+    const first = renderRental(rentalDraftPrefixFor('u1'));
+    expect(screen.getByTestId('lines').textContent).toBe('tentx2');
+    expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
+    first.unmount();
+    renderRental(rentalDraftPrefixFor('u2'));
+    expect(screen.getByTestId('lines').textContent).toBe('');
+  });
+
+  it('the adopted draft is saved under the account key from then on', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    localStorage.setItem(`${RENTAL_DRAFT_PREFIX}${WH}`, draft([{ itemId: 'tent', quantity: 2 }]));
+    renderRental(rentalDraftPrefixFor('u1'));
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+    const saved = JSON.parse(localStorage.getItem(`${rentalDraftPrefixFor('u1')}${WH}`) ?? '{}');
+    expect(saved.lines).toEqual([{ itemId: 'tent', quantity: 2 }]);
+    expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
+  });
+
+  it('an account with its own rental draft keeps it, and the Orders draft is never adopted', () => {
+    localStorage.setItem(
+      `${rentalDraftPrefixFor('u1')}${WH}`,
+      draft([{ itemId: 'tent', quantity: 1 }]),
+    );
+    localStorage.setItem(`${ORDER_DRAFT_PREFIX}${WH}`, draft([{ itemId: 'stapler', quantity: 1 }]));
+    const own = renderRental(rentalDraftPrefixFor('u1'));
+    expect(screen.getByTestId('lines').textContent).toBe('tentx1');
+    own.unmount();
+    renderRental(rentalDraftPrefixFor('u2'));
+    expect(screen.getByTestId('lines').textContent).toBe('');
+    expect(localStorage.getItem(`${ORDER_DRAFT_PREFIX}${WH}`)).not.toBeNull();
   });
 });
 

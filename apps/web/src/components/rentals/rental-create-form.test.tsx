@@ -118,6 +118,12 @@ const TENT: CatalogItem = {
   reorderPoint: 0,
 };
 
+// The signed-in viewer's own cart key (B20a: rentalDraftPrefixFor), and the
+// account-less key New rental used before it.
+const VIEWER = 'u-viewer';
+const DRAFT_KEY = `rental-draft:v2:${VIEWER}:wh-1`;
+const LEGACY_DRAFT_KEY = 'rental-draft:wh-1';
+
 function savedCart(key: string, lines: Array<{ itemId: string; quantity: number }>) {
   localStorage.setItem(
     key,
@@ -133,7 +139,7 @@ function savedCart(key: string, lines: Array<{ itemId: string; quantity: number 
   );
 }
 
-function renderForm(items: CatalogItem[] = [TENT]) {
+function renderForm(items: CatalogItem[] = [TENT], viewerUserId = VIEWER) {
   return render(
     <RentalCreateForm
       warehouses={[
@@ -145,6 +151,7 @@ function renderForm(items: CatalogItem[] = [TENT]) {
       aisles={[]}
       members={[]}
       viewerRole="admin"
+      viewerUserId={viewerUserId}
     />,
   );
 }
@@ -171,7 +178,7 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
   });
 
   it('shows a saved line it cannot find, and refuses to check out until it is removed', async () => {
-    savedCart('rental-draft:wh-1', [
+    savedCart(DRAFT_KEY, [
       { itemId: 'tent', quantity: 1 },
       { itemId: 'gone', quantity: 2 },
     ]);
@@ -203,13 +210,15 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
 
   // Web walk 2026-09-25: Add, then Check out at once. The action came back
   // inside the cart's 250 ms save debounce, clearCartDraft ran, and the save
-  // still waiting wrote the checked-out lines back to rental-draft:wh-1, so
-  // the next New rental for that warehouse opened with them. Mutation caught:
-  // clearCartDraft removing the key without cancelling that save.
+  // still waiting wrote the checked-out lines back to the warehouse's draft
+  // (then rental-draft:wh-1; the viewer's own key since B20a), so the next New
+  // rental for that warehouse opened with them. Mutation caught:
+  // clearCartDraft removing the key without cancelling that save, and (B20a)
+  // a checkout that clears a key other than the one the cart saves under.
   it('a checkout that comes back before the cart saves leaves no draft behind', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      savedCart('rental-draft:wh-1', [{ itemId: 'tent', quantity: 1 }]);
+      savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
       renderForm();
       await act(async () => {
         vi.advanceTimersByTime(300);
@@ -228,14 +237,15 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
       await act(async () => {
         vi.advanceTimersByTime(1000);
       });
-      expect(localStorage.getItem('rental-draft:wh-1')).toBeNull();
+      expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
+      expect(localStorage.getItem(LEGACY_DRAFT_KEY)).toBeNull();
     } finally {
       vi.useRealTimers();
     }
   });
 
   it('switching warehouse loads that warehouse and holds checkout until it arrives', () => {
-    savedCart('rental-draft:wh-1', [{ itemId: 'tent', quantity: 1 }]);
+    savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
     renderForm();
     expect((checkOut() as HTMLButtonElement).disabled).toBe(false);
 
@@ -243,6 +253,73 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
 
     expect(push).toHaveBeenCalledWith('/dashboard/rentals/new?warehouseId=wh-2');
     expect((checkOut() as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+// ═══ EACH PERSON'S RENTAL CART IS THEIR OWN (B20a) ═══
+//
+// The cart was saved under rental-draft:<warehouse> for whoever used the
+// browser, so on a shared computer the next person to open New rental for the
+// same warehouse found the last person's items. The form now saves, restores
+// and clears under the viewer's own key, and adopts a cart saved under the old
+// key once.
+describe("RentalCreateForm — the viewer's own cart", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    push.mockReset();
+    toastError.mockReset();
+    createRentalAction.mockReset();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+  });
+
+  // Mutation caught: the provider given the shared prefix, or no account.
+  it("opens the viewer's own cart, never another account's cart for the same warehouse", () => {
+    savedCart('rental-draft:v2:u-other:wh-1', [{ itemId: 'tent', quantity: 1 }]);
+    const other = renderForm();
+    expect(screen.getByText('Add items from the catalog.')).toBeTruthy();
+    expect((checkOut() as HTMLButtonElement).disabled).toBe(true);
+    other.unmount();
+
+    savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
+    renderForm();
+    expect(screen.getByText('Event tent')).toBeTruthy();
+    expect((checkOut() as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  // Mutation caught: no legacy prefix passed (a cart saved before the deploy
+  // vanishes), or the old key read but left for the next person.
+  it('adopts a cart saved under the old shared key once, then keeps it under the viewer key', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    savedCart(LEGACY_DRAFT_KEY, [{ itemId: 'tent', quantity: 2 }]);
+    const first = renderForm();
+    expect(screen.getByText('Event tent')).toBeTruthy();
+    expect(localStorage.getItem(LEGACY_DRAFT_KEY)).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+    expect(JSON.parse(localStorage.getItem(DRAFT_KEY) ?? '{}').lines).toEqual([
+      { itemId: 'tent', quantity: 2 },
+    ]);
+    first.unmount();
+
+    renderForm([TENT], 'u-other');
+    expect(screen.getByText('Add items from the catalog.')).toBeTruthy();
+  });
+
+  // Mutation caught: checkout clearing the shared key instead of the viewer's.
+  it("a checkout clears the viewer's own cart", async () => {
+    savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
+    renderForm();
+    createRentalAction.mockResolvedValue({ ok: true, data: { id: 'rental-1' } });
+    fireEvent.change(screen.getByLabelText('Borrower'), { target: { value: 'Ana' } });
+    await act(async () => {
+      fireEvent.click(checkOut());
+    });
+    expect(createRentalAction).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
   });
 });
 
@@ -338,7 +415,7 @@ describe('RentalCreateForm: the redesigned rail and setup', () => {
   afterEach(() => localStorage.clear());
 
   it('the cart controls are 44 px on a phone and on coarse pointers', () => {
-    savedCart('rental-draft:wh-1', [{ itemId: 'tent', quantity: 1 }]);
+    savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
     renderForm();
     for (const name of ['Decrease quantity', 'Increase quantity']) {
       const button = screen.getByRole('button', { name });
@@ -352,7 +429,7 @@ describe('RentalCreateForm: the redesigned rail and setup', () => {
   });
 
   it('the unavailable line keeps its words, its remove button and the touch size', () => {
-    savedCart('rental-draft:wh-1', [{ itemId: 'gone', quantity: 2 }]);
+    savedCart(DRAFT_KEY, [{ itemId: 'gone', quantity: 2 }]);
     renderForm();
     expect(
       screen.getByText('An item saved in this cart is no longer available to rent here (2).'),

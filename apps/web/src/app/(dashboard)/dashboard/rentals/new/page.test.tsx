@@ -567,6 +567,19 @@ describe('New rental: the borrower picker members', () => {
   });
 });
 
+describe('New rental: the cart belongs to the signed-in member', () => {
+  // B20a: the form saves its cart under the viewer's own key
+  // (rentalDraftPrefixFor), so the page names the viewer. Mutation caught: no
+  // viewer passed (the form would fall back to no account).
+  it("hands the form the signed-in member's own id", async () => {
+    stubWith(() => ({ data: [], error: null }));
+    reserved.mockResolvedValue(new Map());
+    await renderPage();
+    const props = formProps.mock.calls.at(-1)?.[0] as { viewerUserId?: unknown };
+    expect(props.viewerUserId).toBe('u1');
+  });
+});
+
 describe('New rental: only the rental items the caller can read, and only their photos', () => {
   // The rental items were read with the service-role client, filtered by org,
   // warehouse, status, is_rental and deleted_at only. inventory_items_select
