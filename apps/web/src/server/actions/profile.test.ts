@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
+import { verifiedSessionAuth } from '@/test/verified-session-stub';
 
 // a534b31e (2026-07-10, "updateTag requires cacheComponents — use
 // revalidateTag everywhere") swapped setOrgLogoUrlAction's cache
@@ -38,6 +39,9 @@ const { authState, mfaState, redirectError } = vi.hoisted(() => ({
     /** Session leg (supabase.auth.mfa.*), which is all an org-less user has. */
     totp: [] as Array<{ status: string }>,
     currentLevel: 'aal1' as 'aal1' | 'aal2',
+    /** S50a: whose account the cookie session's reads answer for (the
+     *  factor list and the verified claims); 'user-1' is the validated user. */
+    sessionUserId: 'user-1',
   },
   authState: {
     /** No accepted membership: getSessionMemberships() -> [] and every
@@ -134,10 +138,18 @@ const {
       deleteUser: vi.fn(async (_userId: string) => ({
         error: null as { message: string; status?: number; code?: string; name?: string } | null,
       })),
-      /** Review R7: asked only after deleteUser answered an error. */
+      /** The platform-admin check's email read (S50a), and review R7: asked
+       *  again after deleteUser answered an error. */
       getUserById: vi.fn(async (_userId: string) => ({
-        data: { user: { id: 'user-1' } as { id: string } | null },
+        data: { user: { id: 'user-1' } as { id: string; email?: string | null } | null },
         error: null as { message: string; status?: number; code?: string } | null,
+      })),
+      /** S50a: the last check's factor read, by the validated user's id. */
+      listFactors: vi.fn(async (_args: { userId: string }) => ({
+        data: {
+          factors: mfaState.totp.map((f, i) => ({ id: `f${i + 1}`, factor_type: 'totp', ...f })),
+        } as { factors: Array<{ id: string; factor_type: string; status: string }> } | null,
+        error: null as { message: string } | null,
       })),
     },
     /** 0388 — account_deletion_check, the dry run the action asks first. */
@@ -177,6 +189,7 @@ vi.mock('@/lib/supabase/admin', () => ({
       admin: {
         deleteUser: adminAuth.deleteUser,
         getUserById: adminAuth.getUserById,
+        mfa: { listFactors: adminAuth.listFactors },
       },
     },
     rpc: adminRpc,
@@ -273,6 +286,7 @@ beforeEach(() => {
   mfaState.enrolled = false;
   mfaState.totp = [];
   mfaState.currentLevel = 'aal1';
+  mfaState.sessionUserId = 'user-1';
   adminAuth.deleteUser.mockImplementation(async () => ({ error: null }));
   adminAuth.getUserById.mockImplementation(async () => ({ data: { user: { id: 'user-1' } }, error: null }));
   adminRpc.mockImplementation(async () => ({ data: { deletable: true }, error: null }));
@@ -621,13 +635,16 @@ describe('deleteOwnAccountAction', () => {
       'user_profiles.update': { data: null, error: null },
     });
     // The session MFA legs (all an org-less user has — there is no org policy
-    // to consult) are driven from mfaState.
-    stubHolder.stub.client.auth.mfa.listFactors.mockImplementation(async () => ({
-      data: { all: mfaState.totp, totp: mfaState.totp },
+    // to consult) are driven from mfaState: the factor list is GoTrue's user
+    // (getUser), the level the verified session claims (S50a), each answering
+    // for mfaState.sessionUserId.
+    stubHolder.stub.client.auth.getUser.mockImplementation(async () => ({
+      data: { user: { id: mfaState.sessionUserId, factors: mfaState.totp } },
       error: null,
     }));
-    stubHolder.stub.client.auth.mfa.getAuthenticatorAssuranceLevel.mockImplementation(
-      async () => ({ data: { currentLevel: mfaState.currentLevel }, error: null }),
+    Object.assign(
+      stubHolder.stub.client.auth,
+      verifiedSessionAuth(() => ({ sub: mfaState.sessionUserId, aal: mfaState.currentLevel })),
     );
     // The browser's own session, ended after a successful delete (walk B9).
     (stubHolder.stub.client.auth as unknown as { signOut: typeof cookieSignOut }).signOut =
@@ -726,9 +743,14 @@ describe('deleteOwnAccountAction', () => {
   });
 
   // O-A3-7 (0393): the platform console's operator account is refused in-app
-  // while its email is on the allowlist; asked FIRST, before any read.
+  // while its email is on the allowlist; asked FIRST, before any read. The
+  // email is the validated user's own, read by its id with the service role
+  // (S50a), never from the cookie session.
   it('refuses a platform admin first, by the VERIFIED auth email, and changes nothing', async () => {
-    platformAdmin.getVerifiedEmail.mockImplementationOnce(async () => 'ops@stockpilotusa.com');
+    adminAuth.getUserById.mockImplementationOnce(async () => ({
+      data: { user: { id: 'user-1', email: 'platform-admin@example.test' } },
+      error: null,
+    }));
     platformAdmin.isPlatformAdmin.mockImplementationOnce(() => true);
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(false);
@@ -740,17 +762,22 @@ describe('deleteOwnAccountAction', () => {
       expect((result.error.details as { reason?: string } | undefined)?.reason).toBe('platform_admin');
     }
     // Never the profile email the person can edit (session.email 'u@example.test').
-    expect(platformAdmin.isPlatformAdmin).toHaveBeenCalledWith('ops@stockpilotusa.com');
+    expect(platformAdmin.isPlatformAdmin).toHaveBeenCalledWith('platform-admin@example.test');
     expect(stubHolder.stub!.fromCalls).not.toContain('organization_members');
     expect(checkRateLimitMock).not.toHaveBeenCalled();
     expect(adminRpc).not.toHaveBeenCalled();
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
     expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
     expect(avatarStorage.list).not.toHaveBeenCalled();
+    expect(adminAuth.getUserById).toHaveBeenCalledWith('user-1');
+    expect(platformAdmin.getVerifiedEmail).not.toHaveBeenCalled();
   });
 
   it('fails CLOSED when the verified email cannot be read: try again, nothing changed', async () => {
-    platformAdmin.getVerifiedEmail.mockImplementationOnce(async () => null);
+    adminAuth.getUserById.mockImplementationOnce(async () => ({
+      data: { user: null },
+      error: { message: 'upstream unavailable', status: 503 },
+    }));
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -762,6 +789,97 @@ describe('deleteOwnAccountAction', () => {
     expect(platformAdmin.isPlatformAdmin).not.toHaveBeenCalled();
     expect(adminRpc).not.toHaveBeenCalled();
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    // Reported as the phone route reports it.
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        tag: 'account.delete.platform_admin_check',
+        extra: { source: 'web' },
+      }),
+    );
+  });
+
+  it('an account already gone at the platform-admin check: this browser is signed out, nothing deleted or written here', async () => {
+    adminAuth.getUserById.mockImplementationOnce(async () => ({
+      data: { user: null },
+      error: {
+        name: 'AuthApiError',
+        status: 404,
+        code: 'user_not_found',
+        message: 'User not found',
+      },
+    }));
+    const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    expect(result.ok).toBe(true);
+    expect(adminRpc).not.toHaveBeenCalled();
+    expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+    expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
+  /**
+   * S50a: immediately before the delete, assertStepUpHeld checks once more
+   * that the verified session is the validated user's and owes no step-up, so
+   * nothing read between the gate and the delete can stand in for it.
+   */
+  describe('the last check before the delete (S50a)', () => {
+    it('runs after the database check and before the delete', async () => {
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(adminAuth.listFactors).toHaveBeenCalledWith({ userId: 'user-1' });
+      expect(adminAuth.listFactors.mock.invocationCallOrder[0]).toBeGreaterThan(
+        adminRpc.mock.invocationCallOrder[0]!,
+      );
+      expect(adminAuth.listFactors.mock.invocationCallOrder[0]).toBeLessThan(
+        adminAuth.deleteUser.mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it("a verified session that is not the validated user's: sign in again, nothing deleted or written", async () => {
+      mfaState.sessionUserId = 'user-2';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'unauthenticated',
+          message: 'Sign in again, then try again.',
+          details: { reason: 'session_changed' },
+        },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).not.toHaveBeenCalled();
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+    });
+
+    it('an authenticator still owed at aal1: refused with aal2_required, nothing deleted', async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal1';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('factors that cannot be read: refused, nothing deleted', async () => {
+      adminAuth.listFactors.mockImplementationOnce(async () => ({
+        data: null,
+        error: { message: 'service unavailable' },
+      }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toMatchObject({ ok: false, error: { code: 'internal_error' } });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('an authenticator at aal2: deleted', async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal2';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
+    });
   });
 
   it('a failed local sign-out after the delete still answers ok (the account is gone) and is reported', async () => {
@@ -932,6 +1050,11 @@ describe('deleteOwnAccountAction', () => {
       'user_profiles.update': { data: null, error: null },
     });
     (stubHolder.stub.client.auth as unknown as { signOut: typeof cookieSignOut }).signOut = cookieSignOut;
+    // The last check before the delete reads the verified session (S50a).
+    Object.assign(
+      stubHolder.stub.client.auth,
+      verifiedSessionAuth(() => ({ sub: mfaState.sessionUserId, aal: mfaState.currentLevel })),
+    );
     const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
     expect(result.ok).toBe(true);
     expect(adminAuth.deleteUser).toHaveBeenCalledWith('user-1');
@@ -1066,13 +1189,55 @@ describe('deleteOwnAccountAction', () => {
     it('fails CLOSED when the factor list cannot be read', async () => {
       // Mirrors resolveMfaState in services/context.ts: an unreadable MFA state
       // must never be treated as "no MFA required" on a destructive action.
-      stubHolder.stub!.client.auth.mfa.listFactors.mockImplementation(async () => {
+      stubHolder.stub!.client.auth.getUser.mockImplementation(async () => {
         throw new Error('network');
       });
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe('forbidden');
       expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    // S50a: the posture is this person's own: their factor list and their
+    // verified level, each held to the user requireSession() validated.
+    it("a factor list that is not the validated user's: sign in again, nothing deleted", async () => {
+      mfaState.sessionUserId = 'user-2';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'unauthenticated',
+          message: 'Sign in again, then try again.',
+          details: { reason: 'session_changed' },
+        },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it("an enrolled user whose verified level is not their own session's is not at aal2", async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal2';
+      stubHolder.stub!.client.auth.getSession = verifiedSessionAuth(() => ({
+        sub: 'user-2',
+        aal: 'aal2',
+      })).getSession;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'forbidden', details: { reason: 'aal2_required' } },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it('reads neither listFactors() nor the unverified level', async () => {
+      mfaState.totp = [{ status: 'verified' }];
+      mfaState.currentLevel = 'aal2';
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(stubHolder.stub!.client.auth.mfa.listFactors).not.toHaveBeenCalled();
+      expect(
+        stubHolder.stub!.client.auth.mfa.getAuthenticatorAssuranceLevel,
+      ).not.toHaveBeenCalled();
     });
   });
 
@@ -1175,7 +1340,11 @@ describe('deleteOwnAccountAction', () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({
         error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
       }));
-      adminAuth.getUserById.mockImplementationOnce(async () => ({ data: { user: null }, error: NOT_FOUND }));
+      // The platform-admin check reads the account first (S50a); the second
+      // read is the one after the failed delete.
+      adminAuth.getUserById
+        .mockImplementationOnce(async () => ({ data: { user: { id: 'user-1' } }, error: null }))
+        .mockImplementationOnce(async () => ({ data: { user: null }, error: NOT_FOUND }));
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
       expect(result.ok).toBe(true);
       expect(adminAuth.getUserById).toHaveBeenCalledWith('user-1');
@@ -1199,16 +1368,114 @@ describe('deleteOwnAccountAction', () => {
       );
     });
 
-    it('404 user_not_found to the delete (deleted by another request): success, no second audit row', async () => {
+    // Only the gap between the last check's factor read (S50a) and the delete:
+    // the other request deleted the account after GoTrue listed its factors.
+    // Deleted any earlier, the factor read itself answers 404 (the next case).
+    it('deleted by another request after the last check read its factors (404 user_not_found to the delete): success, no second audit row', async () => {
       adminAuth.deleteUser.mockImplementationOnce(async () => ({ error: NOT_FOUND }));
       const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
       expect(result.ok).toBe(true);
-      expect(adminAuth.getUserById).not.toHaveBeenCalled();
+      expect(adminAuth.listFactors).toHaveBeenCalledTimes(1);
+      // The platform-admin check's read only (S50a): the delete's own answer
+      // settles it, so GoTrue is not asked again.
+      expect(adminAuth.getUserById).toHaveBeenCalledTimes(1);
       expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
       // The request that deleted it removes the avatar files (0393).
       expect(avatarStorage.list).not.toHaveBeenCalled();
       expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
       expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+    });
+
+    // The likeliest way to meet the deletion: both requests pass their checks
+    // (each check is rolled back before its delete), the other one deletes,
+    // and this one's next GoTrue call is the last check's factor read. GoTrue
+    // answers every /admin/users/<id> route, the factor list included, with
+    // 404 user_not_found once the user is gone.
+    it('deleted by another request before the last check read its factors (404 user_not_found there): success, this browser signed out, nothing deleted or written here', async () => {
+      adminAuth.listFactors.mockImplementationOnce(async () => ({ data: null, error: NOT_FOUND }));
+      // Not Once: a queued answer the action never asks for would carry over
+      // to the next test (clearAllMocks keeps it); the top-level beforeEach
+      // resets this one.
+      adminAuth.deleteUser.mockImplementation(async () => ({ error: NOT_FOUND }));
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(adminAuth.listFactors).toHaveBeenCalledWith({ userId: 'user-1' });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(avatarStorage.list).not.toHaveBeenCalled();
+      expect(cookieSignOut).toHaveBeenCalledTimes(1);
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      // Not an outage: the factors were not "unreadable".
+      expect(reportErrorMock).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'auth.step_up_held.factors_unreadable' }),
+      );
+    });
+
+    // The same race when getClaims() cannot check the token locally (the key
+    // set could not be fetched): the session's token is then checked by GoTrue,
+    // which answers 403 user_not_found for a deleted account, so the last check
+    // finds no session of the account. GoTrue is asked whether the account
+    // still exists before "sign in again" is said.
+    it('deleted by another request during the check, while GoTrue checks the token: success, this browser signed out, nothing deleted or written here', async () => {
+      adminRpc.mockImplementationOnce(async () => {
+        const auth = stubHolder.stub!.client.auth as unknown as Record<string, unknown>;
+        auth.getClaims = async () => ({
+          data: null,
+          error: { name: 'AuthRetryableFetchError', status: 0, message: 'fetch failed' },
+        });
+        auth.getUser = async () => ({
+          data: { user: null },
+          error: {
+            name: 'AuthApiError',
+            status: 403,
+            code: 'user_not_found',
+            message: 'User from sub claim in JWT does not exist',
+          },
+        });
+        return { data: { deletable: true }, error: null };
+      });
+      // The platform-admin check finds the account; it is gone after that.
+      // (Not Once: see above.)
+      let reads = 0;
+      adminAuth.getUserById.mockImplementation(async () =>
+        ++reads === 1
+          ? { data: { user: { id: 'user-1' } }, error: null }
+          : { data: { user: null }, error: NOT_FOUND },
+      );
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({ ok: true, data: undefined });
+      expect(adminAuth.getUserById).toHaveBeenCalledTimes(2);
+      expect(adminAuth.getUserById).toHaveBeenNthCalledWith(2, 'user-1');
+      expect(adminAuth.listFactors).not.toHaveBeenCalled();
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(cookieSignOut).toHaveBeenCalledWith({ scope: 'local' });
+    });
+
+    it('no session of the account at the last check, and GoTrue cannot say whether it exists: sign in again, nothing deleted or signed out', async () => {
+      adminRpc.mockImplementationOnce(async () => {
+        mfaState.sessionUserId = 'user-2';
+        return { data: { deletable: true }, error: null };
+      });
+      let reads = 0;
+      adminAuth.getUserById.mockImplementation(async () =>
+        ++reads === 1
+          ? { data: { user: { id: 'user-1' } }, error: null }
+          : { data: { user: null }, error: { message: 'upstream unavailable', status: 503 } },
+      );
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual({
+        ok: false,
+        error: {
+          code: 'unauthenticated',
+          message: 'Sign in again, then try again.',
+          details: { reason: 'session_changed' },
+        },
+      });
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(cookieSignOut).not.toHaveBeenCalled();
     });
 
     it('the check finds no such account (deleted from another device): success, nothing deleted or written here', async () => {

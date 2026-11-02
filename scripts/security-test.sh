@@ -1040,6 +1040,19 @@ WEB_TESTS=(
   src/lib/auth/mfa-factors.test.ts
   src/server/services/context.factor-swap.test.ts
   src/server/actions/team.transfer-refresh-swap.test.ts
+  # Each security check in the recovery codes, account deletion and the email
+  # change reads the factors and sign-in level of the account the action
+  # already validated (docket S50a). A recovery code is spent, and codes are
+  # minted, with that account's verified access token on a client that acts as
+  # it alone (lib/supabase/access-token-client.ts); account deletion reads that
+  # account's factors, level and email, and checks once more right before the
+  # delete (server/services/step-up-held.ts); the email change takes the
+  # factors from the getUser() answer that names the user. The real server
+  # client, auth-js and requireSession() in the three action files.
+  src/server/services/step-up-held.test.ts
+  src/server/actions/mfa-recovery.held-reads.test.ts
+  src/server/actions/profile.held-reads.test.ts
+  src/server/actions/email-change.held-reads.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
@@ -1146,6 +1159,27 @@ WEB_TESTS=(
   # Warehouse scoping (defence in depth behind the RLS policies).
   src/lib/warehouse-scope.test.ts
   src/lib/locations/scope.test.ts
+
+  # S39: a write named by a row id reads that row in the ACTIVE organization,
+  # through the caller's own client, before its function runs; a miss answers
+  # the site's not-found sentence and nothing runs (lib/in-active-org.ts). A
+  # member of two organizations whose page or phone screen was left open after
+  # a switch sent the other organization's id with this one's context: the
+  # function changed the row there while the audit row, the webhook, the
+  # outbox row and the notices were written here. Twelve sites: order cancel
+  # and paper signature, cycle count release and reassign, receipt post and
+  # reversal, rental checkout, kit save, assembly and hand-out, and the
+  # movement note (action and phone route). The guard classifies every .rpc(
+  # call under apps/web/src and removes each of the twelve reads in turn to
+  # prove it is what holds. Each file carries the "Security invariant" marker.
+  src/test/rpc-active-organization.guard.test.ts
+  src/server/services/lib/in-active-org.test.ts
+  src/server/services/order-requests.other-organization.test.ts
+  src/server/services/cycle-counts.other-organization.test.ts
+  src/server/services/receiving.other-organization.test.ts
+  src/server/services/rentals.other-organization.test.ts
+  src/server/services/bundles.other-organization.test.ts
+  src/server/actions/movements.other-organization.test.ts
 
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified
