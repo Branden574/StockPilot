@@ -8,7 +8,7 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('@/lib/auth/session', () => ({
   requireSession: vi.fn(async () => ({
     userId: 'user-1',
-    email: 'u@e.com',
+    email: 'u@example.test',
     fullName: null,
     avatarUrl: null,
     defaultOrganizationId: 'org-1',

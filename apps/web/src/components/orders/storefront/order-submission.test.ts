@@ -38,7 +38,7 @@ function record(placer: string, extra: Record<string, unknown> = {}) {
       warehouseId: 'aaaaaaaa-0000-4000-8000-000000000001',
       fulfillmentType: 'delivery',
       deliveryCharterId: 'cccccccc-0000-4000-8000-000000000001',
-      onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+      onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
       notes: 'Room 12',
       neededByLocal: '2026-12-01T09:30',
       lines: [
@@ -130,7 +130,7 @@ describe('cartStateFromPendingBody', () => {
       warehouseId: 'aaaaaaaa-0000-4000-8000-000000000001',
       charterId: 'cccccccc-0000-4000-8000-000000000001',
       fulfillmentType: 'delivery',
-      onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+      onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
       notes: 'Room 12',
       neededBy: '2026-12-01T09:30',
       lines: [{ itemId: 'bbbbbbbb-0000-4000-8000-00000000000a', quantity: 5 }],

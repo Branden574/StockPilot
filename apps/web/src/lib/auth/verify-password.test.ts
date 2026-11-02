@@ -57,7 +57,7 @@ describe('verifyPasswordSideChannel', () => {
   });
 
   it('builds an isolated, non-persisting client', async () => {
-    await verifyPasswordSideChannel('u@e.com', 'pw');
+    await verifyPasswordSideChannel('u@example.test', 'pw');
     expect(refs.createClient).toHaveBeenCalledWith(
       'https://example.supabase.co',
       'anon-key',
@@ -68,7 +68,7 @@ describe('verifyPasswordSideChannel', () => {
   });
 
   it('revokes the session the password grant just minted (no ghost row)', async () => {
-    const res = await verifyPasswordSideChannel('u@e.com', 'pw');
+    const res = await verifyPasswordSideChannel('u@example.test', 'pw');
 
     expect(res).toEqual({ ok: true });
     // scope 'local' — revoke ONLY the ghost. 'global'/'others' would evict the
@@ -83,7 +83,7 @@ describe('verifyPasswordSideChannel', () => {
       error: { message: 'Invalid login credentials' },
     });
 
-    const res = await verifyPasswordSideChannel('u@e.com', 'bad');
+    const res = await verifyPasswordSideChannel('u@example.test', 'bad');
 
     expect(res).toEqual({
       ok: false,
@@ -99,13 +99,13 @@ describe('verifyPasswordSideChannel', () => {
     // A failed cleanup must never turn a VERIFIED password into a failure —
     // a leaked ghost is the pre-fix status quo, a false "password incorrect"
     // would block the user out of email change / MFA enroll entirely.
-    await expect(verifyPasswordSideChannel('u@e.com', 'pw')).resolves.toEqual({ ok: true });
+    await expect(verifyPasswordSideChannel('u@example.test', 'pw')).resolves.toEqual({ ok: true });
   });
 
   it('reports internal_error (not invalid_password) when the client throws', async () => {
     refs.signInWithPassword.mockRejectedValue(new Error('network down'));
 
-    const res = await verifyPasswordSideChannel('u@e.com', 'pw');
+    const res = await verifyPasswordSideChannel('u@example.test', 'pw');
 
     expect(res).toEqual({
       ok: false,
