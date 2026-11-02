@@ -980,6 +980,13 @@ WEB_TESTS=(
   src/lib/auth/verified-claims.test.ts
   src/lib/auth/server-session-reads.guard.test.ts
   src/lib/auth/platform-admin.gates.test.ts
+  # The claims count only for the account the request already validated (S43a
+  # review round 1): a cookie whose refresh token belongs to another account's
+  # session, timed to refresh between the identity read and the claims read,
+  # passed the console's fresh step-up with that account's claims. The
+  # withContext gate and assertCurrentAal2 cases are in
+  # context.verified-aal.test.ts.
+  src/lib/auth/platform-admin.refresh-swap.test.ts
   src/server/services/context.verified-aal.test.ts
   src/server/actions/sessions.test.ts
   src/server/actions/mfa-recovery.generate.test.ts
