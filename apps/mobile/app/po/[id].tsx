@@ -41,6 +41,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { PO_DRAFT_REVIEW_COPY, poIsReviewOnly } from '@/lib/po-draft-review';
+import { poBillToLine, readPoBillToCharter, type BillToCharterRead } from '@/lib/po-bill-to';
 import { poStatusLabel } from '@/lib/po-status';
 import {
   OVER_RECEIPT_CONFIRM_LABEL,
@@ -87,6 +88,8 @@ interface PoHeader {
   status: string;
   destination_warehouse_id: string | null;
   supplier_name: string | null;
+  /** The charter the PO is billed to (purchase_orders.charter_id), B56. */
+  charter_id: string | null;
 }
 
 interface DraftLine {
@@ -129,6 +132,8 @@ export default function PoReceiveScreen() {
   // The size-run read failed: lines render one by one (receiving still works,
   // it is the job), and a notice says why. Set by every size-run read.
   const [groupsDegraded, setGroupsDegraded] = React.useState(false);
+  // The bill-to charter's read (B56): set once per load, on the success path.
+  const [billTo, setBillTo] = React.useState<BillToCharterRead>({ state: 'none' });
   // The receipt history (or its totals) did not load: said in place of the
   // history, never shown as receipts with 0 accepted. Set by every read.
   const [receiptsError, setReceiptsError] = React.useState<string | null>(null);
@@ -321,7 +326,7 @@ export default function PoReceiveScreen() {
       supabase
         .from('purchase_orders')
         .select(
-          `id, po_number, status,
+          `id, po_number, status, charter_id,
            supplier:suppliers!supplier_id (name),
            destination:locations!destination_location_id (warehouse_id)`,
         )
@@ -375,13 +380,19 @@ export default function PoReceiveScreen() {
       { warehouse_id: string | null } | { warehouse_id: string | null }[] | null;
     const supplierObj = Array.isArray(supplier) ? supplier[0] : supplier;
     const destObj = Array.isArray(dest) ? dest[0] : dest;
+    const charterId = (r.charter_id as string | null) ?? null;
     setHeader({
       id: r.id as string,
       po_number: r.po_number as string,
       status: r.status as string,
       supplier_name: supplierObj?.name ?? null,
       destination_warehouse_id: destObj?.warehouse_id ?? null,
+      charter_id: charterId,
     });
+    // The bill-to charter (B56), a label read apart from the PO read: it runs
+    // beside the size runs and the history, never rejects and waits at most
+    // PO_BILL_TO_WAIT_MS, so it can neither fail nor hold receiving.
+    const billToRead = readPoBillToCharter(supabase, orgId, charterId);
 
     type ItemEmbed = {
       id: string;
@@ -426,6 +437,7 @@ export default function PoReceiveScreen() {
     // says "did not load" instead of zero totals.
     await loadReceiptHistory();
 
+    setBillTo(await billToRead);
     setLoading(false);
     // sportsEnabled deliberately excluded — see sportsEnabledRef above. Only
     // the PO id / org context re-key the draft (the two part loaders are
@@ -445,6 +457,8 @@ export default function PoReceiveScreen() {
   // A DRAFT is read-only here (po-draft-review.ts): no Scan, no quantities,
   // no Post receipt, and its lines one by one (no receiving runs).
   const reviewOnly = poIsReviewOnly(header?.status);
+  // Null for a PO billed to no charter, and for a read of another PO's.
+  const billToLine = poBillToLine(header?.charter_id ?? null, billTo);
   // Receiving follows stock:adjust, the permission the receipt route asserts
   // (and, since 0395, the database's own receipt function): the screen used
   // to offer Scan, the quantities and Post receipt to everyone who can read
@@ -735,6 +749,7 @@ export default function PoReceiveScreen() {
               <Text style={styles.subtitle}>
                 {header?.supplier_name ?? 'No supplier'} · {poStatusLabel(header?.status)}
               </Text>
+              {billToLine ? <Text style={styles.subtitle}>{billToLine}</Text> : null}
             </View>
             {readOnly ? null : (
               <Pressable
