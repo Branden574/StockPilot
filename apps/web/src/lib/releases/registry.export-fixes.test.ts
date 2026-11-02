@@ -77,6 +77,7 @@ const exporter: ReleaseViewer = {
  * three, or as a notice, sees or reads them first (a read of a release a
  * reader is not told changes nothing).
  */
+// Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: the authenticator code and integration retries releases only): the web fixes and archived charters releases are published later, at the top, and reach an owner, so they are read or seen with the others.
 const NEWER_IDS = [
   'web-fixes-2026-11-02',
   'archived-charters-2026-11',
@@ -156,6 +157,7 @@ describe('the export fixes release', () => {
   it('sits directly below the update-ready-and-fixes release (published later, below the lists-delivery-sites-and-fixes release), directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: the lists-delivery-sites-and-fixes release at 1, ID at 2, the small-fixes-8 release at 3 and slice(3)): the authenticator code and integration retries releases are published later, directly below the B44 phone update draft, above the lists-delivery-sites-and-fixes release, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft, mobile-app-asks-before-restarting, a draft at 0, and the three releases below it at 1 to 3): the release that folds the draft in, update-ready-and-fixes, is published at 3, directly below the lists-delivery-sites-and-fixes release and directly above this one, dated after it; the three releases above it move up one place, and this one stays at 4.
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0, ID at 4 and slice(5)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     expect(RELEASES[2]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[2]?.status).toBe('published');
     expect(RELEASES[3]?.id).toBe('integration-retries-2026-11');

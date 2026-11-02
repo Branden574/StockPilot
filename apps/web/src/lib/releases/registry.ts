@@ -72,6 +72,16 @@ export const RELEASES: Release[] = [
     // ordinary logos "upload and print as before": a logo over 1024 px now
     // prints from a 512 px copy (image-prefetch.ts:226-247), so it says they
     // are accepted as before and print. The summary is new.
+    // Changed in the review of this publish: howItAffectsYou said "Logos
+    // under that size ... are accepted as before and print", which covered
+    // every format. Only a PNG, JPEG or WebP is sized at upload
+    // (profile.ts:494); an AVIF is held to 4096 by 4096 on the PDF side
+    // (DECODE_MAX_INPUT_PIXELS.avif, image-decode.ts:59), so a 5000 by 5000
+    // AVIF is accepted and prints no logo, and an AVIF logo never printed
+    // before #468 (image-prefetch.ts:404-407). The sentence now names PNG, JPG
+    // and WebP. An SVG logo, possible only for one uploaded from 2026-05-05 to
+    // 2026-05-09, prints no logo; it stays out, as the export fixes release
+    // records for #414 (its "an SVG logo no longer prints" note).
     // Not announced (each PR's own reasons): #455's tracking-key rule, photo
     // route gate and retired route; #468's photo and export changes, and the
     // WebP and AVIF logos that now print (B48's entry, the integrator's call).
@@ -107,7 +117,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           'Your logo prints at the top of PDFs such as purchase orders, cycle count sheets and reports. A logo that large is now left out of those PDFs, because preparing it takes too much time and memory. Settings tells you when you upload it, instead of the PDFs quietly showing only your organization name.',
         howItAffectsYou:
-          'Logos under that size, including wide wordmarks, are accepted as before and print at the top of those PDFs. If the logo you have now is larger than this, your PDFs show only your organization name until you upload a smaller copy.',
+          'PNG, JPG and WebP logos under that size, including wide wordmarks, are accepted as before and print at the top of those PDFs. If the logo you have now is larger than this, your PDFs show only your organization name until you upload a smaller copy.',
         whatToDo:
           'No action needed. If Settings says your logo is too large, save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.',
         audience: { roles: ['owner', 'admin'] },
@@ -157,10 +167,22 @@ export const RELEASES: Release[] = [
     // says it could be picked for an item or book (the form offered it,
     // item-form.tsx at c4323b76a^:1123). Its whatChanged last sentence says
     // "as a new choice", as the record's own charter is still offered back.
+    // Its whatChanged also says "shows that charter by name, marked
+    // (archived)" for "shows that charter's name marked (archived)", "move the
+    // item or book" for "move it", and its whyItMatters "while a warehouse
+    // still served it" for "while its warehouse still served it"; none
+    // changes the meaning.
+    // Changed in the review of this publish: the summary and whatChanged said
+    // "saving keeps it" for the item and book forms as if that were new.
+    // Before #467 the form offered every charter the warehouse links,
+    // archived ones included, by id (item-form.tsx at c4323b76a^:1109-1126),
+    // so a save, or a move to a warehouse that links it, already kept it.
+    // They now say saving still keeps it there; keeping it on a save is new
+    // only in the Team dialog.
     status: 'published',
     title: 'On the web, archived charters show by name and are kept when you save',
     summary:
-      "On the web, a charter that has been archived now shows by its name, marked (archived), and saving keeps it: on the item and book forms, where it showed as a long code, and for owners and admins in a member's Charters dialog on Team, where it was not listed. The web no longer offers an archived charter as a new choice.",
+      "On the web, a charter that has been archived now shows by its name, marked (archived): on the item and book forms, where it showed as a long code and saving still keeps it, and for owners and admins in a member's Charters dialog on Team, where it was not listed and saving now keeps it. The web no longer offers an archived charter as a new choice.",
     publishedAt: '2026-11-02T19:00:00Z',
     entries: [
       {
@@ -183,7 +205,7 @@ export const RELEASES: Release[] = [
         area: 'Inventory',
         title: 'Item and book forms name an archived charter instead of showing a long code',
         whatChanged:
-          'On the web, when you edit an item or book whose charter has been archived, the Charter list shows that charter by name, marked (archived), and saving keeps it, also when you move the item or book to another warehouse that still serves that charter. The web no longer offers an archived charter as a new choice for an item or book.',
+          'On the web, when you edit an item or book whose charter has been archived, the Charter list now shows that charter by name, marked (archived). Saving still keeps it, as before, also when you move the item or book to another warehouse that still serves that charter. The web no longer offers an archived charter as a new choice for an item or book.',
         whyItMatters:
           'A charter archived while a warehouse still served it showed in the Charter list as a long code, and it could be picked for an item or book.',
         howItAffectsYou:

@@ -512,6 +512,7 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: 17): the export fixes release is published after it, at the top, so it sits one place lower.
     // Re-pinned by docs/whats-new-2026-11-02b (2026-11-02; was: 19): the lists-delivery-sites-and-fixes release is published after it, directly below the B44 phone update draft, so it sits one place lower.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: 20): the authenticator code and integration retries releases are published after it, directly below the B44 phone update draft, so it sits two places lower.
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: 22): the web fixes and archived charters releases are published after it, at the top, so it sits two places lower.
     expect(at).toBe(24);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
@@ -522,6 +523,7 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: the slice 8 draft at 0): it is published in the same place, at the top, the newest release.
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: the small-fixes-8 release at 0): the export fixes release is published at the top, the newest release, directly above it.
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES[1] to [3], below the B44 phone update draft at 0): the draft is folded into the update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, so these three move up one place and it takes [3]; every position from [4] down stays.
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0 and the public link release at 21): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     expect(RELEASES[2]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[2]?.status).toBe('published');
     expect(RELEASES[3]?.id).toBe('integration-retries-2026-11');

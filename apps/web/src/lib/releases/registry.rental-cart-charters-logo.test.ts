@@ -257,6 +257,23 @@ describe('the web fixes release (B20a and S45)', () => {
     );
   });
 
+  // Added in the review round (2026-11-02): only a PNG, JPEG or WebP logo is
+  // sized at upload, and an AVIF is held to 4096 by 4096 on the PDF side, so
+  // a 5000 by 5000 AVIF is under 50 million pixels, accepted and prints no
+  // logo. The line that says logos under that size print names the three
+  // formats the upload sizes.
+  it('says only PNG, JPG and WebP logos under that size are accepted and print, as the upload sizes only those', () => {
+    const logo = release().entries[1]!;
+    expect(logo.howItAffectsYou).toMatch(
+      /^PNG, JPG and WebP logos under that size, including wide wordmarks, are accepted as before and print at the top of those PDFs\./,
+    );
+    expect(readerText(release()).join(' ')).not.toMatch(/\bAVIF\b|\bSVG\b/);
+    expect(source('lib/image-decode.ts')).toContain('  avif: 4096 * 4096,');
+    expect(source('server/actions/profile.ts')).toContain(
+      'An AVIF states its size in a box tree that is not read here',
+    );
+  });
+
   it('promises no phone update and never says book for a recorded quantity', () => {
     const text = readerText(release()).join(' ');
     expect(text).not.toMatch(/mobile app|phone|App Store|TestFlight|\bbook(ed)?\b/i);
@@ -326,6 +343,24 @@ describe('the archived charters release (S44)', () => {
     );
     expect(source('components/admin/charters-manager.tsx')).toContain(
       '<strong>Archived view</strong>',
+    );
+  });
+
+  // Added in the review round (2026-11-02): before #467 the item and book
+  // forms offered every charter the warehouse links, archived ones included
+  // (by id), so a save already kept it there; keeping it on a save is new only
+  // in the Team dialog.
+  it('says saving still keeps an archived charter on the item and book forms, and now keeps it in the Team dialog', () => {
+    const [team, form] = release().entries;
+    expect(release().summary).toContain(
+      'on the item and book forms, where it showed as a long code and saving still keeps it,',
+    );
+    expect(release().summary).toContain('where it was not listed and saving now keeps it.');
+    expect(release().summary).not.toMatch(/\(archived\), and saving keeps it/);
+    expect(form!.whatChanged).toContain('Saving still keeps it, as before,');
+    expect(form!.whatChanged).not.toMatch(/, and saving keeps it/);
+    expect(team!.whyItMatters).toBe(
+      'An archived charter was not listed in the dialog, so a save did not keep it.',
     );
   });
 
