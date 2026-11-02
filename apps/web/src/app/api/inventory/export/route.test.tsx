@@ -9,6 +9,7 @@ import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { reportError } from '@/lib/error-reporter';
+import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
 import {
   attachExportImages,
@@ -209,6 +210,14 @@ describe('POST /api/inventory/export — authorization', () => {
     vi.mocked(withApiContext).mockResolvedValue(buildCtx('viewer'));
     const res = await POST(buildRequest({ format: 'csv', scope: 'all' }));
     expect(res.status).toBe(403);
+  });
+
+  // B68: the bare code reached the dialog's alert line as "forbidden".
+  it('says in the 403 which permission to ask an admin for', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(buildCtx('viewer'));
+    const res = await POST(buildRequest({ format: 'csv', scope: 'all' }));
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden', message: EXPORT_FORBIDDEN_COPY });
   });
 
   it('400s a selected export with no ids', async () => {

@@ -267,6 +267,9 @@ export default async function RentalItemsPage({
           />
         ) : (
           <ElsewhereUnavailableNotice unavailable={inventory.elsewhereUnavailable}>
+            {/* No canExport, so no Export here for anyone (B68): every export
+                reads only non-rental items, so it saved items from the Items
+                list, or a file with no rows. */}
             <InventoryTable
               items={itemsWithImages}
               total={rentalTotal}

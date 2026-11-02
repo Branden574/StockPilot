@@ -368,6 +368,8 @@ async function booksTableSection({
   // sports:manage with the sports module on; the page asked the module gate
   // with the others).
   const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
   // The bulk "Cycle count" shortcut (B42): only for someone who can start a
   // count, by the server's floors (core countStartAllowed: a manager with
   // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
@@ -482,6 +484,7 @@ async function booksTableSection({
         canUngroup={canUngroup}
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
+        canExport={canExport}
         canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -765,6 +768,7 @@ async function booksTableSection({
       canUngroup={canUngroup}
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
+      canExport={canExport}
       canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
