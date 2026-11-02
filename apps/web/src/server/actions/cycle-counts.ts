@@ -3,23 +3,16 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
 import { CycleCountsService } from '@/server/services/cycle-counts';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  // ForbiddenError comes out of assertWarehouseAccess when the caller
-  // isn't allowed to touch the warehouse. Map it to the 'forbidden'
-  // ActionResult code so the client toast says "permission denied"
-  // instead of a generic "Unknown error".
-  if (error instanceof ForbiddenError) return err('forbidden', error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.cycle_counts');
 }
 
 const startSchema = z

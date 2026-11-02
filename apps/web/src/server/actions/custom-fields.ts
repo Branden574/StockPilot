@@ -3,13 +3,13 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
-import { ServiceError, withContext } from '@/server/services/context';
+import { withContext } from '@/server/services/context';
 import {
   CustomFieldsService,
   RESERVED_CUSTOM_FIELD_KEYS,
 } from '@/server/services/custom-fields';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   CUSTOM_FIELD_TYPES,
@@ -132,10 +132,7 @@ export async function createCustomFieldAction(
     revalidate();
     return ok({ definition });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.custom_fields.create_custom_field');
   }
 }
 
@@ -180,10 +177,7 @@ export async function updateCustomFieldAction(
     revalidate();
     return ok({ definition });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.custom_fields.update_custom_field');
   }
 }
 
@@ -222,9 +216,6 @@ export async function archiveCustomFieldAction(
     revalidate();
     return ok({ definition });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.custom_fields.archive_custom_field');
   }
 }

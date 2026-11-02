@@ -1161,6 +1161,12 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S31: a Server Action answers a failure it did not expect with a fixed
+  # sentence, never the error's own text, and reports it with the action's
+  # tag (server/lib/action-error-result.ts). The same census reads every
+  # Server Action and service and their imports. The file carries the
+  # "Security invariant" marker.
+  src/server/lib/action-error-result.test.ts
   # S34: a member's session never leaves with an analytics request. PostHog's
   # SDK sends to /ingest on our own origin, so the browser attaches every
   # cookie of this host. app/ingest/[...path]/route.ts builds each request to

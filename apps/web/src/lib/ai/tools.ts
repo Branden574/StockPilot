@@ -8,6 +8,7 @@ import { resolveAiProvider } from './provider';
 import { dataTag, untrustedDeep, untrustedTag } from './untrusted';
 import { env } from '@/lib/env';
 import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
+import { reportError } from '@/lib/error-reporter';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
@@ -2870,6 +2871,31 @@ const getStaleItemsTool: ToolExecutor = {
 // name/SKU fails to find a concept the user is describing.
 // ──────────────────────────────────────────────────────────────────
 
+/**
+ * What the model reads when semantic search fails (S31 review). A tool's
+ * result goes into the model's context and its reply goes to the person, so a
+ * failure's own text (the database's words about tables and policies, or the
+ * AI vendor's quota text) is reported here and never returned.
+ */
+export const SEMANTIC_SEARCH_UNAVAILABLE =
+  'Semantic search is unavailable right now. Use searchInventory (keyword search) instead.';
+export const EMBEDDING_BACKFILL_FAILED =
+  'The embedding backfill could not finish. Try again in a few minutes.';
+
+function semanticSearchFailed(
+  code: 'embedding_failed' | 'search_failed',
+  step: 'embed' | 'search' | 'confirm',
+  failure: unknown,
+  ctx: ServiceContext,
+): { error: string; message: string } {
+  void reportError(failure, {
+    tag: 'ai.tool.semantic_search',
+    organizationId: ctx.organizationId,
+    extra: { step },
+  });
+  return { error: code, message: SEMANTIC_SEARCH_UNAVAILABLE };
+}
+
 const searchInventorySemanticTool: ToolExecutor = {
   declaration: {
     name: 'searchInventorySemantic',
@@ -2906,10 +2932,7 @@ const searchInventorySemanticTool: ToolExecutor = {
     try {
       vec = await embedQuery(query);
     } catch (err) {
-      return {
-        error: 'embedding_failed',
-        message: err instanceof Error ? err.message : 'Unknown error embedding query.',
-      };
+      return semanticSearchFailed('embedding_failed', 'embed', err, ctx);
     }
 
     // HI-3, layer 2 (database). Migration 0320 adds `p_org_id` and filters
@@ -2926,12 +2949,7 @@ const searchInventorySemanticTool: ToolExecutor = {
       },
     );
     if (error) {
-      return {
-        error: 'search_failed',
-        message: error.message,
-        hint:
-          'If the message mentions the function not existing or no function matching the arguments, migration 0320 needs to be applied (it replaces 0094 s signature with an org-scoped one). If no rows have embeddings yet, run the backfill from /dashboard/settings (or via the embedItems action).',
-      };
+      return semanticSearchFailed('search_failed', 'search', error, ctx);
     }
     const rows = (data ?? []) as Array<{
       id: string;
@@ -2968,7 +2986,7 @@ const searchInventorySemanticTool: ToolExecutor = {
         rows.map((r) => r.id),
       );
     if (ownedError) {
-      return { error: 'search_failed', message: ownedError.message };
+      return semanticSearchFailed('search_failed', 'confirm', ownedError, ctx);
     }
     const inOrg = new Set((owned ?? []).map((r) => (r as { id: string }).id));
 
@@ -3013,10 +3031,11 @@ const backfillEmbeddingsTool: ToolExecutor = {
       const { embedded, failed, changed, remaining } = result;
       return { embedded, failed, changed, remaining };
     } catch (e) {
-      return {
-        error: 'backfill_failed',
-        message: e instanceof Error ? e.message : 'Unknown error',
-      };
+      void reportError(e, {
+        tag: 'ai.tool.backfill_embeddings',
+        organizationId: ctx.organizationId,
+      });
+      return { error: 'backfill_failed', message: EMBEDDING_BACKFILL_FAILED };
     }
   },
 };

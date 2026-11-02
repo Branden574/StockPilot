@@ -5,7 +5,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { withApiContext } from '@/lib/auth/api-context';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { reportError } from '@/lib/error-reporter';
 import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { buildInventoryExportSourceRows } from '@/lib/inventory-export';
@@ -677,5 +679,33 @@ describe('POST /api/inventory/export — an unexpected failure', () => {
     });
     expect(text).not.toContain('fontkit');
     expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export' });
+  });
+  // Since S16 these answered "Something went wrong" (S31, LS1): the context
+  // read's fallback could not check the caller's permissions or account
+  // status, and that check has its own sentence.
+  it('a permission check that could not run answers its own sentence, reported as a warning', async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new PermissionsUnavailableError();
+    vi.mocked(withApiContext).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ format: 'csv', scope: 'all' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your permissions could not be checked. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export', level: 'warning' });
+  });
+
+  it('an account status that could not be read answers its own sentence, reported as a warning', async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new AccountStatusUnavailableError();
+    vi.mocked(withApiContext).mockRejectedValueOnce(err);
+    const res = await POST(buildRequest({ format: 'csv', scope: 'all' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Account status could not be verified. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(err, { tag: 'inventory.export', level: 'warning' });
   });
 });

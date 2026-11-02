@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 
@@ -42,6 +44,41 @@ function thrownBy(fn: () => never): unknown {
 describe('internalErrorResponse', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // S31 (LS1): a route that calls withApiContext inside its try answered these
+  // two with "Something went wrong" since S16. Each carries one fixed sentence
+  // the app wrote (lib/auth/effective-permissions.ts, account-status.ts), the
+  // one routes answered before S16, and the check failing is not the route's
+  // fault: a warning.
+  it('answers a permission check that could not run with its own sentence and the route status, as a warning', async () => {
+    const e = new PermissionsUnavailableError();
+    const res = internalErrorResponse(e, 'api.test.route', {
+      status: 503,
+      organizationId: 'org-1',
+      message: 'A route sentence.',
+    });
+    expect(res.status).toBe(503);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your permissions could not be checked. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(e, {
+      tag: 'api.test.route',
+      organizationId: 'org-1',
+      level: 'warning',
+    });
+  });
+
+  it('answers an account status that could not be read with its own sentence, as a warning', async () => {
+    const e = new AccountStatusUnavailableError();
+    const res = internalErrorResponse(e, 'api.test.route');
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Account status could not be verified. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(e, { tag: 'api.test.route', level: 'warning' });
   });
 
   it("answers the fixed sentence, never the error's text", async () => {

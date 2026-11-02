@@ -3,6 +3,7 @@ import 'server-only';
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
 import { env } from '@/lib/env';
+import { reportError } from '@/lib/error-reporter';
 
 import type { Database } from '@stockpilot/core';
 
@@ -76,10 +77,16 @@ export async function verifyPasswordSideChannel(
 
     return { ok: true };
   } catch (e) {
+    // The callers answer `message` as it is (MFA set-up, recovery codes, the
+    // ownership transfer, the email change), so it is a fixed sentence, never
+    // the thrown error's text; the error goes to the report (S31).
+    void reportError(e instanceof Error ? e : new Error(String(e)), {
+      tag: 'auth.verify_password',
+    });
     return {
       ok: false,
       reason: 'internal_error',
-      message: e instanceof Error ? e.message : 'Password verification failed',
+      message: 'Could not verify your current password. Please try again.',
     };
   }
 }

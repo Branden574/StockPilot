@@ -18,6 +18,7 @@ import {
   removeAvatarObjects,
   settleFailedDelete,
 } from '@/server/lib/account-deletion';
+import { NOT_SET_UP_MESSAGE, unexpectedActionError } from '@/server/lib/action-error-result';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { insertAuditRowReported } from '@/server/services/audit';
 
@@ -81,11 +82,13 @@ export async function createOrgForCustomerAction(
   let admin;
   try {
     admin = createAdminClient();
-  } catch {
-    return err(
-      'internal_error',
-      'Server is missing SUPABASE_SERVICE_ROLE_KEY. Check Vercel env config.',
-    );
+  } catch (e) {
+    // Only a server without the service-role key throws here: never the
+    // setting's name to the operator (S31); the report names it.
+    return unexpectedActionError(e, 'actions.platform_admin.create_org_for_customer', {
+      message: NOT_SET_UP_MESSAGE,
+      level: 'warning',
+    });
   }
 
   // 1. Invite the user. generateLink({type:'invite'}) creates the auth row
@@ -344,8 +347,11 @@ export async function setOrgDeletionPassphraseAction(
   let admin;
   try {
     admin = createAdminClient();
-  } catch {
-    return err('internal_error', 'Server is missing SUPABASE_SERVICE_ROLE_KEY.');
+  } catch (e) {
+    return unexpectedActionError(e, 'actions.platform_admin.set_org_deletion_passphrase', {
+      message: NOT_SET_UP_MESSAGE,
+      level: 'warning',
+    });
   }
   // Fail-closed brute-force guard: the currentPassphrase check below is a secret
   // oracle, so throttle rotate attempts per-actor exactly like the delete path —
@@ -435,8 +441,11 @@ export async function removeOrgAction(
   let admin;
   try {
     admin = createAdminClient();
-  } catch {
-    return err('internal_error', 'Server is missing SUPABASE_SERVICE_ROLE_KEY.');
+  } catch (e) {
+    return unexpectedActionError(e, 'actions.platform_admin.remove_org', {
+      message: NOT_SET_UP_MESSAGE,
+      level: 'warning',
+    });
   }
 
   // 1. A passphrase must be configured, and it must match.

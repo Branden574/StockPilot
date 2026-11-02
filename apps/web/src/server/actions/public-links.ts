@@ -4,13 +4,14 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
-import { assertPermission, ServiceError, withContext } from '@/server/services/context';
+import { assertPermission, withContext } from '@/server/services/context';
 import {
   PublicLinksService,
   publicLinkSchema,
   type EffectiveCatalogCount,
   type PublicLinkCandidateRow,
 } from '@/server/services/public-links';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -27,8 +28,7 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.public_links');
 }
 
 const SETTINGS_PATH = '/dashboard/settings/public-requests';

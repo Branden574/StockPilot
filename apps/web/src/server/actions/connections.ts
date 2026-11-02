@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { ConnectionsService } from '@/server/services/connections';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult, type ConnectorProviderId } from '@stockpilot/core';
 
@@ -52,9 +52,7 @@ const accountMappingSchema = z.object({
 
 function toActionError(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
-  if (e instanceof ServiceError) return err(e.code, e.message, e.details);
-  console.error(e);
-  return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  return actionErrorResult(e, 'actions.connections');
 }
 
 /** Begins an OAuth connect; returns the authorize URL for the client to redirect to. */

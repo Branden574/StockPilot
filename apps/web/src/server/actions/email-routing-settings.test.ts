@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 // Mutable session state so per-test role / MFA overrides work (the
 // auto-archive-settings.test.ts pattern).
@@ -79,6 +80,8 @@ vi.mock('@/server/services/context', async () => {
     })),
   };
 });
+
+import { reportError } from '@/lib/error-reporter';
 
 import { setOrgEmailRoutingAction } from './email-routing-settings';
 
@@ -257,5 +260,39 @@ describe('setOrgEmailRoutingAction — gates fail closed', () => {
     });
     expect(res).toMatchObject({ ok: false, error: { code: 'validation_error' } });
     expect(updateSpy).not.toHaveBeenCalled();
+  });
+});
+
+// S31: the last catch answered an unexpected error's own text, and only logged
+// it. It says the fixed sentence now and reports it; a refusal still carries
+// only details.reason (the panel's step-up modal reads it).
+describe('setOrgEmailRoutingAction — what a failure says (S31)', () => {
+  it("an unexpected failure answers the fixed sentence, never the error's text, and is reported", async () => {
+    const e = new Error('insert or update on table "audit_logs" violates foreign key constraint');
+    auditSpy.mockRejectedValueOnce(e as never);
+    const res = await setOrgEmailRoutingAction({
+      feature: 'delivery_request',
+      recipients: VALID_RECIPIENTS,
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Something went wrong. Please try again.' },
+    });
+    expect(reportError).toHaveBeenCalledWith(e, {
+      tag: 'actions.email_routing_settings.set_org_email_routing',
+    });
+  });
+
+  it('a step-up refusal keeps details.reason and nothing else', async () => {
+    sessionState.mfaRequired = true;
+    sessionState.mfaSatisfied = false;
+    sessionState.mfaEnrolled = true;
+    const res = await setOrgEmailRoutingAction({
+      feature: 'delivery_request',
+      recipients: VALID_RECIPIENTS,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.details).toEqual({ reason: 'aal2_required' });
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

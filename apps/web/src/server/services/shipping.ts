@@ -2,6 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { EasyPostApiError, EasyPostClient } from '@/server/connectors/easypost/client';
 import { getConnectionSecret } from '@/server/connectors/secret-store';
@@ -27,6 +28,15 @@ export const parcelSchema = z.object({
   height_in: z.number().positive(),
 });
 export type ParcelInput = z.infer<typeof parcelSchema>;
+
+/**
+ * EasyPost refused the request (4xx other than 429): it was never carried out,
+ * so nothing was charged, and the details sent need changing. Anything else
+ * (a 5xx, a 429, a timeout, a network error) is the carrier not answering.
+ */
+function carrierRefused(e: unknown): boolean {
+  return e instanceof EasyPostApiError && e.status >= 400 && e.status < 500 && e.status !== 429;
+}
 
 /** A single shoppable rate, flattened from the EasyPost Shipment `rates[]`. */
 export interface ShippingRate {
@@ -624,12 +634,26 @@ export class ShippingService {
         }`,
       );
     }
+    // S31: the carrier's own text (its response body, a network error's words)
+    // is reported, never answered: the label route and the return-label action
+    // pass a validation ServiceError's words to the person as they are.
+    this.reportCarrierFailure('shipping.buy_failed', original);
     throw new ServiceError(
       'validation_error',
-      `Label purchase failed at the carrier: ${
-        original instanceof Error ? original.message : String(original)
-      }`,
+      carrierRefused(original)
+        ? 'The carrier refused the label purchase. Nothing was charged. Check the shipment details and try again.'
+        : 'The label could not be bought. Nothing was charged. Try again.',
     );
+  }
+
+  /** The carrier's failure, for the people who run the app (S31). */
+  private reportCarrierFailure(tag: string, e: unknown): void {
+    void reportError(e, {
+      tag,
+      organizationId: this.ctx.organizationId,
+      level: 'warning',
+      extra: { status: e instanceof EasyPostApiError ? e.status : null },
+    });
   }
 
   /**
@@ -650,9 +674,7 @@ export class ShippingService {
     client: EasyPostClient,
     err: unknown,
   ): Promise<CarrierShipmentRow> {
-    const definitiveNoCharge =
-      err instanceof EasyPostApiError && err.status >= 400 && err.status < 500 && err.status !== 429;
-    if (definitiveNoCharge) {
+    if (carrierRefused(err)) {
       // 4xx (not 429): EasyPost rejected the request before charging. Safe to
       // reopen the draft for a corrected retry.
       return await this.rollbackClaim(draftRow, err);
@@ -1150,11 +1172,12 @@ export class ShippingService {
       // The Shipment was never created → no charge possible. Reopen/close out the
       // draft so it does not occupy state, then surface the error.
       await this.discardReturnDraft(draftRow.id);
+      this.reportCarrierFailure('shipping.return_shipment_failed', err);
       throw new ServiceError(
         'validation_error',
-        `Could not create the return shipment at the carrier: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
+        carrierRefused(err)
+          ? "The carrier refused the return shipment. Check the order's shipping address and your organization's address, then try again."
+          : 'The carrier could not be reached. Try again in a few minutes.',
       );
     }
 
