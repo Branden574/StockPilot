@@ -27,8 +27,11 @@ import { describe, expect, it } from 'vitest';
  *     *-http.ts, *error-response.ts, export-errors.ts) anywhere in src, and
  *     every module an API route imports directly (`@/...` or a relative path,
  *     by import, export-from or import()): a helper builds text a route
- *     answers as it is (the AI ISBN extract's `notes` did, S16 review). Not
- *     server/services nor server/actions: they have their own scopes.
+ *     answers as it is (the AI ISBN extract's `notes` did, S16 review). Also
+ *     every lib/ai module those lib/ai modules import, all the way down: the
+ *     AI chat hands a tool's result to the model, and the model's reply is
+ *     answered (lib/ai/tools.ts, S31 review). Not server/services nor
+ *     server/actions: they have their own scopes.
  *   - Server Actions: every module under server/actions, every module whose
  *     first statement (or a function's first statement) is 'use server', and
  *     every module they import directly outside server/services. A Server
@@ -51,8 +54,10 @@ import { describe, expect, it } from 'vitest';
  *
  * where an error is a catch clause's binding or a rejection handler's
  * parameter (whatever its name), a name such as e, err, error, uploadErr,
- * pgError (also as a property: res.error.message), or a parameter that a call
- * by the function's name in the same file passes one of those (a helper such
+ * pgError (also as a property: res.error.message), a const whose value is one
+ * of those (`const failure = asReportableError(e)`, `const thrown = e as
+ * Error`; S31 review), or a parameter that a call by the function's name in
+ * the same file passes one of those or asReportableError(...) (a helper such
  * as `rollbackClaim(original)`). The text is followed through what keeps it
  * text: casts, string methods, `??`, `||`, `&&`, `+`, a branch of `?:`, a
  * template. Also counted (S31):
@@ -61,7 +66,15 @@ import { describe, expect, it } from 'vitest';
  *                                   in an API route, inside NextResponse.json
  *                                   or Response.json; elsewhere, in an object
  *                                   that is returned, thrown or passed to err()
- *                                   or ok(), and as err()'s message
+ *                                   or ok(), and as err()'s message; in every
+ *                                   scope, as the words of a ServiceError other
+ *                                   than internal_error or of a ForbiddenError
+ *                                   (actions and routes answer those as they
+ *                                   are); a name that holds an error counts
+ *                                   there too (S31 review)
+ *   .catch(nonErrorText), .map(rawErrorText), const d = rawErrorText
+ *                                   an error-to-text helper used as a value,
+ *                                   not called (S31 review)
  *   'Server is missing FOO_KEY'     a literal naming a server setting (FOO_KEY,
  *                                   FOO_SECRET, FOO_TOKEN, FOO_PASSWORD, .env,
  *                                   .env.local, env vars, Vercel env)
@@ -86,6 +99,7 @@ const SRC = path.resolve(__dirname, '../..');
 const API = path.join(SRC, 'app/api');
 const ACTIONS = path.join(SRC, 'server/actions');
 const SERVICES = path.join(SRC, 'server/services');
+const AI = path.join(SRC, 'lib/ai');
 
 /** Response helpers outside app/api answer API callers too. */
 const RESPONSE_HELPER = /^(?:.+-)?http\.ts$|^(?:.+-)?error-response\.ts$|^export-errors\.ts$/;
@@ -109,6 +123,10 @@ const ALLOWED: Record<string, { lines: number; why: string }> = {
   'app/api/po-imports/scan/route.ts': {
     lines: 1,
     why: "namesResult.error: parseDisplayNames' own sentences about the file names the caller sent, never an error's text",
+  },
+  'lib/ai/embeddings.ts': {
+    lines: 5,
+    why: "errorText's body and its three callers, read here through the AI tools (S31 review): the text feeds console lines and a batch's firstError, which only the hourly sweep cron answers (to the CRON_SECRET holder); the backfill tool answers counts only, and a failed query embedding is reported, never handed to the model",
   },
   'lib/ai/chat.ts': {
     lines: 1,
@@ -203,8 +221,8 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
     why: 'the start and post mappers match our RAISE codes and answer app sentences, else internal_error',
   },
   'server/services/inventory.ts': {
-    lines: 3,
-    why: "moveSeededStockToUnplaced's local report(): its argument goes only to reportError(new Error(detail)) at warning level; the dialog answers locationName null",
+    lines: 4,
+    why: "moveSeededStockToUnplaced's local report() (3): its argument goes only to reportError(new Error(detail)) at warning level; the dialog answers locationName null. assertCustomFieldsValid (1): validateCustomFields' result.error is the validator's own sentence about a field the person filled in (packages/core customization/custom-fields.ts), never an error's text",
   },
   'server/services/integration-events.ts': {
     lines: 2,
@@ -232,7 +250,7 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
   },
   'server/services/lib/fetch-by-ids.ts': {
     lines: 5,
-    why: "rawErrorText's body (2) is for server logs: every caller passes it to reportError, new Error or an internal_error ServiceError; writeInIdBatches' result.error (2) and settleAsDataError's error.message (1) are read by callers as a database error, which this census counts wherever it is answered",
+    why: "rawErrorText's body (2) is for server logs: every caller passes it to reportError, new Error or an internal_error ServiceError; writeInIdBatches' result.error (2) and settleAsDataError's error.message (1) are read by callers as a database error field, which this census counts wherever it is answered: a returned or thrown object, a JSON body, err(), and a non-internal ServiceError's or a ForbiddenError's words (S31 review); every caller today passes it only to an internal_error ServiceError, reportError, new Error or console",
   },
   'server/services/lib/postgrest-error.ts': {
     lines: 1,
@@ -363,7 +381,20 @@ function apiScope(): string[] {
         !/\.test\.tsx?$/.test(file) &&
         !NOT_READ.test(path.relative(SRC, file)),
     );
-  return [...new Set([...api, ...helpers, ...imported])];
+  // The AI chat's model loop (S31 review): a tool's result goes into the
+  // model's context and the model's reply is answered, so every lib/ai module
+  // the read lib/ai modules import, and what those import, is read too.
+  const read = new Set([...api, ...helpers, ...imported]);
+  const pending = [...read].filter((file) => file.startsWith(AI + path.sep));
+  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    for (const next of importsOf(file)) {
+      if (next.startsWith(AI + path.sep) && !/\.test\.tsx?$/.test(next) && !read.has(next)) {
+        read.add(next);
+        pending.push(next);
+      }
+    }
+  }
+  return [...read];
 }
 
 /** A 'use server' directive as the first of `statements`. */
@@ -612,9 +643,50 @@ function bindsAThrow(id: ts.Identifier): boolean {
 /** Whether `node` holds an error (see the header). */
 function isError(node: ts.Expression): boolean {
   const x = unwrap(node);
-  if (ts.isIdentifier(x)) return bindsAThrow(x) || ERROR_NAME.test(x.text) || isErrorParameter(x);
+  if (ts.isIdentifier(x)) {
+    return bindsAThrow(x) || ERROR_NAME.test(x.text) || isErrorParameter(x) || holdsAnError(x);
+  }
   if (ts.isPropertyAccessExpression(x)) return isErrorField(x);
   if (ts.isCallExpression(x)) return callsHelper(x, ERROR_VALUE_HELPERS);
+  return false;
+}
+
+/** Declarations being followed by holdsAnError, so `const a = b; const b = a` ends. */
+const FOLLOWING = new Set<ts.Node>();
+
+/**
+ * Whether the nearest declaration of `id` is a const whose value is an error
+ * (`const failure = asReportableError(e)`, `const thrown = e as Error`), S31
+ * review.
+ */
+function holdsAnError(id: ts.Identifier): boolean {
+  for (let n: ts.Node | undefined = id.parent; n; n = n.parent) {
+    if (ts.isCatchClause(n) && binds(n.variableDeclaration?.name, id.text)) return false;
+    if (isFunction(n) && n.parameters.some((p) => binds(p.name, id.text))) return false;
+    if (!(ts.isBlock(n) || ts.isSourceFile(n) || ts.isCaseClause(n) || ts.isDefaultClause(n))) {
+      continue;
+    }
+    for (const st of n.statements) {
+      if (ts.isFunctionDeclaration(st) && st.name?.text === id.text) return false;
+      if (!ts.isVariableStatement(st)) continue;
+      const decl = st.declarationList.declarations.find((d) => binds(d.name, id.text));
+      if (!decl) continue;
+      if (
+        (st.declarationList.flags & ts.NodeFlags.Const) === 0 ||
+        !ts.isIdentifier(decl.name) ||
+        !decl.initializer ||
+        FOLLOWING.has(decl)
+      ) {
+        return false;
+      }
+      FOLLOWING.add(decl);
+      try {
+        return isError(decl.initializer);
+      } finally {
+        FOLLOWING.delete(decl);
+      }
+    }
+  }
   return false;
 }
 
@@ -646,6 +718,63 @@ function callsHelper(call: ts.CallExpression, helpers: Set<string>): boolean {
     return helpers.has(name);
   }
   return ts.isPropertyAccessExpression(callee) && helpers.has(callee.name.text);
+}
+
+/** Whether `node` is a callee: `node(...)`, also through casts and parentheses. */
+function isCallee(node: ts.Node): boolean {
+  let n = node;
+  while (n.parent && isWrapper(n.parent)) n = n.parent;
+  return n.parent !== undefined && ts.isCallExpression(n.parent) && n.parent.expression === n;
+}
+
+/**
+ * An error-to-text helper used as a value instead of called: handed on as a
+ * function (`.catch(nonErrorText)`, `.map(rawErrorText)`), or given another
+ * name (`const describe = rawErrorText`), S31 review. Not its import, export
+ * or declaration, a type (`typeof rawErrorText`), or a property's key.
+ */
+function isHelperReference(node: ts.Node): boolean {
+  if (isCallee(node)) return false;
+  if (ts.isPropertyAccessExpression(node)) return ERROR_TEXT_HELPERS.has(node.name.text);
+  if (!ts.isIdentifier(node)) return false;
+  const name = helperAliases(node.getSourceFile()).get(node.text) ?? node.text;
+  if (!ERROR_TEXT_HELPERS.has(name)) return false;
+  const p = node.parent;
+  if (
+    ts.isImportSpecifier(p) ||
+    ts.isExportSpecifier(p) ||
+    ts.isImportClause(p) ||
+    ts.isNamespaceImport(p) ||
+    ts.isTypeQueryNode(p) ||
+    ts.isQualifiedName(p)
+  ) {
+    return false;
+  }
+  if (ts.isPropertyAccessExpression(p) && p.name === node) return false;
+  if (
+    (ts.isFunctionDeclaration(p) ||
+      ts.isFunctionExpression(p) ||
+      ts.isVariableDeclaration(p) ||
+      ts.isParameter(p) ||
+      ts.isPropertyAssignment(p) ||
+      ts.isMethodDeclaration(p) ||
+      ts.isPropertyDeclaration(p) ||
+      ts.isPropertySignature(p) ||
+      ts.isMethodSignature(p)) &&
+    p.name === node
+  ) {
+    return false;
+  }
+  if (ts.isBindingElement(p) && (p.name === node || p.propertyName === node)) return false;
+  return true;
+}
+
+/** Where a helper used as a value takes its text: the call it is handed to, else itself. */
+function helperUse(node: ts.Node): ts.Node {
+  let n = node;
+  while (n.parent && isWrapper(n.parent)) n = n.parent;
+  const p = n.parent;
+  return p && ts.isCallExpression(p) && p.arguments.includes(n as ts.Expression) ? p : n;
 }
 
 /** `res.error`, `result.lastError`: a property named as an error. */
@@ -692,7 +821,10 @@ function errorSlots(sf: ts.SourceFile): Set<string> {
       if (name) {
         node.arguments.forEach((arg, index) => {
           const x = unwrap(arg);
-          if (ts.isIdentifier(x) && (bindsAThrow(x) || ERROR_NAME.test(x.text))) {
+          if (
+            (ts.isIdentifier(x) && (bindsAThrow(x) || ERROR_NAME.test(x.text))) ||
+            (ts.isCallExpression(x) && callsHelper(x, ERROR_VALUE_HELPERS))
+          ) {
             slots.add(`${name}#${index}`);
           }
         });
@@ -1014,6 +1146,10 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
   const field = (value: ts.Expression) => {
     for (const side of answerSides(value)) {
       if (isErrorField(side)) hit(side);
+      // A name that holds an error or an error field (`const why = write.error`).
+      else if (ts.isIdentifier(side) && isError(side) && !narrowedToAppError(side, side.text)) {
+        hit(side);
+      }
     }
   };
   const visit = (node: ts.Node) => {
@@ -1033,6 +1169,21 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
     ) {
       field(node.arguments[1]);
     }
+    // An app error's words are answered as they are: a ServiceError other
+    // than internal_error, and a ForbiddenError (S31 review).
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.arguments) {
+      const [first, second] = node.arguments;
+      if (node.expression.text === 'ForbiddenError' && first) field(first);
+      if (
+        node.expression.text === 'ServiceError' &&
+        second &&
+        !(first && ts.isStringLiteralLike(first) && first.text === 'internal_error')
+      ) {
+        field(second);
+      }
+    }
+    // An error-to-text helper used as a value (S31 review).
+    if (isHelperReference(node) && !staysOnServer(helperUse(node))) hit(node);
     // A server setting's name in text that can be answered (S31).
     if (
       (ts.isStringLiteral(node) ||
@@ -1243,6 +1394,10 @@ describe("API routes never answer an error's own text", () => {
     expect(read).toContain('server/loaders/inventory-list.ts');
     // Dynamically imported too (extract-isbns-ai: `await import('@/lib/xlsx-to-csv')`).
     expect(read).toContain('lib/xlsx-to-csv.ts');
+    // The AI chat's tools: what a tool returns goes into the model's context,
+    // and the model's reply is answered (S31 review).
+    expect(read).toContain('lib/ai/tools.ts');
+    expect(read).toContain('lib/ai/chat-claude.ts');
     // A relative import out of app/api is followed like an `@/` one.
     const route = path.join(API, 'books/extract-isbns-ai/route.ts');
     expect(moduleFile('../../../../lib/books/isbn-ai-extract', route)).toBe(
@@ -1376,6 +1531,60 @@ describe("Server Actions and services never answer an error's own text (S31)", (
         (hit) => hit.line,
       ),
     ).toEqual([2]);
+  });
+
+  it("an app error's words built from an error field, a helper handed on as a function or renamed, and a const holding an error all count (S31 review, control: one per line)", () => {
+    const sample = inActionCatch([
+      // A ServiceError other than internal_error, and a ForbiddenError, answer their words as they are.
+      "const write = await w(); if (write.error !== null) throw new ServiceError('conflict', write.error);",
+      'throw new ForbiddenError(access.error);',
+      "throw new ServiceError('validation_error', ok_ ? 'fine' : outcome.lastError);",
+      // An error-to-text helper handed on as a function, or given another name.
+      'return ok({ reasons: r.failures.map(rawErrorText) });',
+      "const why = await work().then(() => null, nonErrorText); return err('conflict', why ?? 'x');",
+      "const describeIt = rawErrorText; return err('conflict', describeIt(e));",
+      'return ok({ reasons: r.failures.map(errorTextHelpers.postgrestErrorText) });',
+      // A const that holds an error is an error, whatever its name.
+      "const failure = asReportableError(e); return { ok: false, error: { code: 'conflict', message: failure.message } };",
+      "const thrown = e as Error; return err('conflict', thrown.message);",
+      // A name that holds an error field, answered as an app error's words.
+      "const cause = write.error; throw new ServiceError('conflict', cause);",
+    ]);
+    expect(hitsIn('sample.ts', sample, 'actions').map((hit) => hit.line)).toEqual([
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+    ]);
+    // An error a same-file helper is handed (as the helper's result, not a name).
+    const handed = [
+      "function answer(x: Error) { return err('conflict', x.message); }",
+      'export async function act() { try { await work(); } catch (e) { return answer(asReportableError(e)); } }',
+    ].join('\n');
+    expect(hitsIn('sample.ts', handed, 'actions').map((hit) => hit.line)).toEqual([1]);
+    // The same spellings in a route.
+    const route = inCatch([
+      'const why = await work().catch(nonErrorText); return NextResponse.json({ message: why });',
+      "throw new ServiceError('conflict', res.error);",
+    ]);
+    expect(hitsIn('sample.ts', route).map((hit) => hit.line)).toEqual([2, 3]);
+  });
+
+  it("what stays on the server, an app error's own sentence, an import, an export and a declaration do not count (S31 review, control)", () => {
+    const sample = inActionCatch([
+      "const write = await w(); if (write.error !== null) throw new ServiceError('internal_error', write.error);",
+      "throw new ServiceError('conflict', 'That name is already taken.');",
+      'throw new ForbiddenError();',
+      "console.error('[x]', r.failures.map(rawErrorText));",
+      "const failure = asReportableError(e); void reportError(failure, { tag: 't' }); console.error('[x]', failure.message);",
+      "const thrown = e as Error; if (thrown.message.includes('timeout')) return retry();",
+    ]);
+    expect(hitsIn('sample.ts', sample, 'actions')).toEqual([]);
+    const declared = [
+      "import { rawErrorText, nonErrorText as describeIt } from './fetch-by-ids';",
+      "export { postgrestErrorText } from './postgrest-error';",
+      "export function reportedMessage(x: unknown): string { return typeof x === 'string' ? 'text' : 'other'; }",
+      'type Describe = typeof rawErrorText;',
+      'const names = { rawErrorText: 1, describeIt: 2 };',
+    ].join('\n');
+    expect(hitsIn('sample.ts', declared, 'actions')).toEqual([]);
   });
 
   it('the Server Action scope reads every action module and what it imports outside services, and no tests', () => {
