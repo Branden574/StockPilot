@@ -1,17 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Security invariant: a phone sign-in puts no text the caller typed into the
- * organization's Slack or Teams security feed (security review of S5a).
+ * Security invariant: a phone sign-in's note keeps only the device family in
+ * the organization's activity (the security.new_device_login event), and
+ * names the device from the allowlisted fields alone, never from the
+ * request's User-Agent (security review of S5a; integrator decision, device
+ * label 2026-11-02).
  *
- * THE DEFECT. With no device model that passed the route's allowlist, the
- * route had no label, so noteLoginDevice showed the request's own User-Agent
- * header instead: as the stored device, in the email, and as the `device` of
- * the security.new_device_login event, which goes to the organization's
- * Slack or Teams feed. Any member signing in to their own account could put
- * text of their choosing into a "New device sign-in" card sent by the
- * StockPilot integration to each organization they belong to. The route now
- * names such a device "StockPilot app", from nothing the caller sent.
+ * The family is "StockPilot app on iPhone", "on iPad" or "on Android", else
+ * "StockPilot app". The model stays in the person's own device list and
+ * their own new-device email.
  *
  * The REAL route, the REAL noteLoginDevice and the REAL Slack request
  * builder. Only the identity, the rate limiter, the Audit row, the email
@@ -20,7 +18,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const ORG = '44444444-4444-4444-8444-444444444444';
 const INSTALL = '0f6c2d1e-8a4b-4c5d-9e6f-7a8b9c0d1e2f';
-const HOSTILE = '<!channel> <https://phish.example/login|Review this sign-in now>';
+// A placeholder agent: none of it may be shown anywhere.
+const AGENT = 'Placeholder-Agent/1.0 (ua-marker)';
 
 const h = vi.hoisted(() => ({
   after: [] as Array<() => unknown>,
@@ -116,7 +115,7 @@ async function signIn(device: unknown) {
       headers: {
         authorization: 'Bearer token-1',
         'content-type': 'application/json',
-        'user-agent': HOSTILE,
+        'user-agent': AGENT,
       },
       body: JSON.stringify({ installId: INSTALL, device }),
     }),
@@ -141,10 +140,10 @@ beforeEach(() => {
   h.stored.length = 0;
 });
 
-describe('POST /api/v1/auth/signed-in: the organization’s security feed', () => {
+describe('POST /api/v1/auth/signed-in: the organization’s activity', () => {
   it.each([
     ['no device fields', {}],
-    ['a model outside the allowlist', { model: '<!here> <https://phish.example|Open>' }],
+    ['a model outside the allowlist', { model: '<model-marker|x>' }],
     ['a system but no model', { osName: 'iOS', osVersion: '18.1' }],
   ])(
     '%s: the device is "StockPilot app", and the User-Agent reaches no Slack text, email or stored device',
@@ -154,8 +153,7 @@ describe('POST /api/v1/auth/signed-in: the organization’s security feed', () =
       expect(h.dispatched[0]!.type).toBe('security.new_device_login');
       expect(h.dispatched[0]!.data.device).toBe('StockPilot app');
       const text = slackText(h.dispatched[0]!.data);
-      expect(text).not.toContain('<!');
-      expect(text).not.toContain('phish.example');
+      expect(text).not.toContain('marker');
       expect(text).toContain('(StockPilot app)');
       expect(h.emails).toHaveLength(1);
       expect(h.emails[0]!.deviceLabel).toBe('StockPilot app');
@@ -164,9 +162,28 @@ describe('POST /api/v1/auth/signed-in: the organization’s security feed', () =
     },
   );
 
-  it('an allowlisted model: the label the phone named, still nothing from the header', async () => {
-    await signIn({ model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1' });
-    expect(h.dispatched[0]!.data.device).toBe('StockPilot app on iPhone 15 Pro (iOS 18.1)');
-    expect(slackText(h.dispatched[0]!.data)).not.toContain('phish.example');
-  });
+  it.each([
+    [
+      { model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1' },
+      'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+      'StockPilot app on iPhone',
+    ],
+    [
+      { model: 'iPad Air (5th generation)', osName: 'iPadOS', osVersion: '17.4.1' },
+      'StockPilot app on iPad Air (5th generation) (iPadOS 17.4.1)',
+      'StockPilot app on iPad',
+    ],
+  ])(
+    'an allowlisted model (%o): the person’s own device list and email name it, the activity names only the family',
+    async (device, label, family) => {
+      await signIn(device);
+      expect(h.dispatched[0]!.data.device).toBe(family);
+      const text = slackText(h.dispatched[0]!.data);
+      expect(text).toContain(`(${family})`);
+      expect(text).not.toContain(device.model);
+      expect(text).not.toContain('marker');
+      expect(h.emails[0]!.deviceLabel).toBe(label);
+      expect(h.stored[0]!.user_agent).toBe(label);
+    },
+  );
 });

@@ -51,21 +51,29 @@ export const dynamic = 'force-dynamic';
  * fails is dropped, never trusted, and the row is still written.
  *
  * What the device is called comes from those fields only, never from the
- * request's User-Agent: noteLoginDevice shows the name as the stored device,
- * in the email and in the organization's Slack or Teams security feed. With
- * no model that passed it is "StockPilot app" (security review of S5a), so
- * no text the caller typed reaches that feed. The User-Agent still goes to
- * the note, where it is only hashed into the device's identity when the
- * install id is missing.
+ * request's User-Agent (security review of S5a). Two names (integrator
+ * decision, device label 2026-11-02):
+ *   - the label, "StockPilot app on iPhone 15 Pro (iOS 18.1)", only in the
+ *     person's own device list and their own new-device email;
+ *   - the family, "StockPilot app on iPhone", "on iPad", "on Android" or
+ *     "StockPilot app", in the Audit row and the organization's activity
+ *     (noteLoginDevice's security.new_device_login event): the sign-in note
+ *     keeps only the device family there.
+ * With no model that passed, the label is the family too. The User-Agent
+ * still goes to the note, where it is only hashed into the device's identity
+ * when the install id is missing.
  */
 
 const INSTALL_ID = z.string().uuid();
-// expo-device's model name ("iPhone 15 Pro", "iPad Air (5th generation)").
-// Never the device's own name, which can carry a person's name: the phone
-// does not send it (apps/mobile/src/lib/auth-notes.ts).
-const MODEL = z.string().regex(/^[A-Za-z0-9 ()+.,/_-]{1,64}$/);
-const OS_NAME = z.string().regex(/^[A-Za-z0-9 ._-]{1,32}$/);
-const OS_VERSION = z.string().regex(/^[A-Za-z0-9._-]{1,24}$/);
+// expo-device's model name ("iPhone 15 Pro", "iPad Air (5th generation)"):
+// letters, digits, spaces, parentheses, '+' and '-', at most 48. No '.', '/',
+// ',' or '_': a model is never an address or a sentence. Never the device's
+// own name, which can carry a person's name: the phone does not send it
+// (apps/mobile/src/lib/auth-notes.ts).
+const MODEL = z.string().regex(/^[A-Za-z0-9 ()+-]{1,48}$/);
+// expo-device's osName, exactly one of these.
+const OS_NAME = z.enum(['iOS', 'iPadOS', 'Android']);
+const OS_VERSION = z.string().regex(/^[0-9.]{1,16}$/);
 const APP_VERSION = z.string().regex(/^[A-Za-z0-9.+_-]{1,32}$/);
 
 const noteSchema = z.object({
@@ -90,12 +98,28 @@ function readDevice(raw: unknown) {
   };
 }
 
-/** The device note's name for a phone that named no model that passed. */
-const UNNAMED_PHONE = 'StockPilot app';
+type CheckedDevice = ReturnType<typeof readDevice>;
 
-/** "StockPilot app on iPhone 15 Pro (iOS 18.1)"; no model, no label. */
-function deviceLabel(d: ReturnType<typeof readDevice>): string | null {
-  if (!d.model) return null;
+/**
+ * The family, from fixed words only: "StockPilot app on iPhone" or "on iPad"
+ * when the model's first word is iPhone or iPad, "on Android" when the system
+ * is Android, else "StockPilot app". What the Audit row and the organization's
+ * activity call the phone.
+ */
+function deviceFamily(d: CheckedDevice): string {
+  const firstWord = d.model?.split(' ')[0];
+  if (firstWord === 'iPhone') return 'StockPilot app on iPhone';
+  if (firstWord === 'iPad') return 'StockPilot app on iPad';
+  if (d.osName === 'Android') return 'StockPilot app on Android';
+  return 'StockPilot app';
+}
+
+/**
+ * "StockPilot app on iPhone 15 Pro (iOS 18.1)": the person's own name for the
+ * phone, in their device list and their email. With no model, the family.
+ */
+function deviceLabel(d: CheckedDevice): string {
+  if (!d.model) return deviceFamily(d);
   const system = d.osName ? ` (${d.osName}${d.osVersion ? ` ${d.osVersion}` : ''})` : '';
   return `StockPilot app on ${d.model}${system}`;
 }
@@ -142,6 +166,7 @@ export async function POST(req: Request) {
 
     const device = readDevice(parsed.data.device);
     const label = deviceLabel(device);
+    const family = deviceFamily(device);
     const installId = checked(INSTALL_ID, parsed.data.installId);
 
     await emitAuthAudit({
@@ -157,19 +182,20 @@ export async function POST(req: Request) {
         // The code is still owed: an AAL1 session of an account with an
         // authenticator (the web's mfa_required, actions/auth.ts).
         mfa_required: claims.aal === 'aal1' && ctx.mfaEnrolled === true,
-        device_label: label,
+        // The family only (integrator decision, device label 2026-11-02).
+        device_label: family,
         session_ref: sessionRef(sessionId),
       },
     });
 
     // After the response (defer: after(), kept alive), like the web's
     // sign-in: the device, and the email when it is new on an account that
-    // already has a known one.
+    // already has a known one. The label goes to the person's own device
+    // list and email; the organization's activity gets the family.
     const userId = ctx.userId;
     const email = claims.email;
     const userAgent = req.headers.get('user-agent');
     const ip = requestIp(req);
-    const deviceName = label ?? UNNAMED_PHONE;
     defer(() =>
       noteLoginDevice({
         userId,
@@ -177,7 +203,8 @@ export async function POST(req: Request) {
         userAgent,
         ip,
         deviceKey: installId,
-        deviceLabel: deviceName,
+        deviceLabel: label,
+        deviceFamily: family,
       }),
     );
 

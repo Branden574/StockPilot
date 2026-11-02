@@ -54,15 +54,21 @@ export async function noteLoginDevice(args: {
   /** The phone's install id, checked by the caller (POST /api/v1/auth/signed-in). */
   deviceKey?: string | null;
   /** The phone's own name for itself ("StockPilot app on iPhone 15 Pro (iOS 18.1)"),
-   *  built by the caller from allowlisted fields: shown in place of the agent. */
+   *  built by the caller from allowlisted fields: shown in place of the agent
+   *  in the person's own device list and email. */
   deviceLabel?: string | null;
+  /** What the organization's activity (the webhook event) calls the device
+   *  when the caller gives it: the phone's family only ("StockPilot app on
+   *  iPhone"), from fixed words (S5, integrator decision 2026-11-02). */
+  deviceFamily?: string | null;
 }): Promise<void> {
   try {
     const ua = (args.userAgent ?? '').trim() || 'Unknown device';
     const label = args.deviceLabel?.trim() || null;
-    // What the device is called wherever it is shown: the stored agent, the
-    // email, the webhook event.
+    // What the device is called in the person's own device list and email.
     const shown = label ?? ua;
+    // What the webhook event calls it: the family when the caller gave one.
+    const forOrganization = args.deviceFamily?.trim() || shown;
     const hash = deviceHash(args.userId, ua, args.deviceKey?.trim() || null);
     const admin = createAdminClient();
 
@@ -137,7 +143,7 @@ export async function noteLoginDevice(args: {
         // email alert above + the internal audit_logs in Supabase).
         void dispatchEvent(m.organization_id, 'security.new_device_login', {
           userId: args.userId,
-          device: shown.slice(0, 120),
+          device: forOrganization.slice(0, 120),
         });
       }
     }

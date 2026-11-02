@@ -154,6 +154,7 @@ const APP_UA_2 = 'StockPilot/42 CFNetwork/1568.200.51 Darwin/24.1.0';
 const INSTALL_1 = '0f6c2d1e-8a4b-4c5d-9e6f-7a8b9c0d1e2f';
 const INSTALL_2 = '3a4b5c6d-7e8f-4a0b-8c1d-2e3f4a5b6c7d';
 const LABEL = 'StockPilot app on iPhone 15 Pro (iOS 18.1)';
+const FAMILY = 'StockPilot app on iPhone';
 
 const phone = (deviceKey: string, userAgent = APP_UA_1, deviceLabel = LABEL) =>
   noteLoginDevice({
@@ -163,6 +164,7 @@ const phone = (deviceKey: string, userAgent = APP_UA_1, deviceLabel = LABEL) =>
     ip: '203.0.113.7',
     deviceKey,
     deviceLabel,
+    deviceFamily: FAMILY,
   });
 const web = () =>
   noteLoginDevice({ userId: USER, email: EMAIL, userAgent: WEB_UA, ip: '203.0.113.9' });
@@ -241,8 +243,8 @@ describe('noteLoginDevice — which device is new (the phone’s install id)', (
   });
 });
 
-describe('noteLoginDevice — the label names the device everywhere it is shown', () => {
-  it('the email, the stored agent and the webhook’s device field use the label', async () => {
+describe('noteLoginDevice — the label names the device to the person, the family to the organization', () => {
+  it('the email and the stored agent use the label; the webhook’s device field only the family', async () => {
     db.members = [
       {
         user_id: USER,
@@ -260,10 +262,13 @@ describe('noteLoginDevice — the label names the device everywhere it is shown'
       deviceLabel: LABEL,
     });
     expect(db.devices[1]!.user_agent).toBe(LABEL);
+    // Integrator decision (device label, 2026-11-02): the sign-in note keeps
+    // only the device family in the organization's activity.
     expect(dispatchEvent).toHaveBeenCalledWith('org-a', 'security.new_device_login', {
       userId: USER,
-      device: LABEL,
+      device: FAMILY,
     });
+    expect(JSON.stringify(dispatchEvent.mock.calls)).not.toContain('15 Pro');
   });
 
   it('a known install’s row is refreshed with the label, not the raw agent', async () => {

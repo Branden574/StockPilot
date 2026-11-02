@@ -1072,9 +1072,9 @@ WEB_TESTS=(
   # without error. The new-device email goes out only for a device the call
   # itself recorded (one per phone install) and its webhook event reaches
   # accepted, non-act-as memberships only. The phone's device name comes from
-  # the allowlisted fields alone, never its User-Agent, so no text the caller
-  # typed reaches the organization's Slack or Teams feed. The auth audit
-  # helpers are server code, never Server Actions.
+  # the allowlisted fields alone, never its User-Agent, and the sign-in note
+  # keeps only the device family in the Audit row and the organization's
+  # activity. The auth audit helpers are server code, never Server Actions.
   src/app/api/v1/auth/signed-in/route.test.ts
   src/app/api/v1/auth/signed-in/route.device-feed.test.ts
   src/app/api/v1/auth/signed-out/route.test.ts

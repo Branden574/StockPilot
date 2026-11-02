@@ -177,7 +177,9 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
         email: 'member@example.com',
         role: 'manager',
         mfa_required: false,
-        device_label: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+        // The family only: the model stays in the person's own device list
+        // and email (integrator decision, device label 2026-11-02).
+        device_label: 'StockPilot app on iPhone',
         session_ref: sha256(SESSION).slice(0, 16),
       },
     });
@@ -209,7 +211,7 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
     expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { mfa_required: true } });
   });
 
-  it('after the response: noteLoginDevice with this install’s id and the device’s label', async () => {
+  it('after the response: noteLoginDevice with this install’s id, the device’s label and its family', async () => {
     await POST(req());
     expect(h.noteLoginDevice).not.toHaveBeenCalled();
     await runAfter();
@@ -220,6 +222,7 @@ describe('POST /api/v1/auth/signed-in — the row', () => {
       ip: '203.0.113.7',
       deviceKey: INSTALL,
       deviceLabel: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+      deviceFamily: 'StockPilot app on iPhone',
     });
   });
 
@@ -253,7 +256,7 @@ describe('POST /api/v1/auth/signed-in — the body', () => {
     expect(h.emitAuthAudit).not.toHaveBeenCalled();
   });
 
-  it('a field outside the allowlist is dropped, not trusted: no label in the row, no install id; the row is still written', async () => {
+  it('a field outside the allowlist is dropped, not trusted: no model in the row, no install id; the row is still written', async () => {
     await POST(
       req({
         installId: 'not-a-uuid',
@@ -265,51 +268,69 @@ describe('POST /api/v1/auth/signed-in — the body', () => {
         },
       }),
     );
-    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { device_label: null } });
+    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({
+      extra: { device_label: 'StockPilot app' },
+    });
     await runAfter();
     expect(h.noteLoginDevice).toHaveBeenCalledWith(
-      expect.objectContaining({ deviceKey: null, deviceLabel: 'StockPilot app' }),
+      expect.objectContaining({
+        deviceKey: null,
+        deviceLabel: 'StockPilot app',
+        deviceFamily: 'StockPilot app',
+      }),
     );
   });
 
   it('no model that passes: the device note calls it "StockPilot app", never by the request’s own User-Agent', async () => {
-    // The device note shows its label in the Slack or Teams security feed
-    // (security review of S5a). The User-Agent is whatever the caller typed;
-    // it goes to the note for the device hash only.
-    const hostile = '<!channel> <https://phish.example/login|Review this sign-in now>';
-    for (const device of [{}, { model: '<!here>' }, { osName: 'iOS', osVersion: '18.1' }]) {
+    // The User-Agent goes to the note for the device hash only.
+    const agent = 'Placeholder-Agent/1.0 (ua-marker)';
+    for (const device of [{}, { model: '<model-marker>' }, { osName: 'iOS', osVersion: '18.1' }]) {
       h.noteLoginDevice.mockClear();
       h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: crypto.randomUUID() }));
       await POST(
         req(
           { installId: INSTALL, device },
-          { authorization: 'Bearer token-1', 'user-agent': hostile },
+          { authorization: 'Bearer token-1', 'user-agent': agent },
         ),
       );
       await runAfter();
       expect(h.noteLoginDevice).toHaveBeenCalledTimes(1);
       expect(h.noteLoginDevice.mock.calls[0]![0]).toMatchObject({
-        userAgent: hostile,
+        userAgent: agent,
         deviceKey: INSTALL,
         deviceLabel: 'StockPilot app',
+        deviceFamily: 'StockPilot app',
       });
     }
   });
 
-  it('length caps: an over-long model is dropped', async () => {
-    await POST(req({ installId: INSTALL, device: { ...BODY.device, model: 'x'.repeat(65) } }));
-    expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({ extra: { device_label: null } });
+  it('length caps: a model of 48 characters is kept, one of 49 is dropped', async () => {
+    await POST(req({ installId: INSTALL, device: { ...BODY.device, model: 'x'.repeat(48) } }));
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: crypto.randomUUID() }));
+    await POST(req({ installId: INSTALL, device: { ...BODY.device, model: 'x'.repeat(49) } }));
+    await runAfter();
+    expect(h.noteLoginDevice.mock.calls.map((c) => c[0].deviceLabel)).toEqual([
+      `StockPilot app on ${'x'.repeat(48)} (iOS 18.1)`,
+      'StockPilot app',
+    ]);
   });
 
   it('a model with no system named: the label names the model alone', async () => {
     await POST(req({ installId: INSTALL, device: { model: 'iPad Air (5th generation)' } }));
     expect(h.emitAuthAudit.mock.calls[0]![0]).toMatchObject({
       extra: {
-        device_label: 'StockPilot app on iPad Air (5th generation)',
+        device_label: 'StockPilot app on iPad',
         platform: null,
         app_version: null,
       },
     });
+    await runAfter();
+    expect(h.noteLoginDevice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceLabel: 'StockPilot app on iPad Air (5th generation)',
+        deviceFamily: 'StockPilot app on iPad',
+      }),
+    );
   });
 
   it('a body that is not an object: 400 validation_error, nothing written', async () => {
@@ -317,6 +338,110 @@ describe('POST /api/v1/auth/signed-in — the body', () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toBe('validation_error');
     expect(h.emitAuthAudit).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v1/auth/signed-in — the device’s name: the model in the person’s own device list and email, the family everywhere else', () => {
+  // Integrator decision (device label, 2026-11-02): the model is letters,
+  // digits, spaces, parentheses, '+' and '-', at most 48; the system is one
+  // of iOS, iPadOS and Android; its version is digits and dots. The Audit log
+  // row and the organization's activity name only the family.
+  async function note(device: Record<string, unknown>) {
+    h.readVerifiedTokenClaims.mockResolvedValueOnce(claims({ sessionId: crypto.randomUUID() }));
+    h.emitAuthAudit.mockClear();
+    h.noteLoginDevice.mockClear();
+    expect((await POST(req({ installId: INSTALL, device }))).status).toBe(200);
+    await runAfter();
+    const row = h.emitAuthAudit.mock.calls[0]![0] as { extra: Record<string, unknown> };
+    const sent = h.noteLoginDevice.mock.calls[0]![0] as Record<string, unknown>;
+    return {
+      auditLabel: row.extra.device_label,
+      platform: row.extra.platform,
+      label: sent.deviceLabel,
+      family: sent.deviceFamily,
+    };
+  }
+
+  it.each([
+    ['an address and a path', 'Reset at evil.example/x'],
+    ['a comma', 'a,b'],
+    ['an underscore', 'x_y'],
+    ['a dot alone', 'Open example.com'],
+    ['a slash alone', 'a/b'],
+    ['64 characters', 'A'.repeat(64)],
+    ['a dot after a known family', 'iPhone example.com'],
+  ])('a model with %s falls back to "StockPilot app" everywhere', async (_n, model) => {
+    expect(await note({ model, osName: 'iOS', osVersion: '18.1' })).toEqual({
+      auditLabel: 'StockPilot app',
+      platform: 'iOS',
+      label: 'StockPilot app',
+      family: 'StockPilot app',
+    });
+  });
+
+  it.each([
+    [
+      { model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1' },
+      'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+      'StockPilot app on iPhone',
+    ],
+    [
+      { model: 'iPad Air (5th generation)', osName: 'iPadOS', osVersion: '17.4.1' },
+      'StockPilot app on iPad Air (5th generation) (iPadOS 17.4.1)',
+      'StockPilot app on iPad',
+    ],
+    [
+      { model: 'Pixel 8', osName: 'Android', osVersion: '14' },
+      'StockPilot app on Pixel 8 (Android 14)',
+      'StockPilot app on Android',
+    ],
+    [
+      { model: 'Simulator iOS', osName: 'iOS', osVersion: '18.1' },
+      'StockPilot app on Simulator iOS (iOS 18.1)',
+      'StockPilot app',
+    ],
+    [
+      { osName: 'Android', osVersion: '14' },
+      'StockPilot app on Android',
+      'StockPilot app on Android',
+    ],
+  ])(
+    '%o: the model in the label, the family in the Audit row and the activity',
+    async (device, label, family) => {
+      expect(await note(device)).toEqual({
+        auditLabel: family,
+        platform: device.osName,
+        label,
+        family,
+      });
+    },
+  );
+
+  it.each(['Visit evil', 'ios', 'iOS ', 'Windows', 'iPhone OS'])(
+    'a system outside the three names (%j) is dropped: no platform, no system in the label',
+    async (osName) => {
+      expect(await note({ model: 'iPhone 15 Pro', osName, osVersion: '18.1' })).toEqual({
+        auditLabel: 'StockPilot app on iPhone',
+        platform: null,
+        label: 'StockPilot app on iPhone 15 Pro',
+        family: 'StockPilot app on iPhone',
+      });
+    },
+  );
+
+  it.each(['call-now', '18.1a', '18_1', '1'.repeat(17), '18 1'])(
+    'a system version that is not digits and dots, or over 16 characters (%j), is dropped',
+    async (osVersion) => {
+      expect((await note({ model: 'iPhone 15 Pro', osName: 'iOS', osVersion })).label).toBe(
+        'StockPilot app on iPhone 15 Pro (iOS)',
+      );
+    },
+  );
+
+  it('a system version of 16 digits and dots is kept', async () => {
+    expect(
+      (await note({ model: 'iPhone 15 Pro', osName: 'iOS', osVersion: '18.1.1.1.1.1.1.1' })).label,
+    ).toBe('StockPilot app on iPhone 15 Pro (iOS 18.1.1.1.1.1.1.1)');
   });
 });
 

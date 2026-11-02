@@ -237,13 +237,21 @@ describe('a session that still owes its authenticator code reaches the phone’s
       event: 'user.signed_in',
       userId: USER,
       organizationId: ORG,
-      extra: expect.objectContaining({ client: 'mobile', mfa_required: true }),
+      extra: expect.objectContaining({
+        client: 'mobile',
+        mfa_required: true,
+        device_label: 'StockPilot app on iPhone',
+      }),
     });
     await runAfter();
+    // The model goes only to the person's own device list and email; the
+    // organization's activity gets the family (integrator decision, device
+    // label 2026-11-02).
     expect(refs.notes).toEqual([
       expect.objectContaining({
         userId: USER,
         deviceLabel: 'StockPilot app on iPhone 15 Pro (iOS 18.1)',
+        deviceFamily: 'StockPilot app on iPhone',
       }),
     ]);
   });
