@@ -16,10 +16,18 @@
  * text (test/copy-in-source.ts, the reader the other copy guards share) in
  * the web app (apps/web/src), the phone (apps/mobile/src and apps/mobile/app)
  * and the shared core (packages/core/src), tests, mocks and fixtures left
- * out, for the mode's old name and for a purchase order said to be sent to a
- * supplier by anyone but the reader. The reader sending it ("Send them the
- * purchase order yourself.", "every PO PDF you send to suppliers") and the
- * disclaimer ("Nothing is sent to the supplier.") are allowed.
+ * out, for the mode's old name and for these ways of saying a purchase order
+ * is sent, emailed or submitted to a supplier or vendor by anyone but the
+ * reader: with a helping verb ("is sent to the supplier"); as a status after
+ * the purchase order or in parentheses ("PO sent to supplier", "Ordered (sent
+ * to supplier)"); as something StockPilot does ("sends it to the supplier",
+ * "emails your PO to the vendor"); next to "automatically" ("Send the PO to
+ * the supplier automatically"); and as a label that starts "Send to" or "Sent
+ * to" a supplier. Other wording is not caught: a new sentence about the mode
+ * still needs a person to read it. The reader sending it ("Send them the
+ * purchase order yourself.", "every PO PDF you send to suppliers") and a
+ * "not" ("Nothing is sent to the supplier.", "PO not sent to supplier") are
+ * allowed.
  *
  * IF THIS FAILS: say what happens. The purchase order is marked as ordered,
  * and the person sends it to the supplier. A What's New entry that quotes the
@@ -38,7 +46,20 @@ const REPO = path.resolve(__dirname, '../../../../..');
 /** The trees whose copy people read: the web app, the phone and core. */
 const SCANNED = ['apps/web/src', 'apps/mobile/src', 'apps/mobile/app', 'packages/core/src'];
 
-/** How the copy said a purchase order goes to a supplier. */
+/** "to the supplier", "to your vendor", "to each supplier", "to vendors". */
+const TO_SUPPLIER = String.raw`\s+to\s+(?:the\s+|your\s+|a\s+|each\s+|its\s+|their\s+)?(?:suppliers?|vendors?)\b`;
+/** The purchase order, as copy names it: "PO", "POs", "purchase orders", "order". */
+const PO = String.raw`(?:pos?|purchase\s+orders?|orders?)`;
+/** Every form of send, email and submit the copy might use. */
+const SEND = String.raw`(?:send|sends|sent|email|emails|emailed|submit|submits|submitted)`;
+/** Not after a "not": "Nothing is sent", "is not ... sent", "isn't sent". */
+const NOT_NEGATED = String.raw`(?<!\b(?:nothing|never|not|no)\s+(?:\w+\s+)?|n't\s+(?:\w+\s+)?)`;
+
+/**
+ * How the copy said a purchase order goes to a supplier. These are the forms
+ * the guard knows, each in the probe test below; a sentence about the mode
+ * in other words still needs a person to read it.
+ */
 const SENT_TO_SUPPLIER: readonly { name: string; re: RegExp }[] = [
   // The mode's old name, which says StockPilot sends the purchase order.
   { name: '"Auto-send"', re: /\bauto-?sen(?:d|ds|t|ding)\b/i },
@@ -49,10 +70,29 @@ const SENT_TO_SUPPLIER: readonly { name: string; re: RegExp }[] = [
     name: '"is sent to the supplier"',
     re: /(?<!\b(?:nothing|never|not)\s)\b(?:is|are|was|were|be|been|being|gets?|got)\s+(?:sent|emailed|submitted)\s+to\s+(?:the\s+|your\s+|a\s+|each\s+|its\s+|their\s+)?(?:suppliers?|vendors?)\b/i,
   },
-  // Said as something StockPilot does: "sends it to the supplier".
+  // A status with no helping verb, after the purchase order or in
+  // parentheses: "PO sent to supplier", "Ordered (sent to supplier)".
+  {
+    name: '"PO sent to supplier"',
+    re: new RegExp(String.raw`(?:\b${PO}\s+|\(\s*)(?:sent|emailed|submitted)${TO_SUPPLIER}`, 'i'),
+  },
+  // Said as something StockPilot does: "sends it to the supplier", "emails
+  // your PO to the vendor".
   {
     name: '"sends it to the supplier"',
-    re: /\b(?:sends|emails|submits)\s+(?:it|them|the\s+(?:po|purchase\s+orders?)|pos?|purchase\s+orders?)\s+to\s+(?:the\s+|your\s+|a\s+|each\s+|its\s+|their\s+)?(?:suppliers?|vendors?)\b/i,
+    re: new RegExp(
+      String.raw`\b(?:sends|emails|submits)\s+(?:it|them|(?:(?:the|your|each|its|their|this|that|every)\s+)?${PO})${TO_SUPPLIER}`,
+      'i',
+    ),
+  },
+  // The mode's option without "Auto-": "Send the PO to the supplier
+  // automatically", "POs are automatically emailed to your vendor".
+  {
+    name: '"automatically" sent to the supplier',
+    re: new RegExp(
+      String.raw`${NOT_NEGATED}\bautomatically\s+${SEND}\b[^.!?]{0,60}?${TO_SUPPLIER}|${NOT_NEGATED}\b${SEND}\b[^.!?]{0,60}?${TO_SUPPLIER}[^.!?]{0,20}?\bautomatically\b`,
+      'i',
+    ),
   },
   // A label or a status: "Send to supplier", "Sent to supplier".
   {
@@ -177,6 +217,18 @@ describe('no screen says StockPilot sends a purchase order to a supplier', () =>
       'It will be emailed to your vendor.',
       'StockPilot sends the PO to the supplier.',
       'Sent to supplier',
+      // A status with no helping verb, after the PO or in parentheses.
+      'PO sent to supplier',
+      'Purchase orders emailed to vendors',
+      'Ordered (sent to supplier)',
+      // "your" before the purchase order.
+      'StockPilot emails your PO to the vendor.',
+      'It sends your purchase orders to each supplier.',
+      // The mode's option without "Auto-".
+      'Send the PO to the supplier automatically',
+      'Email the PO to the supplier automatically',
+      'Automatically send the PO to the supplier',
+      'POs are automatically emailed to your vendor.',
     ]) {
       expect(caught(text), text).not.toEqual([]);
     }
@@ -188,6 +240,14 @@ describe('no screen says StockPilot sends a purchase order to a supplier', () =>
       'Printed at the bottom of every PO PDF you send to suppliers.',
       'Draft a PO with line items, send it to a supplier, then receive against it.',
       'The invite email could not be sent.',
+      // The reader sends it, or nothing is sent.
+      'Send the PO to the supplier yourself.',
+      'POs you sent to suppliers this week',
+      'PO not sent to supplier',
+      'Purchase orders are never automatically sent to suppliers.',
+      'Nothing is sent to the supplier automatically.',
+      'A PO is not automatically emailed to the vendor.',
+      'Reports are emailed to you automatically.',
     ]) {
       expect(caught(text), text).toEqual([]);
     }
