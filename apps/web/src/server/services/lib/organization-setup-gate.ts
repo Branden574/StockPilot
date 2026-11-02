@@ -1,6 +1,10 @@
 import { isAdminRole } from '@stockpilot/core';
 
+import { reportError } from '@/lib/error-reporter';
+
 import { assertPermission, mfaGateError, ServiceError, type ServiceContext } from '../context';
+
+import { postgrestErrorText } from './postgrest-error';
 
 /**
  * The organization's setup: its warehouses, its charters and their links, and
@@ -55,6 +59,35 @@ export function setupNothingSaved(): ServiceError {
 /** W4 as the error a service throws. */
 export function setupPartlySaved(): ServiceError {
   return new ServiceError('conflict', SETUP_PARTLY_SAVED_COPY);
+}
+
+/**
+ * A save that sends no UPDATE (no field of the row in it, or only a
+ * warehouse's charter list) has nothing that proves the id is a row of this
+ * organization before its audit row names it, so it reads the row first. A
+ * row that is not there, or a read that fails, answers W3 and the save writes
+ * nothing and no audit row. A failed read's database text goes to the server
+ * report only.
+ */
+export async function assertSetupRowInOrganization(
+  ctx: ServiceContext,
+  table: 'warehouses' | 'charters',
+  id: string,
+): Promise<void> {
+  const res = await ctx.supabase
+    .from(table)
+    .select('id')
+    .eq('organization_id', ctx.organizationId)
+    .eq('id', id)
+    .maybeSingle();
+  if (res.error) {
+    void reportError(
+      new Error(`${table} row check failed: ${postgrestErrorText(res.error, res)}`),
+      { tag: 'organization_setup.row_check', extra: { table, id } },
+    );
+    throw setupNothingSaved();
+  }
+  if (!res.data) throw setupNothingSaved();
 }
 
 /** A write the row policy refused (an INSERT, or an UPDATE's new row). */

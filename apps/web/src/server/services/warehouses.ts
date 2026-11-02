@@ -7,6 +7,7 @@ import { ServiceError, withContext, type ServiceContext } from './context';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import {
   assertCanEditOrganizationSetup,
+  assertSetupRowInOrganization,
   isPolicyRefusal,
   setupNothingSaved,
   setupPartlySaved,
@@ -369,7 +370,10 @@ export class WarehousesService {
    * the save says nothing was saved, before any link is written and with no
    * audit row. When the row lands and a link write then fails, the audit row
    * records the row change without the charter list, and the save says part
-   * of it was not saved.
+   * of it was not saved. A save with no field of the row (only the charter
+   * list, or nothing) sends no UPDATE, so it reads the row first instead,
+   * before the links are read: its audit rows never name an id that is not
+   * this organization's warehouse.
    */
   async update(id: string, patch: UpdateWarehouseInput) {
     assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
@@ -384,6 +388,9 @@ export class WarehousesService {
     if (patch.address !== undefined) updates.address = patch.address ?? null;
     if (patch.notes !== undefined) updates.notes = patch.notes ?? null;
     if (patch.status !== undefined) updates.status = patch.status;
+    if (Object.keys(updates).length === 0) {
+      await assertSetupRowInOrganization(this.ctx, 'warehouses', id);
+    }
 
     // Charter list reconciliation lives in WarehouseChartersService — calling
     // it from here keeps the audit log + item-conflict checks in one place.

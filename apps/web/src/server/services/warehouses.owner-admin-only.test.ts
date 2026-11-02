@@ -11,6 +11,7 @@ import {
   inFilters,
   makeServiceContext,
   makeSupabaseStub,
+  servedLikePostgrest,
   type MockCall,
   type QueryResult,
   type SupabaseStub,
@@ -36,6 +37,9 @@ import { WarehousesService } from './warehouses';
 const ORG = 'org-test';
 const WH = '00000000-0000-4000-8000-0000000000a1';
 const NEW_WH = '00000000-0000-4000-8000-0000000000a9';
+/** Another organization's warehouse, and an id no warehouse has. */
+const OTHER_ORG_WH = '00000000-0000-4000-8000-0000000000b1';
+const UNKNOWN_WH = '00000000-0000-4000-8000-0000000000b9';
 const C1 = '00000000-0000-4000-8000-0000000000c1';
 const C2 = '00000000-0000-4000-8000-0000000000c2';
 
@@ -78,6 +82,7 @@ function linkRows(charterIds: string[]) {
 }
 
 interface Recorded {
+  warehouseReads: MockCall[];
   warehouseUpdates: MockCall[];
   warehouseInserts: MockCall[];
   linkInserts: MockCall[];
@@ -100,13 +105,22 @@ function stubWith(opts: {
 }) {
   let table = linkRows(opts.links ?? []);
   const recorded: Recorded = {
+    warehouseReads: [],
     warehouseUpdates: [],
     warehouseInserts: [],
     linkInserts: [],
     linkDeletes: [],
     itemCounts: [],
   };
+  const warehouses = servedLikePostgrest([
+    { id: WH, organization_id: ORG },
+    { id: OTHER_ORG_WH, organization_id: 'org-other' },
+  ]);
   const stub = makeSupabaseStub({
+    'warehouses.select': (call) => {
+      recorded.warehouseReads.push(call);
+      return warehouses(call);
+    },
     'warehouses.update': (call) => {
       recorded.warehouseUpdates.push(call);
       return opts.rowUpdate ?? { data: [{ id: WH }], error: null };
@@ -256,6 +270,68 @@ describe('WarehousesService.update asks its rows back', () => {
       warehouseId: WH,
       after: { name: 'Renamed', code: 'NDC', managerUserId: null, status: 'active' },
     });
+  });
+});
+
+describe('WarehousesService.update with no row field', () => {
+  // No UPDATE is sent, so nothing else proves the id is a warehouse of this
+  // organization before the audit rows name it.
+  it.each([
+    ['another organization', OTHER_ORG_WH],
+    ['no warehouse', UNKNOWN_WH],
+  ])(
+    "an admin's save of only the charter list on an id of %s: W3, before the links are read, and no audit row",
+    async (_label, id) => {
+      const { stub, recorded } = stubWith({ links: [C1] });
+
+      await expect(
+        new WarehousesService(memberCtx(stub, 'admin')).update(id, { charterIds: [] }),
+      ).rejects.toMatchObject({ code: 'conflict', message: W3 });
+
+      expect(recorded.warehouseReads).toHaveLength(1);
+      expect(stub.chainsAll.get('warehouse_charters.select')).toBeUndefined();
+      expect(recorded.warehouseUpdates).toEqual([]);
+      expect(recorded.linkInserts).toEqual([]);
+      expect(recorded.linkDeletes).toEqual([]);
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ['another organization', OTHER_ORG_WH],
+    ['no warehouse', UNKNOWN_WH],
+  ])(
+    "an admin's save with nothing in it on an id of %s: W3 and no audit row",
+    async (_label, id) => {
+      const { stub, recorded } = stubWith({});
+
+      await expect(
+        new WarehousesService(memberCtx(stub, 'admin')).update(id, {}),
+      ).rejects.toMatchObject({ code: 'conflict', message: W3 });
+
+      expect(recorded.warehouseUpdates).toEqual([]);
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("on this organization's warehouse the charter list saves with the same two audit rows as before", async () => {
+    const { stub, recorded, links } = stubWith({ links: [C1] });
+
+    await new WarehousesService(memberCtx(stub, 'admin')).update(WH, { charterIds: [C1, C2] });
+
+    expect(recorded.warehouseReads).toHaveLength(1);
+    expect(recorded.warehouseUpdates).toEqual([]);
+    expect(links()).toEqual([C1, C2]);
+    expect(auditEvents()).toEqual(['warehouse_charters.updated', 'warehouse.updated']);
+  });
+
+  it('a save with a row field sends no extra read: the UPDATE asks its row back', async () => {
+    const { stub, recorded } = stubWith({ links: [C1] });
+
+    await new WarehousesService(memberCtx(stub, 'admin')).update(WH, editorSave([C1]));
+
+    expect(recorded.warehouseReads).toEqual([]);
+    expect(recorded.warehouseUpdates).toHaveLength(1);
   });
 });
 

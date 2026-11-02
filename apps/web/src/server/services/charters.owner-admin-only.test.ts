@@ -8,6 +8,7 @@ import { effectivePermissions, type Role } from '@stockpilot/core';
 import {
   makeServiceContext,
   makeSupabaseStub,
+  servedLikePostgrest,
   type MockCall,
   type QueryResult,
   type SupabaseStub,
@@ -27,6 +28,9 @@ import { ChartersService } from './charters';
 
 const CHARTER = '00000000-0000-4000-8000-0000000000c1';
 const NEW_CHARTER = '00000000-0000-4000-8000-0000000000c9';
+/** Another organization's charter, and an id no charter has. */
+const OTHER_ORG_CHARTER = '00000000-0000-4000-8000-0000000000d1';
+const UNKNOWN_CHARTER = '00000000-0000-4000-8000-0000000000d9';
 
 const W1 = 'Only owners and admins can change warehouses and charters. Nothing was saved.';
 const W3 = 'Nothing was saved. Reload the page and try again.';
@@ -42,7 +46,16 @@ function memberCtx(stub: SupabaseStub, role: Role, overrides = [] as typeof gran
 
 function stubWith(opts: { update?: QueryResult; insert?: QueryResult } = {}) {
   const writes: MockCall[] = [];
+  const reads: MockCall[] = [];
+  const charters = servedLikePostgrest([
+    { id: CHARTER, organization_id: 'org-test' },
+    { id: OTHER_ORG_CHARTER, organization_id: 'org-other' },
+  ]);
   const stub = makeSupabaseStub({
+    'charters.select': (call) => {
+      reads.push(call);
+      return charters(call);
+    },
     'charters.update': (call) => {
       writes.push(call);
       return opts.update ?? { data: [{ id: CHARTER }], error: null };
@@ -52,7 +65,7 @@ function stubWith(opts: { update?: QueryResult; insert?: QueryResult } = {}) {
       return opts.insert ?? { data: { id: NEW_CHARTER }, error: null };
     },
   });
-  return { stub, writes };
+  return { stub, writes, reads };
 }
 
 beforeEach(() => {
@@ -104,20 +117,40 @@ describe('ChartersService.update asks its row back', () => {
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('an update with no fields sends no UPDATE', async () => {
-    const { stub, writes } = stubWith({ update: { data: null, error: null } });
+  it("an update with no fields sends no UPDATE, and reads this organization's charter first", async () => {
+    const { stub, writes, reads } = stubWith({ update: { data: null, error: null } });
 
     await new ChartersService(memberCtx(stub, 'admin')).update(CHARTER, {});
 
     expect(writes).toEqual([]);
+    expect(reads).toHaveLength(1);
   });
 
+  it.each([
+    ['another organization', OTHER_ORG_CHARTER],
+    ['no charter', UNKNOWN_CHARTER],
+  ])(
+    'an update with no fields on an id of %s: W3, and no charter.updated naming it',
+    async (_label, id) => {
+      const { stub, writes } = stubWith();
+
+      await expect(
+        new ChartersService(memberCtx(stub, 'admin')).update(id, {}),
+      ).rejects.toMatchObject({ code: 'conflict', message: W3 });
+
+      expect(writes).toEqual([]);
+      expect(audit).not.toHaveBeenCalled();
+    },
+  );
+
   it("an admin's UPDATE that lands writes charter.updated as before", async () => {
-    const { stub, writes } = stubWith();
+    const { stub, writes, reads } = stubWith();
 
     await new ChartersService(memberCtx(stub, 'admin')).update(CHARTER, { name: 'Renamed' });
 
     expect(writes).toHaveLength(1);
+    // The UPDATE asks its row back: no extra read.
+    expect(reads).toEqual([]);
     expect(audit).toHaveBeenCalledTimes(1);
     expect(audit.mock.calls[0]![0]).toEqual({
       event: 'charter.updated',

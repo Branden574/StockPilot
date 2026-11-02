@@ -7,6 +7,7 @@ import { ServiceError, withContext, type ServiceContext } from './context';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import {
   assertCanEditOrganizationSetup,
+  assertSetupRowInOrganization,
   isPolicyRefusal,
   setupNothingSaved,
   WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY,
@@ -182,7 +183,9 @@ export class ChartersService {
    * Owner or admin only, checked before any write (B99). The UPDATE asks for
    * its row back: one that changed no row (the id is not this organization's,
    * or the policy hid it) says nothing was saved and writes no audit row. A
-   * save with no field sends no UPDATE, as WarehousesService.update.
+   * save with no field sends no UPDATE, as WarehousesService.update, and reads
+   * the row instead, so its audit row never names an id that is not this
+   * organization's charter.
    */
   async update(id: string, patch: UpdateCharterInput) {
     assertCanEditOrganizationSetup(this.ctx, WAREHOUSE_SETUP_OWNER_ADMIN_ONLY_COPY);
@@ -207,6 +210,8 @@ export class ChartersService {
         .maybeSingle();
       if (error) throw new ServiceError('internal_error', error.message);
       if (!row) throw setupNothingSaved();
+    } else {
+      await assertSetupRowInOrganization(this.ctx, 'charters', id);
     }
     await audit({ event: 'charter.updated', entityType: 'charter', entityId: id, after: patch }, this.ctx);
   }

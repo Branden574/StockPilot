@@ -185,7 +185,12 @@ export class WarehouseChartersService {
       if (toRemove.length > 0) {
         // The rows it removed come back: a DELETE the policy refuses removes
         // nothing and answers no error.
-        const { data: gone, error: delErr } = await this.ctx.supabase
+        const {
+          data: gone,
+          error: delErr,
+          status,
+          statusText,
+        } = await this.ctx.supabase
           .from('warehouse_charters')
           .delete()
           .eq('organization_id', this.ctx.organizationId)
@@ -194,7 +199,15 @@ export class WarehouseChartersService {
           .in('charter_id', toRemove)
           .select('charter_id');
         if (delErr) {
-          if (!added) throw new ServiceError('internal_error', delErr.message);
+          // The database's own words go to the server report only; the
+          // person reads what was saved.
+          void reportError(
+            new Error(
+              `warehouse charter links delete failed: ${postgrestErrorText(delErr, { status, statusText })}`,
+            ),
+            { tag: 'warehouse_charters.save', extra: { warehouseId, write: 'delete' } },
+          );
+          if (!added) throw setupNothingSaved();
           await auditLinks([...desired, ...toRemove]);
           throw setupPartlySaved();
         }

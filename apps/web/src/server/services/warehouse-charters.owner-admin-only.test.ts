@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { audit, mockWithContext } = vi.hoisted(() => ({
+const { audit, mockWithContext, reportError } = vi.hoisted(() => ({
   audit: vi.fn(async (..._args: unknown[]) => {}),
   mockWithContext: vi.fn(),
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
 }));
 vi.mock('./audit', () => ({ audit }));
-vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 // The real gates and ServiceError; only the request context is the test's.
 vi.mock('@/server/services/context', async (importOriginal) => ({
@@ -21,6 +22,7 @@ import {
   inFilters,
   makeServiceContext,
   makeSupabaseStub,
+  servedLikePostgrest,
   type MockCall,
   type QueryResult,
   type SupabaseStub,
@@ -79,11 +81,13 @@ interface Recorded {
 /**
  * The links as the table holds them, and the writes. The DELETE removes and
  * returns what `deleteRemoves` lets it (all it was asked for by default);
- * `beforeDelete` changes the table first, as another admin's save would.
+ * `beforeDelete` changes the table first, as another admin's save would;
+ * `linkDelete` answers the DELETE with an error instead, removing nothing.
  */
 function stubWith(opts: {
   links: string[];
   linkInsert?: QueryResult;
+  linkDelete?: QueryResult;
   deleteRemoves?: (asked: string[]) => string[];
   beforeDelete?: (links: string[]) => string[];
 }) {
@@ -99,6 +103,8 @@ function stubWith(opts: {
     itemCounts: [],
   };
   const stub = makeSupabaseStub({
+    // The warehouse itself, this organization's.
+    'warehouses.select': servedLikePostgrest([{ id: WH, organization_id: ORG }]),
     'warehouses.update': (call) => {
       recorded.warehouseUpdates.push(call);
       return { data: [{ id: WH }], error: null };
@@ -112,6 +118,7 @@ function stubWith(opts: {
     },
     'warehouse_charters.delete': (call) => {
       recorded.linkDeletes.push(call);
+      if (opts.linkDelete) return opts.linkDelete;
       if (opts.beforeDelete) {
         const keep = opts.beforeDelete(table.map((r) => r.charter_id));
         table = table.filter((r) => keep.includes(r.charter_id));
@@ -153,6 +160,7 @@ function lastLinksRead(stub: SupabaseStub): MockCall {
 
 beforeEach(() => {
   audit.mockClear();
+  reportError.mockClear();
   mockWithContext.mockReset();
 });
 
@@ -263,6 +271,67 @@ describe('a link DELETE that removes nothing', () => {
       entityId: WH,
       before: { charterIds: [C1, C2, C3] },
       after: { charterIds: [C1] },
+    });
+  });
+});
+
+describe('a link DELETE that fails', () => {
+  // The database's own words for the failure; they go to the server log only.
+  const DB_TEXT = 'canceling statement due to statement timeout on "warehouse_charters"';
+
+  it('with nothing else of the save landed: W3, the database text only in the server report, and no audit row', async () => {
+    const { stub, recorded, links } = stubWith({
+      links: [C1, C2],
+      linkDelete: { data: null, error: { message: DB_TEXT, code: '57014' } },
+    });
+
+    const refusal = await new WarehouseChartersService(memberCtx(stub, 'admin'))
+      .setForWarehouse(WH, [C1])
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+
+    expect(refusal).toMatchObject({ code: 'conflict', message: W3 });
+    // Nothing of the database's words travels with the error to the caller.
+    expect(refusal).not.toHaveProperty('internalDetail', expect.anything());
+    expect(JSON.stringify(refusal)).not.toContain('statement timeout');
+    expect(String((refusal as Error).message)).not.toContain('statement timeout');
+    expect(recorded.linkDeletes).toHaveLength(1);
+    expect(links()).toEqual([C1, C2]);
+    expect(audit).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(String((reportError.mock.calls[0]![0] as Error).message)).toContain(DB_TEXT);
+    expect(reportError.mock.calls[0]![1]).toMatchObject({ extra: { warehouseId: WH } });
+  });
+
+  it('through the action: the answer is W3, not the database text', async () => {
+    const { stub } = stubWith({
+      links: [C1, C2],
+      linkDelete: { data: null, error: { message: DB_TEXT, code: '57014' } },
+    });
+    mockWithContext.mockResolvedValue(memberCtx(stub, 'admin'));
+
+    const res = await updateWarehouseAction(WH, { charterIds: [C1] });
+
+    expect(res).toEqual({ ok: false, error: { code: 'conflict', message: W3 } });
+  });
+
+  it('after the INSERT landed: the partly-saved path is unchanged (the audit row names the links in place, then W4)', async () => {
+    const { stub, links } = stubWith({
+      links: [C1, C2],
+      linkDelete: { data: null, error: { message: DB_TEXT, code: '57014' } },
+    });
+
+    await expect(
+      new WarehouseChartersService(memberCtx(stub, 'admin')).setForWarehouse(WH, [C1, C3]),
+    ).rejects.toMatchObject({ code: 'conflict', message: W4 });
+
+    expect(links()).toEqual([C1, C2, C3]);
+    expect(audit).toHaveBeenCalledTimes(1);
+    expect(audit.mock.calls[0]![0]).toMatchObject({
+      event: 'warehouse_charters.updated',
+      after: { charterIds: [C1, C3, C2] },
     });
   });
 });
