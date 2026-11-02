@@ -504,7 +504,7 @@ export function RecurringTemplatesPanel({
         ? Math.round(parseFloat(form.capDollars) * 100)
         : null;
     if (capCents != null && !Number.isFinite(capCents)) {
-      toast.error('Enter a valid auto-send cap, or leave it blank.');
+      toast.error('Enter a valid auto-order cap, or leave it blank.');
       return;
     }
 
@@ -608,9 +608,14 @@ export function RecurringTemplatesPanel({
           ) : null
         }
       >
+        {/* B105: it said the mode requires a $ cap, but with no cap the run
+            marks a PO as ordered whenever its total is under the
+            organization's PO approval threshold (shouldAutoSend), and it
+            sends nothing to the supplier. */}
         <p className="text-muted-foreground px-[18px] pb-3 pt-3.5 text-[13.5px] leading-[20.25px]">
-          Templates that create a PO automatically on a cadence. Draft by default; opt-in auto-send
-          requires a $ cap and stays within your PO approval threshold.
+          Templates that create a PO automatically on a cadence. Draft by default; a template can
+          instead mark its PO as ordered automatically, under a cap or your PO approval threshold.
+          Nothing is sent to the supplier.
         </p>
 
         {/* ── Template list ── */}
@@ -677,7 +682,7 @@ export function RecurringTemplatesPanel({
                           ? ` (${tpl.custom_days}d)`
                           : ''}
                         {' · '}
-                        {tpl.send_mode === 'send' ? 'Auto-send' : 'Draft'}{' '}
+                        {tpl.send_mode === 'send' ? 'Auto-order' : 'Draft'}{' '}
                         {tpl.max_auto_send_cents != null
                           ? `(cap ${formatCurrency(tpl.max_auto_send_cents / 100)})`
                           : ''}
@@ -886,18 +891,26 @@ export function RecurringTemplatesPanel({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="draft">Create a draft PO for review</SelectItem>
-                    <SelectItem value="send">Auto-send to supplier</SelectItem>
+                    <SelectItem value="send">Mark as ordered automatically</SelectItem>
                   </SelectContent>
                 </Select>
+                {/* The run's rule (shouldAutoSend, called with the template's
+                    cap and the organization's threshold): with no cap the
+                    threshold alone decides, so a blank cap does not keep the
+                    template to drafts (B105; it said "Without a cap, it falls
+                    back to draft."). Marking as ordered sends nothing. */}
                 <p className={help}>
-                  Auto-send respects your PO approval threshold. Without a cap, it falls back to
-                  draft.
+                  Mark as ordered automatically marks the PO as ordered when its total is within the
+                  cap and under your PO approval threshold, if you have one. With no cap, it is
+                  marked as ordered whenever its total is under your approval threshold. With
+                  neither, it stays a draft. Nothing is sent to the supplier. Send them the purchase
+                  order yourself.
                 </p>
               </div>
 
               {form.sendMode === 'send' && (
                 <div className="space-y-1.5">
-                  <Label htmlFor="rpt-cap">Auto-send cap ($, optional)</Label>
+                  <Label htmlFor="rpt-cap">Auto-order cap ($, optional)</Label>
                   <Input
                     id="rpt-cap"
                     type="number"
@@ -909,7 +922,7 @@ export function RecurringTemplatesPanel({
                     disabled={submitting}
                   />
                   <p className={help}>
-                    POs above this cap are drafted for review instead of auto-sent.
+                    A PO over this cap stays a draft for review instead of being marked as ordered.
                   </p>
                 </div>
               )}
