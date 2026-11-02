@@ -1,7 +1,8 @@
 -- supabase/tests/0426_categories_select_category_sets.test.sql
--- pgTAP proof for migration 0426 (docket S49): category rows are read through
--- the three sets inventory rows already use, and user_can_see_item_category
--- leaves the Data API. Every member reads the same categories as before.
+-- pgTAP proof for migration 0426 (docket S49): categories_select reads the
+-- membership set stock_movements_select reads and the two category sets
+-- inventory_items_select reads, and user_can_see_item_category leaves the
+-- Data API. Every member reads the same categories as before.
 --
 -- S.  Structure and who may call the function:
 --     S1  its posture is unchanged (definer, stable, search_path, owner,
@@ -20,7 +21,12 @@
 --         definer function (a revoke there would hide every category: the
 --         policy runs as the reader, INV-C1);
 --     S10 the plan of a category read as a signed-in member runs the three
---         sets and never the function.
+--         sets and never the function;
+--     S11 the policy and the function carry the reviewed comments; S12 what
+--         those comments say of the catalog holds (the membership set is
+--         stock_movements_select's, the two category sets are
+--         inventory_items_select's, and the three take no argument and call
+--         auth.uid() in their code).
 -- E.  The row sets: 13 personas x 4 categories in 2 organizations. For each,
 --     the rows categories_select returns (a real authenticated read) equal a
 --     hand-written list AND the rows the pre-0426 rule passes
@@ -43,7 +49,7 @@
 
 begin;
 
-select plan(30);
+select plan(32);
 
 \set orgA  '\'549c0000-0000-0000-0000-00000000000a\''
 \set orgB  '\'549c0000-0000-0000-0000-00000000000b\''
@@ -307,6 +313,43 @@ select is(
     where position(f in pg_temp.plan_as(:p04)) > 0),
   'rls_cat_allowed_category_ids,rls_cat_unrestricted_org_ids,rls_member_org_ids',
   'S10: a restricted viewer''s category read runs the three sets and never user_can_see_item_category or is_org_member');
+
+-- S11. The two comments section 4 of the migration writes (md5 of each text;
+-- the texts are in the migration). Neither names the migration's number, so
+-- a rename leaves these values alone.
+select is(
+  (select coalesce(md5(obj_description(pol.oid, 'pg_policy')), '-') from pg_policy pol
+    where pol.polrelid = 'public.categories'::regclass and pol.polname = 'categories_select')
+  || '/' || coalesce(md5(obj_description('public.user_can_see_item_category(uuid,uuid,uuid)'::regprocedure, 'pg_proc')), '-'),
+  'bb74e95b96721dfe6f6663036372678f/855d484431d536a595efed45d73dd788',
+  'S11: categories_select and user_can_see_item_category carry the reviewed comments');
+
+-- S12. What those comments say of the catalog: stock_movements_select reads
+-- rls_member_org_ids, inventory_items_select reads the two category sets (and
+-- not rls_member_org_ids: the comments name stock_movements_select for that
+-- set), and the three sets take no argument and call auth.uid() in their code
+-- (bodies read without comments and quoted strings).
+select is(
+  (select string_agg(c.relname || ':'
+                     || coalesce((select string_agg(f, '+' order by f)
+                                    from unnest(array['rls_member_org_ids', 'rls_cat_unrestricted_org_ids',
+                                                      'rls_cat_allowed_category_ids']) f
+                                   where position(f || '()' in pg_get_expr(pol.polqual, pol.polrelid)) > 0), 'none'),
+                     ', ' order by c.relname)
+     from pg_policy pol join pg_class c on c.oid = pol.polrelid
+    where (pol.polrelid, pol.polname) in (('public.inventory_items'::regclass, 'inventory_items_select'),
+                                          ('public.stock_movements'::regclass, 'stock_movements_select')))
+  || ' | ' ||
+  (select string_agg(p.proname || ':' || p.pronargs::text || ':'
+                     || (regexp_replace(p.prosrc, $re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$, ' ', 'g')
+                           ~* $re$\mauth\.uid\M$re$)::text, ', ' order by p.proname)
+     from pg_proc p
+    where p.oid in ('public.rls_member_org_ids()'::regprocedure,
+                    'public.rls_cat_unrestricted_org_ids()'::regprocedure,
+                    'public.rls_cat_allowed_category_ids()'::regprocedure)),
+  'inventory_items:rls_cat_allowed_category_ids+rls_cat_unrestricted_org_ids, stock_movements:rls_member_org_ids'
+  ' | rls_cat_allowed_category_ids:0:true, rls_cat_unrestricted_org_ids:0:true, rls_member_org_ids:0:true',
+  'S12: what the comments say holds: stock_movements_select reads rls_member_org_ids, inventory_items_select reads the two category sets and not rls_member_org_ids, and the three sets take no argument and call auth.uid() in their code');
 
 -- ══ E. The row sets: live = the hand list = the pre-0426 rule ══════════════
 select is(pg_temp.live(:p01) || ' | ' || pg_temp.old_rule(:p01), 'S49 A1,S49 A2 | S49 A1,S49 A2',

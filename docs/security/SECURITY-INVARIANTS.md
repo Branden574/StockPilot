@@ -43,10 +43,13 @@
      quoted strings (one shared expression, `_sec_inv_gate_re`); INV-4b and
      INV-29b were added, and INV-29 and INV-32 plant comment-only and
      string-only probes. INV-B3's grants paragraph gained the exception 0310
-     and 0426 use, INV-B2 names INV-22's string-literal residual, and section
-     10 records the second recurrence. The census figures in those entries
-     were read by a scratch pgTAP probe on a local Postgres at main f584141ba
-     with 0426 applied; the counts in section 10 were not re-derived. -->
+     and 0426 use, INV-B2 names INV-22's string-literal residual and gives
+     the measured current state (18 policies, 15 gated; the figure it had
+     carried since this document's first version was 19, 16 gated), and
+     section 10 records the second recurrence. The census figures in those
+     entries were read by a scratch pgTAP probe on a local Postgres at main
+     f584141ba with 0426 applied; the counts in section 10 were not
+     re-derived. -->
 
 # Security invariants
 
@@ -345,15 +348,15 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   unremarkable in a migration diff.
 - **Enforced by**: the predicate on each policy.
 - **Tested at**: INV-22, with INV-23 as the control that the population being
-  judged is non-empty. Current state: 19 such policies — 16 gated, 3 explicit
-  denies (the `mfa_recovery_codes_no_*` idiom that makes that table
-  trigger-write-only). One residual, named since S49: INV-22 searches the
-  deparsed predicate, which carries no comment but can carry a string literal,
-  so an identity name inside a quoted string in a predicate would still count
-  as a gate. INV-22 does not strip strings; a predicate is short enough that a
-  reviewer reads it whole. Measured on 2026-11-02 (main f584141ba with 0426):
-  the population held 18 policies, 15 gated with or without their strings and
-  3 explicit denies, so none passed on a string alone.
+  judged is non-empty. Current state, measured on 2026-11-02 (main f584141ba
+  with 0426): 18 such policies — 15 gated, 3 explicit denies (the
+  `mfa_recovery_codes_no_*` idiom that makes that table trigger-write-only).
+  One residual, named since S49: INV-22 searches the deparsed predicate,
+  which carries no comment but can carry a string literal, so an identity
+  name inside a quoted string in a predicate would still count as a gate.
+  INV-22 does not strip strings; a predicate is short enough that a reviewer
+  reads it whole. All 15 gated policies are still gated with their strings
+  removed, so none passes on a string alone.
 
 ### INV-B3 — no ungated SECURITY DEFINER function is authenticated-executable
 
@@ -456,17 +459,19 @@ body, so a gate name anywhere counted, a comment included.
 `has_org_role` is in a comment (0310 says so itself), and it takes the user
 it answers about from its caller. Any signed-in account could ask it, by
 POST to its RPC, whether a person (any id) is a member of an organization
-(any id) and which categories a limited viewer holds. 0426 moved `categories_select`
-onto the zero-argument sets `inventory_items_select` already used (0229),
-which read `auth.uid()` themselves, and took `authenticated`'s `EXECUTE` away
-from the function under the exception above. The lesson for the next helper:
-a predicate that takes a user id from its caller belongs in the zero-argument
-set form, and a policy should read sets that derive the user from the
-session, not pass `auth.uid()` into a function anyone can call with another
-id. Not modelled by the expression, and in no swept body today: a nested
-comment, an `E''` string with `\'`, and a dollar-quoted string inside a body
-(a gate name in one of those still counts). And a name proves a gate is
-called, not that the call decides anything.
+(any id) and which categories a limited viewer holds. 0426 moved
+`categories_select` onto zero-argument sets that read `auth.uid()`
+themselves: the two category sets `inventory_items_select` already read
+(0229) and the membership set `stock_movements_select` reads. It took
+`authenticated`'s `EXECUTE` away from the function under the exception
+above. The lesson for the next helper: a predicate that takes a user id from
+its caller belongs in the zero-argument set form, and a policy should read
+sets that derive the user from the session, not pass `auth.uid()` into a
+function anyone can call with another id. Not modelled by the expression,
+and in no swept body today: a nested comment, an `E''` string with `\'`,
+and a dollar-quoted string inside a body (a gate name in one of those still
+counts). And a name proves a gate is called, not that the call decides
+anything.
 
 Reproduce (the `authenticated` twin of the INV-B1 query above; the body is read
 the way INV-25 reads it, comments and quoted strings removed first):

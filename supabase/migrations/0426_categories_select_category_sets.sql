@@ -1,10 +1,11 @@
 -- 0426_categories_select_category_sets.sql
 --
--- Category rows are read through the same three sets inventory rows already
--- use, and public.user_can_see_item_category leaves the Data API (docket
--- S49). Nothing a person does in the web app or on the phone changes: every
--- member reads the same categories as before (the equivalence matrix in the
--- 0426 test). No row of any table changes.
+-- categories_select reads the membership set stock_movements_select reads and
+-- the two category sets inventory_items_select reads, and
+-- public.user_can_see_item_category leaves the Data API (docket S49). Nothing
+-- a person does in the web app or on the phone changes: every member reads
+-- the same categories as before (the equivalence matrix in the 0426 test). No
+-- row of any table changes.
 --
 -- ── WHAT WAS WRONG ─────────────────────────────────────────────────────────
 -- user_can_see_item_category(p_user_id, p_org_id, p_category_id) (0310,
@@ -69,10 +70,14 @@
 -- now gets 42501. Never 40001 or 40P01 (PostgREST retries those, 0367).
 --
 -- ── ORDER ─────────────────────────────────────────────────────────────────
--- After every lower number. No queued migration restates, drops or pins
--- categories_select, user_can_see_item_category or the three set helpers.
--- The function's body is not pinned here, so S47 (which restates it) may go
--- before or after this file.
+-- After every lower number. Of the objects this file pins, one is touched by
+-- a queued migration: docket S47's (open when this was written) restates
+-- user_can_see_item_category's body with CREATE OR REPLACE, which keeps the
+-- function's grants and comment, and its preflight pins that body and the
+-- function's posture, which this file leaves alone. This file pins the
+-- function's grants and dependents, which S47's leaves alone, and not its
+-- body, so the two may go in either order. No queued migration restates,
+-- drops or pins categories_select or the three set helpers.
 
 set lock_timeout = '900ms';
 
@@ -219,16 +224,20 @@ revoke all on function public.user_can_see_item_category(uuid, uuid, uuid) from 
 grant execute on function public.user_can_see_item_category(uuid, uuid, uuid) to service_role;
 
 -- ═══ 4. Comments ════════════════════════════════════════════════════════════
+-- Neither text names this file's number, so a rename leaves them (and the
+-- md5s the 0426 test pins) alone.
 comment on policy categories_select on public.categories is
   'Members read their organization''s categories, and a viewer limited to some categories reads only those (S49). '
-  'The rule inventory_items_select uses (0229): three sets that read auth.uid() themselves, are disabled-aware and '
-  'expiry-aware (0310), and are evaluated once per query. Replaces 0140''s per-row '
+  'Membership is rls_member_org_ids, as in stock_movements_select. The category rule is rls_cat_unrestricted_org_ids '
+  'or the (organization_id, id) pair in rls_cat_allowed_category_ids, the two sets inventory_items_select reads (0229), '
+  'with id in place of category_id. The three sets take no user id: they read auth.uid() themselves, refuse disabled '
+  'accounts and expired Act-as seats (0310), and are evaluated once per query. Replaces 0140''s per-row '
   'user_can_see_item_category(auth.uid(), organization_id, id).';
 
 comment on function public.user_can_see_item_category(uuid, uuid, uuid) is
   'The category visibility rule as one predicate about the user it is given (0129; disabled-aware since 0310). '
-  'No policy calls it since S49: categories_select, like inventory_items_select (0229), reads rls_member_org_ids, '
-  'rls_cat_unrestricted_org_ids and rls_cat_allowed_category_ids, which take no user id. EXECUTE is service_role''s '
-  'only, because it answers for any user id it is given.';
+  'No policy calls it since S49: categories_select reads rls_member_org_ids, as stock_movements_select does, and '
+  'rls_cat_unrestricted_org_ids and rls_cat_allowed_category_ids, as inventory_items_select does (0229). None of '
+  'the three takes a user id. EXECUTE is service_role''s only, because it answers for any user id it is given.';
 
 reset lock_timeout;
