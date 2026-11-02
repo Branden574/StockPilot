@@ -584,10 +584,6 @@ describe('Books page: a staff page is planned group-aware', () => {
 });
 
 /**
- * Redesign P3.2: the Books list keeps its own Table / Grid choice
- * (sp_view_books), read on the server for the first paint.
- */
-/**
  * B68: Export (the toolbar menu and the bulk bar's button) showed to every
  * member, while the export, its sample and export.csv answer only
  * items:export, which staff and viewers lack by default. The page passes the
@@ -652,6 +648,10 @@ describe('Books page: Export only for a member who holds items:export', () => {
   });
 });
 
+/**
+ * Redesign P3.2: the Books list keeps its own Table / Grid choice
+ * (sp_view_books), read on the server for the first paint.
+ */
 describe('Books page: the Table / Grid choice comes from its cookie', () => {
   it.each<[string, Record<string, string>, 'table' | 'grid']>([
     ['no cookie: Table, the default', {}, 'table'],

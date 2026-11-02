@@ -875,11 +875,6 @@ describe('Items page: the Table / Grid choice comes from its cookie', () => {
 });
 
 /**
- * CONFLICTS D5 (fixed in redesign P3.2): the Archived view told people to
- * restore an item by editing it and setting its status to Active, but the
- * item form has no status field. The way back is Restore on the selection.
- */
-/**
  * B68: Export (the toolbar menu and the bulk bar's button) showed to every
  * member, while the export, its sample and export.csv answer only
  * items:export, which staff and viewers lack by default. The page passes the
@@ -940,6 +935,11 @@ describe('Items page: Export only for a member who holds items:export', () => {
   });
 });
 
+/**
+ * CONFLICTS D5 (fixed in redesign P3.2): the Archived view told people to
+ * restore an item by editing it and setting its status to Active, but the
+ * item form has no status field. The way back is Restore on the selection.
+ */
 describe('Items page: the Archived view says how to restore', () => {
   it('points at Restore on the selection, never at a status field', async () => {
     const { container } = render(await callPage({ status: 'archived' }));
