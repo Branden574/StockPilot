@@ -123,6 +123,8 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
         ['id', 'ord-1'],
       ]),
     );
+    // Nor a warehouse check: a manager's would read `warehouses`.
+    expect(stub.fromCalls).not.toContain('warehouses');
   });
 
   it('DENIES when the ownership/status read fails, without reaching the RPC', async () => {

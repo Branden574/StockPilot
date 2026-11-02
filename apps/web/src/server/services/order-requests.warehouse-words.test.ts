@@ -171,6 +171,11 @@ describe('cancel by an approver asks write access to the order\'s warehouse', ()
     expect(stub.rpcCalls.map((c) => c.name)).toEqual(['cancel_order_request']);
     // S39: every caller's cancel reads the order in the organization first.
     expect(stub.fromCalls).toContain('order_requests');
+    // No warehouse check. For a manager, getWarehouseAccess reads
+    // `warehouses` (roleSeesEveryWarehouse) and never the assignments, so
+    // `warehouses` is the read that would show a check; the assignments line
+    // covers the staff branch.
+    expect(stub.fromCalls).not.toContain('warehouses');
     expect(stub.fromCalls).not.toContain('user_warehouse_assignments');
   });
 });
