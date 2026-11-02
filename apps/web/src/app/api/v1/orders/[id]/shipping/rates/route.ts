@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { ShippingService } from '@/server/services/shipping';
 
@@ -45,6 +46,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const { id } = await params;
+  // A malformed id is a 400 before anything is read with it (B63).
+  const invalidId = invalidPathIdResponse(id, 'That order id is not valid.');
+  if (invalidId) return invalidId;
 
   const json = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(json);

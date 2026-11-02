@@ -6,8 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // Selection on the Items / Books table (the owner's release-blocking item),
 // the redesign's fixes to it (P3.2): CONFLICTS D9 (the page select-all during
 // a server-mode search), D8 (the boxes' accessible names) and D18 (the saved
-// view's owner controls hidden from touch and keyboard), and the jump-to-page
-// grid's touch targets (P2.2 hand-off).
+// view's owner controls hidden from touch and keyboard), the jump-to-page
+// grid's touch targets (P2.2 hand-off), and the bulk bar's Cycle count gate
+// that the table hands on (B42).
 
 const { routerMock, urlState } = vi.hoisted(() => ({
   routerMock: { replace: vi.fn(), push: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() },
@@ -54,10 +55,13 @@ vi.mock('@/components/ui/image-hover-preview', () => ({
 vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
   useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
-const { spy } = vi.hoisted(() => ({ spy: { selectedIds: [] as string[] } }));
+const { spy } = vi.hoisted(() => ({
+  spy: { selectedIds: [] as string[], canStartCount: undefined as boolean | undefined },
+}));
 vi.mock('@/components/inventory/bulk-actions', () => ({
-  BulkActions: (props: { selectedIds: string[] }) => {
+  BulkActions: (props: { selectedIds: string[]; canStartCount?: boolean }) => {
     spy.selectedIds = props.selectedIds;
+    spy.canStartCount = props.canStartCount;
     return <div data-testid="bulk-actions" />;
   },
 }));
@@ -98,6 +102,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   urlState.params = new URLSearchParams('');
   spy.selectedIds = [];
+  spy.canStartCount = undefined;
   window.history.replaceState(null, '', '/dashboard/inventory');
 });
 afterEach(() => {
@@ -256,6 +261,66 @@ describe('CONFLICTS D18: a saved view’s owner controls reach touch and keyboar
   });
 });
 
+// B23: a shared view whose owner deleted their account. Once the database
+// keeps it for the team (the design in the PR), it has no owner: the chip
+// says so instead of "a teammate", and only the people the server says may
+// delete it (an admin or owner) get Delete. Nobody gets the owner's share
+// toggle, as nobody owns it.
+describe('B23: a shared view whose owner deleted their account', () => {
+  function renderWith(view: Record<string, unknown>) {
+    return render(
+      <InventoryTable
+        items={[row('a')] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        savedViews={[{ id: 'v1', name: 'Restock', state: {}, ...view }] as never}
+        savedViewScope="inventory"
+        currentUserId="u-1"
+      />,
+    );
+  }
+
+  it('says who shared it: a deleted user, not a teammate', () => {
+    const { container } = renderWith({ ownerId: null, isShared: true, canRemove: false });
+    const chip = container.querySelector('span[title^="Shared by"]');
+    expect(chip?.getAttribute('title')).toBe('Shared by a deleted user');
+  });
+
+  it('an admin the server lets remove it gets Delete, and no share toggle', () => {
+    renderWith({ ownerId: null, isShared: true, canRemove: true });
+    expect(screen.getByRole('button', { name: 'Apply view Restock' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete view Restock' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ }),
+    ).toBeNull();
+  });
+
+  it('a member gets only Apply', () => {
+    renderWith({ ownerId: null, isShared: true, canRemove: false });
+    expect(screen.getByRole('button', { name: 'Apply view Restock' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Delete view/ })).toBeNull();
+    expect(
+      screen.queryByRole('button', { name: /Make view Restock private|Share view Restock/ }),
+    ).toBeNull();
+  });
+
+  it("a teammate's view still reads Shared by a teammate, and the owner's Shared by you", () => {
+    const teammate = renderWith({ ownerId: 'u-2', isShared: true, canRemove: false });
+    expect(
+      teammate.container.querySelector('span[title^="Shared by"]')?.getAttribute('title'),
+    ).toBe('Shared by a teammate');
+    teammate.unmount();
+    const own = renderWith({ ownerId: 'u-1', isShared: true, canRemove: true });
+    expect(own.container.querySelector('span[title^="Shared by"]')?.getAttribute('title')).toBe(
+      'Shared by you',
+    );
+    expect(screen.getByRole('button', { name: 'Make view Restock private' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete view Restock' })).toBeInTheDocument();
+  });
+});
+
 describe('the jump-to-page grid on a touch screen (P2.2 hand-off)', () => {
   // At 28 px with 4 px gaps, each page button's 44 px touch area reached over
   // the row above, so a tap on the bottom of page 1 opened page 6.
@@ -298,5 +363,50 @@ describe('pending filter navigations never block clicks', () => {
     );
     const list = container.querySelector('[aria-busy]')!;
     expect(list.getAttribute('class') ?? '').not.toContain('pointer-events-none');
+  });
+});
+
+describe("B42: the table hands the page's canStartCount to the bulk bar", () => {
+  // Three links decide the bulk Cycle count: the Items and Books pages work
+  // out core countStartAllowed (their page.chain tests), this table hands it
+  // to BulkActions, and BulkActions draws Cycle count only when it is true
+  // (bulk-actions.test.tsx). These pin the middle link. Without the hand-off
+  // every manager loses Cycle count; with a default of true, Rentals items,
+  // which passes nothing, offers it again, and rental equipment is never
+  // counted (0369 D8).
+  it('Items and Books: a page that passes canStartCount has it reach the bulk bar', async () => {
+    const user = userEvent.setup();
+    render(
+      <InventoryTable
+        items={[row('a')] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        canStartCount
+      />,
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Select Item a' }));
+    expect(spy.selectedIds).toEqual(['a']);
+    expect(spy.canStartCount).toBe(true);
+  });
+
+  it('Rentals items passes none, so the bulk bar is told no', async () => {
+    const user = userEvent.setup();
+    render(
+      <InventoryTable
+        items={[row('r1', { is_rental: true })] as never}
+        lookups={LOOKUPS}
+        total={1}
+        initialQuery=""
+        pageSize={30}
+        rowLinkPrefix="/dashboard/rentals/items"
+        basePath="/dashboard/rentals/items"
+        rentalsOnly
+      />,
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Select Item r1' }));
+    expect(spy.selectedIds).toEqual(['r1']);
+    expect(spy.canStartCount).toBe(false);
   });
 });

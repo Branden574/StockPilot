@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { forbiddenOrInternalResponse } from '@/server/lib/api-error-response';
 import { SizeCountsService } from '@/server/services/size-counts';
 import { ServiceError } from '@/server/services/context';
 
@@ -74,7 +75,8 @@ export async function POST(req: NextRequest) {
 const GENERIC_500_MESSAGE = 'An internal error occurred. Please try again.';
 
 /**
- * Shared error mapper for all 8 size-count routes.
+ * Shared error mapper for the nine handlers in the eight size-count route
+ * files.
  *
  * S13: the non-ServiceError branch used to return `e.message` verbatim. Every
  * raw Postgres/PostgREST failure that escaped the service — an RLS refusal
@@ -86,6 +88,15 @@ const GENERIC_500_MESSAGE = 'An internal error occurred. Please try again.';
  * Now the caller gets a stable slug plus a generic sentence and the raw text
  * goes to the error reporter instead. 4xx ServiceError messages stay verbatim:
  * those are app-authored strings a screen is meant to render.
+ *
+ * B73: start, append and scan check warehouse access through
+ * assertWarehouseAccess, whose refusal is a ForbiddenError, not a
+ * ServiceError, so it used to fall through to the generic 500 and was
+ * reported as an error on every request. It now answers as S16's routes do
+ * (forbiddenOrInternalResponse): a 403 with the refusal's own words, not
+ * reported; a 503 with Retry-After, reported as a warning, when the caller's
+ * own access could not be read. Everything else keeps the S13 500, with the
+ * same body, tag and level.
  */
 export function sizeCountError(e: unknown): NextResponse {
   if (e instanceof ServiceError) {
@@ -116,9 +127,5 @@ export function sizeCountError(e: unknown): NextResponse {
                 : 500;
     return NextResponse.json({ error: e.code, message: e.message }, { status });
   }
-  void reportError(e, { tag: 'size-counts.api' });
-  return NextResponse.json(
-    { error: 'internal_error', message: GENERIC_500_MESSAGE },
-    { status: 500 },
-  );
+  return forbiddenOrInternalResponse(e, 'size-counts.api', { message: GENERIC_500_MESSAGE });
 }

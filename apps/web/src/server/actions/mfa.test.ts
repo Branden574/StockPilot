@@ -5,7 +5,7 @@ vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), updateTag: vi.fn() }));
 vi.mock('@/lib/auth/session', () => ({
   requireSession: vi.fn(async () => ({
     userId: 'user-1',
-    email: 'u@e.com',
+    email: 'u@example.test',
     fullName: null,
     avatarUrl: null,
     defaultOrganizationId: 'org-1',
@@ -126,7 +126,7 @@ describe('verifyEnrollmentAction — password re-confirm is mandatory', () => {
 
     expect(res.ok).toBe(true);
     expect(verifyPasswordSideChannel).toHaveBeenCalledWith(
-      'u@e.com',
+      'u@example.test',
       'correct horse battery staple',
     );
     expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: 'f1' });

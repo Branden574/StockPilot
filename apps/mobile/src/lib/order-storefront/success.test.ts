@@ -96,8 +96,8 @@ describe('what the success screen says', () => {
   });
 
   it('on behalf: the emails go to the person it is for', () => {
-    const p = placed({ order: { ...ORDER_SUMMARY, requestedFor: { self: false, name: 'Maria Lopez', email: 'maria@x.org' } } });
-    expect(successSentences(p)).toEqual(['Sent for approval. Emails about it go to Maria Lopez at maria@x.org.']);
+    const p = placed({ order: { ...ORDER_SUMMARY, requestedFor: { self: false, name: 'Pixie Quill', email: 'pixie@x.org' } } });
+    expect(successSentences(p)).toEqual(['Sent for approval. Emails about it go to Pixie Quill at pixie@x.org.']);
   });
 
   it('a replay says it was already placed; "Don’t send it" finding it placed says so', () => {
@@ -139,14 +139,14 @@ describe('the pickup or delivery request email (offered to every placer when rou
   });
 
   it('a delivery for someone else: the site placed for, and the person it is for', () => {
-    const order = { ...ORDER_SUMMARY, fulfillmentType: 'delivery' as const, deliveryCharterId: SITE, requestedFor: { self: false as const, name: 'Maria', email: 'maria@x.org' } };
+    const order = { ...ORDER_SUMMARY, fulfillmentType: 'delivery' as const, deliveryCharterId: SITE, requestedFor: { self: false as const, name: 'Pixie', email: 'pixie@x.org' } };
     const input = successEmailInput({
       context: base,
-      placed: placed({ order, body: { ...BODY, fulfillmentType: 'delivery', deliveryCharterId: SITE, onBehalfOf: { name: 'Maria', email: 'maria@x.org' } } }),
+      placed: placed({ order, body: { ...BODY, fulfillmentType: 'delivery', deliveryCharterId: SITE, onBehalfOf: { name: 'Pixie', email: 'pixie@x.org' } } }),
     })!;
     expect(input.destination).toMatchObject({ id: SITE, name: 'North' });
-    expect(input.requestedFor).toBe('Maria');
-    expect(input.requesterEmail).toBe('maria@x.org');
+    expect(input.requestedFor).toBe('Pixie');
+    expect(input.requesterEmail).toBe('pixie@x.org');
   });
 
   it('no routing, routing core refuses, or a body this build cannot read: no email', () => {

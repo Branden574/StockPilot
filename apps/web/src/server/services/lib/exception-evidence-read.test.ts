@@ -53,7 +53,7 @@ function row(o: Partial<EvidenceRow> & { id: string }): EvidenceRow {
     created_at: '2026-09-27T12:00:00Z',
     removed_at: null,
     removed_by: null,
-    uploader: { full_name: 'Maria Lopez', email: 'maria@x.test' },
+    uploader: { full_name: 'Pixie Quill', email: 'pixie@x.test' },
     ...o,
   };
 }
@@ -135,7 +135,7 @@ describe('buildEvidenceBlock', () => {
     if (block.status !== 'ok') throw new Error('unavailable');
     expect(block.photos[0]).toEqual({
       id: 'e1',
-      uploadedBy: { id: 'u-staff', label: 'Maria Lopez' },
+      uploadedBy: { id: 'u-staff', label: 'Pixie Quill' },
       capturedAt: '2026-09-27T11:50:00Z',
       uploadedAt: '2026-09-27T12:00:00Z',
       note: 'shelf empty',
