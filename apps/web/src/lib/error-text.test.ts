@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { ServiceError } from '@/server/services/context';
 import { realSupabaseClient } from '@/test/postgrest-answers';
 
-import { asReportableError, NO_MESSAGE_TEXT, nonErrorText } from './error-text';
+import { asReportableError, NO_MESSAGE_TEXT, nonErrorText, reportedMessage } from './error-text';
 
 /**
  * The text an error report carries for a value that is not an Error (docket
@@ -190,5 +191,41 @@ describe('asReportableError', () => {
     expect(made).toBeInstanceOf(Error);
     expect(made.message).toBe('deadlock detected (code 40P01)');
     expect(made.stack).toMatch(/^Error: deadlock detected \(code 40P01\)/);
+  });
+});
+
+/**
+ * A ServiceError('internal_error') says only "An internal error occurred.
+ * Please try again." to its caller and keeps the database's text in
+ * `internalDetail`, for the server's logs (S13). Reported as it is, the alert
+ * said only that sentence.
+ */
+describe('reportedMessage', () => {
+  it('an internal error reports its internal detail, any other error its message', () => {
+    const internal = new ServiceError(
+      'internal_error',
+      'canceling statement due to statement timeout',
+    );
+    expect(internal.message).toBe('An internal error occurred. Please try again.');
+    expect(reportedMessage(internal)).toBe('canceling statement due to statement timeout');
+    expect(reportedMessage(new ServiceError('forbidden', 'No access.'))).toBe('No access.');
+    expect(reportedMessage(new Error('plain'))).toBe('plain');
+    // An internal error built with no text of its own keeps the sentence.
+    expect(reportedMessage(new ServiceError('internal_error', ''))).toBe(
+      'An internal error occurred. Please try again.',
+    );
+  });
+
+  it('cuts a long internal detail to 500 characters', () => {
+    expect(reportedMessage(new ServiceError('internal_error', 'd'.repeat(2_000)))).toBe(
+      `${'d'.repeat(500)}…`,
+    );
+  });
+
+  it('a credential in the internal detail is redacted before the cut', () => {
+    const token = 'a3f9c1d20b7e4856f10c9d2e3b4a5f6708192a3b4c5d6e7f8091a2b3c4d5e6f7';
+    const lead = `${'x'.repeat(478)} /orders/sign/`;
+    const text = reportedMessage(new ServiceError('internal_error', `${lead}${token} failed`));
+    expect(text).not.toContain(token.slice(0, 8));
   });
 });

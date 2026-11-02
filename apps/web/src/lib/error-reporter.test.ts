@@ -159,6 +159,21 @@ describe('reportError with a value that is not an Error', () => {
     await expect(reportError(Object.create(null), { tag: 't' })).resolves.toBeUndefined();
     expect(vi.mocked(console.error).mock.calls[0]![1]).toBe('Non-Error object with no message');
   });
+
+  // A ServiceError('internal_error') keeps the database's text in
+  // internalDetail ("for logging", S13) and says only a fixed sentence: the
+  // report carries the text, and the stack keeps the throw site.
+  it("an internal error reports its internal detail, and its stack keeps the throw site's sentence", async () => {
+    process.env.ERROR_WEBHOOK_URL = 'https://errors.internal.example/ingest';
+    const internal = Object.assign(new Error('An internal error occurred. Please try again.'), {
+      name: 'ServiceError',
+      internalDetail: 'canceling statement due to statement timeout',
+    });
+    await reportError(internal, { tag: 'verification.location' });
+    const body = JSON.parse(postedBody()) as { message: string; stack: string };
+    expect(body.message).toBe('canceling statement due to statement timeout');
+    expect(body.stack).toContain('An internal error occurred');
+  });
 });
 
 function escapeRegExp(text: string): string {
