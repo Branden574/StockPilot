@@ -9,12 +9,14 @@ import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit
 /*
  * The auth audit helpers, moved verbatim out of server/actions/auth.ts so the
  * authenticator code checks in server/actions/mfa.ts and mfa-recovery.ts
- * (through lib/auth/mfa-code-attempts.ts) write their rows the same way.
+ * (through lib/auth/mfa-code-attempts.ts) and the phone routes
+ * POST /api/v1/auth/signed-in and signed-out write their rows the same way.
  *
  * Server code only: `import 'server-only'` and never 'use server'. Exported
  * from a 'use server' module, emitAuthAudit would be a Server Action, an
  * endpoint anyone could call to write Audit log rows in any organization's
- * name. lib/auth/mfa-code-attempts.test.ts pins this.
+ * name. auth-audit.guard.test.ts and lib/auth/mfa-code-attempts.test.ts pin
+ * this.
  */
 
 /**

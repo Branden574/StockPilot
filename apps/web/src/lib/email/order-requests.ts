@@ -33,7 +33,7 @@ import {
 } from './unsubscribe';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { resolveTrackToken } from '@/server/lib/order-secrets';
+import { readOrderSecrets } from '@/server/lib/order-secrets';
 import { sendReplacementOrderEmail } from '@/server/email/replacement-update';
 
 import type {
@@ -357,6 +357,11 @@ function buildTrackUrl(
     return `${appUrl}/dashboard/orders/${row.id}`;
   }
   const base = `${appUrl}/r/track?id=${row.id}&email=${encodeURIComponent(recipientEmail)}`;
+  // B20a: a key opens the order for whoever holds it, and the tracker's email
+  // field can be edited, so only an email to the order's own address carries
+  // one (see isOrdersOwnAddress). Anyone else (a signer's receipt) gets the
+  // link without it.
+  if (!isOrdersOwnAddress(row, recipientEmail)) return base;
   // Mig 0330: the request's OWN public_track_token is the durable `&t=`
   // scope (minted at public submit; unlike the org/link catalog token it is
   // readable at send time and survives catalog-token rotation). The
@@ -368,20 +373,55 @@ function buildTrackUrl(
 }
 
 /**
- * The request's own public track token for a /r/track link, or null when the
- * link does not need one (portal and signed-in requesters link elsewhere).
- * It lives in the service-only order_request_secrets (the public submit has
- * written it there since 0389, and 0392 moved every older one there and
- * nulled the order column). Without a service-role key, or when the read
- * fails, the link carries no token (the tracker then asks for it).
+ * Whether `recipientEmail` is the address the order is for (its
+ * requester_email), compared trimmed and lower-cased (B20a). At a hand-over
+ * the sign route also sends the completed receipt to a physical signer whose
+ * address differs; with the order's own key in that link, a signer who typed
+ * the requester's address into the tracker read the order and, for a
+ * completed order with Returns on, the requester's return link. Only the
+ * order's own address gets its key.
  */
-async function requestTrackToken(row: OrderRequestRow): Promise<string | null> {
+function isOrdersOwnAddress(row: OrderRequestRow, recipientEmail: string): boolean {
+  const own = row.requester_email?.trim().toLowerCase();
+  return !!own && recipientEmail.trim().toLowerCase() === own;
+}
+
+/**
+ * The request's own public track token for a /r/track link, or null when the
+ * link does not need one (portal and signed-in requesters link elsewhere) or
+ * may not carry it (an email to any address but the order's own: nothing is
+ * read). It lives in the service-only order_request_secrets (the public submit
+ * has written it there since 0389, and 0392 moved every older one there and
+ * nulled the order column).
+ *
+ * Without a service-role key, or when the read fails, the link carries no
+ * token (the tracker then asks for it) and the failure is reported once, with
+ * the order id only, never a token (B20a: it used to be swallowed, a dead
+ * Track button with nothing to say why). An order with no token is not a
+ * failure.
+ */
+async function requestTrackToken(
+  row: OrderRequestRow,
+  recipientEmail: string,
+): Promise<string | null> {
   if (row.source === 'portal' || row.requester_user_id) return null;
+  if (!isOrdersOwnAddress(row, recipientEmail)) return null;
+  let admin: ReturnType<typeof createAdminClient>;
   try {
-    return await resolveTrackToken(createAdminClient(), row.id);
-  } catch {
+    admin = createAdminClient();
+  } catch (e) {
+    void reportError(e, { tag: 'orders.track-token', extra: { orderId: row.id } });
     return null;
   }
+  const read = await readOrderSecrets(admin, row.id);
+  if (!read.ok) {
+    void reportError(new Error('order_request_secrets read failed'), {
+      tag: 'orders.track-token',
+      extra: { orderId: row.id },
+    });
+    return null;
+  }
+  return read.secrets?.publicTrackToken ?? null;
 }
 
 /**
@@ -1477,7 +1517,7 @@ export async function sendOrderRequestEmail(
           appUrl,
           recipientEmail,
           publicRequestToken ?? null,
-          await requestTrackToken(request),
+          await requestTrackToken(request, recipientEmail),
         );
   const unsubscribe = buildUnsubscribeUrl(request, appUrl, recipientEmail);
 

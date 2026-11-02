@@ -31,6 +31,15 @@
  *      per-organization warehouse, account-eviction.ts
  *      accountScopedStorageKeys). The outbox is never cleared by a sign-out.
  *
+ * THIS PHONE'S OWN STEPS (S5). Between 4 and 5, while the session and its
+ * access token still exist, beforeSessionEnds (auth-context.tsx: hold push
+ * registration, delete this phone's push token row, tell the server, which
+ * signs the account's other devices out); right after 5 answers,
+ * afterSessionEnd(ended) (release the hold; register again if the session
+ * survived). Each is capped (6 s), a failure is only warned, and neither
+ * decides whether the person is signed out. Neither runs for "Stay signed in"
+ * or after an in-app account deletion (its token rows went with the account).
+ *
  * ORDER REQUESTS NOT CONFIRMED (phone ordering PO-4, plan 3.6). A sent order
  * request whose answer never arrived lives in the account's draft keys,
  * which step 6 removes, and only its key can still settle it. So, beside the
@@ -128,10 +137,22 @@ export interface SignOutFlowDeps extends EndSessionDeps {
    * succeeded, and a failed first load never replaced it (review 2026-09-26).
    */
   clearAccountStorage(): Promise<void>;
+  /**
+   * This phone's own steps while the session still exists (S5): run after
+   * holdForAccount, just before the session ends. Capped by the flow; a
+   * failure is only warned.
+   */
+  beforeSessionEnds?(): Promise<void>;
+  /** Right after the session's end was decided: whether it ended. Capped by
+   *  the flow; a failure is only warned. */
+  afterSessionEnd?(ended: boolean): Promise<void>;
 }
 
 /** How long the sign-out waits for the drains before asking anyway. */
 export const SIGN_OUT_DRAIN_TIMEOUT_MS = 15_000;
+
+/** How long the sign-out waits for each of this phone's own steps (S5). */
+export const SIGN_OUT_DEVICE_STEP_TIMEOUT_MS = 6_000;
 
 /**
  * End the session and report whether it actually ended. `global` falls back
@@ -173,9 +194,23 @@ export async function runSignOutFlow(
      *  never be sent, so there is nothing to ask and it is discarded. */
     discardWithoutAsking?: boolean;
     drainTimeoutMs?: number;
+    deviceStepTimeoutMs?: number;
   } = {},
 ): Promise<SignOutOutcome> {
   const warn = deps.warn ?? (() => undefined);
+  // This phone's own steps (S5): bounded, and only warned. A step that throws
+  // before it returns a promise is caught the same way.
+  const deviceStep = async (when: 'before' | 'after', step: () => Promise<void>) => {
+    try {
+      await withTimeout(
+        Promise.resolve().then(step),
+        opts.deviceStepTimeoutMs ?? SIGN_OUT_DEVICE_STEP_TIMEOUT_MS,
+      );
+    } catch (e) {
+      warn(`[auth] this phone could not finish its steps ${when} signing out`, e);
+    }
+  };
+  const deviceSteps = opts.discardWithoutAsking !== true;
   const count = async () => {
     try {
       return await deps.countUnsynced();
@@ -276,7 +311,12 @@ export async function runSignOutFlow(
     warn('[auth] could not hold queued changes for this account', e);
   }
 
-  if (!(await endSession(deps, 'global'))) return 'still-signed-in';
+  const { beforeSessionEnds, afterSessionEnd } = deps;
+  if (deviceSteps && beforeSessionEnds) await deviceStep('before', () => beforeSessionEnds());
+
+  const ended = await endSession(deps, 'global');
+  if (deviceSteps && afterSessionEnd) await deviceStep('after', () => afterSessionEnd(ended));
+  if (!ended) return 'still-signed-in';
 
   if (discard) {
     try {

@@ -33,6 +33,7 @@ import {
 import { audit } from '@/server/services/audit';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 
 import {
   ACCOUNT_DISABLED_MESSAGE,
@@ -722,6 +723,11 @@ export async function changePasswordAction(
     }
   }
 
+  // The account's sessions, listed BEFORE the password changes, so the ones
+  // the change ends can be named to their devices below: once ended they
+  // cannot be listed. Never throws; unreadable is null and nothing is named.
+  const listedSessions = await listMySessionIds(supabase);
+
   const { error: updateError } = await supabase.auth.updateUser({
     password: parsed.data.newPassword,
   });
@@ -753,23 +759,26 @@ export async function changePasswordAction(
   // listener for this window — the same one signOutAction and
   // completePasswordResetAction drive — it just was never told from here.
   //
-  // keepId spares the tab that made the change. A `keepId: null` payload means
-  // "evict EVERY session" (signOutAction's semantics), so when the current
-  // session id can't be derived we SKIP the broadcast rather than send a null
-  // we don't mean and bounce the user to /signin mid-flow. The id is the
-  // access token's `session_id` claim once its signature checks out
-  // (lib/auth/verified-claims), not getSession()'s token decoded unchecked.
+  // The broadcast names the sessions that ended (the listed ones other than
+  // this tab's), never the one that stays: the channel is public, and a live
+  // session id must not go out on it (S5, services/sessions.ts). A
+  // `keepId: null` payload means "evict EVERY session" (signOutAction's
+  // semantics), so when the current session id can't be derived we SKIP the
+  // broadcast rather than send a null we don't mean and bounce the user to
+  // /signin mid-flow. The id is the access token's `session_id` claim once
+  // its signature checks out (lib/auth/verified-claims), not getSession()'s
+  // token decoded unchecked.
   try {
-    const keepId = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
+    const current = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
     if (othersError) {
       // The other sessions are still alive. revoke_my_other_sessions (0213)
       // ends every session of auth.uid() except the one given, so it is called
       // only with this tab's verified session id: with null, `id is distinct
       // from null` would end this session too.
-      databaseRevoke = keepId ? await revokeMyOtherSessions(supabase, keepId) : 'no_session_id';
+      databaseRevoke = current ? await revokeMyOtherSessions(supabase, current) : 'no_session_id';
     }
-    if (keepId) {
-      await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId });
+    if (current) {
+      await broadcastEndedSessions(user.id, listedSessions, current);
     } else {
       console.warn(
         '[changePasswordAction] could not derive current session id — skipped revocation broadcast',

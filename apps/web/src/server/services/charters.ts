@@ -4,8 +4,11 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Structured mailing address for a charter campus. Mirrors `WarehouseAddress`
@@ -55,6 +58,13 @@ export interface CharterRow {
   user_count: number;
   created_at: string;
   updated_at: string;
+}
+
+/** A charter's name and status, for a label (namesByIds). */
+export interface CharterNameRow {
+  id: string;
+  name: string;
+  status: CharterRow['status'];
 }
 
 /**
@@ -218,5 +228,41 @@ export class ChartersService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!row) throw new ServiceError('not_found', 'Charter not found.');
     await audit({ event: 'charter.restored', entityType: 'charter', entityId: id }, this.ctx);
+  }
+
+  /**
+   * The names and statuses of the given charters, AT ANY STATUS, read by id
+   * (batched `.in()`, each batch paged: no organization-wide list and no
+   * PostgREST row cap, pattern #3). For a LABEL of a charter a member or a
+   * record already holds that list() does not return: archived and inactive
+   * charters keep their warehouse links and members' assignments, so Team's
+   * member Charters dialog and the item forms name them '(archived)' or
+   * '(inactive)' instead of leaving them out or showing the id (S44).
+   *
+   * A label only: what a member or a record holds is never decided from it.
+   * charters_select admits every member at any status. Ids that are not uuids
+   * are dropped before the read. Throws on a failed read (readCharterLabels
+   * reports it and answers none).
+   */
+  async namesByIds(ids: readonly string[]): Promise<CharterNameRow[]> {
+    const wanted = [...new Set(ids.filter((id) => UUID_RE.test(id)).map((id) => id.toLowerCase()))];
+    if (wanted.length === 0) return [];
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<{ id: string; name: string; status: string }>(
+      wanted,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('charters')
+          .select('id, name, status')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      status: r.status as CharterRow['status'],
+    }));
   }
 }

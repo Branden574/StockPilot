@@ -417,10 +417,11 @@ let builtOrderCreateRequestSchema: OrderCreateRequestSchema | null = null;
  * header). The plan names this `orderCreateRequestSchema`; it is a function
  * returning the schema.
  *
- * Only the new body. The web action's legacy branch (PO-2, one release, for
- * tabs opened before the deploy) receives today's body (`neededBy` as an
- * instant, `requesterPhone` and `pickupLocationNotes` null) and reads it with
- * its own legacy schema; `.strict()` refuses that body here, by design.
+ * Only the new body. The pre-PO-2 body (`neededBy` as an instant,
+ * `requesterPhone` and `pickupLocationNotes`) is refused here by `.strict()`,
+ * by design; the web action's one-release legacy branch that read it with its
+ * own schema was removed in B20a, and the action now refuses a body with no
+ * submission key before this runs.
  */
 export function orderCreateRequestSchema(): OrderCreateRequestSchema {
   if (builtOrderCreateRequestSchema === null) {

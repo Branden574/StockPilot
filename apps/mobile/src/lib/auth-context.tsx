@@ -33,8 +33,15 @@ import {
   normalizeIdentityEmail,
   rememberIdentity,
 } from './remembered-identity';
+import { sendSignedInNote, sendSignedOutNote } from './auth-notes';
 import { removeOrderCachesAtRest } from './order-storefront/caches-at-rest';
 import { signOutOrderSubmissions } from './order-storefront/services';
+import {
+  clearDeliveredNotifications,
+  deviceSignOutSteps,
+  FALLBACK_UNBIND_TIMEOUT_MS,
+  SIGN_OUT_UNBIND_TIMEOUT_MS,
+} from './push-unbind';
 import { hasStoredSession, liveOutboxScope } from './session-scope';
 import {
   endSession,
@@ -407,6 +414,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       userId: signedIn.user?.id ?? null,
       email: normalizeIdentityEmail(email),
     });
+    // The sign-in reaches the server (S5): the Audit log row, and the
+    // new-device email for a phone the account has not used before. Here, on
+    // the password step, before the code, where the web notes a device too:
+    // a stolen password used on a new phone still alerts the owner. Detached
+    // and bounded (auth-notes.ts): it never holds the sign-in.
+    void sendSignedInNote();
     // Password got us to AAL1. If the account has a verified TOTP factor,
     // raise the MFA gate so RootGate shows the code screen instead of the
     // app. Without this a 2FA-enrolled user would be let in on password
@@ -446,6 +459,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signOut: AuthState['signOut'] = async (opts) => {
     if (signingOut.current) return;
     signingOut.current = true;
+    const afterAccountDeleted = opts?.afterAccountDeleted === true;
+    // This phone's own steps (S5, push-unbind.ts): while the session still
+    // exists, hold push registration, delete this phone's push token row and
+    // tell the server (the Audit log row, and the account's other devices
+    // signed out at once); once the session's end is decided, release the
+    // hold, registering again if the session survived.
+    const deviceSteps = deviceSignOutSteps({
+      user: session?.user ?? null,
+      unbindTimeoutMs: SIGN_OUT_UNBIND_TIMEOUT_MS,
+      note: sendSignedOutNote,
+    });
     try {
       // Refresh this device's remembered identity BEFORE the session goes —
       // this is a deliberate exit, but the record must stay current for
@@ -492,14 +516,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const keys = accountScopedStorageKeys(await AsyncStorage.getAllKeys());
             if (keys.length > 0) await AsyncStorage.multiRemove(keys);
           },
+          // After an in-app account deletion there is nothing to unbind or
+          // note: the account's token rows went with it.
+          ...(afterAccountDeleted
+            ? {}
+            : {
+                beforeSessionEnds: deviceSteps.beforeSessionEnds,
+                afterSessionEnd: deviceSteps.afterSessionEnd,
+              }),
           warn: (message, err) => console.warn(message, err),
         },
-        { discardWithoutAsking: opts?.afterAccountDeleted === true },
+        { discardWithoutAsking: afterAccountDeleted },
       );
+      // What Notification Center still shows of the account goes with it.
+      if (outcome === 'signed-out') await clearDeliveredNotifications();
       if (outcome === 'still-signed-in') {
         Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
       }
     } finally {
+      // The backstop: a hold the flow did not release (a throw) never keeps
+      // this phone from registering again.
+      deviceSteps.release();
       signingOut.current = false;
     }
   };
@@ -513,37 +550,53 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: session.user.email ? normalizeIdentityEmail(session.user.email) : null,
       });
     }
-    // Local-only sign-out: clears the on-device session so the
-    // sign-in screen renders, but does NOT revoke the user's other
-    // sessions (web, other phone). Used when the user fails the
-    // biometric prompt and wants to re-authenticate with password
-    // on this device only. The cache and the outbox are kept: the
-    // next account's first pull resets a cache that is not its own
-    // (sync.ts), and queued work stays held for this account.
-    const ended = await endSession(
-      {
-        signOut: signOutDeliberately,
-        hasSession: hasStoredSession,
-        warn: (m, e) => console.warn(m, e),
-      },
-      'local',
-    );
-    if (!ended) {
-      // A LOCAL sign-out needs the network too (auth-js POSTs /logout and
-      // keeps the session on a transport failure). Lifting the biometric
-      // lock or the MFA gate now would open the app on a session that is
-      // still here, without the biometric check or the second factor.
-      // "Still here" is read from the STORED session (hasStoredSession):
-      // getSession() answers null for a token it could not refresh offline
-      // while the session stays on the device, which read as "ended" and
-      // unlocked the app once the access token had expired.
-      Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
-      return false;
+    // This phone's push token row goes too (S5, push-unbind.ts), deleted
+    // while the session still exists, with registration held until the
+    // session's end is decided: whoever signs in next on this phone must not
+    // get this account's notifications. No note to the server: this is not
+    // the account signing out everywhere, and it writes no Audit log row.
+    const deviceSteps = deviceSignOutSteps({
+      user: session?.user ?? null,
+      unbindTimeoutMs: FALLBACK_UNBIND_TIMEOUT_MS,
+    });
+    try {
+      await deviceSteps.beforeSessionEnds();
+      // Local-only sign-out: clears the on-device session so the
+      // sign-in screen renders, but does NOT revoke the user's other
+      // sessions (web, other phone). Used when the user fails the
+      // biometric prompt and wants to re-authenticate with password
+      // on this device only. The cache and the outbox are kept: the
+      // next account's first pull resets a cache that is not its own
+      // (sync.ts), and queued work stays held for this account.
+      const ended = await endSession(
+        {
+          signOut: signOutDeliberately,
+          hasSession: hasStoredSession,
+          warn: (m, e) => console.warn(m, e),
+        },
+        'local',
+      );
+      // Released either way; a session that survived registers again.
+      await deviceSteps.afterSessionEnd(ended);
+      if (!ended) {
+        // A LOCAL sign-out needs the network too (auth-js POSTs /logout and
+        // keeps the session on a transport failure). Lifting the biometric
+        // lock or the MFA gate now would open the app on a session that is
+        // still here, without the biometric check or the second factor.
+        // "Still here" is read from the STORED session (hasStoredSession):
+        // getSession() answers null for a token it could not refresh offline
+        // while the session stays on the device, which read as "ended" and
+        // unlocked the app once the access token had expired.
+        Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
+        return false;
+      }
+      setLocked(false);
+      setMfaRequired(false);
+      mfaFactorId.current = null;
+      return true;
+    } finally {
+      deviceSteps.release();
     }
-    setLocked(false);
-    setMfaRequired(false);
-    mfaFactorId.current = null;
-    return true;
   };
 
   const unlock: AuthState['unlock'] = async () => {

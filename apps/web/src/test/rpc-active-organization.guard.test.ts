@@ -133,10 +133,13 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of old AI chat history in every organization; no active organization.',
   ],
-  'app/api/orders/freq/route.ts::order_request_top_skus_for_warehouse': RO(),
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',
+  ],
+  'app/api/v1/auth/signed-out/route.ts::revoke_my_other_sessions': [
+    'not_org_data',
+    "The caller's own sessions: the phone's sign-out ends the account's other sessions (0213: auth.uid()'s rows only).",
   ],
   'app/api/v1/me/seen/route.ts::touch_member_last_seen': [
     'takes_org',

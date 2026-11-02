@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { withCappedImage } from './image-decode';
 import { IMAGE_VARIANTS } from './image-variants.config';
 
 /**
@@ -19,27 +20,22 @@ import { IMAGE_VARIANTS } from './image-variants.config';
  * backfilled photo lost its edges there), and each one was a billed,
  * rate-limited render.
  *
- * `sharp` is a dependency of apps/web, loaded lazily as in image-reencode.ts.
- * null when the bytes cannot be decoded (not an image, a format sharp's build
- * cannot read, or more than MAX_INPUT_PIXELS).
+ * The decode is the capped decoder's (lib/image-decode.ts, S45): the bytes
+ * must be a PNG, JPEG, WebP or AVIF within that format's pixel cap (50
+ * million; AVIF 4096 x 4096), and it opens sharp with the EXIF orientation
+ * applied. null when the bytes cannot be decoded (not one of those formats,
+ * over the cap, or a file sharp's build cannot read).
  */
-
-/** A decode past this many pixels is refused: a decompression bomb, not a
- *  photo. The limit image-reencode.ts measured and chose (a 50 MP decode
- *  stays near 1 GB). sharp checks it from the header, before decoding. */
-const MAX_INPUT_PIXELS = 50_000_000;
 
 export async function makeItemPhotoThumbnail(bytes: Uint8Array): Promise<Uint8Array | null> {
   try {
-    const { default: sharp } = await import('sharp');
-    const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const edge = IMAGE_VARIANTS.thumb.maxDimension;
-    const out = await sharp(input, { limitInputPixels: MAX_INPUT_PIXELS })
-      // rotate() with no angle applies the EXIF orientation to the pixels.
-      .rotate()
-      .resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true })
-      .webp({ quality: Math.round(IMAGE_VARIANTS.thumb.quality * 100) })
-      .toBuffer();
+    const out = await withCappedImage(bytes, ['png', 'jpeg', 'webp', 'avif'], (img) =>
+      img
+        .resize({ width: edge, height: edge, fit: 'inside', withoutEnlargement: true })
+        .webp({ quality: Math.round(IMAGE_VARIANTS.thumb.quality * 100) })
+        .toBuffer(),
+    );
     if (out.byteLength === 0) return null;
     return new Uint8Array(out.buffer, out.byteOffset, out.byteLength);
   } catch {

@@ -372,6 +372,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
       sessionId: 'session-1',
       aal: 'aal1',
       amr: [],
+      email: null,
     });
   });
 
@@ -405,6 +406,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
       sessionId: 'session-1',
       aal: 'aal2',
       amr: [],
+      email: null,
     });
     verifyAnswers(GOTRUE_WRONG_CODE);
 
@@ -442,6 +444,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
         sessionId: 'session-1',
         aal,
         amr: [],
+        email: null,
       });
 
       await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
@@ -478,6 +481,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
         sessionId: 'session-1',
         aal,
         amr: [],
+        email: null,
       });
       vi.mocked(checkRateLimit).mockImplementation(async (key: string) => ({
         allowed: !key.startsWith('mfa-code-account:'),
