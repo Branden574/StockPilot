@@ -20,10 +20,18 @@ const challenge = vi.fn();
 const verify = vi.fn();
 const auditInsert = vi.fn();
 const broadcastToChannel = vi.fn();
+const revokeAllSessionsForUser = vi.fn();
+const cookieSet = vi.fn();
+const cookieGetAll = vi.fn((): Array<{ name: string; value: string }> => []);
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers()),
-  cookies: vi.fn(async () => ({ get: () => undefined, set: () => {}, delete: () => {} })),
+  cookies: vi.fn(async () => ({
+    get: () => undefined,
+    getAll: () => cookieGetAll(),
+    set: (...args: unknown[]) => cookieSet(...args),
+    delete: () => {},
+  })),
 }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('next/server', () => ({ after: vi.fn() }));
@@ -37,6 +45,9 @@ vi.mock('@/lib/email/resend', () => ({
 }));
 vi.mock('@/lib/realtime/broadcast', () => ({
   broadcastToChannel: (...args: unknown[]) => broadcastToChannel(...args),
+}));
+vi.mock('@/server/services/platform/sessions', () => ({
+  revokeAllSessionsForUser: (...args: unknown[]) => revokeAllSessionsForUser(...args),
 }));
 vi.mock('@/lib/supabase/admin', () => {
   // resolveDefaultOrgAndRole chains .select().eq()[.eq()][.not()][.limit()]
@@ -65,6 +76,8 @@ vi.mock('@/lib/supabase/server', () => ({
     },
   }),
 }));
+
+import { reportError } from '@/lib/error-reporter';
 
 import { completePasswordResetAction, requestPasswordResetAction } from './auth';
 
@@ -525,6 +538,99 @@ describe('completePasswordResetAction', () => {
         },
       });
       expectNothingSignedOut();
+    });
+  });
+
+  // ── When the global sign-out itself returns an error ─────────────────────
+  // auth-js returns the failure rather than throwing, and nothing read it: the
+  // password changed but every other session of the account stayed alive, and
+  // when the recovery session could not be loaded this browser kept it too.
+  describe('when the global sign-out returns an error', () => {
+    const GOTRUE_DOWN = {
+      name: 'AuthRetryableFetchError',
+      message: 'Service Unavailable',
+      status: 503,
+    };
+
+    beforeEach(() => {
+      signOut.mockResolvedValue({ error: GOTRUE_DOWN });
+      revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: [] });
+      cookieGetAll.mockReturnValue([
+        { name: 'sb-x-auth-token', value: 'a' },
+        { name: 'sb-x-auth-token.0', value: 'b' },
+        { name: 'stockpilot-theme', value: 'dark' },
+      ]);
+    });
+
+    it("ends the account's sessions in the database, expires this browser's auth cookies and records it", async () => {
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
+      expect(revokeAllSessionsForUser).toHaveBeenCalledWith('u1');
+      // The database revoke tells the devices itself when it worked.
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+      expect(cookieSet.mock.calls.map((c) => c[0]).sort()).toEqual([
+        'sb-x-auth-token',
+        'sb-x-auth-token.0',
+      ]);
+      for (const call of cookieSet.mock.calls) {
+        expect(call.slice(1)).toEqual(['', { path: '/', maxAge: 0 }]);
+      }
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u1',
+          metadata: expect.objectContaining({
+            revoke_error: 'AuthRetryableFetchError',
+            database_revoke: 'ok',
+          }),
+        }),
+      );
+      expect(reportError).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          tag: 'auth.password_reset_revoke_failed',
+          extra: expect.objectContaining({ database_revoke: 'ok' }),
+        }),
+      );
+      expect(JSON.stringify(vi.mocked(reportError).mock.calls)).not.toContain(
+        'Service Unavailable',
+      );
+    });
+
+    it('when the database revoke fails too, still tells every device and records both', async () => {
+      revokeAllSessionsForUser.mockResolvedValue({ ok: false, sessionIds: [] });
+
+      await completePasswordResetAction(INPUT);
+
+      expect(broadcastToChannel).toHaveBeenCalledWith('user:u1:sessions', 'revoked', {
+        keepId: null,
+      });
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          metadata: expect.objectContaining({
+            revoke_error: 'AuthRetryableFetchError',
+            database_revoke: 'failed',
+          }),
+        }),
+      );
+    });
+
+    it('a sign-out that answers records that no database revoke was needed', async () => {
+      signOut.mockResolvedValue({ error: null });
+
+      await completePasswordResetAction(INPUT);
+
+      expect(revokeAllSessionsForUser).not.toHaveBeenCalled();
+      expect(cookieSet).not.toHaveBeenCalled();
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          metadata: expect.objectContaining({ revoke_error: null, database_revoke: 'not_needed' }),
+        }),
+      );
     });
   });
 });

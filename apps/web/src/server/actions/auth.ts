@@ -350,37 +350,12 @@ export async function signOutAction(): Promise<void> {
   // No error means nothing was reported, not that every session ended: GoTrue
   // answering 401/403/404 for this token is no error either.
   const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
-  let databaseRevoke: 'not_needed' | 'ok' | 'failed' | 'no_account' = 'not_needed';
-  const cookieStore = await cookies();
-  if (revokeError) {
-    // Every other session of the account is still alive. End them in the
-    // database instead (the by-user-id revoke behind member removal and
-    // account disable), which tells the devices itself when it worked.
-    databaseRevoke = accountId
-      ? (await revokeAllSessionsForUser(accountId)).ok
-        ? 'ok'
-        : 'failed'
-      : 'no_account';
-    // And this browser's own session: when auth-js could not load it (an
-    // expired access token whose refresh failed) it returns that error
-    // BEFORE removing the local session, so the cookies would stay and be
-    // refreshed once the Auth server answers again. The same backstop as
-    // app/auth/session-ended/route.ts.
-    for (const c of cookieStore.getAll()) {
-      if (SUPABASE_AUTH_COOKIE.test(c.name)) cookieStore.set(c.name, '', { path: '/', maxAge: 0 });
-    }
-    // Never GoTrue's message: the name, code and status say what failed.
-    void reportError(new Error('Sign out could not confirm that every session ended'), {
-      tag: 'auth.sign_out_revoke_failed',
-      level: 'warning',
-      extra: {
-        name: revokeError.name,
-        code: revokeError.code ?? null,
-        status: revokeError.status ?? null,
-        database_revoke: databaseRevoke,
-      },
-    });
-  }
+  const databaseRevoke = revokeError
+    ? await endSessionsAfterFailedGlobalSignOut(revokeError, accountId, {
+        tag: 'auth.sign_out_revoke_failed',
+        message: 'Sign out could not confirm that every session ended',
+      })
+    : 'not_needed';
   // The revoke above only kills REFRESH tokens — devices coast on their
   // current access token for up to ~1h ("signed out on web, phone still
   // let me in", owner-observed 2026-07-02). The broadcast makes every
@@ -394,6 +369,7 @@ export async function signOutAction(): Promise<void> {
   if (accountId && databaseRevoke !== 'ok') {
     await broadcastToChannel(`user:${accountId}:sessions`, 'revoked', { keepId: null });
   }
+  const cookieStore = await cookies();
   cookieStore.delete(REMEMBER_SESSION_COOKIE);
 
   if (accountId) {
@@ -405,16 +381,72 @@ export async function signOutAction(): Promise<void> {
       extra: {
         email: user?.email ?? null,
         scope: 'global',
-        // What is known, never "confirmed": GoTrue's code (or the error's
-        // name) when the sign-out returned one, and what the database
-        // revoke did then.
-        revoke_error: revokeError ? (revokeError.code ?? revokeError.name) : null,
+        revoke_error: revokeErrorLabel(revokeError),
         database_revoke: databaseRevoke,
       },
     });
   }
 
   redirect('/');
+}
+
+/** The failure a sign-out returned, as auth-js hands it back. */
+type SignOutError = { name: string; code?: string; status?: number };
+
+/**
+ * What an audit row says about a sign-out's answer: GoTrue's code, or the
+ * error's name when it has none, or null when it returned no error. What is
+ * known, never "confirmed": no error also covers GoTrue answering 401, 403 or
+ * 404 for the token, which auth-js does not report.
+ */
+function revokeErrorLabel(error: SignOutError | null): string | null {
+  return error ? (error.code ?? error.name) : null;
+}
+
+/**
+ * The backstop for a global sign-out (Sign out, a finished password reset)
+ * that returned an error instead of ending the account's sessions:
+ *
+ *   1. Every other session of the account is still alive, so they are ended
+ *      in the database instead (revokeAllSessionsForUser, the by-user-id
+ *      revoke behind member removal and account disable, which tells the
+ *      devices itself when it worked). Only for an account a verified answer
+ *      named.
+ *   2. This browser's own session: when auth-js could not load it (an expired
+ *      access token whose refresh failed) it returns that error BEFORE
+ *      removing the local session, so the cookies would stay and be refreshed
+ *      once the Auth server answers again. Its Supabase auth cookies are
+ *      expired, as app/auth/session-ended/route.ts does.
+ *   3. A warning report with the error's name, code and status, never
+ *      GoTrue's message.
+ *
+ * Returns what the database revoke did, for the caller's broadcast and row.
+ */
+async function endSessionsAfterFailedGlobalSignOut(
+  revokeError: SignOutError,
+  accountId: string | null,
+  report: { tag: string; message: string },
+): Promise<'ok' | 'failed' | 'no_account'> {
+  const databaseRevoke = accountId
+    ? (await revokeAllSessionsForUser(accountId)).ok
+      ? 'ok'
+      : 'failed'
+    : 'no_account';
+  const cookieStore = await cookies();
+  for (const c of cookieStore.getAll()) {
+    if (SUPABASE_AUTH_COOKIE.test(c.name)) cookieStore.set(c.name, '', { path: '/', maxAge: 0 });
+  }
+  void reportError(new Error(report.message), {
+    tag: report.tag,
+    level: 'warning',
+    extra: {
+      name: revokeError.name,
+      code: revokeError.code ?? null,
+      status: revokeError.status ?? null,
+      database_revoke: databaseRevoke,
+    },
+  });
+  return databaseRevoke;
 }
 
 export async function requestPasswordResetAction(
@@ -625,11 +657,24 @@ export async function completePasswordResetAction(
   // pivot straight into the account. scope: 'global' also kills every
   // other live session for this user across all devices so a leaked
   // legitimate session is forcibly evicted.
-  await supabase.auth.signOut({ scope: 'global' });
+  //
+  // auth-js returns a failure rather than throwing, so the answer is read.
+  // When it is an error, the sessions are ended in the database instead and
+  // this browser's auth cookies are expired: an AAL2 recovery session left in
+  // the browser would otherwise pass the proxy's local token check for up to
+  // an hour, the auto-elevation this block exists to prevent.
+  const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
+  const databaseRevoke = revokeError
+    ? await endSessionsAfterFailedGlobalSignOut(revokeError, resetUser?.id ?? null, {
+        tag: 'auth.password_reset_revoke_failed',
+        message: 'Password reset could not confirm that every session ended',
+      })
+    : 'not_needed';
   // Evict live devices NOW, not at access-token expiry (≤1h): the whole
   // point of resetting a password is that existing sessions may be in
-  // hostile hands. Same broadcast contract as device management.
-  if (resetUser) {
+  // hostile hands. Same broadcast contract as device management. Not sent
+  // twice when the database revoke already did.
+  if (resetUser && databaseRevoke !== 'ok') {
     await broadcastToChannel(`user:${resetUser.id}:sessions`, 'revoked', { keepId: null });
   }
 
@@ -640,7 +685,11 @@ export async function completePasswordResetAction(
       event: 'user.password.reset_completed',
       userId: resetUser.id,
       organizationId,
-      extra: { email: resetUser.email ?? null },
+      extra: {
+        email: resetUser.email ?? null,
+        revoke_error: revokeErrorLabel(revokeError),
+        database_revoke: databaseRevoke,
+      },
     });
   }
 
@@ -763,11 +812,17 @@ export async function changePasswordAction(
   // other browsers, stale tabs) but keep the current tab signed in so
   // the in-app password change doesn't bounce the user to /signin.
   // Best-effort — never block the success response on a signOut error.
+  //
+  // auth-js RETURNS a failure rather than throwing, so the catch below never
+  // saw one; the answer is read, and a returned error is answered below with
+  // the database revoke of the other sessions.
+  let othersError: SignOutError | null = null;
   try {
-    await supabase.auth.signOut({ scope: 'others' });
+    ({ error: othersError } = await supabase.auth.signOut({ scope: 'others' }));
   } catch (e) {
     console.warn('[changePasswordAction] signOut others failed:', e);
   }
+  let databaseRevoke: 'not_needed' | 'ok' | 'failed' | 'no_session_id' = 'not_needed';
 
   // The revoke above only kills REFRESH tokens. Every other live client coasts
   // on its current ACCESS token for up to ~1h: another browser's middleware
@@ -787,6 +842,13 @@ export async function changePasswordAction(
   // (lib/auth/verified-claims), not getSession()'s token decoded unchecked.
   try {
     const keepId = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
+    if (othersError) {
+      // The other sessions are still alive. revoke_my_other_sessions (0213)
+      // ends every session of auth.uid() except the one given, so it is called
+      // only with this tab's verified session id: with null, `id is distinct
+      // from null` would end this session too.
+      databaseRevoke = keepId ? await revokeMyOtherSessions(supabase, keepId) : 'no_session_id';
+    }
     if (keepId) {
       await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId });
     } else {
@@ -799,12 +861,45 @@ export async function changePasswordAction(
     // refresh tokens ARE revoked; the broadcast only shortens the eviction lag.
     console.warn('[changePasswordAction] revocation broadcast failed:', e);
   }
+  if (othersError) {
+    // Never GoTrue's message: the name, code and status say what failed.
+    void reportError(new Error('Password change could not confirm that the other sessions ended'), {
+      tag: 'auth.password_change_revoke_failed',
+      level: 'warning',
+      extra: {
+        name: othersError.name,
+        code: othersError.code ?? null,
+        status: othersError.status ?? null,
+        database_revoke: databaseRevoke,
+      },
+    });
+  }
 
   await audit({
     event: 'user.password.changed',
     entityType: 'user',
     entityId: user.id,
+    extra: { revoke_error: revokeErrorLabel(othersError), database_revoke: databaseRevoke },
   });
 
   return ok({ ok: true });
+}
+
+/**
+ * Ends every session of the signed-in account except `keepSessionId`, in the
+ * database (revoke_my_other_sessions, 0213; granted to authenticated). Never
+ * throws: what happened is the answer.
+ */
+async function revokeMyOtherSessions(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  keepSessionId: string,
+): Promise<'ok' | 'failed'> {
+  try {
+    const { error } = await supabase.rpc('revoke_my_other_sessions', {
+      p_keep_session_id: keepSessionId,
+    });
+    return error ? 'failed' : 'ok';
+  } catch {
+    return 'failed';
+  }
 }
