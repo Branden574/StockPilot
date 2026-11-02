@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { ServiceError } from '../context';
+import { ListReadError } from './list-rows';
 import { postgrestErrorText } from './postgrest-error';
 
 /** PostgREST clamps every response to `[api] max_rows` (1000;
@@ -32,10 +33,16 @@ type PageResult<Row> = {
  *
  * The stable `.order('id')` is REQUIRED: without a deterministic sort the same
  * row can land on two pages (or none), corrupting the accumulated set.
+ *
+ * `requireList` names the table of a read whose answer decides something (who
+ * is told, what a digest shows): a page that is not a list then throws
+ * `ServiceError('internal_error')`, with the table and the status in
+ * `internalDetail` (list-rows.ts says why). Without it, such a page ends the
+ * read as "no more rows", as it always has (docket S27, open question 13).
  */
 export async function fetchAllRows<Row>(
   buildPage: (from: number, to: number) => PromiseLike<PageResult<Row>>,
-  opts: { cap?: number } = {},
+  opts: { cap?: number; requireList?: string } = {},
 ): Promise<Row[]> {
   const cap = opts.cap;
   const rows: Row[] = [];
@@ -48,6 +55,12 @@ export async function fetchAllRows<Row>(
     // has an empty message, which left internalDetail undefined and the log
     // with no cause at all.
     if (error) throw new ServiceError('internal_error', postgrestErrorText(error, res));
+    if (opts.requireList !== undefined && !Array.isArray(data)) {
+      throw new ServiceError(
+        'internal_error',
+        new ListReadError(opts.requireList, res.status ?? null).message,
+      );
+    }
     const page = (data ?? []) as Row[];
     for (const r of page) rows.push(r);
     if (page.length < to - from + 1) break;

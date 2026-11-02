@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
 import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
 
 /**
@@ -338,5 +339,99 @@ describe('GET /api/cron/weekly-digest — what each recipient is sent', () => {
       expect.anything(),
       expect.objectContaining({ tag: 'cron.weekly-digest.org' }),
     );
+    // The report carries the read's own text, not the generic sentence a
+    // ServiceError('internal_error') shows (docket S27 review).
+    const orgReport = reportErrorMock.mock.calls.find(
+      ([, context]) => (context as { tag?: string }).tag === 'cron.weekly-digest.org',
+    );
+    expect((orgReport?.[0] as Error).message).toBe('canceling statement due to statement timeout');
+  });
+
+  /**
+   * docket S27: an answer with no error that is not a list (postgrest-js
+   * resolves an empty body with data null) was read as "no rows", and every
+   * one of these widened a digest: the viewer whose role lost
+   * purchase_orders:read, the staff member with their own revoke and the
+   * viewer limited to some categories were each sent what the organization
+   * took away. Such an answer is a failed read: nobody in the organization is
+   * sent a digest, nothing is claimed (a re-run the same week delivers), and
+   * the organization's failure is reported once.
+   */
+  describe('an answer that is not a list sends nobody in the org a digest', () => {
+    async function expectOrgSkipped(read: string, answer: unknown, table: string, status: number) {
+      const stub = orgStub({ [read]: answer as QueryResult });
+      adminHolder.client = stub.client;
+      const res = await GET(request());
+
+      expect(await res.json()).toMatchObject({ ok: true, sent: 0, failed: 6 });
+      expect(sendEmailMock).not.toHaveBeenCalled();
+      expect(rendered.size).toBe(0);
+      expect(stub.chainsAll.has('idempotency_keys.insert')).toBe(false);
+      const reports = reportErrorMock.mock.calls.filter(
+        ([, context]) => (context as { tag?: string }).tag === 'cron.weekly-digest.org',
+      );
+      expect(reports).toHaveLength(1);
+      // What the reporter emits is the error's message (error-reporter-core
+      // logs and posts `message` only), so the report itself names the table
+      // and the status: a ServiceError's message is the generic sentence.
+      expect((reports[0]?.[0] as Error).message).toBe(
+        `${table} answered no list (status ${status})`,
+      );
+      expect(reports[0]?.[1]).toEqual({ tag: 'cron.weekly-digest.org', extra: { orgId: ORG } });
+    }
+
+    it.each(NOT_A_LIST)(
+      '%s from the role override read: the viewer whose role lost purchase orders is not sent them',
+      async (_shape, answer) => {
+        await expectOrgSkipped(
+          'role_permission_overrides.select',
+          answer,
+          'role_permission_overrides',
+          answer.status,
+        );
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the member override read: the staff member with their own revoke is not sent them',
+      async (_shape, answer) => {
+        await expectOrgSkipped(
+          'user_permission_overrides.select',
+          answer,
+          'user_permission_overrides',
+          answer.status,
+        );
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the category read: the viewer limited to some categories is not sent every category',
+      async (_shape, answer) => {
+        await expectOrgSkipped(
+          'user_category_assignments.select',
+          answer,
+          'user_category_assignments',
+          answer.status,
+        );
+      },
+    );
+
+    it.each(NOT_A_LIST)('%s from the warehouse assignment read', async (_shape, answer) => {
+      await expectOrgSkipped(
+        'user_warehouse_assignments.select',
+        answer,
+        'user_warehouse_assignments',
+        answer.status,
+      );
+    });
+
+    it.each(NOT_A_LIST)('%s from the role default read', async (_shape, answer) => {
+      await expectOrgSkipped(
+        'role_default_permissions.select',
+        answer,
+        'role_default_permissions',
+        answer.status,
+      );
+    });
   });
 });

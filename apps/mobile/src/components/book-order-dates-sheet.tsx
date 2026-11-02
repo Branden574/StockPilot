@@ -2,7 +2,6 @@ import { Check, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -27,6 +26,7 @@ import {
 
 import { OptionRow, SHEET_MIN_TAP, sheetStyles } from '@/components/book-order-sheet-parts';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { MonthCalendar } from '@/components/ui/month-calendar';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import {

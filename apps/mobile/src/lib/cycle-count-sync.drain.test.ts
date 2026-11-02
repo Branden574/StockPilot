@@ -497,3 +497,54 @@ describe('a queued clear of a line (B4a)', () => {
     expect(calls.log).toEqual(['outboxMarkSending:1', 'outboxBumpFailure:1']);
   });
 });
+
+describe('Restart now pauses the count drain (B44)', () => {
+  it('stops before the next row, and whenIdle waits for the drain running', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    apiMock.api.mockImplementationOnce(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      await gate;
+    });
+    const owner = { org: 'org-a', user: 'u1' };
+    cacheMock.rows = [countRow(1, 'l1', owner), countRow(2, 'l2', owner), countRow(3, 'l3', owner)];
+
+    const drain = cycleCountSync.forceSync();
+    await vi.waitFor(() => expect(calls.log).toContain(`api:${recordPath('l1')}`));
+    const resume = cycleCountSync.pauseForRestart();
+    try {
+      let idle = false;
+      const waiting = cycleCountSync.whenIdle().then(() => {
+        idle = true;
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(idle).toBe(false);
+      release();
+      await Promise.all([drain, waiting]);
+      expect(idle).toBe(true);
+      // The first count went; the two behind it were never marked sending.
+      expect(calls.log).toEqual(['outboxMarkSending:1', `api:${recordPath('l1')}`, 'outboxAck:1']);
+
+      // Paused, a forced drain sends nothing.
+      calls.log = [];
+      await cycleCountSync.forceSync();
+      expect(calls.log).toEqual([]);
+    } finally {
+      resume();
+    }
+
+    // Resumed (a restart that did not happen), the rest go.
+    cacheMock.rows = [countRow(2, 'l2', owner), countRow(3, 'l3', owner)];
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual([
+      'outboxMarkSending:2',
+      `api:${recordPath('l2')}`,
+      'outboxAck:2',
+      'outboxMarkSending:3',
+      `api:${recordPath('l3')}`,
+      'outboxAck:3',
+    ]);
+  });
+});

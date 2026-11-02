@@ -6,6 +6,7 @@ import { REQUEST_TIMED_OUT_COPY } from './connection-copy';
 import { OutboxSessionChangedError } from './outbox-scope';
 import { registerInFlight } from './request-cancellation';
 import { supabase } from './supabase';
+import { trackWrite } from './update-prompt-holds';
 import { readSavedWorkspace, savedWorkspaceFor } from './workspace-keys';
 
 /**
@@ -181,7 +182,16 @@ export async function orgHeader(userId: string | null): Promise<Record<string, s
   return orgId ? { 'X-Organization-Id': orgId } : {};
 }
 
-export async function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+export function api<T>(path: string, opts: ApiOptions = {}): Promise<T> {
+  // A write is counted for the whole call, headers included, so a throw while
+  // they are built cannot leave the count up: the phone update's Restart now
+  // waits for writes in flight, and its pop-up waits while any is
+  // (update-prompt-holds.ts). A restart cancels every request in flight.
+  const call = send<T>(path, opts);
+  return (opts.method ?? 'GET') === 'GET' ? call : trackWrite(call);
+}
+
+async function send<T>(path: string, opts: ApiOptions): Promise<T> {
   // Scope every request to the active workspace org. The server (withApiContext)
   // validates membership and 401s on a bad value. The saved workspace is named
   // only for the account whose bearer this is (orgHeader).
