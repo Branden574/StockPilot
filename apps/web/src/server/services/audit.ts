@@ -406,6 +406,13 @@ export type AuditEvent =
   | 'mfa.enrolled'
   | 'mfa.unenrolled'
   | 'mfa.policy.changed'
+  // An authenticator code GoTrue judged wrong, on the web's sign-in code, the
+  // step-up or the reset's code step (lib/auth/mfa-code-attempts.ts). No
+  // organization: not shown to the organization's admins, and never counted
+  // as the person's own last action. metadata: path ('challenge' or
+  // 'password_reset'), session_aal on the challenge path, gotrue_code. Never
+  // the code, GoTrue's message or the factor id.
+  | 'mfa.code_refused'
   | 'mfa.recovery.generated'
   | 'mfa.recovery.consumed'
   | 'mfa.recovery.failed'

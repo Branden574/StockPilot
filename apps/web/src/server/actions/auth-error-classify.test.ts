@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyPasswordUpdateError, isBannedUserAuthError } from './auth-error-classify';
+import {
+  classifyMfaCodeError,
+  classifyPasswordUpdateError,
+  isBannedUserAuthError,
+} from './auth-error-classify';
 
 /**
  * Pins the contract this module exists to hold: the decision is made on the
@@ -123,5 +127,64 @@ describe('classifyPasswordUpdateError', () => {
     expect(
       classifyPasswordUpdateError({ name: { toString: () => 'AuthSessionMissingError' } }),
     ).toBeNull();
+  });
+});
+
+/**
+ * How GoTrue answered an authenticator code check (mfa.challenge and
+ * mfa.verify), for the sign-in code, the step-up and the reset's code step.
+ * Positive only: `refused` is GoTrue's own wrong-code answer and nothing else,
+ * because only that answer writes an mfa.code_refused row. An answer that
+ * never judged the code (no answer, a rate limit, a gone session, anything
+ * unknown) must not put a refusal on the account's record.
+ */
+describe('classifyMfaCodeError', () => {
+  it.each([
+    [{ name: 'AuthApiError', status: 422, code: 'mfa_verification_failed' }, 'refused'],
+    [{ name: 'AuthRetryableFetchError', status: 503, message: 'Service Unavailable' }, 'no_answer'],
+    [{ name: 'AuthApiError', status: 429, code: 'over_request_rate_limit' }, 'limited'],
+    [{ name: 'AuthApiError', status: 429 }, 'limited'],
+    [{ name: 'AuthUnknownError', message: 'Unexpected token < in JSON' }, 'unchecked'],
+    [
+      { name: 'AuthSessionMissingError', status: 400, message: 'Auth session missing!' },
+      'session_gone',
+    ],
+    [{ name: 'AuthApiError', status: 403, code: 'session_not_found' }, 'session_gone'],
+    [{ name: 'AuthApiError', status: 403, code: 'session_expired' }, 'session_gone'],
+    [{ name: 'AuthApiError', status: 401, code: 'bad_jwt' }, 'session_gone'],
+    [{ name: 'AuthApiError', status: 401, code: 'no_authorization' }, 'session_gone'],
+    [{ name: 'AuthApiError', status: 422, code: 'mfa_challenge_expired' }, 'unchecked'],
+    [{ name: 'AuthApiError', status: 422, code: 'mfa_ip_address_mismatch' }, 'unchecked'],
+    [{ name: 'AuthApiError', status: 404, code: 'mfa_factor_not_found' }, 'unchecked'],
+    [{ name: 'AuthApiError', status: 400, code: 'mfa_verification_rejected' }, 'unchecked'],
+    [{ name: 'AuthApiError', status: 400, code: 'something_new' }, 'unchecked'],
+  ])('reads %j as %s', (error, expected) => {
+    expect(classifyMfaCodeError(error)).toBe(expected);
+  });
+
+  it('ignores the message entirely, even when it says the code is wrong', () => {
+    expect(classifyMfaCodeError({ message: 'Invalid TOTP code entered' })).toBe('unchecked');
+    expect(
+      classifyMfaCodeError({
+        name: 'AuthApiError',
+        status: 400,
+        message: 'mfa_verification_failed',
+      }),
+    ).toBe('unchecked');
+  });
+
+  it('does not accept a code or name that merely stringifies to a known one', () => {
+    expect(classifyMfaCodeError({ code: { toString: () => 'mfa_verification_failed' } })).toBe(
+      'unchecked',
+    );
+    expect(
+      classifyMfaCodeError({ name: { toString: () => 'AuthRetryableFetchError' }, status: 503 }),
+    ).toBe('unchecked');
+  });
+
+  it('is unchecked for a missing, null or undefined error', () => {
+    expect(classifyMfaCodeError(null)).toBe('unchecked');
+    expect(classifyMfaCodeError(undefined)).toBe('unchecked');
+    expect(classifyMfaCodeError({})).toBe('unchecked');
   });
 });

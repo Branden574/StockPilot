@@ -12,6 +12,8 @@ const checkRateLimit = vi.fn();
 const resetPasswordForEmail = vi.fn();
 // completePasswordResetAction surface (the recovery session's own client).
 const getUser = vi.fn();
+const getSession = vi.fn();
+const getClaims = vi.fn();
 const updateUser = vi.fn();
 const signOut = vi.fn();
 const listFactors = vi.fn();
@@ -70,6 +72,8 @@ vi.mock('@/lib/supabase/server', () => ({
     auth: {
       resetPasswordForEmail,
       getUser,
+      getSession,
+      getClaims,
       updateUser,
       signOut,
       mfa: { listFactors, getAuthenticatorAssuranceLevel, challenge, verify },
@@ -195,11 +199,24 @@ describe('completePasswordResetAction', () => {
   // there is nothing to gain from making it resemble a real credential.
   const RESET_VALUE = 'Aa1xxxxxx';
   const INPUT = { password: RESET_VALUE, confirmPassword: RESET_VALUE };
+  // The stored access token of the link's session. Unsigned: the getClaims
+  // stub stands in for auth-js's verified read.
+  const STORED_ACCESS = `h.${Buffer.from(JSON.stringify({ sub: 'u2' })).toString('base64url')}.s`;
 
   beforeEach(() => {
     vi.clearAllMocks();
     checkRateLimit.mockResolvedValue({ allowed: true });
     getUser.mockResolvedValue({ data: { user: { id: 'u1', email: 'u@example.test' } } });
+    // The link's session, verified: it names the account when GoTrue's first
+    // answer names nobody (the reset's code step keys its budget on it).
+    getSession.mockResolvedValue({
+      data: { session: { access_token: STORED_ACCESS } },
+      error: null,
+    });
+    getClaims.mockResolvedValue({
+      data: { claims: { sub: 'u2', session_id: 's2', aal: 'aal1' } },
+      error: null,
+    });
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
     // Default: no MFA enrolled.
@@ -316,7 +333,14 @@ describe('completePasswordResetAction', () => {
     getAuthenticatorAssuranceLevel.mockResolvedValue({
       data: { currentLevel: 'aal1', nextLevel: 'aal2' },
     });
-    verify.mockResolvedValue({ error: { message: 'Invalid TOTP code entered' } });
+    verify.mockResolvedValue({
+      error: {
+        name: 'AuthApiError',
+        status: 422,
+        code: 'mfa_verification_failed',
+        message: 'Invalid TOTP code entered',
+      },
+    });
 
     const res = await completePasswordResetAction({ ...INPUT, totpCode: '000000' });
 
@@ -538,6 +562,178 @@ describe('completePasswordResetAction', () => {
         },
       });
       expectNothingSignedOut();
+    });
+  });
+
+  // ── The code step: one budget with the sign-in code, and refused-code rows ──
+  // A press with a code spends one attempt of the account's budget at this
+  // client address (shared with the sign-in code and the step-up), before
+  // GoTrue is asked. Only a code GoTrue judged wrong writes mfa.code_refused,
+  // with no organization and never the code.
+  describe('the code step', () => {
+    const REFUSED = 'That code is not valid. Check your authenticator app and try again.';
+    const NOT_CHECKED = 'Could not check your code just now. Try again.';
+    const LINK_GONE =
+      'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
+    const SUBMITTED = '246813';
+    const WRONG_CODE = {
+      name: 'AuthApiError',
+      status: 422,
+      code: 'mfa_verification_failed',
+      message: 'Invalid TOTP code entered',
+    };
+
+    beforeEach(() => {
+      listFactors.mockResolvedValue({
+        data: { totp: [{ id: 'f1', status: 'verified' }] },
+        error: null,
+      });
+      getAuthenticatorAssuranceLevel.mockResolvedValue({
+        data: { currentLevel: 'aal1', nextLevel: 'aal2' },
+      });
+    });
+
+    function codeBudgetCalls() {
+      return checkRateLimit.mock.calls.filter((c) => String(c[0]).startsWith('mfa-code:'));
+    }
+
+    function refusedRows() {
+      return auditInsert.mock.calls
+        .map((c) => c[0] as Record<string, unknown>)
+        .filter((row) => row.event === 'mfa.code_refused');
+    }
+
+    it('a refused code keeps its answer and writes one row on the reset path', async () => {
+      verify.mockResolvedValue({ error: WRONG_CODE });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: REFUSED, details: { reason: 'aal2_required' } },
+      });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(refusedRows()).toEqual([
+        expect.objectContaining({
+          organization_id: null,
+          user_id: 'u1',
+          metadata: expect.objectContaining({
+            entity_id: 'u1',
+            path: 'password_reset',
+            gotrue_code: 'mfa_verification_failed',
+          }),
+        }),
+      ]);
+      expect(JSON.stringify(refusedRows())).not.toContain(SUBMITTED);
+    });
+
+    it('spends the account’s code budget at this address, and a spent budget asks GoTrue nothing', async () => {
+      await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+      expect(codeBudgetCalls()).toEqual([['mfa-code:u1:unknown', 10, 900000, 'closed']]);
+
+      vi.clearAllMocks();
+      checkRateLimit.mockImplementation(async (key: string) => ({
+        allowed: !key.startsWith('mfa-code:'),
+      }));
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'rate_limited',
+          message: 'Too many code attempts. Wait a few minutes and try again.',
+        },
+      });
+      expect(challenge).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('the press that only asks for the code spends nothing from the code budget', async () => {
+      await completePasswordResetAction(INPUT);
+
+      expect(codeBudgetCalls()).toEqual([]);
+    });
+
+    it('when the first account read fails, the verified session names the account for the budget and the row', async () => {
+      getUser.mockResolvedValueOnce({
+        data: { user: null },
+        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+      });
+      verify.mockResolvedValue({ error: WRONG_CODE });
+
+      await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(codeBudgetCalls()).toEqual([['mfa-code:u2:unknown', 10, 900000, 'closed']]);
+      expect(refusedRows()).toEqual([expect.objectContaining({ user_id: 'u2' })]);
+    });
+
+    it('a check that got no answer says the code was not checked, and writes nothing', async () => {
+      verify.mockResolvedValue({
+        error: { name: 'AuthRetryableFetchError', status: 503, message: 'Service Unavailable' },
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: NOT_CHECKED, details: { reason: 'aal2_required' } },
+      });
+      expect(refusedRows()).toEqual([]);
+    });
+
+    it.each(['challenge', 'verify'] as const)(
+      'a session gone at the %s says the link expired, and writes nothing',
+      async (step) => {
+        const gone = {
+          name: 'AuthSessionMissingError',
+          status: 400,
+          message: 'Auth session missing!',
+        };
+        if (step === 'challenge') challenge.mockResolvedValue({ data: null, error: gone });
+        else verify.mockResolvedValue({ error: gone });
+
+        const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+        expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+        expect(refusedRows()).toEqual([]);
+        expect(updateUser).not.toHaveBeenCalled();
+      },
+    );
+
+    it('when nothing names the account, the code is not checked and nothing is spent', async () => {
+      getUser.mockResolvedValue({
+        data: { user: null },
+        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+      });
+      getSession.mockResolvedValue({ data: { session: null }, error: null });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: NOT_CHECKED, details: { reason: 'aal2_required' } },
+      });
+      expect(codeBudgetCalls()).toEqual([]);
+      expect(challenge).not.toHaveBeenCalled();
+    });
+
+    it("GoTrue's own rate limit is answered as one, and writes nothing", async () => {
+      verify.mockResolvedValue({
+        error: { name: 'AuthApiError', status: 429, code: 'over_request_rate_limit', message: 'x' },
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'rate_limited',
+          message: 'Too many code checks right now. Wait a minute and try again.',
+        },
+      });
+      expect(refusedRows()).toEqual([]);
     });
   });
 

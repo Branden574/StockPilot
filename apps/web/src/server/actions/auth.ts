@@ -6,13 +6,20 @@ import { after } from 'next/server';
 
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { noteLoginDevice } from '@/lib/auth/login-device';
+import {
+  checkMfaCode,
+  MFA_CHALLENGE_NOT_STARTED,
+  MFA_CODE_BUDGET_SPENT,
+  MFA_CODE_GOTRUE_LIMITED,
+  MFA_CODE_NOT_CHECKED,
+  MFA_CODE_REFUSED,
+} from '@/lib/auth/mfa-code-attempts';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import {
   REMEMBER_SESSION_COOKIE,
@@ -23,7 +30,8 @@ import {
   classifyPasswordUpdateError,
   isBannedUserAuthError,
 } from '@/server/actions/auth-error-classify';
-import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
+import { audit } from '@/server/services/audit';
+import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 import {
@@ -55,113 +63,6 @@ async function getClientIp(): Promise<string> {
     h.get('x-real-ip') ??
     'unknown'
   );
-}
-
-/**
- * Writes an auth-lifecycle audit row directly via the admin client.
- *
- * The standard `audit()` helper requires a ServiceContext, and its
- * `withContext()` fallback throws NEXT_REDIRECT for org-less callers —
- * which would corrupt the control flow of a sign-in (no resolved org
- * yet) or a sign-in-failure (no authenticated user). This direct helper
- * writes the event with whatever attribution we have, tags IP/UA from
- * the request headers, and never throws.
- *
- * organization_id and user_id are both nullable on audit_logs (see
- * migration 0002_inventory.sql), so a sign-in-failure with both null
- * is still a valid forensic row.
- */
-async function emitAuthAudit(params: {
-  event: AuditEvent;
-  userId?: string | null;
-  organizationId?: string | null;
-  extra?: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    const h = await headers();
-    const ip =
-      h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? null;
-    const userAgent = h.get('user-agent') ?? null;
-
-    // Reads the INSERT's own result: supabase-js returns a refused write as
-    // { error } rather than throwing, so the catch below never saw one.
-    await insertAuditRowReported({
-      organization_id: params.organizationId ?? null,
-      user_id: params.userId ?? null,
-      event: params.event,
-      ip,
-      user_agent: userAgent,
-      metadata: {
-        entity_type: 'user',
-        entity_id: params.userId ?? null,
-        warehouse_id: null,
-        before: null,
-        after: null,
-        reason: null,
-        ...(params.extra ?? {}),
-      },
-    });
-  } catch (e) {
-    // Best-effort — never let a logging failure break an auth action.
-    void reportError(e, {
-      tag: 'audit.auth_emit_failed',
-      level: 'warning',
-      extra: { event: params.event },
-    });
-  }
-}
-
-/**
- * Resolves a user's default organization + role for audit attribution
- * and ServiceContext construction. Returns nulls if the lookup fails —
- * the audit row is still written (organization_id is nullable). Uses
- * the admin client because the user may be on a freshly-issued or
- * recovery session with limited RLS context.
- */
-async function resolveDefaultOrgAndRole(
-  userId: string,
-): Promise<{ organizationId: string | null; role: string | null }> {
-  try {
-    const admin = createAdminClient();
-    const { data: profile } = await admin
-      .from('user_profiles')
-      .select('default_organization_id')
-      .eq('id', userId)
-      .maybeSingle();
-    const defaultOrgId =
-      (profile as { default_organization_id: string | null } | null)
-        ?.default_organization_id ?? null;
-
-    if (defaultOrgId) {
-      const { data: member } = await admin
-        .from('organization_members')
-        .select('organization_id, role')
-        .eq('user_id', userId)
-        .eq('organization_id', defaultOrgId)
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      const row = member as { organization_id: string; role: string } | null;
-      if (row) return { organizationId: row.organization_id, role: row.role };
-    }
-
-    const { data: anyMember } = await admin
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userId)
-      .not('accepted_at', 'is', null)
-      // Oldest first: the same tie-break as every other membership resolver (0355).
-      .order('created_at', { ascending: true })
-      .order('organization_id', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const row = anyMember as { organization_id: string; role: string } | null;
-    return {
-      organizationId: row?.organization_id ?? null,
-      role: row?.role ?? null,
-    };
-  } catch {
-    return { organizationId: null, role: null };
-  }
 }
 
 /**
@@ -506,6 +407,10 @@ function normalizeTotpCode(raw: unknown): string | null {
 const RESET_CODE_ASK =
   'Enter the 6-digit code from your authenticator app to finish resetting your password.';
 
+/** The reset link's session is gone: spent, expired, or ended in another tab. */
+const RESET_LINK_GONE =
+  'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
+
 export async function completePasswordResetAction(
   // `totpCode` is additive and optional: the emailed recovery link and the
   // form both keep working without it, and it is read off the raw input rather
@@ -575,24 +480,35 @@ export async function completePasswordResetAction(
         // showing a dead end. Same vocabulary as the API gate's aal2_required.
         return err('forbidden', RESET_CODE_ASK, { reason: 'aal2_required' });
       }
-      const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
-        factorId: totpFactorId,
-      });
-      if (chErr || !challenge) {
-        return err('internal_error', 'Could not start the authenticator check. Please try again.');
+      // The account whose code budget this press spends (shared with the
+      // sign-in code and the step-up, lib/auth/mfa-code-attempts.ts): the
+      // first read's, else the link session's verified claims. With neither,
+      // the code is not checked and nothing is spent.
+      const accountId = preUser?.id ?? (await readVerifiedSessionClaims(supabase))?.userId ?? null;
+      if (!accountId) {
+        return err('forbidden', MFA_CODE_NOT_CHECKED, { reason: 'aal2_required' });
       }
-      const { error: verifyErr } = await supabase.auth.mfa.verify({
+      const check = await checkMfaCode(supabase, {
+        userId: accountId,
         factorId: totpFactorId,
-        challengeId: challenge.id,
         code,
+        path: 'password_reset',
       });
-      if (verifyErr) {
-        // Generic on purpose: never let the caller distinguish "wrong code"
-        // from "wrong/expired link" — and never echo GoTrue's message, which
-        // can carry factor/challenge identifiers.
+      if (check.kind === 'budget_spent') {
+        // No `reason`: the form keeps the box and the code and shows this.
+        return err('rate_limited', MFA_CODE_BUDGET_SPENT);
+      }
+      if (check.kind !== 'verified') {
+        // Never echo GoTrue's message, which can carry factor/challenge
+        // identifiers.
+        if (check.outcome === 'session_gone') return err('unauthenticated', RESET_LINK_GONE);
+        if (check.outcome === 'limited') return err('rate_limited', MFA_CODE_GOTRUE_LIMITED);
+        if (check.kind === 'challenge_failed') {
+          return err('internal_error', MFA_CHALLENGE_NOT_STARTED);
+        }
         return err(
           'forbidden',
-          'That code is not valid. Check your authenticator app and try again.',
+          check.outcome === 'refused' ? MFA_CODE_REFUSED : MFA_CODE_NOT_CHECKED,
           { reason: 'aal2_required' },
         );
       }
@@ -615,9 +531,7 @@ export async function completePasswordResetAction(
       // that.
       return err(
         'forbidden',
-        normalizeTotpCode(input.totpCode)
-          ? 'Could not check your code just now. Try again.'
-          : RESET_CODE_ASK,
+        normalizeTotpCode(input.totpCode) ? MFA_CODE_NOT_CHECKED : RESET_CODE_ASK,
         { reason: 'aal2_required' },
       );
     }
@@ -636,10 +550,7 @@ export async function completePasswordResetAction(
       // The link's session is gone (spent, expired, or ended by a reset
       // finished in another tab). The words follow the sign-in card's
       // LINK_FAILED_NOTICE (lib/auth/auth-page-notices.ts).
-      return err(
-        'unauthenticated',
-        'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
-      );
+      return err('unauthenticated', RESET_LINK_GONE);
     }
     return err('internal_error', error.message);
   }
