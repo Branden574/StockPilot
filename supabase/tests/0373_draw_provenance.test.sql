@@ -94,7 +94,9 @@
 --         -> C7, D18, D21, D23, D27, F11, S2, S5, S7 ...
 --  C11    mirror: impersonation filter removed from the location org membership
 --         -> S3, S4
---  C12    mirror: impersonation filter added to the warehouse org role check
+--  C12    mirror: impersonation filter removed from the warehouse org role check
+--         (inverted by S47, which gave both user_can_access_warehouse and this
+--         arm the filter; the 2026-09-26 mutant added it, when neither had it)
 --         -> S3
 --  C13    mirror: disabled_at ignored in the location org membership
 --         -> S4
@@ -1645,7 +1647,11 @@ select is(
                        and (select array_agg(a.attname::text order by a.attname) from unnest(c.conkey) k(attnum)
                               join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum)
                            = array['organization_id', 'user_id'])::text,
-  'caller_can_write_location:188634bf8552a0064bfbf1ebfecf814f:s:true:{search_path=public}:postgres:false:false:u,has_org_role:10422b29a6e15acd003d4f11ed28e90c:s:true:{search_path=public}:postgres:false:false:u,is_org_member:76492a6556e9f6a7c33d942aa9726f9f:s:true:{search_path=public}:postgres:false:false:u,user_can_access_warehouse:76b4170f3d393e8a1f293ca3d4895955:s:true:{search_path=public}:postgres:false:false:u|true',
+  -- Re-pinned by S47 (was 76b4170f3d393e8a1f293ca3d4895955, 0310's body):
+  -- user_can_access_warehouse also refuses an expired act-as seat, and _seal's
+  -- warehouse arm was restated with the same term in the same migration (S3
+  -- proves the two still agree).
+  'caller_can_write_location:188634bf8552a0064bfbf1ebfecf814f:s:true:{search_path=public}:postgres:false:false:u,has_org_role:10422b29a6e15acd003d4f11ed28e90c:s:true:{search_path=public}:postgres:false:false:u,is_org_member:76492a6556e9f6a7c33d942aa9726f9f:s:true:{search_path=public}:postgres:false:false:u,user_can_access_warehouse:c3e618bb3c05d227e1f61686e5a1848f:s:true:{search_path=public}:postgres:false:false:u|true',
   'S1: the four predicates ledger._seal restates are the text, volatility, SECURITY DEFINER, search_path, owner, STRICT, LEAKPROOF and PARALLEL it was proven against, and organization_members is unique on (organization_id, user_id) (has_org_role''s limit 1 row is the only row). The preflight refuses the same drift at push time. If this fails, re-prove _seal (S2-S4) before updating both pins');
 
 -- Nine locations: WA rack, WA Unplaced, WA Staging, the home Site, the WB
@@ -1721,8 +1727,8 @@ select is(
   $s$staff=A1:in,UA:in,SA:in,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
 staff_no_wh=A1:out,UA:out,SA:out,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true
 two_org=A1:in,UA:in,SA:in,S:in,B1:out,F1:in,FS:in,X1:in,null:out#live=true#same_by_location=true
-two_org_expired=A1:in,UA:in,SA:in,S:in,B1:out,F1:out,FS:out,X1:in,null:out#live=true#same_by_location=true$s$,
-  'S3: staff personas equal the live predicates per location: WA staff; staff with no warehouse (only org-level); a foreign manager who is WA staff at home (X1 is in scope through the WAREHOUSE''s organization); and one whose foreign membership expired (user_can_access_warehouse has no impersonation filter, is_org_member does)');
+two_org_expired=A1:in,UA:in,SA:in,S:in,B1:out,F1:out,FS:out,X1:out,null:out#live=true#same_by_location=true$s$,
+  'S3: staff personas equal the live predicates per location: WA staff; staff with no warehouse (only org-level); a foreign manager who is WA staff at home (X1 is in scope through the WAREHOUSE''s organization); and one whose foreign membership expired (X1 is out of scope: since S47 user_can_access_warehouse, and _seal''s warehouse arm with it, refuse an expired impersonation, as is_org_member does)');
 select is(
   pg_temp.mirror('viewer', :u_vwr) || E'\n' || pg_temp.mirror('auditor', :u_aud) || E'\n'
   || pg_temp.mirror('outsider', :u_out) || E'\n' || pg_temp.mirror('disabled', :u_dis) || E'\n'

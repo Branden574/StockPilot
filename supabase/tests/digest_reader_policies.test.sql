@@ -115,14 +115,20 @@ select is(
   'bc2d23e5cd73b96bb304c35ec7ef21f6',
   'is_org_member: accepted, unexpired, not disabled'
 );
+-- Re-pinned by S47 (my_warehouse_ids was 32d1893e28697e6f562cfa521102b4c1,
+-- user_can_access_warehouse 30151be2664af7b12f12da8ee82eaf85): both also
+-- refuse an expired act-as seat. The digest never reads for a seat, live or
+-- expired (apps/web/src/app/api/cron/weekly-digest/route.ts leaves every
+-- impersonation row out of its recipients and of each recipient's
+-- membership check), so the reader in digest.ts is unchanged.
 select is(
   md5(pg_get_functiondef('public.my_warehouse_ids()'::regprocedure)),
-  '32d1893e28697e6f562cfa521102b4c1',
+  '71163f73e74f47b8f6680be386a1d0af',
   'my_warehouse_ids: manager and up every warehouse, staff and viewers their assignments'
 );
 select is(
   md5(pg_get_functiondef('public.user_can_access_warehouse(uuid, uuid, text)'::regprocedure)),
-  '30151be2664af7b12f12da8ee82eaf85',
+  'ceb49d9f0edc7ef39302237de350e93c',
   'user_can_access_warehouse: manager and up, or staff and viewers with an assignment'
 );
 select is(

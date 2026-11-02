@@ -472,13 +472,19 @@ select is(
   0::bigint,
   'NEW: EXPIRED impersonation owner sees ZERO items (0177 expiry now enforced here too)');
 reset role;
+-- AMENDED BY S47. This line used to expect 5, captioned "the pre-0229
+-- predicate LEAKED all 5 items to the expired impersonator (the gap 0229
+-- closes)". 0229 closed the gap in the inventory_items policy; the two
+-- helpers the old per-row predicate calls kept it until S47 gave them the
+-- expiry term too. The line stays as the equivalence proof: the old
+-- predicate now refuses the expired impersonator, as the new policy does.
 select is(
   (select count(*) from public.inventory_items
     where id::text like 'ac022900%'
       and public.user_can_access_inventory('ac022900-0000-0000-0000-000000000109'::uuid, warehouse_id, charter_id, 'read')
       and public.user_can_see_item_category('ac022900-0000-0000-0000-000000000109'::uuid, organization_id, category_id)),
-  5::bigint,
-  'OLD: the pre-0229 predicate LEAKED all 5 items to the expired impersonator (the gap 0229 closes)');
+  0::bigint,
+  'OLD: the pre-0229 predicate now refuses the expired impersonator too (S47 gave user_can_access_inventory and user_can_see_item_category the expiry term): the same answer as NEW');
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- stock_movements: org membership is necessary but, since 0321, NOT sufficient.
