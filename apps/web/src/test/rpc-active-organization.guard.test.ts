@@ -3,6 +3,8 @@
  * request that runs in one organization must not act on another
  * organization's row.
  *
+ * Security invariant (S39, listed in scripts/security-test.sh).
+ *
  * WHAT WENT WRONG. A person can belong to more than one organization. The
  * organization switcher changes the active organization for every open tab,
  * and a phone screen keeps its row after a workspace switch. So a page left

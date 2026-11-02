@@ -1,3 +1,6 @@
+// Security invariant (S39, listed in scripts/security-test.sh): a write named by
+// a row id never runs on a row of another organization.
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
