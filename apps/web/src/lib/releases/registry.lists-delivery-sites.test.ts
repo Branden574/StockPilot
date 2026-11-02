@@ -68,16 +68,46 @@ function readerText(r: Release): string[] {
   ];
 }
 
+/**
+ * Added by docs/whats-new-s43a-2026-11 (2026-11-02): the two releases
+ * published after this one, directly below the B44 phone update draft and
+ * above this release. The authenticator code release reaches every member (no
+ * entry has an audience); the integration retries release reaches whoever
+ * manages integrations with the Integrations module on, the owner here among
+ * them. A test that expects this release to be a reader's notice, or first in
+ * an old phone build's list, reads or sees both first (a read of a release a
+ * reader is not told changes nothing).
+ */
+const AUTH_CODE_ID = 'authenticator-code-requests-2026-11';
+const RETRIES_ID = 'integration-retries-2026-11';
+const newerReads = [AUTH_CODE_ID, RETRIES_ID].map((id) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-02T15:50:00Z',
+  read_at: '2026-11-02T15:50:00Z',
+}));
+const newerSeen: Record<string, boolean> = { [AUTH_CODE_ID]: true, [RETRIES_ID]: true };
+
 describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
-  it('is published once, as revision 1, directly below the B44 phone update draft and above the export fixes release', () => {
+  // Renamed by docs/whats-new-s43a-2026-11 (2026-11-02; was: "is published once, as revision 1, directly below the B44 phone update draft and above the export fixes release", with ID at RELEASES[1], the export fixes release at RELEASES[2] and ID the first published release): the authenticator code and integration retries releases are published later, directly below the B44 phone update draft and above this one, so it and the export fixes release move down by two, and it is the third published release. Claim kept: published once, as revision 1, below the B44 phone update draft and directly above the export fixes release.
+  it('is published once, as revision 1, directly below the authenticator code and integration retries releases (published later, below the B44 phone update draft) and above the export fixes release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
     expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('export-fixes-2026-10');
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    expect(RELEASES[1]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[1]?.status).toBe('published');
+    expect(RELEASES[2]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[2]?.status).toBe('published');
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe('export-fixes-2026-10');
+    expect(
+      RELEASES.filter((r) => r.status === 'published')
+        .slice(0, 3)
+        .map((r) => r.id),
+    ).toEqual([AUTH_CODE_ID, RETRIES_ID, ID]);
   });
 
   it('is dated in the past on a whole minute, after its last change went live, and after every release below it', () => {
@@ -130,7 +160,8 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
     expect(release().audience).toBeUndefined();
   });
 
-  it('reaches every member, so it is the first notice for an owner and for a member with no permission, and an old phone build lists it first', () => {
+  // Renamed by docs/whats-new-s43a-2026-11 (2026-11-02; was: "reaches every member, so it is the first notice for an owner and for a member with no permission, and an old phone build lists it first", with nothing read or seen): the authenticator code release, published later above it, reaches every member, and the integration retries release, published later too, reaches the owner, so every reader here reads or sees both first. Claim kept: it reaches every member, it is the first notice for an owner and for a member with no permission once those newer releases are read, and an old phone build lists it first once they are seen.
+  it('reaches every member, so it is the first notice for an owner and for a member with no permission once the newer releases are read, and an old phone build lists it first once they are seen', () => {
     expect(
       visibleReleases(RELEASES, member)
         .find((r) => r.id === ID)
@@ -146,9 +177,9 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
         ?.entries.map((e) => e.id),
     ).toEqual(release().entries.map((e) => e.id));
     for (const v of [everyone, member]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, newerReads, null).latestUnread?.id, v.role).toBe(ID);
     }
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newerSeen)[0]).toEqual({
       id: ID,
       date: '2026-11-02',
       title: release().title,
@@ -157,7 +188,7 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
     });
     // A member reaches no linked entry, so an old phone build shows the title
     // and the summary alone.
-    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+    expect(legacyAnnouncementsFor(RELEASES, member, newerSeen)[0]).toEqual({
       id: ID,
       date: '2026-11-02',
       title: release().title,
