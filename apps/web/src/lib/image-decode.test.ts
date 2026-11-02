@@ -29,6 +29,9 @@ import {
   AVIF_8192_CROPPED_TO_64,
   avifBoxes,
   avifDerivedBoxes,
+  avifOfManyGrids,
+  AVIFS_BEHIND_A_FIRST_META,
+  avifWithAFirstMeta,
   type DerivedAvifOptions,
   EXIF_JPEGS,
   gifHeader,
@@ -443,6 +446,9 @@ describe('readImageHeader: AVIF grids and overlays', () => {
       { ...GRID, tileData, ids32: true },
       { ...GRID, tileData, ipmaWide: true },
       { ...GRID, tileData, ilocBase: true, dataIn: 'mdat' },
+      // libheif adds iloc's base offset to an offset into idat as well.
+      { ...GRID, tileData, idatPad: 16 },
+      { ...GRID, tileData, ilocBase: true, idatPad: 16 },
     ] as DerivedAvifOptions[]) {
       const bytes = avifDerivedBoxes(opts);
       const label = JSON.stringify({ ...opts, tileData: undefined });
@@ -491,6 +497,16 @@ describe('readImageHeader: AVIF grids and overlays', () => {
         }),
       ),
     ).toMatchObject({ width: 4096, height: 4096 });
+    // Its data 16 bytes into idat, by the extent's offset or by iloc's base
+    // offset, reads the same.
+    for (const ilocBase of [false, true]) {
+      expect(readImageHeader(avifDerivedBoxes({ ...GRID, idatPad: 16, ilocBase }))).toEqual({
+        kind: 'avif',
+        width: 128,
+        height: 128,
+        heavy: true,
+      });
+    }
     // Its output under its ispe: the ispe still counts.
     expect(
       readImageHeader(avifDerivedBoxes({ ...GRID, output: [100, 100], ispe: [128, 128] })),
@@ -547,6 +563,22 @@ describe('readImageHeader: AVIF grids and overlays', () => {
     };
     expect(readImageHeader(counted('iloc'))).toBeNull();
     expect(readImageHeader(counted('ipma'))).toBeNull();
+    // Two ipma boxes (libheif merges them): 1024 entries between them, not
+    // in each.
+    const ipmaTwice = (grids: number) => {
+      const plain = avifOfManyGrids(grids, 1);
+      const at = plain.indexOf('ipma') - 4;
+      const end = at + plain.readUInt32BE(at);
+      const copy = plain.subarray(at, end);
+      const b = Buffer.concat([plain.subarray(0, end), copy, plain.subarray(end)]);
+      for (const box of ['meta', 'iprp']) {
+        const boxAt = b.indexOf(box) - 4;
+        b.writeUInt32BE(b.readUInt32BE(boxAt) + copy.length, boxAt);
+      }
+      return b;
+    };
+    expect(readImageHeader(ipmaTwice(512))).toMatchObject({ width: 1, height: 1 });
+    expect(readImageHeader(ipmaTwice(513))).toBeNull();
   });
 
   it.each(Object.entries(OVERSIZED_DERIVED_AVIFS))(
@@ -666,6 +698,22 @@ describe('readImageHeader: AVIF grids and overlays', () => {
         return b;
       })(),
       'a data reference to another file': edited(plain, (b, e) => b.writeUInt16BE(1, e + 4)),
+      // The grid's entry twice, both reading cleanly: which one libheif
+      // reads is not the decoder's to guess.
+      'two iloc entries for the grid': (() => {
+        const e = gridEntry(plain);
+        const b = Buffer.concat([
+          plain.subarray(0, e + 16),
+          plain.subarray(e, e + 16),
+          plain.subarray(e + 16),
+        ]);
+        for (const box of ['meta', 'iloc']) {
+          const at = b.indexOf(box) - 4;
+          b.writeUInt32BE(b.readUInt32BE(at) + 16, at);
+        }
+        b.writeUInt16BE(6, b.indexOf('iloc') + 4 + 4 + 2);
+        return b;
+      })(),
       'two extents': edited(plain, (b, e) => b.writeUInt16BE(2, e + 6)),
       'an extent past the end of idat': edited(plain, (b, e) => b.writeUInt32BE(4, e + 8)),
       'an extent longer than idat': edited(plain, (b, e) => b.writeUInt32BE(12, e + 12)),
@@ -697,6 +745,88 @@ describe('readImageHeader: AVIF grids and overlays', () => {
     })) {
       expect(readImageHeader(bytes), label).toBeNull();
     }
+  });
+
+  it('reads iloc and ipma once, not once for each grid: 1024 grids of 255 associations each', () => {
+    const many = avifOfManyGrids(1024, 255);
+    expect(many.length).toBeLessThan(310_000);
+    // The control: a few grids read as the 1 x 1 image they state.
+    expect(readImageHeader(avifOfManyGrids(4, 3))).toEqual({
+      kind: 'avif',
+      width: 1,
+      height: 1,
+      heavy: true,
+    });
+    const started = performance.now();
+    const header = readImageHeader(many);
+    const took = performance.now() - started;
+    expect(header).toEqual({ kind: 'avif', width: 1, height: 1, heavy: true });
+    // Walking them again for each grid took about 5 s; once, a few ms.
+    expect(took).toBeLessThan(500);
+  });
+});
+
+/**
+ * libheif 1.23 (sharp 0.35) reads the LAST meta box at the top level of an
+ * AVIF, and the first iinf, iloc, iprp and idat inside it. A file with more
+ * than one of any of them is refused, so the box the decoder reads is the
+ * one libheif decodes.
+ */
+describe('readImageHeader: AVIF boxes there should be one of', () => {
+  it('libheif reads the last of two top-level meta boxes; the decoder refuses the file', async () => {
+    const twoMetas = avifWithAFirstMeta(avifBoxes([40, 30]));
+    expect((await sharp(twoMetas).metadata()).width).toBe(40);
+    expect(readImageHeader(twoMetas)).toBeNull();
+    // And the other way round.
+    const other = avifWithAFirstMeta(avifBoxes([64, 64]), avifBoxes([40, 30]));
+    expect((await sharp(other).metadata()).width).toBe(64);
+    expect(readImageHeader(other)).toBeNull();
+    expect(readImageHeader(avifBoxes([40, 30]))).toMatchObject({ width: 40, height: 30 });
+  });
+
+  it.each(Object.entries(AVIFS_BEHIND_A_FIRST_META))(
+    'null, and refused before sharp, behind a first meta of 64 x 64: %s',
+    async (_label, bytes) => {
+      expect(readImageHeader(bytes)).toBeNull();
+      sharpCalls.length = 0;
+      await expect(withCappedImage(bytes, ALL_KINDS, async () => 'decoded')).rejects.toBeInstanceOf(
+        DecodeRefused,
+      );
+      expect(sharpCalls).toEqual([]);
+    },
+  );
+
+  it('null for a meta with two iinf, iloc, iprp or idat boxes, or an iprp with two ipco', () => {
+    const plain = avifDerivedBoxes({
+      type: 'grid',
+      rows: 2,
+      columns: 2,
+      tile: [64, 64],
+      output: [128, 128],
+      ispe: [128, 128],
+    });
+    /** `plain` with a copy of its `type` box right after it, the boxes
+     *  holding it grown to fit. */
+    const twice = (type: string, parents: string[]) => {
+      const at = plain.indexOf(type) - 4;
+      const end = at + plain.readUInt32BE(at);
+      const copy = plain.subarray(at, end);
+      const b = Buffer.concat([plain.subarray(0, end), copy, plain.subarray(end)]);
+      for (const parent of parents) {
+        const parentAt = b.indexOf(parent) - 4;
+        b.writeUInt32BE(b.readUInt32BE(parentAt) + copy.length, parentAt);
+      }
+      return b;
+    };
+    expect(readImageHeader(plain)).toMatchObject({ width: 128, height: 128 });
+    for (const type of ['iinf', 'iloc', 'iprp', 'idat']) {
+      expect(readImageHeader(twice(type, ['meta'])), type).toBeNull();
+    }
+    expect(readImageHeader(twice('ipco', ['meta', 'iprp'])), 'ipco').toBeNull();
+    // Two ipma boxes are allowed (libheif merges them), as are two of a box
+    // that states no size.
+    expect(readImageHeader(twice('ipma', ['meta', 'iprp']))).toMatchObject({ width: 128 });
+    expect(readImageHeader(twice('hdlr', ['meta']))).toMatchObject({ width: 128 });
   });
 });
 

@@ -78,6 +78,7 @@ import {
   EXIF_JPEGS,
   IMAGE_LOOKALIKE_SVGS,
   MALFORMED_PNGS,
+  AVIFS_BEHIND_A_FIRST_META,
   OVERSIZED_DERIVED_AVIFS,
   PNGS_PNG_JS_MISREADS,
   PNG_8X8,
@@ -1558,6 +1559,7 @@ describe('fetchExportImageBytes — the capped decoder (S45)', () => {
       WEBP_100_BY_1000000,
       AVIF_8192_CROPPED_TO_64,
       ...Object.values(OVERSIZED_DERIVED_AVIFS),
+      ...Object.values(AVIFS_BEHIND_A_FIRST_META),
       SVG_16000,
       IMAGE_LOOKALIKE_SVGS['SVG after a comment holding ftypavif']!,
     ]) {

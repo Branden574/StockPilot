@@ -395,6 +395,12 @@ export interface DerivedAvifOptions {
   ipmaWide?: boolean;
   /** Each extent's offset in iloc's base offset, the extent's own 0. */
   ilocBase?: boolean;
+  /** Zero bytes in idat before the derived item's data, so its offset (or
+   *  base offset, with `ilocBase`) is not 0. Default 0. */
+  idatPad?: number;
+  /** An overlay's fill colour: red, green, blue and alpha, 16 bits each.
+   *  Default all 0xffff. */
+  fill?: [number, number, number, number];
   /** One tile's AV1 configuration (av1C contents) and coded data, each tile
    *  pointing at the same data. Default a 16-byte stand-in that is not AV1,
    *  so the file can never be decoded. */
@@ -416,7 +422,8 @@ function sized(n: number, wide: boolean): Buffer {
  */
 export function avifDerivedBoxes(opts: DerivedAvifOptions): Buffer {
   const { type, tile, output, ispe, dataIn = 'idat', wide = false } = opts;
-  const { ids32 = false, ipmaWide = false, ilocBase = false } = opts;
+  const { ids32 = false, ipmaWide = false, ilocBase = false, idatPad = 0 } = opts;
+  const fill = opts.fill ?? [0xffff, 0xffff, 0xffff, 0xffff];
   const id = (n: number) => sized(n, ids32);
   const version = (v: number) => Buffer.from([v, 0, 0, 0]);
   const rows = type === 'grid' ? (opts.rows ?? 1) : 1;
@@ -437,7 +444,7 @@ export function avifDerivedBoxes(opts: DerivedAvifOptions): Buffer {
         ])
       : Buffer.concat([
           Buffer.from([0, flags]),
-          Buffer.alloc(8, 0xff),
+          ...fill.map(u16),
           sized(output[0], wide),
           sized(output[1], wide),
           sized(0, wide),
@@ -493,7 +500,7 @@ export function avifDerivedBoxes(opts: DerivedAvifOptions): Buffer {
       u32(length),
     ]);
   const meta = (mdatAt: number) => {
-    const payloadAt = dataIn === 'idat' ? 0 : mdatAt + 8 + tileData.data.length;
+    const payloadAt = dataIn === 'idat' ? idatPad : mdatAt + 8 + tileData.data.length;
     return fullBox(
       'meta',
       fullBox('hdlr', u32(0), Buffer.from('pict', 'latin1'), Buffer.alloc(13)),
@@ -536,7 +543,7 @@ export function avifDerivedBoxes(opts: DerivedAvifOptions): Buffer {
           ...ipmaEntries,
         ),
       ),
-      ...(dataIn === 'idat' ? [box('idat', payload)] : []),
+      ...(dataIn === 'idat' ? [box('idat', Buffer.alloc(idatPad), payload)] : []),
     );
   };
   const ftyp = box(
@@ -577,7 +584,96 @@ export const OVERSIZED_DERIVED_AVIFS: Readonly<Record<string, Buffer>> = {
   }),
   'an overlay of one 512 x 512 tile on a 16000 x 16000 canvas, its ispe 512 x 512':
     avifDerivedBoxes({ type: 'iovl', tile: [512, 512], output: [16000, 16000], ispe: [512, 512] }),
+  // Its fill colour's green and blue are where a grid states its output
+  // size, so read as a grid it is a 64 x 64 one: only the overlay rule
+  // refuses it.
+  'an overlay on a 16000 x 16000 canvas whose fill colour reads as a 64 x 64 grid, its ispe 64 x 64':
+    avifDerivedBoxes({
+      type: 'iovl',
+      tile: [64, 64],
+      output: [16000, 16000],
+      ispe: [64, 64],
+      fill: [0, 64, 64, 0xffff],
+    }),
 };
+
+/**
+ * `avif` with the meta box of `first` (default a plain 64 x 64 AVIF) put
+ * before its own, both right after ftyp. libheif 1.23 (sharp 0.35) reads the
+ * LAST top-level meta, so a decoder reading the first one would see 64 x 64
+ * and pass a file libheif decodes at `avif`'s size. `avif`'s offsets into
+ * mdat are not moved, so the file is never decoded here.
+ */
+export function avifWithAFirstMeta(avif: Buffer, first: Buffer = avifBoxes([64, 64])): Buffer {
+  const metaAt = (b: Buffer) => b.readUInt32BE(0);
+  const firstAt = metaAt(first);
+  if (first.toString('latin1', firstAt + 4, firstAt + 8) !== 'meta') throw new Error('no meta');
+  const firstMeta = first.subarray(firstAt, firstAt + first.readUInt32BE(firstAt));
+  return Buffer.concat([avif.subarray(0, metaAt(avif)), firstMeta, avif.subarray(metaAt(avif))]);
+}
+
+/** Each AVIF the decoder refuses on its own, behind a first meta box that
+ *  reads as a plain 64 x 64 image. */
+export const AVIFS_BEHIND_A_FIRST_META: Readonly<Record<string, Buffer>> = Object.fromEntries(
+  Object.entries({
+    'an AVIF coded at 8192 x 8192 and cropped to 64 x 64': AVIF_8192_CROPPED_TO_64,
+    ...OVERSIZED_DERIVED_AVIFS,
+  }).map(([label, avif]) => [label, avifWithAFirstMeta(avif)]),
+);
+
+/**
+ * An AVIF of `grids` grid items, each with a 1 x 1 ispe and the same 1 x 1
+ * grid data in idat, and each with `associations` property associations in
+ * ipma, its ispe last. Every size in it is 1 x 1. A decoder that walks iloc
+ * and ipma again for each grid reads about grids x grids x associations
+ * fields: 1024 grids of 255 associations is a 302 KB file.
+ */
+export function avifOfManyGrids(grids: number, associations: number): Buffer {
+  const ids = Array.from({ length: grids }, (_, i) => i + 1);
+  const gridData = Buffer.from([0, 0, 0, 0, 0, 1, 0, 1]);
+  const meta = fullBox(
+    'meta',
+    fullBox('hdlr', u32(0), Buffer.from('pict', 'latin1'), Buffer.alloc(13)),
+    fullBox('pitm', u16(1)),
+    box(
+      'iloc',
+      Buffer.from([1, 0, 0, 0, 0x44, 0x00]),
+      u16(grids),
+      ...ids.map((n) => Buffer.concat([u16(n), u16(1), u16(0), u16(1), u32(0), u32(8)])),
+    ),
+    fullBox(
+      'iinf',
+      u16(grids),
+      ...ids.map((n) =>
+        box('infe', Buffer.from([2, 0, 0, 0]), u16(n), u16(0), Buffer.from('grid\0', 'latin1')),
+      ),
+    ),
+    box(
+      'iprp',
+      box('ipco', fullBox('ispe', u32(1), u32(1))),
+      fullBox(
+        'ipma',
+        u32(grids),
+        ...ids.map((n) =>
+          Buffer.concat([
+            u16(n),
+            Buffer.from([associations]),
+            Buffer.alloc(associations - 1),
+            Buffer.from([1]),
+          ]),
+        ),
+      ),
+    ),
+    box('idat', gridData),
+  );
+  const ftyp = box(
+    'ftyp',
+    Buffer.from('avif', 'latin1'),
+    u32(0),
+    Buffer.from('mif1avifmiaf', 'latin1'),
+  );
+  return Buffer.concat([ftyp, meta]);
+}
 
 /** The av1C contents and the coded data of a single-item AVIF made by
  *  sharp, for avifDerivedBoxes' tiles. */
@@ -674,6 +770,7 @@ holdBackFromSharp(
   WEBP_100_BY_1000000,
   AVIF_8192_CROPPED_TO_64,
   ...Object.values(OVERSIZED_DERIVED_AVIFS),
+  ...Object.values(AVIFS_BEHIND_A_FIRST_META),
   SVG_16000,
   MALFORMED_PNGS['an IHDR of 16000 x 16000 over 16 bytes of data']!,
   MALFORMED_PNGS['an IHDR of 100000 x 100000 over 16 bytes of data']!,

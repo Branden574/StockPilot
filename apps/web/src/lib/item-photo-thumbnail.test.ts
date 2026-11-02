@@ -14,6 +14,7 @@ vi.mock('sharp', async (importOriginal) => {
 import {
   AVIF_8192_CROPPED_TO_64,
   IMAGE_LOOKALIKE_SVGS,
+  AVIFS_BEHIND_A_FIRST_META,
   OVERSIZED_DERIVED_AVIFS,
 } from '@/test/image-decode-fixtures';
 
@@ -136,8 +137,8 @@ describe('makeItemPhotoThumbnail', () => {
     expect(sharpCalls).toEqual([]);
   });
 
-  it.each(Object.entries(OVERSIZED_DERIVED_AVIFS))(
-    'answers null, without calling sharp, for an AVIF whose grid or overlay states more than its ispe: %s',
+  it.each(Object.entries({ ...OVERSIZED_DERIVED_AVIFS, ...AVIFS_BEHIND_A_FIRST_META }))(
+    'answers null, without calling sharp, for an AVIF whose grid or overlay states more than its ispe, or behind a first meta: %s',
     async (_label, bytes) => {
       sharpCalls.length = 0;
       expect(await makeItemPhotoThumbnail(new Uint8Array(bytes))).toBeNull();

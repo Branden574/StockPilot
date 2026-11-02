@@ -16,6 +16,7 @@ import {
   gifHeader,
   IMAGE_LOOKALIKE_SVGS,
   MALFORMED_PNGS,
+  AVIFS_BEHIND_A_FIRST_META,
   OVERSIZED_DERIVED_AVIFS,
   pngWithOversizedData,
   PNGS_PNG_JS_MISREADS,
@@ -394,6 +395,7 @@ describe('photos through the capped decoder (S45)', () => {
       gifHeader(4097, 4096),
       AVIF_8192_CROPPED_TO_64,
       ...Object.values(OVERSIZED_DERIVED_AVIFS),
+      ...Object.values(AVIFS_BEHIND_A_FIRST_META),
     ]) {
       sharpCalls.length = 0;
       expect(await prefetchOne(bytes, 'image/webp')).toBeNull();
@@ -556,8 +558,13 @@ describe('photos through the capped decoder (S45)', () => {
     expect(out.get('cover')).toBeNull();
     expect(callsWith(avif)).toEqual([]);
     // Nor one coded over the cap and cropped under it, nor a grid or overlay
-    // whose data states more than its ispe.
-    for (const bytes of [AVIF_8192_CROPPED_TO_64, ...Object.values(OVERSIZED_DERIVED_AVIFS)]) {
+    // whose data states more than its ispe, nor any of them behind a first
+    // meta box.
+    for (const bytes of [
+      AVIF_8192_CROPPED_TO_64,
+      ...Object.values(OVERSIZED_DERIVED_AVIFS),
+      ...Object.values(AVIFS_BEHIND_A_FIRST_META),
+    ]) {
       fetchSpy.mockResolvedValue(response(bytes, { 'content-type': 'image/avif' }));
       const out = await prefetchImagesAsDataUris([['cover', SIGNED] as const], { maxEdgePx: 40 });
       expect(out.get('cover')).toBeNull();
@@ -783,8 +790,8 @@ describe('prefetchPdfLogo', () => {
     },
   );
 
-  it.each(Object.entries(OVERSIZED_DERIVED_AVIFS))(
-    'an AVIF logo whose grid or overlay states more than its ispe: no logo, nothing stored, sharp not called: %s',
+  it.each(Object.entries({ ...OVERSIZED_DERIVED_AVIFS, ...AVIFS_BEHIND_A_FIRST_META }))(
+    'an AVIF logo whose grid or overlay states more than its ispe, or behind a first meta: no logo, nothing stored, sharp not called: %s',
     async (_label, bytes) => {
       sharpCalls.length = 0;
       serveLogo(bytes, 'image/avif');

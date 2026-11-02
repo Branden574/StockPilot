@@ -375,14 +375,16 @@ function avifDerivedItems(
   return derived;
 }
 
-/** Where an item's data is, by its iloc entry: one extent of a stated
+/** Where each item's data is, by its iloc entry: one extent of a stated
  *  length, in the file (construction method 0) or in idat (1), in this file
- *  (data reference 0). null otherwise, or when iloc does not read. */
+ *  (data reference 0), or null for an entry of any other kind. null for the
+ *  whole map when iloc does not read or holds two entries for one item (the
+ *  size counted must come from the data libheif reads). One pass, so a file
+ *  of many grids costs no more than its size. */
 function avifItemData(
   bytes: Uint8Array,
   inMeta: IsoBox[],
-  itemId: number,
-): { start: number; end: number } | null {
+): Map<number, { start: number; end: number } | null> | null {
   const iloc = inMeta.find((b) => b.type === 'iloc');
   if (!iloc) return null;
   const r = fieldReader(bytes, iloc.body, iloc.end);
@@ -400,6 +402,8 @@ function avifItemData(
   const idSize = version < 2 ? 2 : 4;
   const count = r.read(idSize);
   if (count === null || count > AVIF_MAX_ITEMS) return null;
+  const idat = inMeta.find((b) => b.type === 'idat');
+  const located = new Map<number, { start: number; end: number } | null>();
   for (let i = 0; i < count; i += 1) {
     const id = r.read(idSize);
     // 12 reserved bits, then the construction method.
@@ -408,44 +412,52 @@ function avifItemData(
     const base = r.read(baseSize);
     const extents = r.read(2);
     if (id === null || method === null || dataReference === null || base === null) return null;
-    if (extents === null) return null;
-    if (id !== itemId) {
+    if (extents === null || located.has(id)) return null;
+    if (dataReference !== 0 || extents !== 1) {
+      located.set(id, null);
       if (!r.skip(extents * (indexSize + offsetSize + lengthSize))) return null;
       continue;
     }
-    if (dataReference !== 0 || extents !== 1 || !r.skip(indexSize)) return null;
+    if (!r.skip(indexSize)) return null;
     const offset = r.read(offsetSize);
     const length = r.read(lengthSize);
     if (offset === null || length === null) return null;
+    let start: number | null = null;
+    let end = bytes.length;
     if (method === 0) {
-      const start = base + offset;
-      return start + length <= bytes.length ? { start, end: start + length } : null;
+      start = base + offset;
+    } else if (method === 1 && idat) {
+      start = idat.body + base + offset;
+      end = idat.end;
     }
-    const idat = inMeta.find((b) => b.type === 'idat');
-    if (method !== 1 || !idat) return null;
-    const start = idat.body + base + offset;
-    return start + length <= idat.end ? { start, end: start + length } : null;
+    located.set(
+      id,
+      start !== null && start + length <= end ? { start, end: start + length } : null,
+    );
   }
-  return null;
+  return located;
 }
 
-/** The size an item's first associated ispe states (ipma, its property
- *  indexes counted from 1 into ipco), or null when it has none. */
-function avifItemIspe(
+/** The size each item's first associated ispe states (ipma, its property
+ *  indexes counted from 1 into ipco), by item id. null when ipma does not
+ *  read, or its boxes hold more than AVIF_MAX_ITEMS entries between them.
+ *  One pass over every ipma box (libheif merges them). */
+function avifItemIspes(
   bytes: Uint8Array,
   inIprp: IsoBox[],
   properties: IsoBox[],
-  itemId: number,
-): Size | null {
+): Map<number, Size> | null {
+  const ispes = new Map<number, Size>();
+  let entries = 0;
   for (const ipma of inIprp.filter((b) => b.type === 'ipma')) {
     const r = fieldReader(bytes, ipma.body, ipma.end);
     const version = r.read(1);
     // The low byte of the 24 flag bits.
     const flags = r.skip(2) ? r.read(1) : null;
     const count = r.read(4);
-    if (version === null || flags === null || count === null || count > AVIF_MAX_ITEMS) {
-      return null;
-    }
+    if (version === null || flags === null || count === null) return null;
+    entries += count;
+    if (entries > AVIF_MAX_ITEMS) return null;
     const wideIndex = (flags & 1) === 1;
     for (let i = 0; i < count; i += 1) {
       const id = r.read(version < 1 ? 2 : 4);
@@ -454,12 +466,26 @@ function avifItemIspe(
       for (let j = 0; j < associations; j += 1) {
         const association = r.read(wideIndex ? 2 : 1);
         if (association === null) return null;
+        if (ispes.has(id)) continue;
         const property = properties[(association & (wideIndex ? 0x7fff : 0x7f)) - 1];
-        if (id === itemId && property?.type === 'ispe') return ispeSize(bytes, property);
+        const size = property?.type === 'ispe' ? ispeSize(bytes, property) : null;
+        if (size) ispes.set(id, size);
       }
     }
   }
-  return null;
+  return ispes;
+}
+
+/** The one box of `type` among `boxes`, or null when there is none or more
+ *  than one. */
+function onlyBox(boxes: IsoBox[], type: string): IsoBox | null {
+  const found = boxes.filter((b) => b.type === type);
+  return found.length === 1 ? found[0]! : null;
+}
+
+/** Whether `boxes` hold at most one box of each of `types`. */
+function atMostOneOf(boxes: IsoBox[], types: readonly string[]): boolean {
+  return types.every((type) => boxes.filter((b) => b.type === type).length <= 1);
 }
 
 /**
@@ -495,40 +521,44 @@ function avifGridOutput(bytes: Uint8Array, data: { start: number; end: number })
  * overlay (iovl) at all: overlays are rare, and refusing them keeps their
  * canvas and offsets out of reach.
  *
+ * The boxes read must be the ones libheif decodes. It reads the LAST meta
+ * box at the top level, and the first iinf, iloc, iprp, idat and ipco, so a
+ * file with a harmless meta before a second one would read here as the
+ * harmless one and decode as the other. A file is refused when it holds
+ * more than one meta, or a meta more than one of those boxes (files sharp
+ * and libavif write hold one of each).
+ *
  * null as well when the boxes do not fill their parents, are more than
  * AVIF_MAX_TOP_LEVEL_BOXES or AVIF_MAX_BOXES_INSIDE, or there is no ispe.
  */
 function avifCodedSize(bytes: Uint8Array): Size | null {
-  const meta = isoBoxes(bytes, 0, bytes.length, AVIF_MAX_TOP_LEVEL_BOXES)?.find(
-    (b) => b.type === 'meta',
-  );
+  const top = isoBoxes(bytes, 0, bytes.length, AVIF_MAX_TOP_LEVEL_BOXES);
+  const meta = top && onlyBox(top, 'meta');
   if (!meta) return null;
   const inMeta = isoBoxes(bytes, meta.body + 4, meta.end, AVIF_MAX_BOXES_INSIDE);
-  if (!inMeta) return null;
+  if (!inMeta || !atMostOneOf(inMeta, ['iinf', 'iloc', 'iprp', 'idat'])) return null;
+  const iprp = onlyBox(inMeta, 'iprp');
+  const inIprp = iprp && isoBoxes(bytes, iprp.body, iprp.end, AVIF_MAX_BOXES_INSIDE);
+  const ipco = inIprp && onlyBox(inIprp, 'ipco');
+  const properties = ipco && isoBoxes(bytes, ipco.body, ipco.end, AVIF_MAX_BOXES_INSIDE);
+  if (!inIprp || !properties) return null;
   let largest: Size | null = null;
-  // libheif reads item properties from the first iprp's first ipco.
-  let first: { inIprp: IsoBox[]; properties: IsoBox[] } | null = null;
-  for (const iprp of inMeta.filter((b) => b.type === 'iprp')) {
-    const inIprp = isoBoxes(bytes, iprp.body, iprp.end, AVIF_MAX_BOXES_INSIDE);
-    if (!inIprp) return null;
-    for (const ipco of inIprp.filter((b) => b.type === 'ipco')) {
-      const properties = isoBoxes(bytes, ipco.body, ipco.end, AVIF_MAX_BOXES_INSIDE);
-      if (!properties) return null;
-      first ??= { inIprp, properties };
-      for (const ispe of properties.filter((b) => b.type === 'ispe')) {
-        const size = ispeSize(bytes, ispe);
-        if (!size) return null;
-        largest = larger(largest, size);
-      }
-    }
+  for (const ispe of properties.filter((b) => b.type === 'ispe')) {
+    const size = ispeSize(bytes, ispe);
+    if (!size) return null;
+    largest = larger(largest, size);
   }
   const derived = avifDerivedItems(bytes, inMeta);
   if (!derived) return null;
+  if (derived.length === 0) return largest;
+  if (derived.some((item) => item.type === 'iovl')) return null;
+  const located = avifItemData(bytes, inMeta);
+  const ispes = avifItemIspes(bytes, inIprp, properties);
+  if (!located || !ispes) return null;
   for (const item of derived) {
-    if (item.type === 'iovl' || !first) return null;
-    const data = avifItemData(bytes, inMeta, item.id);
+    const data = located.get(item.id);
     const output = data && avifGridOutput(bytes, data);
-    const ispe = avifItemIspe(bytes, first.inIprp, first.properties, item.id);
+    const ispe = ispes.get(item.id);
     if (!output || !ispe || output.width > ispe.width || output.height > ispe.height) return null;
     largest = larger(largest, output);
   }
