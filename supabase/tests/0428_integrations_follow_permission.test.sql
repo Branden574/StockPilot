@@ -28,7 +28,8 @@
 -- T.  The guard trigger: the pointer, the row's organization, provider and
 --     id; the service role is not affected; the app's own writes pass.
 -- A.  The migration's own preflight and lock prelude, replayed from the
---     statements the CLI recorded (0415's method).
+--     statements the CLI recorded (0415's method); the preflight ends
+--     holding no lock it took on a table outside the catalogs.
 --
 -- Roles: fixtures as the test superuser. Every read or write as an API role
 -- runs inside a subtransaction that is always undone (the role and claims
@@ -37,7 +38,7 @@
 
 begin;
 
-select plan(42);
+select plan(43);
 
 \set orgA '\'527b0000-0000-0000-0000-00000000000a\''
 \set orgB '\'527b0000-0000-0000-0000-00000000000b\''
@@ -744,6 +745,44 @@ select is(
                     join pg_class c on c.oid = to_regclass(g.name)
                     join pg_namespace n on n.oid = c.relnamespace) s),
   'A5: the lock prelude takes ACCESS EXCLUSIVE on the six tables and on every table supautils.policy_grants lists for this role, at once, and on nothing else');
+
+-- The locks on tables outside the catalogs that this backend holds after
+-- the preflight and did not hold before it (relation and mode), on the state
+-- p_prep leaves; ALWAYS undone. 'missing' when the CLI recorded no preflight.
+create function pg_temp.pre_locks(p_prep text) returns text language plpgsql as $$
+declare v_before text[]; v text;
+begin
+  if pg_temp.mig('$pre_s27b$') = '' then
+    return 'missing';
+  end if;
+  begin
+    if p_prep is not null then
+      execute p_prep;
+    end if;
+    select coalesce(array_agg(l.relation::text || ':' || l.mode), '{}') into v_before
+      from pg_locks l
+     where l.pid = pg_backend_pid() and l.locktype = 'relation' and l.granted;
+    execute pg_temp.mig('$pre_s27b$');
+    select string_agg(distinct n.nspname || '.' || c.relname || ':' || l.mode, ','
+                      order by n.nspname || '.' || c.relname || ':' || l.mode) into v
+      from pg_locks l
+      join pg_class c on c.oid = l.relation
+      join pg_namespace n on n.oid = c.relnamespace
+     where l.pid = pg_backend_pid() and l.locktype = 'relation' and l.granted
+       and c.relkind in ('r', 'p') and c.relpersistence = 'p'
+       and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema')
+       and not (l.relation::text || ':' || l.mode) = any (v_before);
+    raise exception using errcode = 'XXT27', message = 'undo';
+  exception when sqlstate 'XXT27' then
+    null;
+  end;
+  return coalesce(v, 'none');
+end $$;
+
+select is(
+  pg_temp.pre_locks(pg_temp.pre_0428()),
+  'none',
+  'A6: on the pre-0428 state the preflight passes and ends holding no lock it took on a table outside the catalogs (what it reads from role_default_permissions it reads in the undone block)');
 
 select * from finish();
 rollback;
