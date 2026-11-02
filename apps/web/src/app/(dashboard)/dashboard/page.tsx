@@ -47,6 +47,7 @@ import {
   getOrgRowForRequest,
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
+import { factorsOf } from '@/lib/auth/mfa-factors';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { createClient } from '@/lib/supabase/server';
@@ -323,7 +324,11 @@ async function DashboardBody({
   ]);
   const warehouseCount = warehousesList.length;
   const teamCount = teamCountRes.count ?? 0;
-  const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
+  // The checklist's 'Secure your account' step, from this member's own list
+  // only: a list of another account (lib/auth/mfa-factors) marks nothing done.
+  const hasVerifiedFactor = (factorsOf(mfaFactors, ctx.userId) ?? []).some(
+    (f) => f.status === 'verified',
+  );
 
   const checklistSteps = [
     {
