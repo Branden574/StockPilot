@@ -29,7 +29,8 @@ import {
  *      own request: cookie-write-routes.guard.test.ts), or by re-exporting a
  *      handler that does. Or its file is listed with that method in one of:
  *        NON_SESSION  reads no session at all: webhooks, API keys, public
- *                     token links, health, version, password reset. Checked:
+ *                     token links, health, version, password reset, the
+ *                     analytics relay. Checked:
  *                     it imports no session reader and calls no session read
  *                     (getUser, getSession, getClaims, ...). Every route under
  *                     app/api/cron/ is held to the same checks as a folder
@@ -232,6 +233,12 @@ const NON_SESSION: Record<string, NonSession> = {
     methods: ['POST'],
     auth: 'webhook signature',
     reason: 'Stripe: stripe.webhooks.constructEvent over the raw body with STRIPE_WEBHOOK_SECRET.',
+  },
+  'ingest/[...path]/route.ts': {
+    methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    auth: 'none',
+    reason:
+      "PostHog's first-party relay (S34): it passes on only the requests the analytics SDK makes, never a cookie or a member credential, and every other method or path is refused here. It reads no session and no organization data.",
   },
   'm/[token]/photo/[n]/route.ts': {
     methods: ['GET'],
