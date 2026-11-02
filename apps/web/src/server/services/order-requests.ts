@@ -423,12 +423,6 @@ export interface PlaceOrderInput {
   body: unknown;
   surface: 'web' | 'app';
   /**
-   * The web action's legacy branch only (one release, for tabs opened before
-   * the deploy): the needed-by such a tab sent as an instant, passed through
-   * unconverted. The body's neededByLocal is then null.
-   */
-  legacyNeededBy?: string | null;
-  /**
    * The organization the page was opened in (the web action passes it; a
    * route answers for the X-Organization-Id it was sent, so it passes none).
    * The web's organization is the account's default one, which a workspace
@@ -1779,14 +1773,6 @@ export class OrderRequestsService {
       const timeZone = await this.readOrgTimeZoneForOrder();
       const ms = wallClockToInstant(body.neededByLocal, timeZone);
       if (ms === null) {
-        throw new ServiceError('validation_error', ORDER_NEEDED_BY_INVALID_TIME_COPY, {
-          reason: 'needed_by_invalid_time',
-        });
-      }
-      neededBy = new Date(ms).toISOString();
-    } else if (input.legacyNeededBy) {
-      const ms = Date.parse(input.legacyNeededBy);
-      if (!Number.isFinite(ms)) {
         throw new ServiceError('validation_error', ORDER_NEEDED_BY_INVALID_TIME_COPY, {
           reason: 'needed_by_invalid_time',
         });

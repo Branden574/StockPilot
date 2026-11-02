@@ -836,6 +836,11 @@ export class MaintenanceAttachmentsService {
       const thumbnailPath = r.thumbnail_path as string | null;
       if (thumbnailPath) paths.push(thumbnailPath);
     }
+    // sign-bound: the service writes at most MAINTENANCE_MAX_PHOTOS photos of
+    // each kind, a master and a thumbnail each (32 paths). Until 0420 (S9)
+    // revokes INSERT a requester can add rows directly, but one naming a path
+    // with no object fails the page at the master check below whatever the
+    // count, and 1,000 paths would take over 500 rows of real objects.
     const { data: signed, error: signErr } = await admin.storage.from(BUCKET).createSignedUrls(paths, VIEW_URL_TTL_SEC);
     // A whole-call failure means nothing signed at all — including every
     // master — so this throws exactly like a single-row master failure did
