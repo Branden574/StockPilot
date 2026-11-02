@@ -492,6 +492,8 @@ async function inventoryTableSection({
   const canStartOrder =
     can(sessionCtx, 'orders:request') &&
     (await getModulesForRequest(sessionCtx.organizationId)).has('orders');
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
   // The bulk "Cycle count" shortcut (B42): only for someone who can start a
   // count, by the server's floors (core countStartAllowed: a manager with
   // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
@@ -666,6 +668,7 @@ async function inventoryTableSection({
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
+        canExport={canExport}
         canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -1024,6 +1027,7 @@ async function inventoryTableSection({
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
+      canExport={canExport}
       canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
