@@ -60,7 +60,8 @@ export default async function NewScheduleEventPage({
 
   const [warehouses, bundles, nearbyEvents] = await Promise.all([
     warehousesSvc.listNames(),
-    bundlesSvc.list(),
+    // [] while Bundles is off, where list() refuses (B67).
+    bundlesSvc.listForLookups(),
     scheduleSvc.listInRange(conflictFrom, conflictTo),
   ]);
 
