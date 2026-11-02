@@ -547,9 +547,12 @@ export class PurchaseOrdersService {
    *     view-filter is IGNORED for them, same as list());
    *   • all-access + view-filter → that single warehouse;
    *   • all-access, no filter → null (org-wide, left-join semantics).
-   * The ids only ever NARROW: purchase_orders' RLS floor is org
-   * membership (mig 0140), so no id list can widen what the caller's
-   * own client could already read.
+   * The ids only ever NARROW: purchase_orders' RLS (purchase_orders_select
+   * alone since 0423) already applies the read permission and, below
+   * manager, the warehouse scope, so no id list can widen what the caller's
+   * own client could already read. The web's rule stays the stricter one: it
+   * also hides POs with no warehouse from a member limited to some
+   * warehouses, which RLS lets them read.
    */
   private async warehouseScope(params: {
     warehouseId?: string;
@@ -896,6 +899,10 @@ export class PurchaseOrdersService {
   ): Promise<{ id: string | null; poNumber: string; skippedItemIds: string[] }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    // The database's insert policy needs View purchase orders too (0423): a
+    // member who may manage but not read is refused here, in the permission's
+    // words, instead of by the save.
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     // Validate the destination location is in a warehouse the user can write to
     // (and reject a warehouse-less one). Also capture the warehouse_id so we can
@@ -1743,6 +1750,13 @@ export class PurchaseOrdersService {
     // non-cancelled PO (a cancelled PO is excluded — and such an item may yet
     // receive stock + auto-unarchive there).
     //
+    // A LEFT embed, and a line whose PO the caller cannot read keeps its item.
+    // Since 0423 purchase orders are read by purchase_orders_select alone, so
+    // a writer limited to some warehouses does not see another warehouse's
+    // PO, while its lines stay readable (purchase_order_items_select is
+    // member-wide). An inner embed dropped such a line, and the item a live
+    // PO there still expects was archived.
+    //
     // Batched AND paged: an unpaged read was cut at 1000 lines with no
     // error, and a dropped line that would have said "keep" archived an item
     // a live PO still needs. One `.in()` past ~215 ids failed outright.
@@ -1754,7 +1768,7 @@ export class PurchaseOrdersService {
         (batch) => (from, to) =>
           ctx.supabase
             .from('purchase_order_items')
-            .select('item_id, quantity_received, po:purchase_orders!inner(status)')
+            .select('item_id, quantity_received, po:purchase_orders(status)')
             .eq('organization_id', ctx.organizationId) // defense-in-depth: keep the keep-check single-org
             .in('item_id', batch)
             .order('id')
@@ -1778,7 +1792,8 @@ export class PurchaseOrdersService {
       if (Number(row.quantity_received) > 0) keep.add(itemId);
       const poField = row.po as { status?: string } | { status?: string }[] | null;
       const poStatus = Array.isArray(poField) ? poField[0]?.status : poField?.status;
-      if (poStatus && poStatus !== 'cancelled') keep.add(itemId);
+      // No status: a PO the caller cannot read. Keep (fail closed).
+      if (poStatus !== 'cancelled') keep.add(itemId);
     }
 
     const toRetire = cand.filter((c) => !keep.has(c.id));
@@ -1924,9 +1939,13 @@ export class PurchaseOrdersService {
    * cursor, and once an item is known to be on order its other lines do not
    * matter (hence `gt`, which also guarantees progress).
    *
-   * Reads through the caller's client: a signed-in user sees the POs RLS lets
-   * them see (anyone who may manage POs: all of the org's); the cron's
-   * service client sees all.
+   * Reads through the caller's client: a signed-in user sees the POs
+   * purchase_orders_select lets them see (0423: the read permission and,
+   * below manager, the warehouse scope), so a writer limited to some
+   * warehouses sees only their warehouses' open POs and those with no
+   * warehouse, and may draft an item another warehouse already has on order.
+   * The database's skip in save_purchase_order_draft reads the same way. The
+   * cron's service client sees all.
    */
   private async openPoItemIds(): Promise<Set<string>> {
     const out = new Set<string>();
@@ -2012,6 +2031,9 @@ export class PurchaseOrdersService {
   }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    // Checked once here, as create() checks it per draft (0423), so a member
+    // without View purchase orders gets one refusal, not one per supplier.
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     type Row = {
       id: string;
@@ -2183,6 +2205,8 @@ export class PurchaseOrdersService {
   }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    // As createDraftsFromItems: one refusal without View purchase orders (0423).
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     type Row = {
       id: string;

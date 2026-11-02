@@ -423,13 +423,14 @@ PGTAP_TESTS=(
   # writes and the needed-by revision keep working.
   supabase/tests/0384_schedule_event_order_link.test.sql
   # Draft a PO for an order's shortfall (F2-5, 0385): draft_order_shortfall_pos
-  # is SECURITY INVOKER, so purchase_orders_write, purchase_order_items_write,
-  # idempotency_keys_write and the 0359/0360/0364 PO guards decide exactly as
-  # for a hand-made draft, with the floors also in its body: signed in
-  # (42501); not a member, a disabled manager, a missing or foreign order: the
-  # SAME P0002; the orders and purchase_orders modules (P0001
-  # module_disabled); a manager (staff WITH a purchase_orders:manage override
-  # and viewers: 42501 manager_required, since idempotency keys are
+  # is SECURITY INVOKER, so the purchase order write policies
+  # (purchase_orders_insert and _update, purchase_order_items_insert, _update
+  # and _delete since 0423), idempotency_keys_write and the 0359/0360/0364 PO
+  # guards decide exactly as for a hand-made draft, with the floors also in
+  # its body: signed in (42501); not a member, a disabled manager, a missing
+  # or foreign order: the SAME P0002; the orders and purchase_orders modules
+  # (P0001 module_disabled); a manager (staff WITH a purchase_orders:manage
+  # override and viewers: 42501 manager_required, since idempotency keys are
   # manager-only), holding purchase_orders:manage (42501), with write access
   # to the order's warehouse. EXECUTE to authenticated only; the three
   # helpers are IMMUTABLE and never anon. No function of 0385 names the
@@ -786,6 +787,19 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Purchase order write scope (0423, docket S46): purchase_orders_write (FOR
+  # ALL) is split into INSERT and UPDATE policies that need the writer floor,
+  # purchase_orders:read and purchase_orders_select's warehouse rule (plus the
+  # organization checks), so no policy widens the read; the line write policy
+  # is split into INSERT, UPDATE and DELETE policies that need the parent
+  # purchase order readable; next_po_number is SECURITY DEFINER with a manager
+  # or purchase_orders:manage gate, so numbers still count every purchase
+  # order. Personas: staff and viewers holding manage in one warehouse, in
+  # none, managers and admins without read; reads, updates, redirects,
+  # cancel and place, inserts, lines, numbering, the draft save, receiving.
+  # The PO-import approval path that stays open is pinned (IMP1). The lock
+  # footprint is scripts/db-concurrency/0423_migration_lock_footprint.sh.
+  supabase/tests/0423_po_write_scope.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { ServiceError, withContext, type ServiceContext } from './context';
+import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
 
 export interface ReconciliationRow {
@@ -47,6 +47,11 @@ export class ReconciliationService {
     vendorId?: string | null;
     status?: 'open' | 'closed' | 'all';
   } = {}) {
+    // The views are security_invoker over purchase_orders, so without View
+    // purchase orders every total reads as zero (0423). Refuse instead, in the
+    // permission's words; the page shows the access message before calling.
+    assertPermission(this.ctx, 'purchase_orders:read');
+
     // PAGINATED — this per-PO view feeds the financial TOTALS below; a 1000-row
     // PostgREST cap would silently undercount any org with >1000 POs. Page by a
     // stable key (purchase_order_id), then re-sort newest-first for display.

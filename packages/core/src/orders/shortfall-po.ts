@@ -67,6 +67,13 @@ function q4(x: number): number {
  * last floor; every manager has it today (user_can_access_inventory), and the
  * service checks it before calling. Anyone else sees
  * SHORTFALL_PO_FORBIDDEN_COPY instead of the button.
+ *
+ * Since migration 0423 the drafts' insert also needs purchase_orders:read.
+ * This input does not carry it on purpose: the phone compiles this file into
+ * its bundle, so a new required field would need a phone release. The web
+ * page adds the read term itself, and the service refuses a manager without
+ * read with the same sentence (on the phone that sentence comes after the
+ * tap).
  */
 export function canDraftShortfallPo(input: {
   isManager: boolean;

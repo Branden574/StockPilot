@@ -71,7 +71,9 @@ const ANSWER = {
   ],
 };
 
-function setup(opts: { rpc?: QueryResult; role?: Role; modules?: ModuleId[] } = {}) {
+function setup(
+  opts: { rpc?: QueryResult; role?: Role; modules?: ModuleId[]; permissions?: string[] } = {},
+) {
   const stub = makeSupabaseStub({
     'order_requests.select': { data: { id: ORDER, warehouse_id: 'wh-1', order_number: 9 }, error: null },
     'rpc:draft_order_shortfall_pos': opts.rpc ?? { data: ANSWER, error: null },
@@ -80,6 +82,7 @@ function setup(opts: { rpc?: QueryResult; role?: Role; modules?: ModuleId[] } = 
     role: opts.role ?? 'manager',
     userId: 'buyer-1',
     enabledModules: new Set<ModuleId>(opts.modules ?? ['orders', 'purchase_orders']),
+    ...(opts.permissions ? { permissions: new Set(opts.permissions) } : {}),
   });
   holder.ctx = ctx;
   vi.mocked(withApiContext).mockResolvedValue(ctx as never);
@@ -239,6 +242,29 @@ describe('POST /api/v1/orders/[id]/shortfall-po', () => {
     expect(res.status).toBe(403);
     expect(await res.json()).toEqual({ error: 'forbidden', message: SHORTFALL_PO_FORBIDDEN_COPY, details: { reason: 'forbidden' } });
     expect(stub.rpcCalls).toEqual([]);
+  });
+
+  it('a manager holding purchase_orders:manage without purchase_orders:read is refused before the function, in core words (the phone and the web)', async () => {
+    // Since 0423 the database refuses the drafts' insert for them; without the
+    // check the function's RLS refusal came back as a 500 and a report.
+    const stub = setup({ permissions: ['orders:approve', 'purchase_orders:manage'] });
+    const res = await POST(req(BODY), { params: params() });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({
+      error: 'forbidden',
+      message: SHORTFALL_PO_FORBIDDEN_COPY,
+      details: { reason: 'forbidden' },
+    });
+    expect(stub.rpcCalls).toEqual([]);
+    setup({ permissions: ['orders:approve', 'purchase_orders:manage'] });
+    expect(await draftShortfallPosAction({ orderId: ORDER, ...BODY })).toEqual({
+      ok: false,
+      error: {
+        code: 'forbidden',
+        message: SHORTFALL_PO_FORBIDDEN_COPY,
+        details: { reason: 'forbidden' },
+      },
+    });
   });
 
   it('the action refuses a malformed request before any read, in core words', async () => {

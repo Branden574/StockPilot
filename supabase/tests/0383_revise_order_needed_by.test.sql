@@ -809,7 +809,13 @@ select is(
   -- Re-pinned by 0390 (was c38fe9b12af77fdaa2d372f4fd324a43): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'hold_order_stock(uuid)|3b0691d604823164daaa7f248616f00f|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
-  'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0423 (docket S46; was b6bebc9ae8b1ec3a9ba6d89b73e39d91, SQL,
+  -- SECURITY INVOKER): plpgsql SECURITY DEFINER with a manager or
+  -- purchase_orders:manage gate, so the count is every purchase order of the
+  -- organization, not only the ones the caller may read; the number it gives
+  -- a manager is unchanged (0423 N1). The needed-by revision reads no PO
+  -- number. Computed on the local stack after 0423.
+  'next_po_number(uuid)|104bd06a21cd31164ab4aa1dbc64433c|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'

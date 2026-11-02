@@ -266,6 +266,22 @@ describe('draftShortfallPos: floors first, in core words, before anything is rea
     }
   });
 
+  it('a manager or admin holding purchase_orders:manage without purchase_orders:read (the database refuses them since 0423)', async () => {
+    for (const role of ['manager', 'admin'] as const) {
+      const { stub, svc } = build({
+        role,
+        permissions: ['orders:approve', 'purchase_orders:manage'],
+      });
+      expect(await refusal(svc.draftShortfallPos(INPUT)), role).toEqual({
+        code: 'forbidden',
+        message: SHORTFALL_PO_FORBIDDEN_COPY,
+        details: { reason: 'forbidden' },
+      });
+      expect(stub.fromCalls).toEqual([]);
+      expect(stub.rpcCalls).toEqual([]);
+    }
+  });
+
   it('an admin and the owner may draft', async () => {
     for (const role of ['admin', 'owner'] as const) {
       const { svc } = build({ role });

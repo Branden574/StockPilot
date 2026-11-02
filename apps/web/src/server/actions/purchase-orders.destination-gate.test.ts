@@ -84,6 +84,29 @@ describe('setPoDestinationWarehouseAction — authorization gate', () => {
     expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
   });
 
+  it('403s without purchase_orders:read, before any location is looked up or created', async () => {
+    // Since migration 0423 the database refuses the PO update for a member
+    // without read; checked first, the refusal no longer comes after a site
+    // location was already created for the warehouse.
+    mockList.mockResolvedValue([]);
+    const { ctx, stub } = ctxWith({
+      role: 'manager',
+      permissions: new Set<Permission>(['purchase_orders:manage']),
+    });
+    mockWithContext.mockResolvedValueOnce(ctx);
+
+    const res = await setPoDestinationWarehouseAction({ poId: PO_ID, warehouseId: WH_ID });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe('forbidden');
+      expect(res.error.message).toBe('Missing permission: purchase_orders:read');
+    }
+    expect(mockList).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+  });
+
   it('403s when the purchase_orders module is disabled', async () => {
     const { ctx, stub } = ctxWith({
       role: 'admin',

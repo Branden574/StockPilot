@@ -94,6 +94,10 @@ export async function setPoDestinationWarehouseAction(input: {
     const ctx = await withContext();
     assertModuleEnabled(ctx, 'purchase_orders');
     assertPermission(ctx, 'purchase_orders:manage');
+    // The PO update below needs View purchase orders (0423). Asked first, so a
+    // member without it is refused before a site location is created for the
+    // warehouse.
+    assertPermission(ctx, 'purchase_orders:read');
 
     // Receiving posts stock INTO this warehouse, so the caller must have write
     // access to it — mirror the guard in the create()/update() service paths so

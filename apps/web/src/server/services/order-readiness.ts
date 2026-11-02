@@ -424,11 +424,21 @@ export class OrderReadinessService {
       });
     }
     // Refused in core's words; the MFA step-up is left to assertPermission,
-    // which words it for the step-up prompt.
-    if (!(ctx.mfaRequired && !ctx.mfaSatisfied) && !(isManagerOrAbove(ctx.role) && can(ctx, 'purchase_orders:manage'))) {
+    // which words it for the step-up prompt. purchase_orders:read too: since
+    // 0423 the drafts' insert needs it, so a manager without it would
+    // otherwise reach the function and fail there.
+    if (
+      !(ctx.mfaRequired && !ctx.mfaSatisfied) &&
+      !(
+        isManagerOrAbove(ctx.role) &&
+        can(ctx, 'purchase_orders:manage') &&
+        can(ctx, 'purchase_orders:read')
+      )
+    ) {
       throw shortfallRefusal('forbidden', SHORTFALL_PO_FORBIDDEN_COPY, 'forbidden');
     }
     assertPermission(ctx, 'purchase_orders:manage');
+    assertPermission(ctx, 'purchase_orders:read');
     const req = checkShortfallInput(input);
 
     const orderRes = await ctx.supabase

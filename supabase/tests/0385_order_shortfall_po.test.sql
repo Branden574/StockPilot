@@ -1007,7 +1007,15 @@ select is(
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'hold_order_stock(uuid)|3b0691d604823164daaa7f248616f00f|true|{"search_path=public, pg_temp",lock_timeout=5s}|postgres\n'
   'location_holdings_visible(uuid)|fb5dc7aa7d0acd81e7752f0b163a9002|false|{search_path=public}|postgres\n'
-  'next_po_number(uuid)|b6bebc9ae8b1ec3a9ba6d89b73e39d91|false|{search_path=public}|postgres\n'
+  -- Re-pinned by 0423 (docket S46; was b6bebc9ae8b1ec3a9ba6d89b73e39d91, SQL,
+  -- SECURITY INVOKER): plpgsql SECURITY DEFINER with a manager or
+  -- purchase_orders:manage gate, so the count is every purchase order of the
+  -- organization, not only the ones the caller may read. F2-5's function
+  -- calls it as a manager holding purchase_orders:manage (its own floors),
+  -- whom the gate admits and who drew the same count before (0423 N1), so
+  -- the numbers it steps past are unchanged. Computed on the local stack
+  -- after 0423.
+  'next_po_number(uuid)|104bd06a21cd31164ab4aa1dbc64433c|true|{search_path=public}|postgres\n'
   -- Re-pinned by 0390 (was 5ac332d439117e498096fc9b1098cf04): the manager-by-role term removed from the
   -- gate and nothing else (0390 R-section proves it); posture unchanged.
   'order_readiness_facts(uuid)|2f3fb057bacda8143377ecd9c2c5e6e2|true|{"search_path=public, pg_temp"}|postgres\n'
@@ -1160,7 +1168,18 @@ select is(
   -- that reproduces the old pin from production's text); verify on the stack.
   'order_requests + schedule_events policies|87377ff4c4e4c700e7598e50fadb59c6|8\n'
   'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
-  'purchase_orders + purchase_order_items + idempotency_keys policies|4d66c95449ef3c5127f8d19974023c70|6',
+  -- Re-pinned by 0423 (docket S46; was 4d66c95449ef3c5127f8d19974023c70|6):
+  -- purchase_orders_write and purchase_order_items_write (FOR ALL) became
+  -- purchase_orders_insert and _update (the writer floor, purchase_orders:read
+  -- and purchase_orders_select's warehouse rule, with 0208's organization
+  -- checks) and purchase_order_items_insert, _update and _delete (the floor
+  -- and a readable parent); the SELECT and idempotency-key policies are
+  -- unchanged. F2-5's function drafts as a manager holding
+  -- purchase_orders:manage, whom the new policies admit wherever they may
+  -- read purchase orders (the manager arm of the warehouse rule); the
+  -- service refuses a manager without purchase_orders:read before calling.
+  -- Computed on the local stack after 0423.
+  'purchase_orders + purchase_order_items + idempotency_keys policies|29bb36e438c19f9cc077731a67629fc8|9',
   'Z2: ledger.*, the 0380/0381/0382 objects, the order, schedule, PO and idempotency-key policies, the PO triggers and the 0384 column grants are the ones F2-5 was proven against');
 
 select * from finish();

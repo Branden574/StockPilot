@@ -4,6 +4,7 @@ import { FilterChipLink } from '@/components/patterns/chip';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
+import { PoAccessDenied } from '@/components/po/po-access-denied';
 import { Badge, type BadgeProps } from '@/components/ui/badge';
 import {
   Table,
@@ -13,9 +14,12 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { requireOrgContext } from '@/lib/auth/session';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { ReconciliationService } from '@/server/services/reconciliation';
 import { formatCurrency, formatRelative } from '@/lib/utils';
+
+import { can } from '@stockpilot/core';
 
 /**
  * The status label's tone (DESIGN-SPEC 6.10), the same tones the PO pages use
@@ -38,6 +42,16 @@ export default async function ReconciliationPage({
 }) {
   const params = await searchParams;
   const status = (params.status as 'open' | 'closed' | 'all' | undefined) ?? 'open';
+
+  // Every number here is a purchase order total, read through the caller's
+  // own purchase order access (the views are security_invoker). Without View
+  // purchase orders the database shows them no purchase order (0423), so say
+  // what is needed instead of showing zeros. Checked before the service call,
+  // as the PO pages do, so a refusal never reaches the error boundary.
+  const ctx = await requireOrgContext();
+  if (!can(ctx, 'purchase_orders:read')) {
+    return <PoAccessDenied />;
+  }
 
   const svc = await ReconciliationService.forCurrentUser();
   const [data, title] = await Promise.all([
