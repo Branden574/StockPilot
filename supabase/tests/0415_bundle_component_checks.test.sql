@@ -43,7 +43,8 @@
 -- R.  One change per body: md5(prosrc) is 0415's, removing the lines tagged
 --     '-- 0404' gives the pre-0415 body exactly, arguments and results are
 --     unchanged, and the ledger.* fingerprint 0383 and 0385 pin moves by those
---     two bodies alone.
+--     two bodies alone (and, since S47, by ledger._seal's tagged expiry line,
+--     which R3 takes back too).
 -- P.  Posture: SECURITY mode, SET clauses, owner and EXECUTE of the restated
 --     functions and the two helpers they use; the wrapper's comment; the
 --     guard trigger.
@@ -530,8 +531,9 @@ select is(
   'p_bundle_id uuid, p_quantity numeric, p_warehouse_id uuid, p_allow_shortage boolean, p_schedule_event_id uuid DEFAULT NULL::uuid, p_notes text DEFAULT NULL::text, p_idempotency_key text DEFAULT NULL::text -> uuid',
   'R2: arguments, defaults and results are unchanged (installed phones call the wrapper by name with these arguments)');
 -- 0383 Z2 and 0385 Z2 pin a fingerprint of every ledger.* function (their
--- query, verbatim). 0415 re-pins both; this shows the new value moves from the
--- old one by the two restated bodies alone.
+-- query, verbatim). 0415 re-pinned both, and S47 re-pinned them again for
+-- ledger._seal's tagged expiry line; this shows each value moves from the one
+-- before it by the restated bodies alone.
 create function pg_temp.ledger_fp() returns text language sql stable as $$
   select md5(string_agg(p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || p.prosecdef || '|' || coalesce(p.proconfig::text, '') || '|' || pg_get_userbyid(p.proowner) || '|' || coalesce(p.proacl::text, ''), E'\n' order by p.oid::regprocedure::text)) || '|' || count(*)
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'ledger'
@@ -548,10 +550,21 @@ begin
   end;
   return v;
 end $$;
+-- ledger._seal with its '-- S47' line taken out: its 0373 text (S47's own
+-- suite, R1, shows that is the pre-S47 body exactly).
+create function pg_temp.seal_pre_s47() returns text language sql stable as $$
+  select regexp_replace(pg_get_functiondef('ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])'::regprocedure),
+                        E'\n[^\n]*-- S47[^\n]*', '', 'g')
+$$;
 select is(
-  pg_temp.ledger_fp() || ' / ' || pg_temp.ledger_fp_after(pg_temp.pre(array['fn_assemble', 'fn_distribute'])),
-  'cfc031524c8052a69fceab91be550768|18 / 1c283e932202295a91e5c118f0873689|18',
-  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is cfc03152|18 after 0415, and with the two restated ledger bodies taken back to their pre-0415 text it is their old pin (1c283e93|18) exactly: nothing else in ledger moved');
+  pg_temp.ledger_fp()
+  || ' / ' || pg_temp.ledger_fp_after(pg_temp.seal_pre_s47())
+  || ' / ' || pg_temp.ledger_fp_after(pg_temp.seal_pre_s47() || E';\n' || pg_temp.pre(array['fn_assemble', 'fn_distribute'])),
+  -- Re-pinned and widened by S47 (was 'cfc031524c8052a69fceab91be550768|18 /
+  -- 1c283e932202295a91e5c118f0873689|18', the value after 0415 and the one
+  -- with the two 0415 bodies taken back).
+  '1e488961426c3f13fd567f2d31734c27|18 / cfc031524c8052a69fceab91be550768|18 / 1c283e932202295a91e5c118f0873689|18',
+  'R3: the ledger.* fingerprint 0383 Z2 and 0385 Z2 pin is 1e488961|18 after S47; with ledger._seal taken back to its pre-S47 text it is 0415''s (cfc03152|18), and with the two 0415 bodies taken back too it is the pre-0415 pin (1c283e93|18) exactly: nothing else in ledger moved');
 
 -- ══ P. Posture ════════════════════════════════════════════════════════════
 select is(

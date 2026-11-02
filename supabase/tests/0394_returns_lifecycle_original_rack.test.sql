@@ -1735,7 +1735,11 @@ select is(
        ('public._notify_recipients(uuid)',                            '679e6193e3dbe5644055e835e8209043'),
        ('public._dispatch_push_for_notification()',                   '17f00da160feb6a7d6609cca4fb6337e'),
        ('public.has_permission(uuid,text)',                           'cc0accdad7e2fdf4f88aa82aa887e85f'),
-       ('public.user_can_access_inventory(uuid,uuid,uuid,text)',      '8a214b77e32a052ca3bf07a2be39a8ae'),
+       -- Re-pinned by S47 (was 8a214b77e32a052ca3bf07a2be39a8ae, 0310's body): it
+       -- also refuses an expired act-as seat, which every returns function's
+       -- earlier is_org_member and has_permission checks already refused, so
+       -- RX-1's members get the same answers.
+       ('public.user_can_access_inventory(uuid,uuid,uuid,text)',      'f80f6ad98ba24e160661117f2c146091'),
        ('public.is_org_member(uuid)',                                 '76492a6556e9f6a7c33d942aa9726f9f'),
        ('public.approve_partial(uuid)',                               '40ca0878733b08a649773fe9b7efd4e0'),
        -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester's

@@ -793,6 +793,27 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Act-as seat expiry (0424, provisional; docket item S47): an expired act-as
+  # seat (an owner row whose impersonation_expires_at has passed, before the
+  # sweep deletes it) passes neither user_can_access_warehouse nor
+  # user_can_access_inventory, whoever asks, nor my_warehouse_ids or
+  # user_can_see_item_category: it reads no rentals or rental lines, claims,
+  # picks, releases and completes nothing (a completion that drew nothing used
+  # to go through and release every stock hold of the order), and cannot be
+  # assigned a pick; ledger._seal's warehouse arm agrees with the helper; a
+  # live seat, the owner and assigned staff are unchanged. The maintenance
+  # guard refuses a cancel by a manager without maintenance_requests:manage on
+  # a request whose requester was deleted (the old check was NULL there and
+  # refused no one), and such a manager, whom the update and photo policies
+  # admit by role, changes no request that is not theirs and adds or deletes
+  # no photo row on one (the guard's write rule and the new photo guard
+  # trigger); the requester and a manage holder still do. Each restated body
+  # is production's with its S47 lines taken out, the migration's preflight is
+  # replayed from the recorded statements, and taking each S47 line out (or
+  # dropping the photo guard's trigger) lets the refused answer through
+  # again. The lock footprint is
+  # scripts/db-concurrency/0424_migration_lock_footprint.sh.
+  supabase/tests/0424_act_as_expiry_in_access_gates.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

@@ -935,7 +935,11 @@ select is(
   -- order, so the update guard's new rules do not touch it (it runs as
   -- postgres, which neither guard's secret rule holds).
   'tg_order_requests_workflow_guard()|55bceafc13d599f8d77d6a4180c28140|false|{search_path=public}|postgres\n'
-  'user_can_access_warehouse(uuid,uuid,text)|76b4170f3d393e8a1f293ca3d4895955|true|{search_path=public}|postgres',
+  -- Re-pinned by S47 (was 76b4170f3d393e8a1f293ca3d4895955, 0310's body): the
+  -- helper also refuses an expired act-as seat, which warehouses_select already
+  -- hid through is_org_member, so the wrapper's warehouse check answers every
+  -- member as before.
+  'user_can_access_warehouse(uuid,uuid,text)|c3e618bb3c05d227e1f61686e5a1848f|true|{search_path=public}|postgres',
   'Z1: the functions place_order_request relies on are the text (production md5 read at build start), SECURITY mode, search_path and owner this build was proven against');
 select is(
   (select md5(string_agg(p.oid::regprocedure::text || '|' || md5(p.prosrc) || '|' || p.prosecdef || '|' || coalesce(p.proconfig::text, '')

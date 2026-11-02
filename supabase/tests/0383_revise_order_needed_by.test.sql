@@ -882,7 +882,12 @@ select is(
   -- revise_order_needed_by calls neither. 0415's pgTAP R3 takes those two
   -- bodies back to their pre-0415 text and gets 1c283e93|18 exactly, so
   -- nothing else in ledger moved.
-  'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
+  -- Re-pinned by S47 (was cfc031524c8052a69fceab91be550768|18): ledger._seal's
+  -- warehouse arm gained its tagged expiry line (header, owner and ACL
+  -- unchanged). revise_order_needed_by draws no stock, so it never reaches
+  -- _seal. 0415's pgTAP R3 takes _seal back to its pre-S47 text and gets
+  -- cfc03152|18 exactly, so nothing else in ledger moved.
+  'ledger.*|1e488961426c3f13fd567f2d31734c27|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier
