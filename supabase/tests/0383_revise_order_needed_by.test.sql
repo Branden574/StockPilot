@@ -888,7 +888,15 @@ select is(
   -- revise_order_needed_by calls neither. 0415's pgTAP R3 takes those two
   -- bodies back to their pre-0415 text and gets 1c283e93|18 exactly, so
   -- nothing else in ledger moved.
-  'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
+  -- Re-pinned by 0423 (docket S46, review round; was cfc031524c8052a69fceab91be550768|18):
+  -- ledger.reverse_receipt restated with three marked additions (it locks the
+  -- purchase order as the caller first, po_not_found, and a PO line update
+  -- that matches no row raises po_line_not_found); header, owner and ACL
+  -- unchanged. 0423's pgTAP C9 takes the additions out and gets 0195's md5,
+  -- and C10 shows ledger.* is cfc03152|18 again with that body, so nothing
+  -- else in ledger moved. Recomputed on the local stack.
+  -- revise_order_needed_by reverses no receipt.
+  'ledger.*|b76b4b1a398e0293450ef16c915271e9|18\n'
   -- Re-pinned by 0384 (was c388801c0cca0196bed7d51dc7df2096): the
   -- schedule_events insert and update WITH CHECK gained
   -- order_request_in_org(order_request_id, organization_id); every earlier

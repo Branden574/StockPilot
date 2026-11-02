@@ -1153,7 +1153,15 @@ select is(
   -- function calls neither. 0415's pgTAP R3 takes those two bodies back to
   -- their pre-0415 text and gets 1c283e93|18 exactly, so nothing else in
   -- ledger moved.
-  'ledger.*|cfc031524c8052a69fceab91be550768|18\n'
+  -- Re-pinned by 0423 (docket S46, review round; was cfc031524c8052a69fceab91be550768|18):
+  -- ledger.reverse_receipt restated with three marked additions (it locks the
+  -- purchase order as the caller first, po_not_found, and a PO line update
+  -- that matches no row raises po_line_not_found); header, owner and ACL
+  -- unchanged. 0423's pgTAP C9 takes the additions out and gets 0195's md5,
+  -- and C10 shows ledger.* is cfc03152|18 again with that body, so nothing
+  -- else in ledger moved. Recomputed on the local stack.
+  -- F2-5's function reverses no receipt.
+  'ledger.*|b76b4b1a398e0293450ef16c915271e9|18\n'
   -- Re-pinned by 0390 (was a85d7406f48ad916cb5fcdb2193fa201|8): order_requests_update
   -- (USING and WITH CHECK) and order_requests_insert lost the has_org_role
   -- manager term; every other term and both schedule_events policies are
@@ -1167,7 +1175,14 @@ select is(
   -- suite H1 predicts) with the local authenticated role's OID (16444, the OID
   -- that reproduces the old pin from production's text); verify on the stack.
   'order_requests + schedule_events policies|87377ff4c4e4c700e7598e50fadb59c6|8\n'
-  'PO triggers|b8cf49572ed3d9556416e8d4b89a7094|4\n'
+  -- Re-pinned by 0423 (docket S46, review round; was b8cf49572ed3d9556416e8d4b89a7094|4):
+  -- trg_po_destination_write_guard added on purchase_orders (BEFORE INSERT OR
+  -- UPDATE OF destination_location_id; a Data API caller's new destination in
+  -- a warehouse must be one they may change). The four earlier triggers are
+  -- unchanged: 0423's pgTAP C10 computes this line without it and gets
+  -- b8cf4957|4. F2-5's draft is created by a manager, whom the guard passes.
+  -- Recomputed on the local stack.
+  'PO triggers|94dfd26ad98f1933caff50696b0c268a|5\n'
   -- Re-pinned by 0423 (docket S46; was 4d66c95449ef3c5127f8d19974023c70|6):
   -- purchase_orders_write and purchase_order_items_write (FOR ALL) became
   -- purchase_orders_insert and _update (the writer floor, purchase_orders:read

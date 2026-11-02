@@ -1,7 +1,9 @@
 import 'server-only';
 
-import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRows } from './lib/paginate';
+
+import { can } from '@stockpilot/core';
 
 export interface ReconciliationRow {
   organization_id: string;
@@ -50,7 +52,13 @@ export class ReconciliationService {
     // The views are security_invoker over purchase_orders, so without View
     // purchase orders every total reads as zero (0423). Refuse instead, in the
     // permission's words; the page shows the access message before calling.
-    assertPermission(this.ctx, 'purchase_orders:read');
+    // The permission alone decides, as on the page (can()): this is a read,
+    // and assertPermission's MFA step-up gate would send an owner or admin
+    // who has not enrolled yet (admins_required lets them in with a banner)
+    // to the error boundary instead of the totals.
+    if (!can(this.ctx, 'purchase_orders:read')) {
+      throw new ServiceError('forbidden', 'Missing permission: purchase_orders:read');
+    }
 
     // PAGINATED — this per-PO view feeds the financial TOTALS below; a 1000-row
     // PostgREST cap would silently undercount any org with >1000 POs. Page by a

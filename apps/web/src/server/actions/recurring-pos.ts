@@ -15,8 +15,9 @@ import { can, err, ok, planAllowsRecurringPos, type ActionResult, type OrgBillin
 
 // ---------------------------------------------------------------------------
 // Recurring PO template CRUD actions.
-// Gate sequence (mirrors auto-reorder-settings.ts verbatim):
+// Gate sequence (mirrors auto-reorder-settings.ts, plus the read check):
 //   validate → withContext → MFA fail-closed → purchase_orders:manage →
+//   purchase_orders:read (0423) →
 //   module-enabled → Pro+ effective-plan via planAllowsRecurringPos →
 //   service call → audit → revalidatePath('/dashboard/purchase-orders/recurring')
 // The plan gate is enforced here because the service itself does not gate plan.
@@ -41,6 +42,16 @@ async function runGate(opts?: { skipPlanGate?: boolean }) {
     return {
       ctx: null as never,
       error: err('forbidden', 'You do not have permission to manage purchase orders.'),
+    } as const;
+  }
+
+  // A template is a standing purchase order: since 0423 writing either needs
+  // View purchase orders too. Asked before the plan, so the answer names what
+  // is really missing.
+  if (!can(ctx, 'purchase_orders:read')) {
+    return {
+      ctx: null as never,
+      error: err('forbidden', 'Missing permission: purchase_orders:read'),
     } as const;
   }
 

@@ -229,6 +229,10 @@ export class RecurringPoTemplatesService {
   async list() {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    // A template is a standing purchase order, so it is held to the rule a
+    // purchase order is written under: View purchase orders too (0423, which
+    // the template policies now require), asked first in the permission's words.
+    assertPermission(this.ctx, 'purchase_orders:read');
 
     type Row = {
       id: string;
@@ -259,6 +263,31 @@ export class RecurringPoTemplatesService {
         .order('name', { ascending: true })
         .order('id', { ascending: true })
         .range(from, to),
+    );
+  }
+
+  // ── writeRefusedOrMissing ─────────────────────────────────────────────────
+
+  /**
+   * A template write matched no row. Since 0423 the database writes a
+   * template only for someone who may write a purchase order to its
+   * destination (below manager: no destination, a place with no warehouse,
+   * or one of their warehouses), while every member still reads every
+   * template, so the list can show one this member may not change. Says
+   * which it is instead of calling a template on the screen "not found".
+   */
+  private async writeRefusedOrMissing(id: string): Promise<ServiceError> {
+    const { data, error } = await this.ctx.supabase
+      .from('recurring_po_templates')
+      .select('id')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) return new ServiceError('internal_error', error.message);
+    if (!data) return new ServiceError('not_found', 'Recurring PO template not found');
+    return new ServiceError(
+      'forbidden',
+      'You can change only the recurring purchase orders that go to your warehouses.',
     );
   }
 
@@ -384,6 +413,7 @@ export class RecurringPoTemplatesService {
   async create(input: RecurringTemplateInput) {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    assertPermission(this.ctx, 'purchase_orders:read'); // as list() says
 
     const parsed = recurringTemplateSchema.parse(input);
     await this.assertDestination(parsed.destinationLocationId);
@@ -433,6 +463,7 @@ export class RecurringPoTemplatesService {
   async update(id: string, input: RecurringTemplateInput) {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    assertPermission(this.ctx, 'purchase_orders:read'); // as list() says
 
     const parsed = recurringTemplateSchema.parse(input);
     await this.assertDestination(parsed.destinationLocationId);
@@ -459,7 +490,7 @@ export class RecurringPoTemplatesService {
       .maybeSingle();
 
     if (error) throw new ServiceError('internal_error', error.message);
-    if (!data) throw new ServiceError('not_found', 'Recurring PO template not found');
+    if (!data) throw await this.writeRefusedOrMissing(id);
 
     void audit(
       {
@@ -479,6 +510,7 @@ export class RecurringPoTemplatesService {
   async setEnabled(id: string, enabled: boolean) {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    assertPermission(this.ctx, 'purchase_orders:read'); // as list() says
 
     const { data, error } = await this.ctx.supabase
       .from('recurring_po_templates')
@@ -489,7 +521,7 @@ export class RecurringPoTemplatesService {
       .maybeSingle();
 
     if (error) throw new ServiceError('internal_error', error.message);
-    if (!data) throw new ServiceError('not_found', 'Recurring PO template not found');
+    if (!data) throw await this.writeRefusedOrMissing(id);
 
     void audit(
       {
@@ -509,6 +541,7 @@ export class RecurringPoTemplatesService {
   async remove(id: string) {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    assertPermission(this.ctx, 'purchase_orders:read'); // as list() says
 
     const { data, error } = await this.ctx.supabase
       .from('recurring_po_templates')
@@ -519,7 +552,7 @@ export class RecurringPoTemplatesService {
       .maybeSingle();
 
     if (error) throw new ServiceError('internal_error', error.message);
-    if (!data) throw new ServiceError('not_found', 'Recurring PO template not found');
+    if (!data) throw await this.writeRefusedOrMissing(id);
 
     void audit(
       {
@@ -552,6 +585,7 @@ export class RecurringPoTemplatesService {
   }> {
     assertModuleEnabled(this.ctx, 'purchase_orders');
     assertPermission(this.ctx, 'purchase_orders:manage');
+    assertPermission(this.ctx, 'purchase_orders:read'); // as list() says
 
     // Only columns purchase_orders has: it has no `destination` (the
     // destination is destination_location_id). Selecting one made PostgREST

@@ -44,7 +44,11 @@ function buildCtx(
     organizationId: 'org-1',
     userId: 'u-1',
     role: 'manager' as const,
-    permissions: new Set<Permission>(opts.permissions ?? (['purchase_orders:manage'] as Permission[])),
+    // A manager as the role grants: manage and View purchase orders (0423:
+    // a template change needs both).
+    permissions: new Set<Permission>(
+      opts.permissions ?? (['purchase_orders:manage', 'purchase_orders:read'] as Permission[]),
+    ),
     supabase: stub.client as never,
     mfaRequired: opts.mfaRequired ?? false,
     mfaSatisfied: opts.mfaSatisfied ?? true,
@@ -129,6 +133,20 @@ describe('PATCH /api/v1/recurring-pos/[id]', () => {
     expect(setEnabled).not.toHaveBeenCalled();
   });
 
+  it('403s without purchase_orders:read (0423) — before the plan is consulted', async () => {
+    // A Free org: had the plan been read first, enabling would answer 409.
+    vi.mocked(withApiContext).mockResolvedValue(
+      buildCtx({ plan: 'free', permissions: ['purchase_orders:manage'] }) as never,
+    );
+    const res = await PATCH(patchReq({ enabled: true }), params());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: 'forbidden',
+      message: 'Missing permission: purchase_orders:read',
+    });
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+
   it('403s when the purchase_orders module is off', async () => {
     vi.mocked(withApiContext).mockResolvedValue(buildCtx({ modules: [] }) as never);
     const res = await PATCH(patchReq({ enabled: false }), params());
@@ -189,6 +207,19 @@ describe('DELETE /api/v1/recurring-pos/[id]', () => {
     vi.mocked(withApiContext).mockResolvedValue(buildCtx({ permissions: [] }) as never);
     const res = await DELETE(deleteReq(), params());
     expect(res.status).toBe(403);
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it('403s without purchase_orders:read (0423)', async () => {
+    vi.mocked(withApiContext).mockResolvedValue(
+      buildCtx({ permissions: ['purchase_orders:manage'] }) as never,
+    );
+    const res = await DELETE(deleteReq(), params());
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({
+      error: 'forbidden',
+      message: 'Missing permission: purchase_orders:read',
+    });
     expect(remove).not.toHaveBeenCalled();
   });
 

@@ -30,6 +30,35 @@ describe('ReconciliationService.summary', () => {
     expect(stub.fromCalls).toEqual([]);
   });
 
+  it('answers an owner or admin who must enroll in MFA but has not yet: a read, so no step-up gate', async () => {
+    // Under the admins_required policy the dashboard lets an unenrolled owner
+    // or admin in with a banner, and the page's own check (can()) has no MFA
+    // step. assertPermission's MFA gate made this read throw mfa_required into
+    // the error boundary; the permission alone decides it, as on the page.
+    const stub = makeSupabaseStub({
+      'vw_po_reconciliation.select': { data: [], error: null },
+      'vw_vendor_performance.select': { data: [], error: null },
+      'vw_warehouse_inbound.select': { data: [], error: null },
+    });
+    const svc = new ReconciliationService(
+      makeServiceContext(stub.client, {
+        role: 'admin',
+        permissions: new Set(['organization:update', 'purchase_orders:read']),
+        mfaRequired: true,
+        mfaSatisfied: false,
+      }) as never,
+    );
+
+    const res = await svc.summary();
+
+    expect(res.totals.qtyOrdered).toBe(0);
+    expect(stub.fromCalls).toEqual([
+      'vw_po_reconciliation',
+      'vw_vendor_performance',
+      'vw_warehouse_inbound',
+    ]);
+  });
+
   it('reads the three views for a caller who holds it', async () => {
     const stub = makeSupabaseStub({
       'vw_po_reconciliation.select': { data: [], error: null },

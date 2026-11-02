@@ -13,6 +13,9 @@ const sessionState = {
   mfaRequired: false,
   mfaSatisfied: true,
   enabledModules: new Set<string>(['purchase_orders']),
+  // The effective permission set, when a test models an override; unset, can()
+  // falls back to the role's defaults.
+  permissions: undefined as Set<string> | undefined,
 };
 
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
@@ -41,6 +44,7 @@ vi.mock('@/server/services/context', async () => {
       mfaRequired: sessionState.mfaRequired,
       mfaSatisfied: sessionState.mfaSatisfied,
       enabledModules: sessionState.enabledModules,
+      ...(sessionState.permissions ? { permissions: sessionState.permissions } : {}),
     })),
   };
 });
@@ -114,6 +118,11 @@ const FREE_ORG_ROW = {
   trial_ends_at: null,
   trial_tier: null,
 };
+
+// Every test starts from the role's default permissions.
+beforeEach(() => {
+  sessionState.permissions = undefined;
+});
 
 function makeStubWithOrgPlan(orgRow: Record<string, unknown>) {
   return makeSupabaseStub({
@@ -323,5 +332,52 @@ describe('seedRecurringTemplateFromPoAction', () => {
     expect(mockSeedFromPo).toHaveBeenCalledWith('po-1');
     // seed action does NOT revalidate (read-only)
     expect(revalidatePath).not.toHaveBeenCalled();
+  });
+});
+
+// Since migration 0423 writing a purchase order needs View purchase orders, and
+// the database holds recurring templates (which the daily run turns into
+// purchase orders as an owner) to the same rule. The gate refuses a manager
+// whose View purchase orders is turned off before the plan is read, so they
+// hear what is really missing.
+describe('the recurring template actions need purchase_orders:read', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionState.role = 'manager';
+    sessionState.mfaRequired = false;
+    sessionState.mfaSatisfied = true;
+    sessionState.enabledModules = new Set(['purchase_orders']);
+    sessionState.permissions = new Set(['purchase_orders:manage']);
+    // A Free org: a gate that read the plan first would answer plan_limit_exceeded.
+    stubHolder.stub = makeStubWithOrgPlan(FREE_ORG_ROW);
+  });
+
+  const cases: Array<
+    [string, () => Promise<{ ok: boolean; error?: { code: string } }>, ReturnType<typeof vi.fn>]
+  > = [
+    ['create', () => createRecurringTemplateAction(validInput) as never, mockCreate],
+    ['update', () => updateRecurringTemplateAction('tpl-1', validInput) as never, mockUpdate],
+    ['enable', () => setRecurringTemplateEnabledAction('tpl-1', true) as never, mockSetEnabled],
+    ['delete', () => deleteRecurringTemplateAction('tpl-1') as never, mockRemove],
+    ['seed', () => seedRecurringTemplateFromPoAction('po-1') as never, mockSeedFromPo],
+  ];
+
+  it.each(cases)(
+    '%s: refused as forbidden without it, before the plan is read, and the service is not called',
+    async (_name, run, svcFn) => {
+      const result = await run();
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error?.code).toBe('forbidden');
+      expect(svcFn).not.toHaveBeenCalled();
+      expect(stubHolder.stub!.fromCalls).toEqual([]);
+    },
+  );
+
+  it('a manager holding it is let through to the service', async () => {
+    sessionState.permissions = new Set(['purchase_orders:manage', 'purchase_orders:read']);
+    stubHolder.stub = makeStubWithOrgPlan(PRO_ORG_ROW);
+    const result = await createRecurringTemplateAction(validInput);
+    expect(result.ok).toBe(true);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 });

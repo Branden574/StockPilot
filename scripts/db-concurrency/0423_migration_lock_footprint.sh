@@ -3,13 +3,17 @@
 # Lock footprint of migration 0423 (purchase order write scope, docket S46;
 # the file is found by its name, so a renumber at push time needs no edit
 # here). The push runs the whole file as one batch, so every table lock a
-# statement takes is held until the file commits. DROP POLICY, CREATE POLICY
-# and COMMENT ON POLICY take ACCESS EXCLUSIVE on their table
-# (purchase_orders, purchase_order_items, and checklist_runs when the
-# receiving checklist is in), supautils takes ACCESS EXCLUSIVE on every table
-# supautils.policy_grants lists for the role (auth, storage, realtime) on each
-# of them, and the new policy expressions read locations while they are parsed
-# (ACCESS SHARE). The app reads purchase_order_items and then purchase_orders
+# statement takes is held until the file commits. DROP POLICY, CREATE POLICY,
+# ALTER POLICY and COMMENT ON POLICY take ACCESS EXCLUSIVE on their table
+# (purchase_orders, purchase_order_items, recurring_po_templates,
+# po_attachments, storage.objects, and checklist_runs when the receiving
+# checklist is in), CREATE TRIGGER takes SHARE ROW EXCLUSIVE on
+# purchase_orders and recurring_po_templates, supautils takes ACCESS EXCLUSIVE
+# on every table supautils.policy_grants lists for the role (auth, storage,
+# realtime) on each policy statement, and the new policy expressions read
+# locations (ACCESS SHARE) and purchase_orders while they are parsed. The
+# functions of the review round (2026-11-02) are plpgsql and lock nothing.
+# The app reads purchase_order_items and then purchase_orders
 # (the open-PO read, the cancel keep-checks, the reports), and a raw line
 # write takes FOR SHARE on its purchase order after the line. So the file
 # takes every lock in one NOWAIT prelude (`do $lock46$ ... end $lock46$;`)
@@ -19,18 +23,20 @@
 # proves:
 #
 #   1a. Before the prelude the file holds no lock on any table outside the
-#       catalogs (the preflight, next_po_number, its grants and its comment
-#       lock nothing).
+#       catalogs (the preflight, next_po_number, the review round's
+#       functions, their grants and their comments lock nothing).
 #   1b. The prelude takes ACCESS SHARE on locations, ACCESS EXCLUSIVE on
-#       purchase_orders, purchase_order_items (and checklist_runs when it
-#       exists) and on every existing table in supautils.policy_grants for the
-#       role, and nothing else.
+#       purchase_orders, purchase_order_items, recurring_po_templates,
+#       po_attachments, storage.objects (and checklist_runs when it exists)
+#       and on every existing table in supautils.policy_grants for the role,
+#       and nothing else.
 #   1c. No statement after the prelude takes a lock the prelude does not
 #       cover (a new table, or a stronger mode on a table it holds below
 #       ACCESS EXCLUSIVE), so the file can never wait while holding one.
 #   2.  The hold, from the prelude to the end of the file, is under 250 ms on
 #       the local stack.
-#   3.  A purchase order reader, a line writer or a reader of auth.users, held
+#   3.  A purchase order reader, a line writer, an attachment reader, a
+#       template writer or a reader of auth.users, held
 #       longer than the retries last: the file retries, holds NO table lock
 #       whenever it is paused between attempts (sampled from pg_locks), and
 #       fails 55P03 after its bounded retries (40 attempts), writing nothing.
@@ -121,10 +127,19 @@ HAS_OLD="$(q "select count(*) from pg_policy where polname in ('purchase_orders_
 STATE_SQL="select md5(string_agg(x, '|' order by x)) from (
   select tablename || '.' || policyname || ':' || cmd || ':' || coalesce(qual, '') || '|' || coalesce(with_check, '') as x
     from pg_policies
-   where schemaname = 'public' and tablename in ('purchase_orders', 'purchase_order_items', 'checklist_runs')
+   where (schemaname = 'public' and tablename in ('purchase_orders', 'purchase_order_items', 'checklist_runs',
+                                                  'recurring_po_templates', 'po_attachments'))
+      or (schemaname = 'storage' and tablename = 'objects' and policyname like 'po-attachments %')
   union all
-  select 'next_po_number:' || md5(p.prosrc) || ':' || p.prosecdef::text || ':' || coalesce(p.proacl::text, '')
-    from pg_proc p where p.oid = 'public.next_po_number(uuid)'::regprocedure) s"
+  select p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || p.prosecdef::text || ':' || coalesce(p.proacl::text, '')
+    from pg_proc p
+   where p.oid in ('public.next_po_number(uuid)'::regprocedure, 'ledger.reverse_receipt(uuid,text)'::regprocedure,
+                   'public._notify_po_status()'::regprocedure, 'public._notify_receipt_posted()'::regprocedure,
+                   'public.po_status_in_org(uuid,uuid)'::regprocedure)
+      or p.proname in ('_po_readable_by', 'po_attachment_object_visible', 'tg_po_destination_write_guard')
+  union all
+  select 'trigger:' || tgrelid::regclass::text || '.' || tgname
+    from pg_trigger where tgname = 'trg_po_destination_write_guard') s"
 echo "local head $HEAD_NOW; FOR ALL purchase order policies present: $HAS_OLD; file $(basename "$MIG")"
 if [ "$HAS_OLD" != "2" ]; then
   echo "needs the head before the purchase order write scope migration (supabase db reset --local --version <the migration before it>)"
@@ -173,6 +188,9 @@ LOCKS_SQL="select string_agg(distinct n.nspname || '.' || c.relname || ':' || l.
           select 'public.locations:AccessShareLock' as x
           union all select 'public.purchase_order_items:AccessExclusiveLock'
           union all select 'public.purchase_orders:AccessExclusiveLock'
+          union all select 'public.recurring_po_templates:AccessExclusiveLock'
+          union all select 'public.po_attachments:AccessExclusiveLock'
+          union all select 'storage.objects:AccessExclusiveLock'
           union all select 'public.checklist_runs:AccessExclusiveLock' where to_regclass('public.checklist_runs') is not null
           union all select n.nspname || '.' || c.relname || ':AccessExclusiveLock'
             from jsonb_array_elements_text(coalesce(nullif(current_setting('supautils.policy_grants', true), '')::jsonb -> current_user::text, '[]'::jsonb)) t(name)
@@ -191,14 +209,14 @@ else
   EXPECTED="$(sed -n 's/^EXPECTED|//p' "$TMP/1.out")"
   END="$(sed -n 's/^END|//p' "$TMP/1.out")"
   if [ "$BEFORE" = "none" ]; then
-    ok "1a: the preflight, next_po_number, its grants and its comment lock no table"
+    ok "1a: the preflight, next_po_number, the review round's functions, their grants and their comments lock no table"
   else
     bad "1a: before the prelude the file already holds: $BEFORE"
   fi
   if [ "$PRELUDE" = "$EXPECTED" ]; then
     CR=""
     case ",$EXPECTED," in *",public.checklist_runs:AccessExclusiveLock,"*) CR=" and checklist_runs" ;; esac
-    ok "1b: the prelude takes exactly locations (access share), the purchase order tables$CR (access exclusive) and the $(printf '%s' "$EXPECTED" | tr ',' '\n' | grep -vc '^public\.') supautils.policy_grants tables"
+    ok "1b: the prelude takes exactly locations (access share), the purchase order, template and attachment tables$CR and storage.objects (access exclusive) and the $(printf '%s' "$EXPECTED" | tr ',' '\n' | grep -vc '^public\.') storage and supautils.policy_grants tables"
   else
     bad "1b: the prelude took: $PRELUDE; expected: $EXPECTED"
   fi
@@ -278,6 +296,8 @@ run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|
 run_behind po-reader "select count(*) from public.purchase_orders where organization_id = '$ORG';" 9 fail
 run_behind line-writer "update public.purchase_order_items set quantity_ordered = quantity_ordered where id = '$LINE';" 9 fail
 run_behind auth-reader "select count(*) from auth.users;" 9 fail
+run_behind attachment-reader "select count(*) from public.po_attachments;" 9 fail
+run_behind template-writer "update public.recurring_po_templates set name = name where organization_id = '$ORG';" 9 fail
 run_behind 3b-short-po-reader "select count(*) from public.purchase_orders where organization_id = '$ORG';" 0.6 apply
 
 # ── 4. The app's shapes, each already holding its first lock ──────────────
@@ -380,7 +400,7 @@ fi
 HEAD_AFTER="$(q "select max(version) from supabase_migrations.schema_migrations")"
 STATE_AFTER="$(q "$STATE_SQL")"
 if [ "$HEAD_AFTER" = "$HEAD_NOW" ] && [ "$STATE_AFTER" = "$STATE_BEFORE" ]; then
-  ok "the stack is unchanged (head $HEAD_NOW; the purchase order policies and next_po_number as before, state $STATE_BEFORE)"
+  ok "the stack is unchanged (head $HEAD_NOW; the policies, functions and triggers the file touches as before, state $STATE_BEFORE)"
 else
   bad "the stack changed under the script (head $HEAD_AFTER, state $STATE_AFTER, was $STATE_BEFORE)"
 fi
