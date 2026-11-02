@@ -7,14 +7,16 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
 
 /*
- * The auth audit helpers, moved verbatim out of server/actions/auth.ts
- * (S29's move, plans/S29-S32.md "Moving the audit helpers"; made by S5, whose
- * phone routes POST /api/v1/auth/signed-in and signed-out write the same rows).
+ * The auth audit helpers, moved verbatim out of server/actions/auth.ts so the
+ * authenticator code checks in server/actions/mfa.ts and mfa-recovery.ts
+ * (through lib/auth/mfa-code-attempts.ts) and the phone routes
+ * POST /api/v1/auth/signed-in and signed-out write their rows the same way.
  *
  * Server code only: `import 'server-only'` and never 'use server'. Exported
  * from a 'use server' module, emitAuthAudit would be a Server Action, an
  * endpoint anyone could call to write Audit log rows in any organization's
- * name. auth-audit.guard.test.ts pins this.
+ * name. auth-audit.guard.test.ts and lib/auth/mfa-code-attempts.test.ts pin
+ * this.
  */
 
 /**
