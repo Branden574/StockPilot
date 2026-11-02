@@ -217,7 +217,9 @@
 -- never waits while holding one
 -- (scripts/db-concurrency/0423_migration_lock_footprint.sh, whose control
 -- reproduces the 40P01 without the prelude). lock_timeout 900ms (below
--- deadlock_timeout) bounds anything unforeseen. Purchase order, template and
+-- deadlock_timeout) bounds anything unforeseen. The bucket's policies come
+-- last, where every file since 0375 keeps its storage.objects policy DDL
+-- (storage-policy-order.guard.test.ts). Purchase order, template and
 -- attachment reads and writes, storage requests and sign-ins (the supautils
 -- tables) queue for the few milliseconds the file holds the locks.
 --
@@ -1122,12 +1124,38 @@ alter policy "po_attachments manage delete" on public.po_attachments
     )
   );
 
--- ═══ 8. The po-attachments bucket: the stored files follow it too ════════════
+-- ═══ 8. The destination guard on both tables ═════════════════════════════════
+create trigger trg_po_destination_write_guard
+  before insert or update of destination_location_id on public.purchase_orders
+  for each row execute function public.tg_po_destination_write_guard();
+
+create trigger trg_po_destination_write_guard
+  before insert or update of destination_location_id on public.recurring_po_templates
+  for each row execute function public.tg_po_destination_write_guard();
+
+-- ═══ 9. Comments of the review round ═════════════════════════════════════════
+comment on policy recurring_po_templates_insert on public.recurring_po_templates is
+  'S46 (0423): a template is a standing purchase order (the daily run creates and may place it as the owner), so it is written under purchase_orders_insert''s rule: a manager or purchase_orders:manage, purchase_orders:read, the destination inside the caller''s warehouses below manager (none, or a place with no warehouse, also passes), and the 0206/0273 organization checks. tg_po_destination_write_guard keeps a viewer out of warehouses they only view.';
+comment on policy recurring_po_templates_update on public.recurring_po_templates is
+  'S46 (0423): as recurring_po_templates_insert, on the row before (USING: the floor, read and the warehouse rule) and after (WITH CHECK) the change.';
+comment on policy recurring_po_templates_delete on public.recurring_po_templates is
+  'S46 (0423): the floor, purchase_orders:read and the warehouse rule, as recurring_po_templates_update''s USING.';
+comment on policy "po_attachments read" on public.po_attachments is
+  'S46 (0423): an attachment row is read exactly when its purchase order is (the EXISTS reads purchase_orders under the caller''s RLS, so purchase_orders_select decides; it was any member before).';
+comment on policy "po_attachments manage insert" on public.po_attachments is
+  'S46 (0423): a manager or purchase_orders:manage, and the purchase order readable by the caller (which also keeps it in the row''s organization, as purchase_order_in_org did).';
+comment on policy "po_attachments manage delete" on public.po_attachments is
+  'S46 (0423): as po_attachments manage insert.';
+
+-- ═══ 10. The po-attachments bucket: the stored files follow it too ═══════════
 -- 0211's four policies, dropped and created again the way 0211 created them
 -- (supautils lets this role manage policies on storage.objects). Each now asks
 -- po_attachment_object_visible(name) first, so a name that is not a purchase
 -- order's folder is refused before the floor's cast; the writes keep 0211's
--- floor on the organization folder.
+-- floor on the organization folder. Last in the file, as in every migration
+-- since 0375 (storage-policy-order.guard.test.ts): nothing after a
+-- storage.objects policy may take another lock. The prelude already holds
+-- every lock this file takes, so the order changes nothing when it runs.
 drop policy "po-attachments read" on storage.objects;
 drop policy "po-attachments manage write" on storage.objects;
 drop policy "po-attachments manage update" on storage.objects;
@@ -1180,28 +1208,5 @@ create policy "po-attachments manage delete"
       or ( select public.has_permission((storage.foldername(name))[1]::uuid, 'purchase_orders:manage') )
     )
   );
-
--- ═══ 9. The destination guard on both tables ═════════════════════════════════
-create trigger trg_po_destination_write_guard
-  before insert or update of destination_location_id on public.purchase_orders
-  for each row execute function public.tg_po_destination_write_guard();
-
-create trigger trg_po_destination_write_guard
-  before insert or update of destination_location_id on public.recurring_po_templates
-  for each row execute function public.tg_po_destination_write_guard();
-
--- ═══ 10. Comments of the review round ════════════════════════════════════════
-comment on policy recurring_po_templates_insert on public.recurring_po_templates is
-  'S46 (0423): a template is a standing purchase order (the daily run creates and may place it as the owner), so it is written under purchase_orders_insert''s rule: a manager or purchase_orders:manage, purchase_orders:read, the destination inside the caller''s warehouses below manager (none, or a place with no warehouse, also passes), and the 0206/0273 organization checks. tg_po_destination_write_guard keeps a viewer out of warehouses they only view.';
-comment on policy recurring_po_templates_update on public.recurring_po_templates is
-  'S46 (0423): as recurring_po_templates_insert, on the row before (USING: the floor, read and the warehouse rule) and after (WITH CHECK) the change.';
-comment on policy recurring_po_templates_delete on public.recurring_po_templates is
-  'S46 (0423): the floor, purchase_orders:read and the warehouse rule, as recurring_po_templates_update''s USING.';
-comment on policy "po_attachments read" on public.po_attachments is
-  'S46 (0423): an attachment row is read exactly when its purchase order is (the EXISTS reads purchase_orders under the caller''s RLS, so purchase_orders_select decides; it was any member before).';
-comment on policy "po_attachments manage insert" on public.po_attachments is
-  'S46 (0423): a manager or purchase_orders:manage, and the purchase order readable by the caller (which also keeps it in the row''s organization, as purchase_order_in_org did).';
-comment on policy "po_attachments manage delete" on public.po_attachments is
-  'S46 (0423): as po_attachments manage insert.';
 
 reset lock_timeout;
