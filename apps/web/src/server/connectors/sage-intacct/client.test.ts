@@ -1,8 +1,15 @@
+import { createServer, type AddressInfo, type Server } from 'node:net';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { IntacctApiError, IntacctClient } from './client';
+import {
+  INTACCT_MAY_HAVE_POSTED,
+  IntacctApiError,
+  IntacctClient,
+  IntacctNoAnswerError,
+} from './client';
 
 const SECRETS = { accessToken: 'bearer-secret-xyz', refreshToken: 'rt', expiresAt: '' };
 
@@ -72,5 +79,284 @@ describe('IntacctClient.queryPage', () => {
     expect(err).toBeInstanceOf(IntacctApiError);
     expect((err as IntacctApiError).status).toBe(403);
     expect((err as IntacctApiError).message).not.toContain('bearer-secret-xyz');
+  });
+});
+
+/** What fetch rejects with when no HTTP answer came, as undici builds it. */
+function fetchFailed(cause: unknown): TypeError {
+  return new TypeError('fetch failed', { cause });
+}
+/** A system error from the socket or the resolver: its code and syscall. */
+function sysError(code: string, syscall: string): Error {
+  return Object.assign(new Error(`${syscall} ${code}`), { code, syscall });
+}
+/** An undici error: a code and no syscall. */
+function undiciError(name: string, code: string): Error {
+  return Object.assign(new Error(name), { name, code });
+}
+/** node's connect to a host with several addresses: an AggregateError that
+ *  carries its first inner error's code itself (loopback probe, 2026-11-01). */
+function aggregate(errors: Error[]): AggregateError {
+  const code = (errors[0] as { code?: string } | undefined)?.code;
+  return Object.assign(new AggregateError(errors), code ? { code } : {});
+}
+
+/** Failures in which no request byte left StockPilot: the lookup or the connect failed. */
+const NEVER_SENT: Array<[string, unknown, string]> = [
+  ['ENOTFOUND', fetchFailed(sysError('ENOTFOUND', 'getaddrinfo')), 'ENOTFOUND'],
+  ['EAI_AGAIN', fetchFailed(sysError('EAI_AGAIN', 'getaddrinfo')), 'EAI_AGAIN'],
+  ['ECONNREFUSED', fetchFailed(sysError('ECONNREFUSED', 'connect')), 'ECONNREFUSED'],
+  [
+    'UND_ERR_CONNECT_TIMEOUT',
+    fetchFailed(undiciError('ConnectTimeoutError', 'UND_ERR_CONNECT_TIMEOUT')),
+    'UND_ERR_CONNECT_TIMEOUT',
+  ],
+  ['EHOSTUNREACH on connect', fetchFailed(sysError('EHOSTUNREACH', 'connect')), 'EHOSTUNREACH'],
+  [
+    'every address refused (an AggregateError)',
+    fetchFailed(
+      aggregate([sysError('ECONNREFUSED', 'connect'), sysError('ECONNREFUSED', 'connect')]),
+    ),
+    'ECONNREFUSED',
+  ],
+  [
+    'every address failed to connect, with mixed codes',
+    fetchFailed(aggregate([sysError('ETIMEDOUT', 'connect'), sysError('ENETUNREACH', 'connect')])),
+    'ETIMEDOUT',
+  ],
+];
+
+/** Failures after which the request may have reached Intacct. */
+const MAY_HAVE_ARRIVED: Array<[string, unknown, string]> = [
+  ['UND_ERR_SOCKET', fetchFailed(undiciError('SocketError', 'UND_ERR_SOCKET')), 'UND_ERR_SOCKET'],
+  ['ECONNRESET on read', fetchFailed(sysError('ECONNRESET', 'read')), 'ECONNRESET'],
+  [
+    'UND_ERR_HEADERS_TIMEOUT',
+    fetchFailed(undiciError('HeadersTimeoutError', 'UND_ERR_HEADERS_TIMEOUT')),
+    'UND_ERR_HEADERS_TIMEOUT',
+  ],
+  [
+    'the timeout',
+    new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    'TimeoutError',
+  ],
+  [
+    'an AggregateError with an inner error that is not a failed connect',
+    fetchFailed(aggregate([sysError('ECONNREFUSED', 'connect'), sysError('ECONNRESET', 'read')])),
+    'ECONNREFUSED',
+  ],
+  ['an empty AggregateError', fetchFailed(new AggregateError([])), 'AggregateError'],
+  ['a TypeError with no cause', new TypeError('fetch failed'), 'TypeError'],
+];
+
+/** A 2xx whose body is cut off part way: the create happened. */
+function cutBody(status: number): Response {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"ia::result":{"key":"DOC'));
+      controller.error(new TypeError('terminated'));
+    },
+  });
+  return new Response(stream, { status, headers: { 'Content-Type': 'application/json' } });
+}
+
+/**
+ * docket B81: fetch's own failure (no HTTP answer) reached the connector with
+ * no status, and its classifier read that as a caller error: the export went
+ * to dead on its first try. Intacct REST v1 has no requestid, so a create may
+ * be sent again only when it provably never left: its lookup or its connect
+ * failed. Any other create failure says so first, for an admin to check
+ * Intacct before Replay. A read is always safe to repeat.
+ */
+describe('IntacctClient: a call that got no answer', () => {
+  const fetchSpy = vi.fn();
+  beforeEach(() => {
+    fetchSpy.mockReset();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const client = () => new IntacctClient(SECRETS);
+  const create = () => client().post('/objects/purchasing/document', { a: 1 });
+  const reads: Array<[string, () => Promise<unknown>, string]> = [
+    [
+      'queryPage()',
+      () => client().queryPage({ object: 'accounts-payable/vendor', fields: ['id'] }),
+      'POST /services/core/query',
+    ],
+    [
+      'get()',
+      () => client().get('/objects/purchasing/document/7'),
+      'GET /objects/purchasing/document/7',
+    ],
+  ];
+
+  it.each(NEVER_SENT)('%s: a create may be sent again', async (_shape, failure, code) => {
+    fetchSpy.mockRejectedValueOnce(failure);
+    const err = await create().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(IntacctNoAnswerError);
+    expect((err as IntacctNoAnswerError).retryable).toBe(true);
+    expect((err as Error).message).toBe(
+      `Intacct POST /objects/purchasing/document got no answer (${code})`,
+    );
+    expect((err as Error).cause).toBe(failure);
+  });
+
+  it.each(MAY_HAVE_ARRIVED)(
+    '%s: a create stops, and its message starts with the check-before-Replay sentence',
+    async (_shape, failure, code) => {
+      fetchSpy.mockRejectedValueOnce(failure);
+      const err = await create().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(IntacctNoAnswerError);
+      expect((err as IntacctNoAnswerError).retryable).toBe(false);
+      expect((err as Error).message).toBe(
+        `${INTACCT_MAY_HAVE_POSTED} Intacct POST /objects/purchasing/document got no answer (${code})`,
+      );
+      expect((err as Error).message).not.toContain('bearer-secret-xyz');
+    },
+  );
+
+  it.each([...NEVER_SENT, ...MAY_HAVE_ARRIVED])(
+    '%s: a read may always be made again',
+    async (_shape, failure, code) => {
+      for (const [, read, what] of reads) {
+        fetchSpy.mockRejectedValueOnce(failure);
+        const err = await read().catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(IntacctNoAnswerError);
+        expect((err as IntacctNoAnswerError).retryable).toBe(true);
+        expect((err as Error).message).toBe(`Intacct ${what} got no answer (${code})`);
+      }
+    },
+  );
+
+  it('a 2xx whose body cannot be read: a read may be made again; a create happened, so it stops', async () => {
+    fetchSpy.mockResolvedValueOnce(new Response('{"ia::result": [', { status: 200 }));
+    const readErr = await client()
+      .queryPage({ object: 'accounts-payable/vendor', fields: ['id'] })
+      .catch((e: unknown) => e);
+    expect(readErr).toBeInstanceOf(IntacctNoAnswerError);
+    expect((readErr as IntacctNoAnswerError).retryable).toBe(true);
+    expect((readErr as Error).message).not.toContain(INTACCT_MAY_HAVE_POSTED);
+
+    fetchSpy.mockResolvedValueOnce(cutBody(201));
+    const createErr = await create().catch((e: unknown) => e);
+    expect(createErr).toBeInstanceOf(IntacctNoAnswerError);
+    expect((createErr as IntacctNoAnswerError).retryable).toBe(false);
+    expect((createErr as Error).message).toBe(
+      `${INTACCT_MAY_HAVE_POSTED} Intacct POST /objects/purchasing/document answered 201 with a body that could not be read (TypeError)`,
+    );
+  });
+
+  it('a create answered 500, 502 or 504 may have been committed; 503 and a read answered 5xx were not', async () => {
+    for (const status of [500, 502, 504]) {
+      fetchSpy.mockResolvedValueOnce(new Response('upstream', { status }));
+      const err = await create().catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(IntacctApiError);
+      expect((err as IntacctApiError).status).toBe(status);
+      expect((err as IntacctApiError).mayHavePosted).toBe(true);
+      expect((err as Error).message).toBe(
+        `${INTACCT_MAY_HAVE_POSTED} Intacct POST /objects/purchasing/document failed (status ${status}): upstream`,
+      );
+    }
+
+    fetchSpy.mockResolvedValueOnce(new Response('busy', { status: 503 }));
+    const busy = await create().catch((e: unknown) => e);
+    expect((busy as IntacctApiError).mayHavePosted).toBe(false);
+    expect((busy as Error).message).toBe(
+      'Intacct POST /objects/purchasing/document failed (status 503): busy',
+    );
+
+    fetchSpy.mockResolvedValueOnce(new Response('upstream', { status: 502 }));
+    const readErr = await client()
+      .queryPage({ object: 'accounts-payable/vendor', fields: ['id'] })
+      .catch((e: unknown) => e);
+    expect((readErr as IntacctApiError).status).toBe(502);
+    expect((readErr as IntacctApiError).mayHavePosted).toBe(false);
+  });
+
+  it('sends a timeout signal only when built with one (the import builds it without)', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    fetchSpy.mockImplementation(
+      async () => new Response(JSON.stringify({ 'ia::result': [] }), { status: 200 }),
+    );
+
+    await new IntacctClient(SECRETS).queryPage({ object: 'x', fields: ['id'] });
+    expect(timeoutSpy).not.toHaveBeenCalled();
+    expect((fetchSpy.mock.calls[0]?.[1] as RequestInit).signal).toBeUndefined();
+
+    await new IntacctClient(SECRETS, { requestTimeoutMs: 15_000 }).post('/objects/x', {});
+    expect(timeoutSpy.mock.calls).toEqual([[15_000]]);
+    expect((fetchSpy.mock.calls[1]?.[1] as RequestInit).signal).toBe(
+      timeoutSpy.mock.results[0]?.value,
+    );
+  });
+});
+
+/**
+ * The failure shapes above were copied from a loopback probe on Node 22 and
+ * undici 6; production runs Node 24, as CI does. These run the never-sent rule
+ * against this runtime's own fetch, over 127.0.0.1 only: a refused connect
+ * must read as never sent, and a connection the server drops after reading
+ * the whole request must not.
+ */
+describe('IntacctClient against the runtime fetch (loopback only)', () => {
+  const runtimeFetch = globalThis.fetch;
+  let target = '';
+  let server: Server | null = null;
+  beforeEach(() => {
+    vi.stubGlobal('fetch', (_input: RequestInfo | URL, init?: RequestInit) =>
+      runtimeFetch(target, init),
+    );
+  });
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    const open = server;
+    server = null;
+    if (open?.listening) await new Promise<void>((resolve) => open.close(() => resolve()));
+  });
+
+  async function listen(onConnection?: Parameters<typeof createServer>[0]): Promise<number> {
+    server = onConnection ? createServer(onConnection) : createServer();
+    const listening = server;
+    await new Promise<void>((resolve) => listening.listen(0, '127.0.0.1', resolve));
+    return (listening.address() as AddressInfo).port;
+  }
+
+  it('a refused connection was never sent: a create may be sent again', async () => {
+    const port = await listen();
+    const closing = server!;
+    server = null;
+    await new Promise<void>((resolve) => closing.close(() => resolve()));
+    target = `http://127.0.0.1:${port}/objects/x`;
+
+    const err = await new IntacctClient(SECRETS, { requestTimeoutMs: 5_000 })
+      .post('/objects/x', {})
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(IntacctNoAnswerError);
+    expect((err as Error).message).toBe('Intacct POST /objects/x got no answer (ECONNREFUSED)');
+    expect((err as IntacctNoAnswerError).retryable).toBe(true);
+  });
+
+  it('a connection dropped after the whole request was read may have arrived: a create stops', async () => {
+    const port = await listen((socket) => {
+      let received = '';
+      socket.on('data', (chunk) => {
+        received += chunk.toString();
+        // The headers and the two-byte body '{}' are all in: drop the connection.
+        if (received.includes('\r\n\r\n') && received.endsWith('{}')) socket.destroy();
+      });
+    });
+    target = `http://127.0.0.1:${port}/objects/x`;
+
+    const err = await new IntacctClient(SECRETS, { requestTimeoutMs: 5_000 })
+      .post('/objects/x', {})
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(IntacctNoAnswerError);
+    expect((err as Error).message).toMatch(
+      /^This export may have reached Sage Intacct\. .* got no answer \((UND_ERR_SOCKET|ECONNRESET)\)$/,
+    );
+    expect((err as IntacctNoAnswerError).retryable).toBe(false);
   });
 });

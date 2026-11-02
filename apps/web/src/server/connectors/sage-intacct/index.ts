@@ -10,7 +10,12 @@ import type {
 } from '@stockpilot/core';
 
 import { MappingReadError } from '../mapping-read-error';
-import { IntacctClient } from './client';
+import {
+  INTACCT_REQUEST_TIMEOUT_MS,
+  IntacctApiError,
+  IntacctClient,
+  IntacctNoAnswerError,
+} from './client';
 import {
   buildIntacctPurchaseOrder,
   buildReturnJournalEntry,
@@ -46,6 +51,12 @@ function isRetryableIntacctError(e: unknown): boolean {
   // posted, not an Intacct answer: retry it with backoff (docket S27). Its
   // cause can carry PostgREST's status (200 or 204), which is no Intacct status.
   if (e instanceof MappingReadError) return true;
+  // No Intacct answer (docket B81): a read, or a create that provably never
+  // left, tries again; a create that may have arrived stops at dead, its
+  // message starting with INTACCT_MAY_HAVE_POSTED (client.ts).
+  if (e instanceof IntacctNoAnswerError) return e.retryable;
+  // A create answered with a 5xx other than 503 may have been committed.
+  if (e instanceof IntacctApiError && e.mayHavePosted) return false;
   const status = (e as { status?: number })?.status ?? 0;
   // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
   // transient → retryable. Other 4xx are caller errors → not retryable.
@@ -73,8 +84,15 @@ function isRetryableIntacctError(e: unknown): boolean {
  * replay-protection rests on (a) the drainer's connection_sync_log never
  * re-dispatching a success row and (b) the connection_mappings row written
  * after each successful create (checked before POSTing — see the mapping
- * short-circuits below). A crash BETWEEN the POST and putMapping can still
- * duplicate on retry — acceptable v1 risk, called out for sandbox testing.
+ * short-circuits below). So a create is tried again only when Intacct cannot
+ * have received it: its host lookup or its connect failed, or Intacct answered
+ * 429, 503 or 401. A create that may have arrived (the connection dropped
+ * after it was sent, no answer within INTACCT_REQUEST_TIMEOUT_MS, any other
+ * 5xx, a 2xx whose body could not be read) stops at dead with
+ * INTACCT_MAY_HAVE_POSTED first, for an admin to check Intacct before Replay
+ * (docket B81). Reads are always tried again. A crash BETWEEN the POST and
+ * putMapping can still duplicate on retry — acceptable v1 risk, called out
+ * for sandbox testing.
  *
  * ⚠ PENDING SANDBOX VERIFICATION (needs the owner's Sage developer license).
  */
@@ -174,7 +192,7 @@ async function handlePurchaseOrderOrdered(
   // builder uses so a sub-cent total is acked, not posted.
   if (round2(amount) <= 0) return { ok: true };
 
-  const client = new IntacctClient(secrets);
+  const client = new IntacctClient(secrets, { requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS });
 
   try {
     const vendorId = supplier
@@ -289,7 +307,7 @@ async function handleReturnClosed(
   const totalAmount = creditLines.reduce((sum, l) => sum + l.quantity * l.unitCost, 0);
   if (round2(totalAmount) <= 0) return { ok: true };
 
-  const client = new IntacctClient(secrets);
+  const client = new IntacctClient(secrets, { requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS });
 
   try {
     const body = buildReturnJournalEntry({

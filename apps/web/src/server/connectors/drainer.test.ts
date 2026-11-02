@@ -7,6 +7,7 @@ import { makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 import { enabledIntegrationOrgIds, MAX_ATTEMPTS, nextBackoff, runDrain } from './drainer';
 import { quickbooksConnector } from './quickbooks';
 import { sageIntacctConnector } from './sage-intacct';
+import { INTACCT_MAY_HAVE_POSTED } from './sage-intacct/client';
 
 vi.mock('@/lib/error-reporter', () => ({
   reportError: vi.fn(),
@@ -865,5 +866,347 @@ describe('runDrain: a failed supplier mapping read retries the export with backo
         }
       },
     );
+  });
+});
+
+/**
+ * docket B81: when the call to Intuit or Intacct failed before any HTTP answer
+ * (a failed lookup, a refused or reset connection, a timeout), fetch threw
+ * with no status, both classifiers read the missing status as 0, a caller
+ * error, and the export went to dead on its first try, never offered again
+ * without a manual Replay. QuickBooks dedupes a repeat by its requestid, so any
+ * failure that is not an Intuit answer now retries with backoff. Intacct
+ * cannot dedupe, so a create retries only when it provably never left (its
+ * lookup or its connect failed); a create that may have arrived stops at dead,
+ * its message first saying to check Intacct before Replay. Driven through a
+ * real supabase-js client (a local fetch) and the real connectors, whose own
+ * fetch is a spy: no request leaves the test.
+ */
+describe('runDrain: a provider call that got no answer', () => {
+  const NOW = new Date('2026-11-01T12:00:00Z');
+  const SUPPLIER = { id: 'sup-1', name: 'Placeholder Supplier' };
+  const QBO_CONN = {
+    id: 'conn-qbo',
+    organization_id: 'org-1',
+    provider_id: 'quickbooks',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'realm-1',
+    settings: {
+      env: 'sandbox',
+      accountIds: { billExpense: '42', returnCredit: '4900', inventoryAsset: '1200' },
+    },
+  };
+  const INTACCT_CONN = {
+    id: 'conn-si',
+    organization_id: 'org-1',
+    provider_id: 'sage_intacct',
+    status: 'active',
+    secret_id: 'secret-1',
+    external_account_id: 'company-1',
+    settings: {
+      intacct: { defaultItemId: 'NONINV', defaultVendorId: 'VDEF' },
+      accountIds: { returnCredit: '4900', inventoryAsset: '1200' },
+    },
+  };
+  const outboxEvent = (topic: string, aggregateType: string, aggregateId: string) => ({
+    id: 'evt-1',
+    organization_id: 'org-1',
+    topic,
+    aggregate_type: aggregateType,
+    aggregate_id: aggregateId,
+    payload: {},
+    dedupe_key: null,
+    created_at: NOW.toISOString(),
+  });
+  const RETURN_ROWS = {
+    returns: [{ id: 'ret-1', return_number: 'RMA-1' }],
+    return_lines: [{ quantity: 2, order_request_line: { unit_cost_at_request: 10 } }],
+  };
+
+  interface Export {
+    name: string;
+    conn: Record<string, unknown>;
+    event: Record<string, unknown>;
+    connectors: Parameters<typeof runDrain>[1];
+    /** What each rehydration read answers, by table. */
+    rows: Record<string, unknown[]>;
+  }
+
+  const QBO_EXPORTS: Export[] = [
+    {
+      name: 'QuickBooks receipt.posted (a Bill)',
+      conn: QBO_CONN,
+      event: outboxEvent('receipt.posted', 'receipt', 'rcpt-1'),
+      connectors: { quickbooks: quickbooksConnector },
+      rows: {
+        receipts: [{ id: 'rcpt-1', purchase_order_id: 'po-1', receipt_number: 'RC-1' }],
+        receipt_lines: [{ qty_accepted_base: 5, unit_cost: 2 }],
+        purchase_orders: [{ supplier_id: 'sup-1' }],
+        suppliers: [SUPPLIER],
+      },
+    },
+    {
+      name: 'QuickBooks purchase_order.ordered',
+      conn: QBO_CONN,
+      event: outboxEvent('purchase_order.ordered', 'purchase_order', 'po-1'),
+      connectors: { quickbooks: quickbooksConnector },
+      rows: {
+        purchase_orders: [
+          { id: 'po-1', po_number: 'PO-1', supplier_id: 'sup-1', subtotal: 120, total: 120 },
+        ],
+        suppliers: [SUPPLIER],
+      },
+    },
+    {
+      name: 'QuickBooks return.closed (a JournalEntry)',
+      conn: QBO_CONN,
+      event: outboxEvent('return.closed', 'return', 'ret-1'),
+      connectors: { quickbooks: quickbooksConnector },
+      rows: RETURN_ROWS,
+    },
+  ];
+
+  /** An Intacct purchase order with no supplier: the default vendor, no vendor read. */
+  const INTACCT_PO: Export = {
+    name: 'Sage Intacct purchase_order.ordered',
+    conn: INTACCT_CONN,
+    event: outboxEvent('purchase_order.ordered', 'purchase_order', 'po-1'),
+    connectors: { sage_intacct: sageIntacctConnector },
+    rows: {
+      purchase_orders: [
+        { id: 'po-1', po_number: 'PO-1', supplier_id: null, subtotal: 120, total: 120 },
+      ],
+    },
+  };
+  const INTACCT_RETURN: Export = {
+    name: 'Sage Intacct return.closed',
+    conn: INTACCT_CONN,
+    event: outboxEvent('return.closed', 'return', 'ret-1'),
+    connectors: { sage_intacct: sageIntacctConnector },
+    rows: RETURN_ROWS,
+  };
+  /** An Intacct purchase order whose supplier has no mapping yet: the vendor read runs first. */
+  const INTACCT_PO_VENDOR_READ: Export = {
+    ...INTACCT_PO,
+    name: 'Sage Intacct purchase_order.ordered with an unmapped supplier',
+    rows: {
+      purchase_orders: [
+        { id: 'po-1', po_number: 'PO-1', supplier_id: 'sup-1', subtotal: 120, total: 120 },
+      ],
+      suppliers: [SUPPLIER],
+    },
+  };
+
+  const fetchFailed = (cause: unknown) => new TypeError('fetch failed', { cause });
+  const sysError = (code: string, syscall: string) =>
+    Object.assign(new Error(`${syscall} ${code}`), { code, syscall });
+  const undiciError = (name: string, code: string) =>
+    Object.assign(new Error(name), { name, code });
+  /** node's connect to a host with several addresses (loopback probe, 2026-11-01). */
+  const aggregate = (errors: Error[]) =>
+    Object.assign(new AggregateError(errors), {
+      code: (errors[0] as { code?: string } | undefined)?.code,
+    });
+  const timeout = () =>
+    new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+
+  /** What the provider's fetch does instead of answering: reject, or answer this. */
+  type Failure = () => Promise<Response>;
+  const rejects =
+    (error: unknown): Failure =>
+    () =>
+      Promise.reject(error);
+  /** A 2xx whose body is cut off part way: the create happened. */
+  const cutBody =
+    (status: number): Failure =>
+    async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"ia::result":{"key":"DOC'));
+            controller.error(new TypeError('terminated'));
+          },
+        }),
+        { status },
+      );
+
+  /** Failures in which no request byte left StockPilot: the lookup or the connect failed. */
+  const NEVER_SENT: Array<[string, Failure]> = [
+    ['ENOTFOUND', rejects(fetchFailed(sysError('ENOTFOUND', 'getaddrinfo')))],
+    ['EAI_AGAIN', rejects(fetchFailed(sysError('EAI_AGAIN', 'getaddrinfo')))],
+    ['ECONNREFUSED', rejects(fetchFailed(sysError('ECONNREFUSED', 'connect')))],
+    [
+      'UND_ERR_CONNECT_TIMEOUT',
+      rejects(fetchFailed(undiciError('ConnectTimeoutError', 'UND_ERR_CONNECT_TIMEOUT'))),
+    ],
+    ['EHOSTUNREACH on connect', rejects(fetchFailed(sysError('EHOSTUNREACH', 'connect')))],
+    [
+      'every address refused (an AggregateError)',
+      rejects(
+        fetchFailed(
+          aggregate([sysError('ECONNREFUSED', 'connect'), sysError('ECONNREFUSED', 'connect')]),
+        ),
+      ),
+    ],
+    [
+      'every address failed to connect, with mixed codes',
+      rejects(
+        fetchFailed(
+          aggregate([sysError('ETIMEDOUT', 'connect'), sysError('ENETUNREACH', 'connect')]),
+        ),
+      ),
+    ],
+  ];
+  /** Failures after which the create may have reached the provider. */
+  const MAY_HAVE_ARRIVED: Array<[string, Failure]> = [
+    ['UND_ERR_SOCKET', rejects(fetchFailed(undiciError('SocketError', 'UND_ERR_SOCKET')))],
+    ['ECONNRESET on read', rejects(fetchFailed(sysError('ECONNRESET', 'read')))],
+    [
+      'UND_ERR_HEADERS_TIMEOUT',
+      rejects(fetchFailed(undiciError('HeadersTimeoutError', 'UND_ERR_HEADERS_TIMEOUT'))),
+    ],
+    ['the timeout', rejects(timeout())],
+    ['a 2xx whose body is cut off', cutBody(201)],
+    [
+      'an AggregateError with an inner error that is not a failed connect',
+      rejects(
+        fetchFailed(
+          aggregate([sysError('ECONNREFUSED', 'connect'), sysError('ECONNRESET', 'read')]),
+        ),
+      ),
+    ],
+  ];
+
+  /** The provider's fetch: `onCall(n)` answers its nth call (0-based). */
+  let onCall: (n: number) => Promise<Response> = async () => json({});
+  const providerFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    onCall(providerFetch.mock.calls.length - 1),
+  );
+
+  beforeEach(() => {
+    vi.mocked(reportError).mockClear();
+    providerFetch.mockClear();
+    vi.stubGlobal('fetch', providerFetch);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** One drain of `x`; every read answers as PostgREST would, every supplier is mapped
+   *  (unless `unmappedSupplier`), and nothing is posted yet. */
+  async function drain(x: Export, opts: { unmappedSupplier?: boolean } = {}) {
+    const requests: ClientRequest[] = [];
+    const admin = realSupabaseClient((req) => {
+      requests.push(req);
+      const path = req.url.pathname.replace(/^\/rest\/v1\//, '');
+      if (req.method === 'GET' && path === 'org_connections') return json([x.conn]);
+      if (req.method === 'GET' && path === 'organization_modules')
+        return json([{ organization_id: 'org-1' }]);
+      if (path === 'rpc/connector_drain_candidates') return json([x.event]);
+      if (req.method === 'GET' && path === 'connection_sync_log') return json([]);
+      if (req.method === 'GET' && path === 'connection_mappings') {
+        return req.url.searchParams.get('entity_type') === 'eq.supplier' && !opts.unmappedSupplier
+          ? json([{ external_id: 'VENDOR-7', external_meta: {} }])
+          : json([]);
+      }
+      if (req.method === 'GET' && x.rows[path]) return json(x.rows[path]);
+      // The writes: the pending row, the outcome, the mapping, last_synced_at.
+      return new Response(null, { status: 204 });
+    });
+    const result = await runDrain(admin, x.connectors, NOW);
+    const outcome = requests
+      .filter((r) => r.method === 'PATCH' && r.url.pathname.endsWith('/connection_sync_log'))
+      .map((r) => JSON.parse(r.body ?? '{}') as Record<string, unknown>);
+    expect(outcome).toHaveLength(1);
+    return { result, outcome: outcome[0]! };
+  }
+
+  function expectRetriedWithBackoff(run: Awaited<ReturnType<typeof drain>>) {
+    expect(run.result).toEqual({ processed: 1, succeeded: 0, failed: 1, deadlettered: 0 });
+    expect(run.outcome.status).toBe('error');
+    expect(new Date(run.outcome.next_attempt_at as string).getTime()).toBeGreaterThan(
+      NOW.getTime(),
+    );
+  }
+
+  describe.each(QBO_EXPORTS)('$name', (x) => {
+    it.each([
+      ...NEVER_SENT,
+      ...MAY_HAVE_ARRIVED,
+      ['a 200 whose body is not JSON', async () => new Response('not json', { status: 200 })],
+    ] as Array<[string, Failure]>)(
+      '%s: error with backoff, not dead (the requestid makes a repeat safe)',
+      async (_shape, failure) => {
+        onCall = () => failure();
+        const run = await drain(x);
+        expect(providerFetch).toHaveBeenCalledTimes(1);
+        expectRetriedWithBackoff(run);
+      },
+    );
+  });
+
+  describe.each([INTACCT_PO, INTACCT_RETURN])('$name', (x) => {
+    it.each(NEVER_SENT)(
+      '%s: the create never left, so error with backoff',
+      async (_shape, failure) => {
+        onCall = () => failure();
+        const run = await drain(x);
+        expect(providerFetch).toHaveBeenCalledTimes(1);
+        expectRetriedWithBackoff(run);
+      },
+    );
+
+    it.each(MAY_HAVE_ARRIVED)(
+      '%s: the create may have arrived, so dead with the check-before-Replay sentence first',
+      async (_shape, failure) => {
+        onCall = () => failure();
+        const run = await drain(x);
+        expect(providerFetch).toHaveBeenCalledTimes(1);
+        expect(run.result).toEqual({ processed: 1, succeeded: 0, failed: 0, deadlettered: 1 });
+        expect(run.outcome.status).toBe('dead');
+        expect(run.outcome.next_attempt_at).toBeNull();
+        expect(String(run.outcome.last_error).startsWith(`${INTACCT_MAY_HAVE_POSTED} `)).toBe(true);
+      },
+    );
+
+    it.each([500, 502, 504])(
+      'a create answered %i may have been committed: dead with the sentence first',
+      async (status) => {
+        onCall = async () => new Response('upstream error', { status });
+        const run = await drain(x);
+        expect(run.outcome.status).toBe('dead');
+        expect(run.outcome.next_attempt_at).toBeNull();
+        expect(run.outcome.last_error).toBe(
+          `${INTACCT_MAY_HAVE_POSTED} Intacct POST ${
+            x === INTACCT_PO
+              ? '/objects/purchasing/document'
+              : '/objects/general-ledger/journal-entry'
+          } failed (status ${status}): upstream error`,
+        );
+      },
+    );
+
+    it.each([429, 503])('a create answered %i retries with backoff (unchanged)', async (status) => {
+      onCall = async () => new Response('busy', { status });
+      expectRetriedWithBackoff(await drain(x));
+    });
+  });
+
+  describe('the Intacct vendor read', () => {
+    it('a vendor read that got no answer retries with backoff, and nothing is created', async () => {
+      onCall = () => Promise.reject(fetchFailed(undiciError('SocketError', 'UND_ERR_SOCKET')));
+      const run = await drain(INTACCT_PO_VENDOR_READ, { unmappedSupplier: true });
+      // Only the vendor read was made.
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expect(String(providerFetch.mock.calls[0]?.[0])).toContain('/services/core/query');
+      expectRetriedWithBackoff(run);
+      expect(String(run.outcome.last_error)).not.toContain(INTACCT_MAY_HAVE_POSTED);
+    });
+
+    it('a vendor read answered 502 retries with backoff (unchanged)', async () => {
+      onCall = async () => new Response('upstream error', { status: 502 });
+      const run = await drain(INTACCT_PO_VENDOR_READ, { unmappedSupplier: true });
+      expect(providerFetch).toHaveBeenCalledTimes(1);
+      expectRetriedWithBackoff(run);
+    });
   });
 });

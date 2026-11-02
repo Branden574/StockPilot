@@ -11,6 +11,7 @@ vi.mock('@/lib/env', () => ({
 
 import type { ConnectionRef, ConnectorDeps, OutboxEvent } from '@stockpilot/core';
 
+import { INTACCT_REQUEST_TIMEOUT_MS } from './client';
 import { sageIntacctConnector } from './index';
 
 /** Chainable supabase-table mock: every chain method returns itself; terminal
@@ -257,6 +258,33 @@ describe('sageIntacctConnector — purchase_order.ordered', () => {
     expect(r400.ok).toBe(false);
     expect(r400.retryable).toBe(false);
   });
+
+  // docket B81: a hung Intacct call held the whole drain-outbox cron, and a
+  // run the platform ended mid-create left the row pending for a blind
+  // re-send. The connector's calls now stop after 15 s.
+  it('sends the create with a 15 s timeout signal', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const admin = makeAdmin({
+      purchase_orders: tableMock({
+        data: { id: 'po-1', po_number: 'PO-1', supplier_id: null, total: 250 },
+        error: null,
+      }),
+    });
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ 'ia::result': { key: '321' } }), { status: 201 }),
+    );
+    const res = await sageIntacctConnector.handleOutboxEvent(
+      poEvent(),
+      conn(GOOD_SETTINGS),
+      SECRETS,
+      makeDeps(admin),
+    );
+    expect(res.ok).toBe(true);
+    expect(INTACCT_REQUEST_TIMEOUT_MS).toBe(15_000);
+    expect(timeoutSpy.mock.calls).toEqual([[15_000]]);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(timeoutSpy.mock.results[0]?.value);
+  });
 });
 
 describe('sageIntacctConnector — return.closed', () => {
@@ -337,6 +365,26 @@ describe('sageIntacctConnector — return.closed', () => {
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(String(init.body)) as { journal: { id: string } };
     expect(body.journal).toEqual({ id: 'GJ' });
+  });
+
+  it('sends the journal entry with a 15 s timeout signal (docket B81)', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const admin = makeAdmin(
+      returnTables([{ quantity: 2, order_request_line: { unit_cost_at_request: 10 } }]),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ 'ia::result': { key: '555' } }), { status: 201 }),
+    );
+    const res = await sageIntacctConnector.handleOutboxEvent(
+      returnEvent(),
+      conn(GOOD_SETTINGS),
+      SECRETS,
+      makeDeps(admin),
+    );
+    expect(res.ok).toBe(true);
+    expect(timeoutSpy.mock.calls).toEqual([[INTACCT_REQUEST_TIMEOUT_MS]]);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(timeoutSpy.mock.results[0]?.value);
   });
 
   it('acks a zero-value return without POSTing', async () => {
