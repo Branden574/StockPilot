@@ -925,7 +925,10 @@ actually fire.
     unless the RMA's functions set the transaction-bound flag
     `stockpilot.return_exchange` (`replacement_cancel_via_return`), so a
     manager cancelling from the order page is refused and the RMA stays in
-    step; the requester's own cancel is refused one step earlier by
+    step. The gate is SECURITY DEFINER, so it cannot ask who set the flag:
+    since the replacement guards (0425, docket S7a) the header guard below,
+    which sorts before it, also covers a move into `cancelled` or `denied`
+    and asks the role first, with the same error. The requester's own cancel is refused one step earlier by
     `cancel_order_request`'s pending-approval window (0395,
     `requester_pending_only`), since a replacement is approved in the
     transaction that creates it. A replacement already picked is cancelled through
@@ -949,21 +952,39 @@ actually fire.
     in. The RMA cancel raises the flag around its own `close_partial` (pinned
     by the 0396 preflight since verification V-3), and so does "Close the
     rest" (`close_return_replacement_rest`, 0397, returns RX-4; below). A
-    data fix by the owner raises the flag the same way. Residual
-    (verification V-1, recorded): the
-    RMA's gates read the ORIGINAL order's warehouse, which this guard does not
-    pin; `order_requests_update` still lets an `orders:approve` holder who
-    writes both warehouses move a completed original by a raw PATCH (no
-    screen or service writes an order's warehouse), and the RMA's warehouse
-    scope follows it: staff of the new warehouse can then release or cancel
-    the replacement in the old one (no order crosses warehouses: a change to
-    an item of the old warehouse is `exchange_item_not_eligible`). Production
-    had 0 such RMAs on 2026-10-11. "Close the rest" (RX-4) also asks write
-    access to the live replacement's own warehouse, under its lock, so it is
-    closed for that path (0397 B7); change, cancel and release keep the
-    residual. Follow-up for a later returns slice: refuse a warehouse change
-    on an order that has an RMA, or ask the replacement's warehouse in those
-    three functions too.
+    data fix by the owner raises the flag the same way. Since the
+    replacement guards (0425, docket S7a) the guard also covers a
+    replacement's move into `cancelled` or `denied` (the status gate's
+    flagged edge, asked here because the gate is SECURITY DEFINER), and the
+    flag counts only for a writer that is not an API role (`anon`,
+    `authenticated` or `service_role` setting it themselves are refused);
+    see the flag below.
+    **The replacement's warehouse** (verification V-1; fixed by 0425). The
+    RMA's gates read the ORIGINAL order's warehouse, which this guard does
+    not pin: `order_requests_update` lets an `orders:approve` holder who
+    writes both warehouses (an owner, admin or manager, or staff assigned to
+    both) move a completed original by a raw PATCH (no screen or service
+    writes an order's warehouse), and the RMA's warehouse scope follows it.
+    Until 0425 staff of the new warehouse alone could then release early
+    the replacement in the old one; Cancel replacement and the RMA cancel
+    were refused only inside `cancel_order_request` (slice E, 0416), after
+    both row locks, and Change for the wrong reason
+    (`exchange_item_not_eligible`). Now Release early, Cancel
+    replacement, Change replacement, Close the rest and the RMA cancel ask
+    write access to the live replacement's own warehouse through one helper,
+    `_return_replacement_warehouse_gate` (INVOKER, EXECUTE for nobody):
+    before their first row lock, so a caller who may not act never waits on
+    one, and again under the replacement's row lock (the RMA cancel in its
+    exchange hook; Close the rest keeps its own 0397 check there). The
+    original's gates stay, so after a move every action on the replacement
+    needs both warehouses (fail closed; a completed replacement counts);
+    without a move they are the same warehouse. What stays (owner question
+    Q4, kept by decision a.21): the original's warehouse is still not
+    pinned, the RMA's own scope (receive, close, a new replacement) follows
+    it, and stock moves at close stay gated on each item's own warehouse.
+    The helper's first read takes no lock; the second, under the lock, keeps
+    it fail closed. Proofs: the 0425 suite's V section and
+    `scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh`.
   - **Close the rest** (0397, returns RX-4; RX-2 verification V3).
     `close_return_replacement_rest` (SECURITY DEFINER, EXECUTE for
     `authenticated` only, 5 s lock timeout) ends a replacement handed over
@@ -973,9 +994,12 @@ actually fire.
     foreign RMA answers like a missing one); the Returns and Orders modules;
     `returns:manage`; `orders:approve`; write access to the original order's
     warehouse; a reason (1 to 1,000 characters) and the revision the caller
-    saw. Then the RMA row and the live replacement `FOR UPDATE` (the X-2
-    order; it names no item, so it takes no item lock), write access to the
-    replacement's warehouse, the revision (head kinds, unchanged:
+    saw; and since 0425 (S4, returns plan 13.18) write access to the live
+    replacement's own warehouse, so a caller who may not act is refused
+    before waiting on either row. Then the RMA row and the live replacement
+    `FOR UPDATE` (the X-2 order; it names no item, so it takes no item
+    lock), write access to the replacement's warehouse again, the revision
+    (head kinds, unchanged:
     `return_changed`), the RMA status (`invalid_status_transition`), a
     replay (completed after an earlier close: `{changed: false}`), the
     status the caller's screen showed (`return_changed`), and a backorder
@@ -998,27 +1022,55 @@ actually fire.
     stock S2).
   - **The flag** (security review F-5). `stockpilot.return_exchange` is the
     only barrier for SECURITY DEFINER callers of `cancel_order_request` and
-    `close_partial` on a replacement, and of the header guard. It counts only
-    when it holds the current transaction's id, and no API role can set it:
-    PostgREST sets only `request.*` and the role, and no API-callable
-    function sets it. Exactly three functions set it, each around one call
-    of its own and each with no EXECUTE for any role:
-    `_return_replacement_cancel_order`, `_return_exchange_on_cancel` and (RX-4)
-    `_return_replacement_close_partial` (0397 A1b pins the list). Keep it
-    that way: never add an API-callable function that sets this setting, or
-    that takes a setting's name from its input.
-  - **Fixed lines.** `trg_zz_order_request_lines_replacement_guard`
-    (BEFORE INSERT only) refuses an API-role insert of a replacement's lines
-    (`replacement_lines_fixed`); an update is refused by the
-    `order_request_lines_no_update` policy, not by this trigger (desk check
-    F8). The app refuses both before any write. Recorded (verification V7):
-    unlike the header guard, the lines guard holds for API roles only; the
-    service role bypasses the policy and the trigger returns early for it,
-    so a service-role line insert or quantity update on a replacement would
-    pass outside the exchange budget. Today every admin-client line edit goes
-    through `loadEditableOrderHeader`, which refuses a replacement first; an
-    every-role guard (allowed only under the flag, and only for the columns
-    picking and approval write) is defence in depth for a later slice.
+    `close_partial` on a replacement, of the header guard and (since 0425)
+    of the lines guard. It counts only when it holds the current
+    transaction's id, and no API role can set it: PostgREST sets only
+    `request.*` and the role, and no API-callable function sets it. Exactly
+    three functions set it, each around one call of its own and each with no
+    EXECUTE for any role: `_return_replacement_cancel_order`,
+    `_return_exchange_on_cancel` and (RX-4)
+    `_return_replacement_close_partial` (0397 A1b and 0425 P3 pin the list).
+    They always run inside a SECURITY DEFINER RMA function, as `postgres`.
+    Since 0425 the two INVOKER guards that read it (the header guard and the
+    lines guard) also ask that the writer is not an API role
+    (`current_user` not `anon`, `authenticated` or `service_role`), so an
+    API session that set the flag itself is refused a direct write; the
+    status gate, which runs as `postgres` and cannot ask,
+    has its flagged edge covered by the header guard (0425 FR1 to FR4 and
+    M1 to M3). Residual: inside a SECURITY DEFINER function every caller is
+    `postgres`, so no role tells a flag the RMA code raised from one an API
+    session raised before calling such a function; there the barrier is
+    still that no API role can set it. Keep it that way: never add an
+    API-callable function that sets this setting, or that takes a setting's
+    name from its input. A data fix on a replacement's header, status or
+    lines runs as the owner and raises the flag inside its own transaction:
+    `set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true)`.
+  - **Fixed lines** (every role since 0425; verification V7).
+    `trg_zz_order_request_lines_replacement_guard` fires BEFORE INSERT OR
+    UPDATE (same name and sort position). Until 0425 it fired on INSERT only
+    and returned at once for any writer but `anon` and `authenticated`, so
+    the service role and every SECURITY DEFINER function could add a line
+    to a replacement or change one outside the exchange budget. Now, for
+    every role: an UPDATE that changes only the workflow columns
+    (`quantity_picked`, `picked_at`, `picked_by`, `quantity_packed`,
+    `packed_at`, `packed_by`, `quantity_fulfilled`, `returned_quantity`) and
+    keeps their value rules (`quantity_fulfilled` and `returned_quantity`
+    never go down, `quantity_fulfilled <= quantity_requested`,
+    `returned_quantity <= quantity_fulfilled`) passes with no lookup, on any
+    order; the flag passes a writer that is not an API role (the one path
+    for a data fix); a line of an ordinary order passes as before; a non-API
+    insert while the replacement is still `pending_approval` passes (only
+    `_return_replacement_issue`, in the transaction that creates and
+    approves it). Anything else on a replacement's line, or moving a line
+    into or out of one, is `replacement_lines_fixed`. The comparison is the
+    whole row minus the workflow columns, so a column added later is
+    guarded. Every function that writes `order_request_lines` is pinned by
+    the 0425 suite's census (V7-9, 12 writers): a new writer fails there
+    first. An API-role update is also refused by the
+    `order_request_lines_no_update` policy (desk check F8), and the app
+    refuses both before any write (`loadEditableOrderHeader`). No DELETE
+    arm: `return_exchange_lines`' foreign key refuses deleting a line it
+    names, for every role.
   - **Reads.** `return_exchange_lines`: members SELECT (RLS on the RMA's
     organization), no API write; `return_decisions.exchange_line_id` is a
     composite key to (exchange line, RMA). A line's decision (approved item,
@@ -1134,8 +1186,10 @@ actually fire.
     or closed is closed as delivered-partial only by "Close the rest" (RX-4,
     above); a rest already resumed into picking goes on through picking and
     hand-over on its order (the order page offers no cancel or close for a
-    replacement). Whether such a rest can come back to backorder (a short
-    pick) and then be closed is checked at the test stage.
+    replacement). A short pick brings such a rest back to backorder at its
+    hand-over, and "Close the rest" then applies (verified at the RX-4 test
+    stage); while it is still being picked it reads "Replacement in
+    progress" (docket S7b, deferred: a close for that state).
 - **Why it matters**: a replacement is stock promised to someone. Without
   these rules an exchange could be issued twice for one approval, picked and
   handed over before the item it replaces came back, cancelled from the

@@ -812,6 +812,23 @@ PGTAP_TESTS=(
   # scripts/db-concurrency/0416_cancel_scope_race.sh; the lock footprint is
   # scripts/db-concurrency/0416_migration_lock_footprint.sh.
   supabase/tests/0416_order_functions_warehouse_scope.test.sql
+  # Replacement guards (0425, docket S7a, INV-C7): a replacement order's
+  # lines are fixed for every role: only the workflow columns change, within
+  # their value rules (what was handed over and what came back never go
+  # down, and stay within what was asked and handed over), unless an RMA
+  # function holds the transaction-bound flag. That flag, in the lines guard
+  # and the header guard, counts only for a writer that is not an API role,
+  # and the header guard now also asks it of a replacement's move into
+  # cancelled or denied (the status gate is SECURITY DEFINER and cannot ask
+  # the role). Release early, Cancel replacement, Change replacement, Close
+  # the rest and the RMA cancel ask write access to the replacement's own
+  # warehouse before their first row lock, and again under the replacement's
+  # lock. Each restated body is the one before with its added lines removed,
+  # and taking each addition out lets the refused write or call through. The
+  # two-session proofs are
+  # scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh; the lock
+  # footprint is scripts/db-concurrency/0425_migration_lock_footprint.sh.
+  supabase/tests/0425_replacement_guards.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

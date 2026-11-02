@@ -563,7 +563,12 @@ select is(
   pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, pg_temp.rest_sql(:'rQ', pg_temp.rev(:'rQ'), 'No longer needed')))
   || ':' || (pg_temp.try_rpc('authenticated', :mgr, pg_temp.rest_sql(:'rQ', pg_temp.rev(:'rQ'), 'No longer needed'))->>'detail')
   || ' | ' || pg_temp.err(pg_temp.try_rpc('authenticated', :mgr, pg_temp.rest_sql(:'rK1', pg_temp.rev(:'rK1'), 'No longer needed'),
-    format($q$update public.order_request_lines set quantity_fulfilled = 0 where order_request_id = %L$q$, :'oK1R'))),
+    -- Since S7 (replacement guards) lowering what was handed over on a
+    -- replacement's line is refused to every writer outside the RMA flag, so
+    -- the fixture raises it, as a data fix would.
+    format($q$select set_config('stockpilot.return_exchange', pg_current_xact_id()::text, true);
+              update public.order_request_lines set quantity_fulfilled = 0 where order_request_id = %L;
+              select set_config('stockpilot.return_exchange', '', true)$q$, :'oK1R'))),
   'P0001:replacement_not_backordered:approved | P0001:replacement_not_backordered',
   'C2: only a backorder that handed something over is closed here: a replacement still waiting, and a backorder that handed nothing over, are refused (Mutation M4)');
 select is(
@@ -744,8 +749,13 @@ select is(
        -- RMA's own write check on the original order's warehouse, where the replacement is
        -- placed and the header guard keeps it.
        ('public.close_partial(uuid)',                             '44852737eedc1959e887b8621925d157'),
-       ('public.tg_order_requests_replacement_header()',          'b7220c36c4f78792f698adfbd8da79ea'),
-       ('public.cancel_return_replacement(uuid,integer,text,text)', '9e42b480d4a77b1ccde60f10fc858d44'),
+       -- Re-pinned by S7 (replacement guards; were b7220c36c4f78792f698adfbd8da79ea and
+       -- 9e42b480d4a77b1ccde60f10fc858d44): the header guard asks the role with the flag
+       -- (an API role that set it itself is refused), and the replacement cancel asks write
+       -- access to the replacement's own warehouse before its locks and under them. Removing
+       -- the added lines gives each body exactly (that suite's R1); the close is unchanged.
+       ('public.tg_order_requests_replacement_header()',          '437f91dc9d1037c01233c62a79885689'),
+       ('public.cancel_return_replacement(uuid,integer,text,text)', '18760fd58c4f2445acaa930d2896ea33'),
        -- Re-pinned by 0413 (were c9a8b3ff98fa7e53e1befaeb39b52c55 and
        -- 60a9e392712860018a5c3d814aa285eb): a record hidden from ordering is
        -- no new exchange selection; an item approved in an earlier transaction
