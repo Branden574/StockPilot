@@ -124,11 +124,15 @@ const VIEWER = 'u-viewer';
 const DRAFT_KEY = `rental-draft:v2:${VIEWER}:wh-1`;
 const LEGACY_DRAFT_KEY = 'rental-draft:wh-1';
 
-function savedCart(key: string, lines: Array<{ itemId: string; quantity: number }>) {
+function savedCart(
+  key: string,
+  lines: Array<{ itemId: string; quantity: number }>,
+  warehouseId = 'wh-1',
+) {
   localStorage.setItem(
     key,
     JSON.stringify({
-      warehouseId: 'wh-1',
+      warehouseId,
       charterId: null,
       fulfillmentType: 'pickup',
       onBehalfOf: null,
@@ -139,21 +143,25 @@ function savedCart(key: string, lines: Array<{ itemId: string; quantity: number 
   );
 }
 
-function renderForm(items: CatalogItem[] = [TENT], viewerUserId = VIEWER) {
-  return render(
+function formElement(items: CatalogItem[] = [TENT], viewerUserId = VIEWER, warehouseId = 'wh-1') {
+  return (
     <RentalCreateForm
       warehouses={[
         { id: 'wh-1', name: 'Main' },
         { id: 'wh-2', name: 'Annex' },
       ]}
-      warehouseId="wh-1"
+      warehouseId={warehouseId}
       items={items}
       aisles={[]}
       members={[]}
       viewerRole="admin"
       viewerUserId={viewerUserId}
-    />,
+    />
   );
+}
+
+function renderForm(items: CatalogItem[] = [TENT], viewerUserId = VIEWER) {
+  return render(formElement(items, viewerUserId));
 }
 
 const checkOut = () => screen.getByRole('button', { name: 'Check out' });
@@ -261,8 +269,10 @@ describe('RentalCreateForm — the cart checks out only what it shows', () => {
 // The cart was saved under rental-draft:<warehouse> for whoever used the
 // browser, so on a shared computer the next person to open New rental for the
 // same warehouse found the last person's items. The form now saves, restores
-// and clears under the viewer's own key, and adopts a cart saved under the old
-// key once.
+// and clears under the viewer's own key. A cart left under the old key belongs
+// to no account, so nobody can say whose it is: it is never opened, and New
+// rental removes it, unread, each time it opens for a warehouse (review of
+// B20a; adopting it once, as first built, handed it to whoever came first).
 describe("RentalCreateForm — the viewer's own cart", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -272,6 +282,8 @@ describe("RentalCreateForm — the viewer's own cart", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    // A storage spy left by a test that failed before restoring its own.
+    vi.restoreAllMocks();
     localStorage.clear();
   });
 
@@ -289,24 +301,91 @@ describe("RentalCreateForm — the viewer's own cart", () => {
     expect((checkOut() as HTMLButtonElement).disabled).toBe(false);
   });
 
-  // Mutation caught: no legacy prefix passed (a cart saved before the deploy
-  // vanishes), or the old key read but left for the next person.
-  it('adopts a cart saved under the old shared key once, then keeps it under the viewer key', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    savedCart(LEGACY_DRAFT_KEY, [{ itemId: 'tent', quantity: 2 }]);
+  // Review of B20a, probe P1: the first person to open New rental for the
+  // warehouse was handed a cart someone else left under the old key, and could
+  // check it out. A tab still on the previous build can save there again after
+  // the deploy; the next person was handed that one too. Mutation caught: the
+  // old prefix given to the provider again (the cart shows the lines and the
+  // key is read), or no removal (the key waits for the next person).
+  it('never shows a cart left under the old shared key, and removes it unread when New rental opens', () => {
+    const otherKey = 'rental-draft:v2:u-other:wh-1';
+    savedCart(otherKey, [{ itemId: 'tent', quantity: 2 }]);
+    savedCart(LEGACY_DRAFT_KEY, [{ itemId: 'tent', quantity: 3 }]);
+    // On localStorage itself: happy-dom binds a copy of each Storage method
+    // onto the instance at first use, so a spy on Storage.prototype misses it.
+    const reads = vi.spyOn(localStorage, 'getItem');
     const first = renderForm();
-    expect(screen.getByText('Event tent')).toBeTruthy();
+    const legacyReads = reads.mock.calls.filter(([key]) => key === LEGACY_DRAFT_KEY);
+    reads.mockRestore();
+    expect(legacyReads).toEqual([]);
+    expect(screen.getByText('Add items from the catalog.')).toBeTruthy();
+    expect((checkOut() as HTMLButtonElement).disabled).toBe(true);
     expect(localStorage.getItem(LEGACY_DRAFT_KEY)).toBeNull();
-    await act(async () => {
-      vi.advanceTimersByTime(300);
-    });
-    expect(JSON.parse(localStorage.getItem(DRAFT_KEY) ?? '{}').lines).toEqual([
+    // Another account's own cart is not touched.
+    expect(JSON.parse(localStorage.getItem(otherKey) ?? '{}').lines).toEqual([
       { itemId: 'tent', quantity: 2 },
     ]);
     first.unmount();
 
+    // A tab still on the previous build saves under the old key again. The
+    // other account opens New rental: their own cart, not that one.
+    savedCart(LEGACY_DRAFT_KEY, [{ itemId: 'tent', quantity: 3 }]);
+    renderForm([TENT], 'u-other');
+    expect(screen.getByRole('heading', { name: /Checkout/ }).textContent).toBe('Checkout(2)');
+    expect(localStorage.getItem(LEGACY_DRAFT_KEY)).toBeNull();
+  });
+
+  // Review of B20a, probe P2: the old key was removed only when the viewer had
+  // no cart of their own, so a viewer who had one left it for the next person
+  // without one. Mutation caught: the removal made only on that branch.
+  it('a viewer with a cart of their own keeps it, and the old shared key is still removed', () => {
+    savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
+    savedCart(LEGACY_DRAFT_KEY, [{ itemId: 'tent', quantity: 4 }]);
+    const own = renderForm();
+    expect(screen.getByRole('heading', { name: /Checkout/ }).textContent).toBe('Checkout(1)');
+    expect(localStorage.getItem(LEGACY_DRAFT_KEY)).toBeNull();
+    own.unmount();
+
     renderForm([TENT], 'u-other');
     expect(screen.getByText('Add items from the catalog.')).toBeTruthy();
+  });
+
+  // The page keeps this form mounted when the warehouse changes (only the
+  // cart, keyed by warehouse, starts again), so the removal runs for every
+  // warehouse New rental opens. Mutation caught: a removal made only for the
+  // first warehouse.
+  it("opening another warehouse removes that warehouse's old shared key too, unshown", () => {
+    const ANNEX_TENT: CatalogItem = {
+      ...TENT,
+      id: 'annex-tent',
+      name: 'Annex tent',
+      warehouseId: 'wh-2',
+    };
+    const annexLegacyKey = 'rental-draft:wh-2';
+    savedCart(annexLegacyKey, [{ itemId: 'annex-tent', quantity: 2 }], 'wh-2');
+    const view = renderForm();
+    view.rerender(formElement([ANNEX_TENT], VIEWER, 'wh-2'));
+    expect(screen.getByText('Add items from the catalog.')).toBeTruthy();
+    expect(screen.queryByText('Annex tent')).toBeNull();
+    expect(localStorage.getItem(annexLegacyKey)).toBeNull();
+  });
+
+  // One removeItem in a try/catch: a browser whose storage refuses it (a
+  // privacy setting) still opens New rental with the viewer's own cart.
+  // Mutation caught: no try/catch (the error takes the form down).
+  it('a browser whose storage refuses the removal still opens New rental', () => {
+    savedCart(DRAFT_KEY, [{ itemId: 'tent', quantity: 1 }]);
+    const remove = vi.spyOn(localStorage, 'removeItem').mockImplementation(() => {
+      throw new Error('SecurityError');
+    });
+    try {
+      renderForm();
+      expect(remove).toHaveBeenCalledWith(LEGACY_DRAFT_KEY);
+    } finally {
+      remove.mockRestore();
+    }
+    expect(screen.getByText('Event tent')).toBeTruthy();
+    expect((checkOut() as HTMLButtonElement).disabled).toBe(false);
   });
 
   // Mutation caught: checkout clearing the shared key instead of the viewer's.

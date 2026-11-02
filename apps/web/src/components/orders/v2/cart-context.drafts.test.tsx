@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -261,16 +261,17 @@ describe('CartProvider — the New order draft is per account', () => {
 // New rental saved its cart under rental-draft:<warehouse>, which belonged to
 // no account: on a shared computer the next person to open New rental for that
 // warehouse found the last person's items and quantities. It now saves under
-// rental-draft:v2:<userId>:<warehouse> (rentalDraftPrefixFor), and a draft left
-// under the old key is adopted once, by the first person who opens that
-// warehouse, and the old key is removed, as the New order draft's was (PO-2).
+// rental-draft:v2:<userId>:<warehouse> (rentalDraftPrefixFor). A draft left
+// under the old key is NOT adopted (review of B20a): it carries no owner, and
+// adopting it once handed it to whoever opened New rental first. New rental
+// mounts the cart with no legacyDraftPrefix, as renderRental does, and removes
+// the old key unread itself (rental-create-form.test.tsx pins that part).
 describe('CartProvider — the New rental draft is per account', () => {
   function renderRental(prefix: string) {
     return render(
       <CartProvider
         initial={initialCartState({ warehouseId: WH, fulfillmentType: 'pickup' })}
         draftPrefix={prefix}
-        legacyDraftPrefix={RENTAL_DRAFT_PREFIX}
       >
         <Lines />
       </CartProvider>,
@@ -280,6 +281,8 @@ describe('CartProvider — the New rental draft is per account', () => {
   beforeEach(() => localStorage.clear());
   afterEach(() => {
     vi.useRealTimers();
+    // A storage spy left by a test that failed before restoring its own.
+    vi.restoreAllMocks();
     localStorage.clear();
   });
 
@@ -297,27 +300,35 @@ describe('CartProvider — the New rental draft is per account', () => {
     expect(localStorage.getItem(u1Key)).not.toBeNull();
   });
 
-  // Mutation caught: no legacy prefix (the old cart vanishes at the deploy),
-  // or one that is read but not removed (every account adopts it).
-  it('a draft under the old shared key is adopted once, by the first account, and the old key is removed', () => {
-    localStorage.setItem(`${RENTAL_DRAFT_PREFIX}${WH}`, draft([{ itemId: 'tent', quantity: 2 }]));
+  // Mounted as New rental mounts it, the cart neither reads nor opens a draft
+  // under the old shared key, for the first account or the next.
+  it('a draft under the old shared key is never read or opened, by any account', () => {
+    const legacyKey = `${RENTAL_DRAFT_PREFIX}${WH}`;
+    localStorage.setItem(legacyKey, draft([{ itemId: 'tent', quantity: 2 }]));
+    // On localStorage itself: happy-dom binds a copy of each Storage method
+    // onto the instance at first use, so a spy on Storage.prototype misses it.
+    const reads = vi.spyOn(localStorage, 'getItem');
     const first = renderRental(rentalDraftPrefixFor('u1'));
-    expect(screen.getByTestId('lines').textContent).toBe('tentx2');
-    expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
+    const legacyReads = reads.mock.calls.filter(([key]) => key === legacyKey);
+    reads.mockRestore();
+    expect(legacyReads).toEqual([]);
+    expect(screen.getByTestId('lines').textContent).toBe('');
     first.unmount();
     renderRental(rentalDraftPrefixFor('u2'));
     expect(screen.getByTestId('lines').textContent).toBe('');
   });
 
-  it('the adopted draft is saved under the account key from then on', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    localStorage.setItem(`${RENTAL_DRAFT_PREFIX}${WH}`, draft([{ itemId: 'tent', quantity: 2 }]));
+  // A tab still on the previous build reads the old key, so this build must
+  // never write it. Real timers: the save is waited for, not stepped.
+  it('a rental cart saves under the account key only, never under the old shared key', async () => {
     renderRental(rentalDraftPrefixFor('u1'));
-    await act(async () => {
-      vi.advanceTimersByTime(300);
+    act(() => {
+      screen.getByRole('button', { name: 'add tent' }).click();
     });
-    const saved = JSON.parse(localStorage.getItem(`${rentalDraftPrefixFor('u1')}${WH}`) ?? '{}');
-    expect(saved.lines).toEqual([{ itemId: 'tent', quantity: 2 }]);
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(`${rentalDraftPrefixFor('u1')}${WH}`) ?? '{}');
+      expect(saved.lines).toEqual([{ itemId: 'tent', quantity: 1 }]);
+    });
     expect(localStorage.getItem(`${RENTAL_DRAFT_PREFIX}${WH}`)).toBeNull();
   });
 
