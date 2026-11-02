@@ -15,18 +15,31 @@ import { emitAuthAudit } from '@/server/services/auth-audit';
  * step-up modal (server/actions/mfa.ts challengeFactorAction), and the reset's
  * code step (server/actions/auth.ts completePasswordResetAction).
  *
- * ONE BUDGET, PER ACCOUNT AND CLIENT ADDRESS. Every well-formed code press
- * spends one attempt of `mfa-code:<account>:<address>`, 10 per 15 minutes,
- * before GoTrue is asked, on all three paths together; a malformed code and the
- * reset's press that only asks for the code spend nothing. GoTrue's own limit
- * cannot tell people apart here: these calls reach it from this server, never
- * from the person's network. The account is the verified one (the session's
- * verified claims, or the reset's first account read), never a value from the
- * input. The address is part of the key on purpose: keyed on the account alone,
- * anyone holding the password could keep spending the budget and pause every
- * web code check of the account, the reset included, which is how a person
- * gets back in. Closed, as every auth front door: a limiter that cannot answer
- * refuses.
+ * ONE BUDGET, TWO BUCKETS. Every well-formed code press, before GoTrue is
+ * asked, on all three paths together, counts once in each of:
+ *   - `mfa-code:<account>:<address>`, 10 per 15 minutes: the pace of one
+ *     person at one place;
+ *   - `mfa-code-account:<account>`, 20 per hour at any address: the ceiling of
+ *     the account, so code attempts from many addresses stop there too.
+ * The press goes ahead only when both allow it, and the refusal is the same
+ * either way. Both are counted on every press, also one the other bucket
+ * refuses: the limiter checks and counts in one step (increment_rate_limit,
+ * migration 0048), so one bucket cannot be read without counting it. A
+ * malformed code and the reset's press that only asks for the code spend
+ * nothing. GoTrue's own limit cannot tell people apart here: these calls reach
+ * it from this server, never from the person's network. The account is the
+ * verified one (the session's verified claims, or the reset's first account
+ * read), never a value from the input.
+ *
+ * The trade-off of the account bucket: someone who already holds the password
+ * (or the reset link) can spend it and pause the account's web code checks,
+ * the reset's included, for at most an hour. A person at one place meets the
+ * address bucket first (10 in 15 minutes); the account bucket only refuses
+ * past 20 in an hour, from one address or many. The hourly security monitor
+ * reports refused codes on one account from 5 in an hour
+ * (server/security/monitors.ts detectRefusedCodeBursts), well before the
+ * account bucket is spent. Both are closed, as every auth front door: a
+ * limiter that cannot answer refuses.
  *
  * ROWS ONLY FOR A CODE GOTRUE JUDGED WRONG. mfa.code_refused is written only
  * for GoTrue's wrong-code answer (classifyMfaCodeError's `refused`), never for
@@ -40,8 +53,12 @@ import { emitAuthAudit } from '@/server/services/auth-audit';
 
 /** Code attempts per account and client address in one window. */
 export const MFA_CODE_ATTEMPT_LIMIT = 10;
-/** The window of the code budget. */
+/** The window of the account-and-address bucket. */
 export const MFA_CODE_ATTEMPT_WINDOW_MS = 15 * 60_000;
+/** Code attempts per account, at any address, in one window. */
+export const MFA_CODE_ACCOUNT_LIMIT = 20;
+/** The window of the account bucket. */
+export const MFA_CODE_ACCOUNT_WINDOW_MS = 60 * 60_000;
 
 /** GoTrue judged the code wrong. The reset's words before this budget. */
 export const MFA_CODE_REFUSED =
@@ -67,18 +84,29 @@ export const MFA_SETUP_UNREADABLE = 'Could not check your authenticator set-up. 
 export type MfaCodePath = 'challenge' | 'password_reset';
 
 /**
- * Spends one code attempt of `userId` at this request's client address.
- * True when the attempt may go ahead.
+ * Spends one code attempt of `userId`: once in the bucket of the account at
+ * this request's client address and once in the account's own bucket. True
+ * only when both allow the attempt.
  */
 export async function allowMfaCodeAttempt(userId: string): Promise<boolean> {
   const ip = clientIpFromHeaders(await headers());
-  const rl = await checkRateLimit(
-    `mfa-code:${userId}:${ip}`,
-    MFA_CODE_ATTEMPT_LIMIT,
-    MFA_CODE_ATTEMPT_WINDOW_MS,
-    'closed',
-  );
-  return rl.allowed;
+  // checkRateLimit never throws: in closed mode a limiter that cannot answer
+  // comes back as not allowed.
+  const [atAddress, account] = await Promise.all([
+    checkRateLimit(
+      `mfa-code:${userId}:${ip}`,
+      MFA_CODE_ATTEMPT_LIMIT,
+      MFA_CODE_ATTEMPT_WINDOW_MS,
+      'closed',
+    ),
+    checkRateLimit(
+      `mfa-code-account:${userId}`,
+      MFA_CODE_ACCOUNT_LIMIT,
+      MFA_CODE_ACCOUNT_WINDOW_MS,
+      'closed',
+    ),
+  ]);
+  return atAddress.allowed && account.allowed;
 }
 
 /**

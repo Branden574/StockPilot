@@ -426,27 +426,68 @@ describe('challengeFactorAction — code budget, words and rows', () => {
     expect(emitAuthAudit).not.toHaveBeenCalled();
   });
 
-  it('keys the budget on the verified account and the client address, never on the input', async () => {
-    vi.mocked(readVerifiedSessionClaims).mockResolvedValue({
-      userId: 'verified-account',
-      sessionId: 'session-1',
-      aal: 'aal1',
-      amr: [],
-    });
+  it.each([
+    ['a sign-in code', 'aal1'],
+    ['a step-up', 'aal2'],
+  ] as const)(
+    'keys the budget on the verified account (with and without the client address), never on the input: %s',
+    async (_label, aal) => {
+      vi.mocked(readVerifiedSessionClaims).mockResolvedValue({
+        userId: 'verified-account',
+        sessionId: 'session-1',
+        aal,
+        amr: [],
+      });
 
-    await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+      await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
 
-    expect(checkRateLimit).toHaveBeenCalledTimes(1);
-    expect(checkRateLimit).toHaveBeenCalledWith(
-      'mfa-code:verified-account:unknown',
-      10,
-      15 * 60_000,
-      'closed',
-    );
-    const [limiterOrder] = vi.mocked(checkRateLimit).mock.invocationCallOrder;
-    const [challengeOrder] = mfaStub.challenge.mock.invocationCallOrder;
-    expect(limiterOrder as number).toBeLessThan(challengeOrder as number);
-  });
+      // Each press counts once in each bucket, both before GoTrue is asked.
+      expect(checkRateLimit).toHaveBeenCalledTimes(2);
+      expect(checkRateLimit).toHaveBeenCalledWith(
+        'mfa-code:verified-account:unknown',
+        10,
+        15 * 60_000,
+        'closed',
+      );
+      expect(checkRateLimit).toHaveBeenCalledWith(
+        'mfa-code-account:verified-account',
+        20,
+        60 * 60_000,
+        'closed',
+      );
+      const [challengeOrder] = mfaStub.challenge.mock.invocationCallOrder;
+      for (const limiterOrder of vi.mocked(checkRateLimit).mock.invocationCallOrder) {
+        expect(limiterOrder).toBeLessThan(challengeOrder as number);
+      }
+    },
+  );
+
+  it.each([
+    ['a sign-in code', 'aal1'],
+    ['a step-up', 'aal2'],
+  ] as const)(
+    'the account’s ceiling across addresses, spent alone, refuses in the same words before GoTrue is asked: %s',
+    async (_label, aal) => {
+      vi.mocked(readVerifiedSessionClaims).mockResolvedValue({
+        userId: 'user-1',
+        sessionId: 'session-1',
+        aal,
+        amr: [],
+      });
+      vi.mocked(checkRateLimit).mockImplementation(async (key: string) => ({
+        allowed: !key.startsWith('mfa-code-account:'),
+        count: 20,
+        resetAt: 0,
+      }));
+
+      const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+      expect(res).toEqual({ ok: false, error: { code: 'rate_limited', message: BUDGET_SPENT } });
+      expect(mfaStub.challenge).not.toHaveBeenCalled();
+      expect(mfaStub.verify).not.toHaveBeenCalled();
+      expect(emitAuthAudit).not.toHaveBeenCalled();
+    },
+  );
 
   it('with no verified session, says the person was signed out and asks nothing', async () => {
     vi.mocked(readVerifiedSessionClaims).mockResolvedValue(null);

@@ -265,9 +265,10 @@ export async function unenrollFactorAction(input: {
  * 6-digit code to upgrade to AAL2. Also the step-up modal's check
  * (components/auth/step-up-modal.tsx), at AAL1 or AAL2.
  *
- * Each press spends one attempt of the account's code budget at this client
- * address, shared with the reset's code step, and a code GoTrue judged wrong
- * writes an mfa.code_refused row (lib/auth/mfa-code-attempts.ts).
+ * Each press spends one attempt of the account's code budget (once at this
+ * client address, once for the account at any address), shared with the
+ * reset's code step, and a code GoTrue judged wrong writes an mfa.code_refused
+ * row (lib/auth/mfa-code-attempts.ts).
  */
 const signInChallengeSchema = z.object({
   factorId: z.string().min(1),
@@ -284,9 +285,10 @@ export async function challengeFactorAction(input: {
   }
   try {
     const supabase = await createClient();
-    // The account and level of THIS session, from its verified token: the
-    // budget is keyed on that account (and the client address), never on the
-    // input. No verified session, no code check (lib/auth/mfa-code-attempts).
+    // The account and level of THIS session, from its verified token: both
+    // buckets of the budget are keyed on that account (one with the client
+    // address), never on the input. No verified session, no code check
+    // (lib/auth/mfa-code-attempts).
     const claims = await readVerifiedSessionClaims(supabase);
     if (!claims) return err('unauthenticated', MFA_SESSION_ENDED);
 

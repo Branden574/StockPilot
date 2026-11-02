@@ -35,6 +35,8 @@ vi.mock('@/server/services/audit', () => ({
 vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: vi.fn() }));
 
 import {
+  MFA_CODE_ACCOUNT_LIMIT,
+  MFA_CODE_ACCOUNT_WINDOW_MS,
   MFA_CODE_ATTEMPT_LIMIT,
   MFA_CODE_ATTEMPT_WINDOW_MS,
   allowMfaCodeAttempt,
@@ -54,7 +56,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe('allowMfaCodeAttempt — one budget per account and client address', () => {
+describe('allowMfaCodeAttempt — per account and client address, and per account', () => {
   it('on Vercel, keys on the account and the first forwarded address, 10 per 15 minutes, closed', async () => {
     vi.stubEnv('VERCEL', '1');
     requestHeaders.current = new Headers({ 'x-forwarded-for': '203.0.113.7, 10.0.0.1' });
@@ -66,6 +68,19 @@ describe('allowMfaCodeAttempt — one budget per account and client address', ()
     expect(MFA_CODE_ATTEMPT_WINDOW_MS).toBe(15 * 60_000);
   });
 
+  it('also spends the account’s own bucket, 20 per hour at any address, closed: each once', async () => {
+    vi.stubEnv('VERCEL', '1');
+    requestHeaders.current = new Headers({ 'x-forwarded-for': '203.0.113.7' });
+
+    await expect(allowMfaCodeAttempt('u1')).resolves.toBe(true);
+
+    expect(checkRateLimit).toHaveBeenCalledTimes(2);
+    expect(checkRateLimit).toHaveBeenCalledWith('mfa-code:u1:203.0.113.7', 10, 900000, 'closed');
+    expect(checkRateLimit).toHaveBeenCalledWith('mfa-code-account:u1', 20, 3600000, 'closed');
+    expect(MFA_CODE_ACCOUNT_LIMIT).toBe(20);
+    expect(MFA_CODE_ACCOUNT_WINDOW_MS).toBe(60 * 60_000);
+  });
+
   it('off Vercel, never trusts x-forwarded-for: x-real-ip, else unknown', async () => {
     vi.stubEnv('VERCEL', '');
     requestHeaders.current = new Headers({
@@ -73,20 +88,27 @@ describe('allowMfaCodeAttempt — one budget per account and client address', ()
       'x-real-ip': '198.51.100.8',
     });
     await allowMfaCodeAttempt('u1');
-    expect(checkRateLimit).toHaveBeenLastCalledWith(
-      'mfa-code:u1:198.51.100.8',
-      10,
-      900000,
-      'closed',
-    );
+    expect(checkRateLimit).toHaveBeenCalledWith('mfa-code:u1:198.51.100.8', 10, 900000, 'closed');
 
     requestHeaders.current = new Headers({ 'x-forwarded-for': '203.0.113.7' });
     await allowMfaCodeAttempt('u1');
-    expect(checkRateLimit).toHaveBeenLastCalledWith('mfa-code:u1:unknown', 10, 900000, 'closed');
+    expect(checkRateLimit).toHaveBeenCalledWith('mfa-code:u1:unknown', 10, 900000, 'closed');
   });
 
   it('a spent budget, or a limiter that cannot answer, refuses', async () => {
     checkRateLimit.mockResolvedValue({ allowed: false, count: 10, resetAt: 0 });
+    await expect(allowMfaCodeAttempt('u1')).resolves.toBe(false);
+  });
+
+  it.each([
+    ['the account at this address', 'mfa-code:'],
+    ['the account at every address', 'mfa-code-account:'],
+  ])('goes ahead only when both allow it: %s spent alone refuses', async (_label, spent) => {
+    checkRateLimit.mockImplementation(async (key: string) => ({
+      allowed: !key.startsWith(spent),
+      count: 0,
+      resetAt: 0,
+    }));
     await expect(allowMfaCodeAttempt('u1')).resolves.toBe(false);
   });
 });
@@ -173,8 +195,15 @@ describe('checkMfaCode', () => {
     expect(row).not.toContain('challenge-1');
   });
 
-  it('a spent budget asks GoTrue nothing and writes nothing', async () => {
-    checkRateLimit.mockResolvedValue({ allowed: false, count: 10, resetAt: 0 });
+  it.each([
+    ['both buckets', ''],
+    ['the account’s ceiling at every address alone', 'mfa-code-account:'],
+  ])('a spent budget (%s) asks GoTrue nothing and writes nothing', async (_label, spent) => {
+    checkRateLimit.mockImplementation(async (key: string) => ({
+      allowed: !key.startsWith(spent),
+      count: 10,
+      resetAt: 0,
+    }));
     const { client, challenge, verify } = fakeClient(null);
 
     const res = await checkMfaCode(client as never, {

@@ -593,8 +593,10 @@ describe('completePasswordResetAction', () => {
       });
     });
 
+    // Both buckets of the code budget: the account at this address
+    // (mfa-code:) and the account at every address (mfa-code-account:).
     function codeBudgetCalls() {
-      return checkRateLimit.mock.calls.filter((c) => String(c[0]).startsWith('mfa-code:'));
+      return checkRateLimit.mock.calls.filter((c) => /^mfa-code(-account)?:/.test(String(c[0])));
     }
 
     function refusedRows() {
@@ -629,7 +631,13 @@ describe('completePasswordResetAction', () => {
 
     it('spends the account’s code budget at this address, and a spent budget asks GoTrue nothing', async () => {
       await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
-      expect(codeBudgetCalls()).toEqual([['mfa-code:u1:unknown', 10, 900000, 'closed']]);
+      expect(codeBudgetCalls()).toHaveLength(2);
+      expect(codeBudgetCalls()).toEqual(
+        expect.arrayContaining([
+          ['mfa-code:u1:unknown', 10, 900000, 'closed'],
+          ['mfa-code-account:u1', 20, 3600000, 'closed'],
+        ]),
+      );
 
       vi.clearAllMocks();
       checkRateLimit.mockImplementation(async (key: string) => ({
@@ -653,6 +661,27 @@ describe('completePasswordResetAction', () => {
       expect(updateUser).not.toHaveBeenCalled();
     });
 
+    it('the account’s ceiling across addresses, spent alone, pauses the code step in the same words', async () => {
+      checkRateLimit.mockImplementation(async (key: string) => ({
+        allowed: !key.startsWith('mfa-code-account:'),
+      }));
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'rate_limited',
+          message: 'Too many code attempts. Wait a few minutes and try again.',
+          details: { reason: 'aal2_required' },
+        },
+      });
+      expect(challenge).not.toHaveBeenCalled();
+      expect(verify).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(refusedRows()).toEqual([]);
+    });
+
     it('the press that only asks for the code spends nothing from the code budget', async () => {
       await completePasswordResetAction(INPUT);
 
@@ -668,7 +697,13 @@ describe('completePasswordResetAction', () => {
 
       await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
 
-      expect(codeBudgetCalls()).toEqual([['mfa-code:u2:unknown', 10, 900000, 'closed']]);
+      expect(codeBudgetCalls()).toHaveLength(2);
+      expect(codeBudgetCalls()).toEqual(
+        expect.arrayContaining([
+          ['mfa-code:u2:unknown', 10, 900000, 'closed'],
+          ['mfa-code-account:u2', 20, 3600000, 'closed'],
+        ]),
+      );
       expect(refusedRows()).toEqual([expect.objectContaining({ user_id: 'u2' })]);
     });
 
