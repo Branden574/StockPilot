@@ -815,17 +815,22 @@ PGTAP_TESTS=(
   # Replacement guards (0425, docket S7a, INV-C7): a replacement order's
   # lines are fixed for every role: only the workflow columns change, within
   # their value rules (what was handed over and what came back never go
-  # down, and stay within what was asked and handed over), unless an RMA
-  # function holds the transaction-bound flag. That flag, in the lines guard
-  # and the header guard, counts only for a writer that is not an API role,
-  # and the header guard now also asks it of a replacement's move into
-  # cancelled or denied (the status gate is SECURITY DEFINER and cannot ask
-  # the role). Release early, Cancel replacement, Change replacement, Close
-  # the rest and the RMA cancel ask write access to the replacement's own
-  # warehouse before their first row lock, and again under the replacement's
-  # lock. Each restated body is the one before with its added lines removed,
-  # and taking each addition out lets the refused write or call through. The
-  # two-session proofs are
+  # down, and stay within what was asked and handed over; what was picked
+  # stays within what was asked and what was packed within what was picked,
+  # neither lowered outside picking but by the hand-over), unless an RMA
+  # function holds the transaction-bound flag. The guard reads the line's
+  # order as its owner, only in the line's own organization (and for an API
+  # writer only in one it is a member of), and refuses when it is not there.
+  # The flag, in the lines guard and the header guard (both SECURITY
+  # INVOKER), counts only for postgres and supabase_admin, an allowlist, and
+  # the header guard now also asks it of a replacement's move into cancelled
+  # or denied (the status gate is SECURITY DEFINER and cannot ask the role).
+  # The login and API roles are pinned. Release early, Cancel replacement,
+  # Change replacement, Close the rest and the RMA cancel ask write access to
+  # the replacement's own warehouse before their first row lock, and again
+  # under the replacement's lock. Each restated body is the one before with
+  # its added lines removed, and taking each addition out lets the refused
+  # write or call through. The two-session proofs are
   # scripts/db-concurrency/0425_replacement_warehouse_gate_race.sh; the lock
   # footprint is scripts/db-concurrency/0425_migration_lock_footprint.sh.
   supabase/tests/0425_replacement_guards.test.sql
