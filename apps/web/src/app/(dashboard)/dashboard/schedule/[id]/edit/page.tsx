@@ -54,7 +54,7 @@ export default async function EditScheduleEventPage({
     throw e;
   }
   // [] while Bundles is off, where list() refuses (B67). An event linked to a
-  // bundle keeps the link in `defaults`.
+  // bundle keeps the link in `defaults`, and the form names it.
   const [warehouses, bundles] = await Promise.all([
     warehousesSvc.listNames(),
     bundlesSvc.listForLookups(),
