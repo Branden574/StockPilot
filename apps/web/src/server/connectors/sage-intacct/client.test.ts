@@ -1,4 +1,4 @@
-import { createServer, type AddressInfo, type Server } from 'node:net';
+import { createServer, type AddressInfo, type Server, type Socket } from 'node:net';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -315,7 +315,7 @@ describe('IntacctClient against the runtime fetch (loopback only)', () => {
     if (open?.listening) await new Promise<void>((resolve) => open.close(() => resolve()));
   });
 
-  async function listen(onConnection?: Parameters<typeof createServer>[0]): Promise<number> {
+  async function listen(onConnection?: (socket: Socket) => void): Promise<number> {
     server = onConnection ? createServer(onConnection) : createServer();
     const listening = server;
     await new Promise<void>((resolve) => listening.listen(0, '127.0.0.1', resolve));
