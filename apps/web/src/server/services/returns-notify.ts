@@ -3,6 +3,7 @@ import 'server-only';
 import {
   effectivePermissions,
   formatOrderNumber,
+  requesterNoticeWords,
   RETURNS_COPY,
   staffNewRequestBody,
   type PermissionOverride,
@@ -232,7 +233,9 @@ export async function notifyStaffNewReturnRequest(
  * The RMA's own events a requester hears (RX-1, and RX-2's exchange events).
  * The replacement ORDER's edges (ready, on the way, handed over) are the
  * notify trigger's in-app pings and the replacement emails
- * (server/email/replacement-update.ts), never sent from here.
+ * (server/email/replacement-update.ts), never sent from here. The same union
+ * as core's RequesterNoticeEvent, whose words the in-app row takes (B21; a
+ * type test keeps the two equal).
  */
 export type RequesterReturnEvent = Extract<
   ReturnUpdateEmailEvent,
@@ -256,24 +259,6 @@ export type RequesterReturnEvent = Extract<
   | 'exchange_request_received'
   | 'exchange_declined'
 >;
-
-const REQUESTER_TITLES: Record<RequesterReturnEvent, string> = {
-  request_received: RETURNS_COPY.requesterReceivedReturnRequest,
-  approved: RETURNS_COPY.requesterReturnApproved,
-  received: RETURNS_COPY.requesterItemReceived,
-  denied: RETURNS_COPY.requesterReturnDeclined,
-  cancelled: RETURNS_COPY.requesterReturnCancelled,
-  // RX-2 (plan 3.6.8): no reason text ever reaches a requester.
-  exchange_approved: RETURNS_COPY.requesterExchangeApprovedReserved,
-  exchange_approved_short: RETURNS_COPY.requesterExchangeApprovedShort,
-  replacement_changed: RETURNS_COPY.requesterReplacementChanged,
-  replacement_cancelled: RETURNS_COPY.requesterReplacementCancelled,
-  return_approved_replacement_added: RETURNS_COPY.requesterReturnApprovedReplacementAdded,
-  return_approved_replacement_added_short: RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
-  replacement_closed_return_only: RETURNS_COPY.requesterReplacementClosedReturnOnly,
-  exchange_request_received: RETURNS_COPY.requesterReceivedExchangeRequest,
-  exchange_declined: RETURNS_COPY.requesterExchangeDeclined,
-};
 
 /** Whether this event reaches the requester at all, given how it happened. */
 export function requesterHearsEvent(event: RequesterReturnEvent, input: { source: string; channel?: string | null }): boolean {
@@ -330,8 +315,13 @@ export async function notifyRequesterReturnEvent(
     // never told again, not even at the address the order kept (A3, 0393; the
     // return prompt and the order emails follow the same rule).
     if (o.requester_deleted_at) return;
-    const title = REQUESTER_TITLES[rma.event];
-    const handle = rma.returnNumber ?? formatOrderNumber(o.order_number) ?? 'your order';
+    // B21 (1.7): a short title (core requesterNoticeWords), and the rest of
+    // the sentence after the RMA or SO number in the body, never "your
+    // order: …"; an event of one sentence keeps the number as its body.
+    const { title, detail } = requesterNoticeWords(rma.event);
+    const number = rma.returnNumber ?? formatOrderNumber(o.order_number);
+    const handle = number ?? 'your order';
+    const body = detail ? (number ? `${number}: ${detail}` : detail) : handle;
     const isPortal = o.source === 'portal';
 
     // An account holder hears in the app. A B2B portal user is not a member;
@@ -344,7 +334,7 @@ export async function notifyRequesterReturnEvent(
           userId: o.requester_user_id,
           type: `return.${rma.event}`,
           title,
-          body: handle,
+          body,
           link: `/dashboard/orders/${rma.linkOrderId ?? rma.orderId}`,
           metadata: {
             return_id: rma.returnId,

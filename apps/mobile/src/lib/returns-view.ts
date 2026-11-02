@@ -19,7 +19,8 @@ import {
   availableLabel,
   availableReturnActions,
   defaultExchangeReviewState,
-  earlierReplacementsLine,
+  denyDialogHelp,
+  earlierReplacementEntries,
   exchangeActionConsequences,
   exchangeReviewDecision,
   exchangeReviewProblem,
@@ -52,6 +53,7 @@ import {
   processLabelFor,
   railStepStateWords,
   READINESS_NEEDS_CONNECTION_COPY,
+  refusalMeansStaleScreen,
   RETURN_ACTION_LABELS,
   RETURN_WAITING_PROMPT_DAYS,
   RETURNS_COPY,
@@ -68,6 +70,7 @@ import {
   type ReturnAction,
   type ReturnActions,
   type ReturnLineDecision,
+  type ReturnRefusalAction,
 } from '@stockpilot/core';
 
 import type {
@@ -363,9 +366,56 @@ export function processingHint(line: MobileReturnWorkbenchLine, choice: RestockC
   return RETURNS_COPY.processScrapHint;
 }
 
-/** The deny sheet's help: only a requester's RMA tells anyone (review). */
+/**
+ * The deny sheet's help: only a requester's RMA tells anyone (review). B21:
+ * core's sentence, so it starts "Nothing moves." as the web's dialog does.
+ */
 export function denyHelp(wb: Pick<MobileReturnWorkbench, 'return'>): string {
-  return wb.return.source === 'requester' ? RETURNS_COPY.denyReasonHelp : RETURNS_COPY.denyReasonHelpInternal;
+  return denyDialogHelp(wb.return.source);
+}
+
+/** The sheets whose reason only the warehouse sees (the replacement's). */
+const REPLACEMENT_REASON_MODES: readonly string[] = [
+  'release',
+  'cancel_replacement',
+  'change_replacement',
+  'issue_replacement',
+  'close_as_return_only',
+  'close_replacement_rest',
+];
+
+/**
+ * The help under a replacement sheet's reason box, and its VoiceOver hint
+ * (B21, 13.17): who sees the reason, the web's words. Null for every other
+ * sheet (Deny has its own, denyHelp).
+ */
+export function reasonHelpFor(mode: string): string | null {
+  return REPLACEMENT_REASON_MODES.includes(mode) ? RETURNS_COPY.replacementReasonHelp : null;
+}
+
+/**
+ * The replacement action a sheet's request names (B21, 13.16), so an order
+ * approval refusal says what needs it (describeReturnError). Null for the
+ * sheets whose database function never asks for order approval.
+ */
+export function refusalActionFor(mode: string): ReturnRefusalAction | null {
+  switch (mode) {
+    case 'approve':
+      return 'approve';
+    case 'cancel':
+      return 'cancel_return';
+    case 'release':
+      return 'release';
+    case 'cancel_replacement':
+      return 'cancel_replacement';
+    case 'change_replacement':
+    case 'issue_replacement':
+      return 'change';
+    case 'close_replacement_rest':
+      return 'close_rest';
+    default:
+      return null;
+  }
 }
 
 // ── Step outcomes ──────────────────────────────────────────────────────────
@@ -773,11 +823,19 @@ export function replacementOrderLines(
   if (ex.releasedEarly) {
     out.push({ key: 'released', text: releasedBeforeReturnLine(ex.release?.byName ?? null, canReadDecisions ? (ex.release?.reason ?? null) : null) });
   }
-  // Review fix P22: the RMA's earlier replacements, in the order status words
-  // (the web lists them too), never a raw status code.
-  const earlier = earlierReplacementsLine(ex.history ?? []);
-  if (earlier) out.push({ key: 'earlier', text: earlier });
+  // The RMA's earlier replacements follow as links (earlierReplacementLinks).
   return out;
+}
+
+/**
+ * The RMA's earlier replacements, each a link to its order (B21, 1.9; the
+ * web links them too): the SO number and the order status words in brackets
+ * (review fix P22: never a raw status code), and the order screen's path.
+ */
+export function earlierReplacementLinks(
+  history: MobileReturnExchange['history'] | null | undefined,
+): { orderId: string; label: string; href: string }[] {
+  return earlierReplacementEntries(history ?? []).map((e) => ({ orderId: e.orderId, label: e.text, href: `/order/${e.orderId}` }));
 }
 
 /**
@@ -787,17 +845,11 @@ export function replacementOrderLines(
  * its replacement was picked or left meanwhile (replacement_in_progress, 0396:
  * the RMA cancel is refused then), or (returns RX-4, 0397) Close the rest
  * found nothing on backorder any more (replacement_not_backordered: the rest
- * was resumed or closed meanwhile). The workbench reloads and says why.
+ * was resumed or closed meanwhile). The workbench reloads and says why. B21:
+ * core's list (refusalMeansStaleScreen), one for the web and the phone.
  */
-const STALE_REFUSALS: readonly string[] = [
-  'return_changed',
-  'invalid_status_transition',
-  'replacement_in_progress',
-  'replacement_not_backordered',
-];
-
 export function refusalRefreshesWorkbench(reason: string | null | undefined): boolean {
-  return typeof reason === 'string' && STALE_REFUSALS.includes(reason);
+  return refusalMeansStaleScreen(reason);
 }
 
 /**

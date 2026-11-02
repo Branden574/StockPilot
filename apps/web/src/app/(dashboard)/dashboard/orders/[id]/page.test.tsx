@@ -3224,6 +3224,38 @@ describe("orders/[id]: ?sign=physical from the RMA's Hand over", () => {
   });
 });
 
+// B21 (2026-11-02): Active reservations said stock is held "until this
+// request is delivered or cancelled", but completing the pick releases every
+// hold (0365) and the card lists only holds not released, so that was never
+// true while the card showed. A replacement's items change only through its
+// return, so its card never says a line can be removed.
+describe('orders/[id]: Active reservations says when held stock is released (B21)', () => {
+  it('an ordinary order: until picking is complete or the order is cancelled', async () => {
+    orderGet.mockResolvedValue(detailFixture({ reservations: [{ id: 'r1', quantity: 3 }] }));
+    await renderPage();
+    const card = screen.getByTestId('order-reservations');
+    expect(card).toHaveTextContent(
+      'Stock is held until picking is complete or the order is cancelled. Removing a line, or lowering its quantity, releases that line’s share straight away.',
+    );
+    expect(card.textContent).not.toMatch(/deliver/i);
+  });
+
+  it('a replacement: until picking is complete or the replacement is cancelled, never "Removing a line"', async () => {
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ replacement_for_return_id: 'rma-1' }),
+        reservations: [{ id: 'r1', quantity: 3 }],
+      }),
+    );
+    await renderPage();
+    const card = screen.getByTestId('order-reservations');
+    expect(card).toHaveTextContent(
+      'Stock is held until picking is complete or the replacement is cancelled.',
+    );
+    expect(card.textContent).not.toMatch(/Removing a line|deliver/i);
+  });
+});
+
 // Redesign P4.B1: the record page in the shared patterns. The header is
 // PageHeader (the way back, the SO number in the h1, who it is from and the
 // warehouse); every block of the main column is a titled section; Dates and

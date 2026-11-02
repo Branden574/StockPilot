@@ -14,6 +14,7 @@ import {
   changeOrCancelInRmaLabel,
   collectReturnedItemLine,
   createdAsReplacementLabel,
+  denyDialogHelp,
   earlierReplacementEntries,
   earlierReplacementsLine,
   exchangeReplacementBanner,
@@ -34,7 +35,10 @@ import {
   replacementRmaLinkLabel,
   replacementShortLine,
   replacementCancelledLines,
+  REQUESTER_NOTICE_EVENTS,
   requesterEntryLabel,
+  requesterNoticeWords,
+  type RequesterNoticeEvent,
   type ReplacementBannerInput,
   slipExchangeLine,
   stillWaitingLine,
@@ -646,5 +650,114 @@ describe('RX-2 fix round 1 words', () => {
     expect(link(info)).toBe('Change or cancel in RMA-1');
     expect(replacementRmaLinkLabel({ ...info, canChangeReplacement: false })).toBe('Open RMA-1');
     expect(replacementRmaLinkLabel({ ...info, canChangeReplacement: true })).toBe('Change or cancel in RMA-1');
+  });
+});
+
+// B21 (2026-11-02): Deny starts "Nothing moves." on the web and now on the
+// phone too, from one sentence.
+describe('B21: the Deny dialog help', () => {
+  it('says nothing moves, then who hears of it', () => {
+    expect(denyDialogHelp('requester')).toBe('Nothing moves. Required. The requester is told the request was declined, never the reason.');
+    expect(denyDialogHelp('internal')).toBe('Nothing moves. Required. The reason is kept on the return. Nobody is notified.');
+    // Only a requester's RMA tells anyone; every other source is a staff RMA.
+    expect(denyDialogHelp('staff')).toBe(denyDialogHelp('internal'));
+    expect(denyDialogHelp(null)).toBe(denyDialogHelp('internal'));
+  });
+});
+
+// B21 (2026-11-02): a requester's notification used the whole sentence as its
+// title, up to 202 characters, so a phone's lock screen cut it off. The title
+// is now the first sentence (or, for the two replacement-added events, the
+// news in five words) and the rest is the body.
+describe('B21: short requester notification titles', () => {
+  /** Today's sentence per event, as the emails keep it. */
+  const SENTENCE: Record<RequesterNoticeEvent, string> = {
+    request_received: RETURNS_COPY.requesterReceivedReturnRequest,
+    exchange_request_received: RETURNS_COPY.requesterReceivedExchangeRequest,
+    approved: RETURNS_COPY.requesterReturnApproved,
+    received: RETURNS_COPY.requesterItemReceived,
+    denied: RETURNS_COPY.requesterReturnDeclined,
+    cancelled: RETURNS_COPY.requesterReturnCancelled,
+    replacement_changed: RETURNS_COPY.requesterReplacementChanged,
+    exchange_approved: RETURNS_COPY.requesterExchangeApprovedReserved,
+    exchange_approved_short: RETURNS_COPY.requesterExchangeApprovedShort,
+    replacement_cancelled: RETURNS_COPY.requesterReplacementCancelled,
+    replacement_closed_return_only: RETURNS_COPY.requesterReplacementClosedReturnOnly,
+    exchange_declined: RETURNS_COPY.requesterExchangeDeclined,
+    return_approved_replacement_added: RETURNS_COPY.requesterReturnApprovedReplacementAdded,
+    return_approved_replacement_added_short: RETURNS_COPY.requesterReturnApprovedReplacementAddedShort,
+  };
+
+  it('covers the 14 events, each title at most 40 characters', () => {
+    expect([...REQUESTER_NOTICE_EVENTS].sort()).toEqual(Object.keys(SENTENCE).sort());
+    for (const event of REQUESTER_NOTICE_EVENTS) {
+      const { title } = requesterNoticeWords(event);
+      expect(title.length, `${event}: ${title}`).toBeLessThanOrEqual(40);
+    }
+  });
+
+  it('the seven one-sentence events keep the sentence as the title, with no detail', () => {
+    for (const event of [
+      'request_received',
+      'exchange_request_received',
+      'approved',
+      'received',
+      'denied',
+      'cancelled',
+      'replacement_changed',
+    ] as const) {
+      expect(requesterNoticeWords(event), event).toEqual({ title: SENTENCE[event], detail: null });
+    }
+  });
+
+  it('the five split events: the first sentence is the title, the rest the detail, no word changed', () => {
+    expect(requesterNoticeWords('exchange_approved')).toEqual({
+      title: 'Your replacement is reserved.',
+      detail: 'Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+    });
+    expect(requesterNoticeWords('exchange_approved_short')).toEqual({
+      title: 'Your replacement is not in stock yet.',
+      detail: 'The warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+    });
+    expect(requesterNoticeWords('replacement_cancelled')).toEqual({
+      title: 'Your replacement was cancelled.',
+      detail: 'The warehouse will follow up.',
+    });
+    expect(requesterNoticeWords('replacement_closed_return_only')).toEqual({
+      title: 'No replacement will be sent.',
+      detail: 'Your return goes on as a return only.',
+    });
+    expect(requesterNoticeWords('exchange_declined')).toEqual({ title: 'Exchange declined.', detail: 'Your return was approved.' });
+    for (const event of [
+      'exchange_approved',
+      'exchange_approved_short',
+      'replacement_cancelled',
+      'replacement_closed_return_only',
+      'exchange_declined',
+    ] as const) {
+      const { title, detail } = requesterNoticeWords(event);
+      expect(`${title} ${detail}`, event).toBe(SENTENCE[event]);
+    }
+  });
+
+  it('the two replacement-added events keep the news in the title', () => {
+    for (const event of ['return_approved_replacement_added', 'return_approved_replacement_added_short'] as const) {
+      const { title, detail } = requesterNoticeWords(event);
+      expect(title).toBe('Return approved, replacement added.');
+      expect(SENTENCE[event].startsWith('Your return was approved. ')).toBe(true);
+      expect(detail).toBe(SENTENCE[event].slice('Your return was approved. '.length));
+    }
+    expect(requesterNoticeWords('return_approved_replacement_added').detail).toBe(
+      'The warehouse added a replacement for you, and it is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+    );
+  });
+
+  it('keeps the requester words free of racks, Staging, dispositions and banned claims', () => {
+    const words = REQUESTER_NOTICE_EVENTS.flatMap((e) => {
+      const { title, detail } = requesterNoticeWords(e);
+      return detail ? [title, detail] : [title];
+    });
+    expect(words.filter((s) => /rack|staging|scrap|restock|on hand|cost|supplier/i.test(s))).toEqual([]);
+    expect(words.filter((s) => /\bbooks?\b|verified|inspected|certif|guarantee/i.test(s))).toEqual([]);
   });
 });

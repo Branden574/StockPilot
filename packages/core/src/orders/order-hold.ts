@@ -215,6 +215,18 @@ export const HOLD_ORDER_NOT_FOUND_COPY = 'Order not found.';
 export const HOLD_MODULE_OFF_COPY = 'Orders are turned off for this organization.';
 export const HOLD_FAILED_COPY = "Stock couldn't be held just now. Try again.";
 
+/**
+ * The order page's Active reservations card: when held stock is let go (B21).
+ * It said "until this request is delivered or cancelled", but complete_picking
+ * releases every hold before the order reaches picking_complete (0365), and
+ * the card lists only holds not released, so that was never true while it
+ * showed. A replacement's items change only through its return, so its card
+ * says nothing about removing a line.
+ */
+export const ORDER_HOLD_CARD_COPY =
+  'Stock is held until picking is complete or the order is cancelled. Removing a line, or lowering its quantity, releases that line’s share straight away.';
+export const REPLACEMENT_HOLD_CARD_COPY = 'Stock is held until picking is complete or the replacement is cancelled.';
+
 function fq(n: number): string {
   const v = Number.isFinite(n) ? n : 0;
   return v.toLocaleString('en-US', { maximumFractionDigits: 4 });

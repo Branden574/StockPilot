@@ -22,7 +22,9 @@ import {
   holdStillShortUnits,
   HoldResultShapeError,
   isHoldStatus,
+  ORDER_HOLD_CARD_COPY,
   parseHoldOrderStockResult,
+  REPLACEMENT_HOLD_CARD_COPY,
   shouldOfferHoldStock,
   shouldTopUpHolds,
   type HoldOutcome,
@@ -386,5 +388,36 @@ describe('order-hold source literals', () => {
     visit(source);
     expect(out.length).toBeGreaterThan(10);
     expect(out.filter((t) => /\bbooks?\b|%|guarantee|verified/i.test(t))).toEqual([]);
+  });
+});
+
+// B21 (2026-11-02): the order page's Active reservations card said stock is
+// held "until this request is delivered or cancelled". complete_picking
+// releases every hold before the order reaches picking_complete (0365), and
+// the card lists only holds not released, so it never shows once that is
+// true. One sentence for an ordinary order, one for a replacement (whose
+// items change only through its return, so no line can be removed there).
+describe('the held-stock card (B21)', () => {
+  it('says picking releases the hold', () => {
+    expect(ORDER_HOLD_CARD_COPY).toBe(
+      'Stock is held until picking is complete or the order is cancelled. Removing a line, or lowering its quantity, releases that line’s share straight away.',
+    );
+    expect(REPLACEMENT_HOLD_CARD_COPY).toBe('Stock is held until picking is complete or the replacement is cancelled.');
+    expect(REPLACEMENT_HOLD_CARD_COPY).not.toMatch(/Removing a line/);
+  });
+
+  it('no sentence in the module says delivered', () => {
+    const HERE = path.dirname(fileURLToPath(import.meta.url));
+    const text = readFileSync(path.join(HERE, 'order-hold.ts'), 'utf8');
+    const source = ts.createSourceFile('order-hold.ts', text, ts.ScriptTarget.Latest, true);
+    const literals: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) literals.push(node.text);
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    expect(literals).toContain(ORDER_HOLD_CARD_COPY);
+    expect(literals.filter((t) => /deliver/i.test(t))).toEqual([]);
+    expect([ORDER_HOLD_CARD_COPY, REPLACEMENT_HOLD_CARD_COPY].filter((w) => /\bbooks?\b|%|guarantee|verified|reserved/i.test(w))).toEqual([]);
   });
 });

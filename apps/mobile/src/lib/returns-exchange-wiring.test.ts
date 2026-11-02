@@ -205,8 +205,11 @@ describe('online only', () => {
   // the release sends nothing and frees the sheet: never stuck on "Saving…",
   // which also blocks Close, the backdrop and the escape. No refusal path in
   // the sheet returns while still busy.
+  // Re-pinned by B21 (2026-11-02; claim kept, nothing is sent and the sheet is
+  // never stuck): it is a stale screen, as on the web, so the sheet closes,
+  // the workbench reloads and its notice says why.
   it('a release with no live replacement shown frees the sheet, and no refusal returns while busy', () => {
-    expect(sheet).toMatch(/if \(!shownOrderId\) \{\s*setError\(RETURN_ERROR_WORDS\.returnChanged\);\s*setBusy\(false\);\s*return;\s*\}/);
+    expect(sheet).toMatch(/if \(!shownOrderId\) \{\s*(?:\/\/[^\n]*\n\s*)*onDone\(\{ message: RETURN_ERROR_WORDS\.returnChanged, workbench: null \}\);\s*return;\s*\}/);
     expect(sheet.match(/setError\([^;]*\);\s*return;/g) ?? []).toEqual([]);
   });
 
@@ -621,5 +624,87 @@ describe('fix round 1 on the phone screens', () => {
     for (const eyebrow of ['{RETURNS_COPY.exchangeStatusHeading}', '{RETURNS_COPY.returning}', 'HISTORY']) {
       expect(view, eyebrow).toContain(`<Eyebrow accessibilityRole="header">${eyebrow}</Eyebrow>`);
     }
+  });
+});
+
+// B21 (2026-11-02): the phone's returns sheets read the same as the web.
+describe('B21: the reason boxes, the refusal words and the earlier replacements', () => {
+  const sheet = code(read('src/components/return-action-sheet.tsx'));
+  const release = code(read('src/components/release-replacement-sheet.tsx'));
+  const view = code(read('src/components/return-workbench-view.tsx'));
+  /** Every <TextInput … /> element of a file, as its source text. */
+  const inputs = (src: string) => src.match(/<TextInput\b[\s\S]*?\/>/g) ?? [];
+  /** The text of one JSX prop's {expression} (braces balanced, spaces folded), or null. */
+  const prop = (el: string, name: string): string | null => {
+    const at = el.search(new RegExp(`\\b${name}=\\{`));
+    if (at < 0) return null;
+    const from = el.indexOf('{', at);
+    let depth = 0;
+    for (let i = from; i < el.length; i += 1) {
+      if (el[i] === '{') depth += 1;
+      else if (el[i] === '}' && --depth === 0) return el.slice(from + 1, i).replace(/\s+/g, ' ').trim();
+    }
+    return null;
+  };
+
+  // 13.17: the help says who sees a reason, on screen and as the box's hint.
+  it("the main reason box shows its help and reads it as the box's hint", () => {
+    expect(sheet).toContain("const reasonHelp = mode === 'deny' ? denyHelp(wb) : reasonHelpFor(mode);");
+    const block = sheet.slice(sheet.indexOf("{mode === 'deny' || mode === 'cancel' || reasonRequired ? ("), sheet.indexOf('</ScrollView>'));
+    expect(block).toMatch(/\{reasonHelp \? \(\s*<Body size=\{13\} muted>\s*\{reasonHelp\}\s*<\/Body>\s*\) : null\}/);
+    expect(block).toContain('accessibilityHint={reasonHelp ?? undefined}');
+    // The help sits between the box's name and the box.
+    expect(block.indexOf('<FieldLabel')).toBeLessThan(block.indexOf('{reasonHelp ? ('));
+    expect(block.indexOf('{reasonHelp ? (')).toBeLessThan(block.indexOf('<TextInput'));
+  });
+
+  it("the order screen's release box does the same", () => {
+    const box = inputs(release);
+    expect(box).toHaveLength(1);
+    expect(prop(box[0]!, 'accessibilityHint')).toBe('RETURNS_COPY.replacementReasonHelp');
+    expect(release).toMatch(/<Body size=\{13\} muted>\s*\{RETURNS_COPY\.replacementReasonHelp\}\s*<\/Body>/);
+  });
+
+  // 1.6: a placeholder equal to the box's name made VoiceOver read the name
+  // twice, and the name went from view as soon as typing started.
+  it("no box's placeholder repeats its name, and the review boxes keep their name above them", () => {
+    const all = [...inputs(sheet), ...inputs(release)];
+    expect(all.length).toBeGreaterThanOrEqual(3);
+    for (const el of all) {
+      const placeholder = prop(el, 'placeholder');
+      expect(placeholder === null || placeholder !== prop(el, 'accessibilityLabel'), el).toBe(true);
+    }
+    const reviewBox = sheet.slice(sheet.indexOf("{v.kind === 'change' || v.kind === 'decline' ? ("));
+    const review = reviewBox.slice(0, reviewBox.indexOf('/>') + 2);
+    expect(review).toContain('<FieldLabel');
+    expect(review.indexOf('<FieldLabel')).toBeLessThan(review.indexOf('<TextInput'));
+    expect(review).not.toContain('placeholder=');
+    expect(reviewBox).toMatch(/<TextInput[\s\S]*?\/>\s*<Body size=\{13\} muted>\s*\{RETURNS_COPY\.replacementReasonHelp\}\s*<\/Body>/);
+  });
+
+  // 13.16: the words of an order approval refusal name the sheet's action.
+  it('both refusal catches name the action', () => {
+    expect(sheet.match(/setError\(describeReturnError\(e, \{ action: refusalActionFor\(mode\) \}\)\)/g)?.length).toBe(2);
+    expect(sheet).not.toMatch(/setError\(describeReturnError\(e\)\)/);
+  });
+
+  // 13.17: a release with no live replacement on screen is a stale screen
+  // (the re-pin above holds its shape): never an error kept in the sheet.
+  it('a release with no live replacement shown closes the sheet with the notice', () => {
+    expect(sheet).toContain('onDone({ message: RETURN_ERROR_WORDS.returnChanged, workbench: null });');
+    expect(sheet).not.toContain('setError(RETURN_ERROR_WORDS.returnChanged)');
+  });
+
+  // 1.9: each earlier replacement opens its order, as on the web.
+  it('each earlier replacement is a link to its order', () => {
+    expect(view).toContain('const earlierLinks = earlierReplacementLinks(ex.history);');
+    const at = view.indexOf('{earlierLinks.map(');
+    expect(at).toBeGreaterThan(-1);
+    const list = view.slice(at);
+    const one = list.slice(0, list.indexOf('</Pressable>'));
+    expect(one).toContain('<Pressable');
+    expect(one).toContain('accessibilityRole="link"');
+    expect(one).toContain('router.push(l.href as Href)');
+    expect(one).toContain('accessibilityLabel={l.label}');
   });
 });

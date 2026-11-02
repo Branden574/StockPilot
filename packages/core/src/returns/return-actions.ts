@@ -411,12 +411,13 @@ export interface ExchangeConsequenceFacts {
  * phone, one rule). Cancel return: a replacement not handed over is cancelled
  * too (named), part handed over stays and the rest is never sent, all handed
  * over stays as it is; with no live replacement nothing is said about one,
- * and a replacement picked or on its way is refused by the database
- * (replacement_in_progress), which is what it says. Cancel replacement: the
- * picked items' Staging first when it was picked, the driver when in transit,
- * then that the order is cancelled and the return itself does not change
- * (never "The return stays open.": the RMA may be closed). Change and Issue
- * say what is created.
+ * only that nothing moves and the return closes as cancelled (B21: the phone
+ * said nothing at all); and a replacement picked or on its way is refused by
+ * the database (replacement_in_progress), which is what it says. Cancel
+ * replacement: the picked items' Staging first when it was picked, the
+ * driver when in transit, then that the order is cancelled and the return
+ * itself does not change (never "The return stays open.": the RMA may be
+ * closed). Change and Issue say what is created.
  */
 export function exchangeActionConsequences(
   action: ExchangeConsequenceAction,
@@ -425,7 +426,7 @@ export function exchangeActionConsequences(
   const cls = replacementClassOf(facts.replacementStatus, facts.anythingHandedOver === true);
   switch (action) {
     case 'cancel':
-      if (cls === 'none') return [];
+      if (cls === 'none') return [{ key: 'effect', text: RETURNS_COPY.cancelReturnNothingMoves }];
       if (cls === 'undrawn') {
         return [{ key: 'effect', text: cancelReturnReplacementSentence(facts.replacementOrderNumber ?? null, { held: facts.held }) }];
       }

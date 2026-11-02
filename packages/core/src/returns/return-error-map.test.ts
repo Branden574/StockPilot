@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   exchangeAlreadySentWords,
   mapReturnError,
+  refusalMeansStaleScreen,
   replacementShortItems,
   RETURN_ERROR_TABLE,
   RETURN_ERROR_WORDS,
+  RETURN_STALE_SCREEN_REASONS,
   returnErrorKey,
   restockProblemWords,
+  type ReturnRefusalAction,
 } from './return-error-map';
 
 describe('the returns error map', () => {
@@ -192,5 +195,75 @@ describe('RX-2 review: cancelling a return under a replacement on its way, and a
     }
     expect(exchangeAlreadySentWords(null)).toBe(zero);
     expect(RETURN_ERROR_TABLE.exchange_already_sent!.message).toBe(zero);
+  });
+});
+
+// B21 (13.16, 2026-11-02): orders_approve is raised by every replacement
+// action (approve_return, cancel_return's exchange hook,
+// change_return_replacement and the issue it shares, cancel_return_replacement,
+// release_return_replacement_early and close_return_replacement_rest), so the
+// approve words were false for five of the six. The caller names its action;
+// with none the neutral sentence, which is never false. Code and status stay.
+describe('B21: the order approval refusal names the action that was refused', () => {
+  const refusal = { code: '42501', hint: 'orders_approve', message: 'orders_approve' };
+
+  it.each<[ReturnRefusalAction, string]>([
+    ['approve', 'Approving the replacement needs order approval permission.'],
+    ['change', 'Changing the replacement or issuing a new one needs order approval permission.'],
+    ['cancel_replacement', 'Cancelling the replacement needs order approval permission.'],
+    ['release', 'Releasing the replacement before the return is received needs order approval permission.'],
+    ['close_rest', 'Closing the rest of the replacement needs order approval permission.'],
+    ['cancel_return', 'Cancelling a return whose exchange was approved needs order approval permission.'],
+  ])('%s', (action, words) => {
+    expect(mapReturnError(refusal, { action })).toMatchObject({
+      reason: 'orders_approve',
+      code: 'forbidden',
+      status: 403,
+      message: words,
+    });
+  });
+
+  it('only approve says "Approving"; with no action the words claim no action at all', () => {
+    const actions: ReturnRefusalAction[] = ['approve', 'change', 'cancel_replacement', 'release', 'close_rest', 'cancel_return'];
+    expect(actions.filter((action) => mapReturnError(refusal, { action }).message.startsWith('Approving'))).toEqual(['approve']);
+    for (const m of [mapReturnError(refusal), mapReturnError(refusal, {}), mapReturnError(refusal, { action: null })]) {
+      expect(m).toMatchObject({ reason: 'orders_approve', code: 'forbidden', status: 403, message: 'Needs order approval permission.' });
+    }
+    expect(RETURN_ERROR_TABLE.orders_approve!.message).toBe('Needs order approval permission.');
+  });
+
+  it('an action changes nothing for any other refusal', () => {
+    for (const hint of Object.keys(RETURN_ERROR_TABLE).filter((h) => h !== 'orders_approve')) {
+      expect(mapReturnError({ hint }, { action: 'release' }), hint).toEqual(mapReturnError({ hint }));
+    }
+    expect(mapReturnError({ code: '55P03' }, { action: 'release' })).toEqual(mapReturnError({ code: '55P03' }));
+  });
+});
+
+// B21 (13.17, 2026-11-02): the phone closed its sheet on four refusals that
+// mean the screen was stale, the web workbench on three (it kept its dialog
+// open on replacement_not_backordered). One list for both.
+describe('B21: one list of refusals that mean the screen was stale', () => {
+  it('is exactly the four, each a known hint', () => {
+    expect([...RETURN_STALE_SCREEN_REASONS].sort()).toEqual([
+      'invalid_status_transition',
+      'replacement_in_progress',
+      'replacement_not_backordered',
+      'return_changed',
+    ]);
+    for (const reason of RETURN_STALE_SCREEN_REASONS) {
+      expect(Object.prototype.hasOwnProperty.call(RETURN_ERROR_TABLE, reason), reason).toBe(true);
+    }
+  });
+
+  it('answers for a reason, and false for anything else', () => {
+    expect(refusalMeansStaleScreen('replacement_not_backordered')).toBe(true);
+    expect(refusalMeansStaleScreen('return_changed')).toBe(true);
+    expect(refusalMeansStaleScreen('replacement_already_drawn')).toBe(false);
+    expect(refusalMeansStaleScreen('replacement_handed_over')).toBe(false);
+    expect(refusalMeansStaleScreen('orders_approve')).toBe(false);
+    expect(refusalMeansStaleScreen(null)).toBe(false);
+    expect(refusalMeansStaleScreen(undefined)).toBe(false);
+    expect(refusalMeansStaleScreen('')).toBe(false);
   });
 });

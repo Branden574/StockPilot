@@ -116,6 +116,26 @@ describe('the words for a refusal (by reason, never by message text)', () => {
     );
   });
 
+  // B21 (13.16, 2026-11-02): orders_approve is raised by every replacement
+  // action. The sheet names its action, so the words say what was refused;
+  // with none they claim no action at all.
+  it('an order approval refusal names the action the sheet sent', () => {
+    const e = new apiMock.ApiError('x', 403, 'forbidden', { reason: 'orders_approve' });
+    expect(describeReturnError(e, { action: 'cancel_replacement' })).toBe('Cancelling the replacement needs order approval permission.');
+    expect(describeReturnError(e, { action: 'release' })).toBe(
+      'Releasing the replacement before the return is received needs order approval permission.',
+    );
+    expect(describeReturnError(e, { action: 'cancel_return' })).toBe(
+      'Cancelling a return whose exchange was approved needs order approval permission.',
+    );
+    expect(describeReturnError(e)).toBe('Needs order approval permission.');
+    expect(describeReturnError(e, { action: null })).toBe('Needs order approval permission.');
+    // Any other refusal reads as before.
+    expect(describeReturnError(new apiMock.ApiError('x', 409, 'conflict', { reason: 'return_changed' }), { action: 'release' })).toBe(
+      'Another person changed this return. Review it again.',
+    );
+  });
+
   it('an internal fault keeps the route words; 401 and 429 have their own', () => {
     expect(describeReturnError(new apiMock.ApiError('Something went wrong. Try again.', 500, 'internal_error', { reason: 'failed' }))).toBe(
       'Something went wrong. Try again.',

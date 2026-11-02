@@ -81,6 +81,8 @@ import {
   openLines,
   processButtonLabel,
   processingHint,
+  reasonHelpFor,
+  refusalActionFor,
   refusalRefreshesWorkbench,
   replacementQuantityMax,
   reviewsForShortChange,
@@ -297,6 +299,10 @@ function SheetContent({
     mode === 'close_replacement_rest' ||
     (mode === 'cancel' && ex.hasApprovedExchange);
   const reasonMax = mode === 'release' ? RETURN_RELEASE_REASON_MAX : RETURN_REASON_MAX;
+  // B21 (13.17): who sees the reason, shown under the box's name and read as
+  // its VoiceOver hint: the deny rule, or for a replacement sheet "Kept on
+  // the return. The requester is never shown it." (the web's words).
+  const reasonHelp = mode === 'deny' ? denyHelp(wb) : reasonHelpFor(mode);
   const reasonValid = reasonRequired ? reasonCount >= 1 && reasonCount <= reasonMax : reasonCount <= reasonMax;
   const choicesValid = !needsDestinations || allChoicesOffered(wb, choices);
   // One sentence per line that needs a destination, naming it.
@@ -416,10 +422,10 @@ function SheetContent({
         const shown = exchangeOf(wb).replacement;
         const shownOrderId = shown?.live ? shown.orderId : null;
         if (!shownOrderId) {
-          // Nothing was sent: the sheet is free again (it can be closed, or
-          // the person reloads), never stuck on "Saving…".
-          setError(RETURN_ERROR_WORDS.returnChanged);
-          setBusy(false);
+          // Nothing was sent. B21 (13.17): a stale screen, as on the web: the
+          // sheet closes, the workbench reloads and its notice says why
+          // (never stuck on "Saving…").
+          onDone({ message: RETURN_ERROR_WORDS.returnChanged, workbench: null });
           return;
         }
         const res = await releaseReturnReplacement(id, shownOrderId, reasonText);
@@ -472,7 +478,7 @@ function SheetContent({
             setShortDetail(detail ?? []);
           }
           if (returnErrorReason(e) === 'replacement_site_not_available') askSite(describeReturnError(e));
-          else setError(describeReturnError(e));
+          else setError(describeReturnError(e, { action: refusalActionFor(mode) }));
           setBusy(false);
         }
         return;
@@ -540,7 +546,8 @@ function SheetContent({
       return;
     } catch (e) {
       if (staleRefusal(e)) return;
-      setError(describeReturnError(e));
+      // B21 (13.16): an order approval refusal names this sheet's action.
+      setError(describeReturnError(e, { action: refusalActionFor(mode) }));
       setBusy(false);
     }
   }
@@ -846,9 +853,9 @@ function SheetContent({
             {mode === 'deny' || mode === 'cancel' || reasonRequired ? (
               <View style={{ gap: 6 }} onLayout={kb.onNoteBlockLayout}>
                 <FieldLabel>{reasonFieldLabel(mode, ex.hasApprovedExchange).toUpperCase()}</FieldLabel>
-                {mode === 'deny' ? (
+                {reasonHelp ? (
                   <Body size={13} muted>
-                    {denyHelp(wb)}
+                    {reasonHelp}
                   </Body>
                 ) : null}
                 <TextInput
@@ -874,6 +881,7 @@ function SheetContent({
                   }
                   placeholderTextColor={c.ink3}
                   accessibilityLabel={reasonFieldLabel(mode, ex.hasApprovedExchange)}
+                  accessibilityHint={reasonHelp ?? undefined}
                   style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
                 />
                 <Mono size={11} color={reasonCount > reasonMax ? c.critText : c.ink3}>
@@ -1047,6 +1055,7 @@ function ExchangeReview({
     const requested = x.requestedItem
       ? returnLineLabel(x.requestedItem.name, x.requestedItem.variant)
       : RETURNS_COPY.replacementWarehouseReview;
+    const reviewReasonLabel = v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel;
     return (
       <View key={x.id} onLayout={(e) => onCardTop(x.id, e.nativeEvent.layout.y)} style={[styles.lineCard, { borderColor: c.hair }]}>
         {/* Review fix P26: VoiceOver reads the heading in words, never the
@@ -1140,18 +1149,25 @@ function ExchangeReview({
           </>
         ) : null}
         {v.kind === 'change' || v.kind === 'decline' ? (
-          <TextInput
-            value={v.reason}
-            onChangeText={(t) => onReview(x.id, { ...v, reason: t })}
-            editable={!disabled}
-            multiline
-            maxFontSizeMultiplier={NOTE_FONT_CAP}
-            placeholder={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
-            placeholderTextColor={c.ink3}
-            accessibilityLabel={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
-            accessibilityHint={RETURNS_COPY.replacementReasonHelp}
-            style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink, minHeight: 64 }]}
-          />
+          // B21 (1.6): the name above the box, not as its placeholder, so
+          // VoiceOver reads it once and it stays in view while typing; the
+          // help under it and as its hint.
+          <View style={{ gap: 6 }}>
+            <FieldLabel>{reviewReasonLabel.toUpperCase()}</FieldLabel>
+            <TextInput
+              value={v.reason}
+              onChangeText={(t) => onReview(x.id, { ...v, reason: t })}
+              editable={!disabled}
+              multiline
+              maxFontSizeMultiplier={NOTE_FONT_CAP}
+              accessibilityLabel={reviewReasonLabel}
+              accessibilityHint={RETURNS_COPY.replacementReasonHelp}
+              style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink, minHeight: 64 }]}
+            />
+            <Body size={13} muted>
+              {RETURNS_COPY.replacementReasonHelp}
+            </Body>
+          </View>
         ) : null}
       </View>
     );

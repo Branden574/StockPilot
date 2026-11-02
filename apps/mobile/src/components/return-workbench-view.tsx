@@ -46,6 +46,7 @@ import {
 import {
   actionHelp,
   actionLabel,
+  earlierReplacementLinks,
   exchangeForLine,
   exchangeOf,
   exchangeRailText,
@@ -195,6 +196,8 @@ export function ReturnWorkbenchView({
   const r = wb.return;
   const ex = exchangeOf(wb);
   const hasExchange = ex.kind === 'exchange';
+  // B21 (1.9): the RMA's earlier replacements, each a link to its order.
+  const earlierLinks = earlierReplacementLinks(ex.history);
   const actions = workbenchActions(wb, { itemIsHere: wb.createdOnCounter, online: !offline, busy });
   const disabled = actions.disabledReason !== null;
   // Review fix P18: what "Get replacement ready" does, under it and as its
@@ -479,6 +482,26 @@ export function ReturnWorkbenchView({
                     </Body>
                   ),
                 )}
+                {/* B21 (1.9): each earlier replacement opens its order, as on
+                    the web, with the order status words (review fix P22). */}
+                {earlierLinks.length > 0 ? (
+                  <>
+                    <Body size={13} muted>{`${RETURNS_COPY.earlierReplacements}:`}</Body>
+                    {earlierLinks.map((l) => (
+                      <Pressable
+                        key={l.orderId}
+                        onPress={() => router.push(l.href as Href)}
+                        accessibilityRole="link"
+                        accessibilityLabel={l.label}
+                        style={({ pressed }) => [styles.link, { opacity: pressed ? 0.7 : 1 }]}
+                      >
+                        <Body size={13} color={c.ink} style={{ textDecorationLine: 'underline' }}>
+                          {l.label}
+                        </Body>
+                      </Pressable>
+                    ))}
+                  </>
+                ) : null}
               </View>
             </Card>
           </>

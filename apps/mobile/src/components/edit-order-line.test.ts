@@ -12,6 +12,7 @@ import {
   lineEditErrorIsIndeterminate,
   lineEditErrorIsReservationSync,
   lineEditErrorIsStale,
+  LINE_EDIT_RESERVATION_SYNC_COPY,
   lineQuantityFloor,
   lineQuantitySummary,
   lineRemovedSummary,
@@ -405,6 +406,16 @@ describe('lineEditErrorIsReservationSync — the 409 that arrives AFTER the writ
     // picture is wrong", this means "the change landed, the hold did not".
     expect(lineEditErrorIsStale(RESERVATION_409)).toBe(false);
     expect(lineEditErrorIsIndeterminate(RESERVATION_409)).toBe(false);
+  });
+
+  // B21 (2026-11-02): the notice said the hold is released when the order is
+  // delivered, but completing the pick releases every hold (0365), as the
+  // order page's Active reservations now says too.
+  it('says the hold is released when picking is complete, never on delivery', () => {
+    expect(LINE_EDIT_RESERVATION_SYNC_COPY).toContain(
+      'the hold is released when picking is complete or the order is cancelled',
+    );
+    expect(LINE_EDIT_RESERVATION_SYNC_COPY).not.toMatch(/deliver/i);
   });
 });
 

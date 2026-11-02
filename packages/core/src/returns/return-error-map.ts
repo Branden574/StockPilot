@@ -20,8 +20,14 @@
  * "Busy" only when no hint matched; anything unknown is an internal error
  * with a generic sentence (the raw text stays server-side).
  *
+ * B21 (13.16): one hint, orders_approve, is raised by every replacement
+ * action, so its words come from the action the caller names (still keyed by
+ * hint first, never by message text); with no action the words name none.
+ *
  * Plain literals and pure functions only: importing this module runs nothing.
  */
+
+import { RETURNS_COPY } from './returns-copy';
 
 export type ReturnServiceErrorCode =
   | 'unauthenticated'
@@ -48,6 +54,12 @@ export const RETURN_ERROR_WORDS = {
   returnsManage: "You don't have permission to manage returns.",
   returnsRead: "You don't have permission to view returns.",
   ordersApprove: 'Approving the replacement needs order approval permission.',
+  // B21 (13.16): orders_approve for the other replacement actions, by action
+  // (RETURN_ERROR_ACTION_WORDS). Close the rest's are returns-copy's own.
+  ordersApproveChange: 'Changing the replacement or issuing a new one needs order approval permission.',
+  ordersApproveCancelReplacement: 'Cancelling the replacement needs order approval permission.',
+  ordersApproveRelease: 'Releasing the replacement before the return is received needs order approval permission.',
+  ordersApproveCancelReturn: 'Cancelling a return whose exchange was approved needs order approval permission.',
   warehouseWrite: "You can't manage returns for this warehouse.",
   warehouseRead: "You can't view returns for this warehouse.",
   moduleDisabled: 'Returns are turned off for this organization.',
@@ -112,7 +124,9 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   order_not_found: { code: 'not_found', status: 404, message: W.orderNotFound },
   returns_manage: { code: 'forbidden', status: 403, message: W.returnsManage },
   returns_read: { code: 'forbidden', status: 403, message: W.returnsRead },
-  orders_approve: { code: 'forbidden', status: 403, message: W.ordersApprove },
+  // B21 (13.16): the words with no action named; mapReturnError's action
+  // gives each replacement action its own (RETURN_ERROR_ACTION_WORDS).
+  orders_approve: { code: 'forbidden', status: 403, message: RETURNS_COPY.needsOrderApproval },
   warehouse_write: { code: 'forbidden', status: 403, message: W.warehouseWrite },
   warehouse_read: { code: 'forbidden', status: 403, message: W.warehouseRead },
   module_disabled: { code: 'module_disabled', status: 403, message: W.moduleDisabled },
@@ -171,6 +185,49 @@ export const RETURN_ERROR_TABLE: Readonly<Record<string, ReturnErrorEntry>> = {
   // in part (detail: the replacement's status, or 'none').
   replacement_not_backordered: { code: 'conflict', status: 409, message: W.replacementNotBackordered },
 };
+
+/**
+ * The replacement action a refusal answered (B21, 13.16). orders_approve is
+ * raised by approve_return (and the replacement issue it shares with
+ * change_return_replacement), cancel_return's exchange hook,
+ * cancel_return_replacement, release_return_replacement_early and
+ * close_return_replacement_rest, so the words were "Approving the
+ * replacement" for all six; the caller names its action instead.
+ */
+export type ReturnRefusalAction = 'approve' | 'change' | 'cancel_replacement' | 'release' | 'close_rest' | 'cancel_return';
+
+/** Hint -> action -> words, for the refusals whose words depend on the action. */
+export const RETURN_ERROR_ACTION_WORDS: Readonly<Record<string, Readonly<Record<ReturnRefusalAction, string>>>> = {
+  orders_approve: {
+    approve: W.ordersApprove,
+    change: W.ordersApproveChange,
+    cancel_replacement: W.ordersApproveCancelReplacement,
+    release: W.ordersApproveRelease,
+    close_rest: RETURNS_COPY.noOrdersApproveCloseRest,
+    cancel_return: W.ordersApproveCancelReturn,
+  },
+};
+
+/**
+ * The refusals that mean the screen was stale (B21, 13.17): another person
+ * changed the return (return_changed), its status moved on
+ * (invalid_status_transition), its replacement was picked or left meanwhile
+ * (replacement_in_progress, 0396), or Close the rest found nothing on
+ * backorder any more (replacement_not_backordered, 0397). Both workbenches
+ * close the open dialog or sheet, reload, and say why in a notice. One list
+ * for the web and the phone (the web's had only three).
+ */
+export const RETURN_STALE_SCREEN_REASONS = [
+  'return_changed',
+  'invalid_status_transition',
+  'replacement_in_progress',
+  'replacement_not_backordered',
+] as const;
+
+/** True when a refusal's reason means the screen was stale (see the list above). */
+export function refusalMeansStaleScreen(reason: string | null | undefined): boolean {
+  return typeof reason === 'string' && (RETURN_STALE_SCREEN_REASONS as readonly string[]).includes(reason);
+}
 
 const BUSY: ReturnErrorEntry = { code: 'conflict', status: 409, message: W.busy, retryable: true };
 const INTERNAL: ReturnErrorEntry = { code: 'internal_error', status: 500, message: W.internal };
@@ -258,15 +315,26 @@ export function exchangeAlreadySentWords(detail: Record<string, unknown> | null 
   return `Only ${available} of these can still be exchanged; the rest already got a replacement on an earlier return.`;
 }
 
-/** One refusal -> its entry, the key that matched and any structured detail. */
-export function mapReturnError(err: ReturnDbError | null | undefined): MappedReturnError {
+/**
+ * One refusal -> its entry, the key that matched and any structured detail.
+ * `action` (B21) names the replacement action that was refused, for the
+ * refusals whose words depend on it (RETURN_ERROR_ACTION_WORDS); every other
+ * refusal reads the same with or without it.
+ */
+export function mapReturnError(
+  err: ReturnDbError | null | undefined,
+  opts: { action?: ReturnRefusalAction | null } = {},
+): MappedReturnError {
   const key = returnErrorKey(err);
   const detail = parseDetail(err?.details);
   const detailList = parseDetailList(err?.details);
   if (key === 'exchange_already_sent') {
     return { ...RETURN_ERROR_TABLE[key]!, message: exchangeAlreadySentWords(detail), reason: key, detail, detailList };
   }
-  if (key) return { ...RETURN_ERROR_TABLE[key]!, reason: key, detail, detailList };
+  if (key) {
+    const byAction = opts.action ? RETURN_ERROR_ACTION_WORDS[key]?.[opts.action] : undefined;
+    return { ...RETURN_ERROR_TABLE[key]!, ...(byAction ? { message: byAction } : {}), reason: key, detail, detailList };
+  }
   const code = (err?.code ?? '').toUpperCase();
   if (code === '55P03' || code === '57014' || code === '40P01') return { ...BUSY, reason: 'busy', detail, detailList };
   return { ...INTERNAL, reason: 'internal_error', detail, detailList };

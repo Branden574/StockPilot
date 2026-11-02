@@ -72,6 +72,7 @@ import {
   isNeededByRevisable,
   isPickingSettled,
   lineOwedUnits,
+  ORDER_HOLD_CARD_COPY,
   ORDER_LINE_HIDDEN_ITEM_NAME,
   ORDER_RETURN_SUMMARY_NOTE,
   orderCancelOffer,
@@ -85,6 +86,7 @@ import {
   readinessAudience,
   readinessStockFlags,
   reconcileReadiness,
+  REPLACEMENT_HOLD_CARD_COPY,
   requesterEntryLabel,
   requesterReturnsView,
   resolveOrgTimezone,
@@ -1863,9 +1865,11 @@ export default async function OrderDetailPage({
                 }
                 data-testid="order-reservations"
               >
+                {/* B21: completing the pick releases every hold (0365), so
+                    never "until delivered"; a replacement's items change
+                    only through its return, so it never offers a line edit. */}
                 <p className="text-muted-foreground text-[12.5px]">
-                  Stock is held until this request is delivered or cancelled. Removing a line, or
-                  lowering its quantity, releases that line&rsquo;s share straight away.
+                  {isReplacement ? REPLACEMENT_HOLD_CARD_COPY : ORDER_HOLD_CARD_COPY}
                 </p>
               </DetailSection>
             )}

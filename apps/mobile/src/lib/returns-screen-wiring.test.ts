@@ -93,7 +93,11 @@ describe('the action sheet names lines and reasons (returns review)', () => {
   it('keys "what happens" by line id, puts a disabled row\'s reason in its label, and picks the deny help by source', () => {
     expect(sheet).toContain('<Body key={t.key}');
     expect(sheet).toContain('accessibilityLabel={why ? `${row.label}. ${why}` : row.label}');
-    expect(sheet).toContain('{denyHelp(wb)}');
+    // Re-pinned by B21 (13.17, 2026-11-02; claim kept, the deny help is
+    // picked by source in denyHelp): it is one of the reason box's helps now,
+    // shown under its name and read as its VoiceOver hint.
+    expect(sheet).toContain("const reasonHelp = mode === 'deny' ? denyHelp(wb) : reasonHelpFor(mode);");
+    expect(sheet).toContain('{reasonHelp}');
     expect(sheet).not.toContain("'Choose a destination that is still available.'");
   });
 });

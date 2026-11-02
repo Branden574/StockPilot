@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
 import { NOT_A_LIST } from '@/test/postgrest-answers';
@@ -20,7 +20,10 @@ import {
   requesterHearsEvent,
   resolveReturnStaffAudience,
   returnStaffLink,
+  type RequesterReturnEvent,
 } from './returns-notify';
+
+import { REQUESTER_NOTICE_EVENTS, type RequesterNoticeEvent } from '@stockpilot/core';
 
 const ORG = 'org-1';
 const WH = 'wh-1';
@@ -341,8 +344,10 @@ describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
         // Re-pinned by returns RX-2 review fix (P14): core's words now say to
         // bring or send the returned item back. The claim stands: a member
         // hears that the replacement is reserved, linked to it.
-        title:
-          'Your replacement is reserved. Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
+        // Re-pinned by B21 (2026-11-02; claim kept): the title is the first
+        // sentence, and the rest follows the RMA number in the body.
+        title: 'Your replacement is reserved.',
+        body: 'RMA-20261005-ABC123: Bring or send the returned item back as arranged with the warehouse; the replacement is prepared once it arrives.',
         link: '/dashboard/orders/repl-1',
         metadata: expect.objectContaining({ order_request_id: 'repl-1', return_id: 'ret-1' }),
       }),
@@ -364,7 +369,9 @@ describe('the exchange messages (returns RX-2, plan 3.6.8)', () => {
     expect(createNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         type: 'return.replacement_closed_return_only',
-        title: 'No replacement will be sent. Your return goes on as a return only.',
+        // Re-pinned by B21 (2026-11-02; claim kept): split at the first sentence.
+        title: 'No replacement will be sent.',
+        body: 'RMA-20261005-ABC123: Your return goes on as a return only.',
       }),
     );
   });
@@ -449,5 +456,85 @@ describe("the requester's exchange messages (returns RX-3)", () => {
     });
     await notifyStaffNewReturnRequest({ ...RMA, actorUserId: null, kind: 'exchange' });
     expect(createNotification).toHaveBeenCalledWith(expect.objectContaining({ title: 'New exchange request', type: 'return.requested' }));
+  });
+});
+
+// B21 (2026-11-02): a requester's notification used the whole sentence as its
+// title, up to 202 characters, and the RMA number as its body, so a phone's
+// lock screen cut the news off. The title is short (core
+// requesterNoticeWords) and the rest follows the number in the body. Emails
+// keep their own words.
+describe('B21: short requester notification titles', () => {
+  function member(orderNumber: number | null) {
+    admin({
+      'order_requests.select': {
+        data: [{ source: 'internal', customer_id: null, requester_user_id: 'req-1', requester_email: null, requester_name: 'R', order_number: orderNumber }],
+        error: null,
+      },
+      'notification_preferences.select': { data: [], error: null },
+    });
+  }
+  const sent = () => createNotification.mock.calls.map((c) => c[0] as { type: string; title: string; body: string });
+
+  it('a one-sentence event keeps its sentence as the title and the number as the body', async () => {
+    member(103);
+    await notifyRequesterReturnEvent({ ...RMA, event: 'approved', source: 'requester', channel: 'staff' });
+    expect(sent()).toEqual([expect.objectContaining({ title: 'Your return was approved.', body: 'RMA-20261005-ABC123' })]);
+  });
+
+  it('with no RMA number the SO number leads the body; with neither, the words alone, never "your order: ..."', async () => {
+    member(103);
+    await notifyRequesterReturnEvent({ ...RMA, returnNumber: null, event: 'replacement_cancelled', source: 'requester' });
+    member(null);
+    await notifyRequesterReturnEvent({ ...RMA, returnNumber: null, event: 'replacement_cancelled', source: 'requester' });
+    member(null);
+    await notifyRequesterReturnEvent({ ...RMA, returnNumber: null, event: 'approved', source: 'requester', channel: 'staff' });
+    expect(sent().map((n) => [n.title, n.body])).toEqual([
+      ['Your replacement was cancelled.', 'SO-000103: The warehouse will follow up.'],
+      ['Your replacement was cancelled.', 'The warehouse will follow up.'],
+      // A one-sentence event keeps today's body.
+      ['Your return was approved.', 'your order'],
+    ]);
+  });
+
+  it('the replacement-added approvals keep the news in the title', async () => {
+    member(103);
+    await notifyRequesterReturnEvent({ ...RMA, event: 'return_approved_replacement_added_short', source: 'requester', channel: 'staff' });
+    expect(sent()).toEqual([
+      expect.objectContaining({
+        title: 'Return approved, replacement added.',
+        body: 'RMA-20261005-ABC123: The warehouse added a replacement for you; it is not in stock yet, and the warehouse will follow up. Bring or send the returned item back as arranged with the warehouse.',
+      }),
+    ]);
+  });
+
+  it('every requester title is at most 40 characters', async () => {
+    for (const event of REQUESTER_NOTICE_EVENTS) {
+      member(103);
+      await notifyRequesterReturnEvent({ ...RMA, event, source: 'requester', channel: 'staff' });
+    }
+    expect(sent()).toHaveLength(REQUESTER_NOTICE_EVENTS.length);
+    for (const n of sent()) expect(n.title.length, `${n.type}: ${n.title}`).toBeLessThanOrEqual(40);
+  });
+
+  it("the web's event list and core's are the same 14", () => {
+    expectTypeOf<RequesterReturnEvent>().toEqualTypeOf<RequesterNoticeEvent>();
+    const all: Record<RequesterReturnEvent, true> = {
+      request_received: true,
+      approved: true,
+      received: true,
+      denied: true,
+      cancelled: true,
+      exchange_approved: true,
+      exchange_approved_short: true,
+      replacement_changed: true,
+      replacement_cancelled: true,
+      return_approved_replacement_added: true,
+      return_approved_replacement_added_short: true,
+      replacement_closed_return_only: true,
+      exchange_request_received: true,
+      exchange_declined: true,
+    };
+    expect(Object.keys(all).sort()).toEqual([...REQUESTER_NOTICE_EVENTS].sort());
   });
 });

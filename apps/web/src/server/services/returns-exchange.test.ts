@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
@@ -911,5 +914,126 @@ describe('the replacement order\'s timeline learns of the receipt', () => {
         detail: [{ itemId: ITEM_L, needed: 1, available: 0 }],
       },
     ]);
+  });
+});
+
+// B21 (13.16, 2026-11-02): orders_approve is raised by every replacement
+// action, and its words said "Approving the replacement" for all six. Each
+// call site names its action, so the words say what was refused; the order
+// screen's release sheet on the phone shows these words as they come.
+describe('B21: an order approval refusal names the action it refused', () => {
+  const NO_ORDERS = { data: null, error: { code: '42501', hint: 'orders_approve', message: 'orders_approve', details: null } };
+  const DECISION = {
+    lines: [{ returnLineId: RLINE_ID, disposition: 'restock' as const, restock: { target: 'original' as const } }],
+    exchange: [{ action: 'approve' as const, exchangeLineId: XLINE_ID }],
+    replacement: { whenShort: 'refuse' as const },
+  };
+  const refused = async (rpc: string, call: (svc: RMAService) => Promise<unknown>) => {
+    const { svc } = svcFor({ [`rpc:${rpc}`]: NO_ORDERS });
+    return call(svc).catch((x: unknown) => x);
+  };
+
+  it.each<[string, string, (svc: RMAService) => Promise<unknown>]>([
+    [
+      'approve_return',
+      'Approving the replacement needs order approval permission.',
+      (svc) => svc.approve(RET_ID, { expectedRevision: 0, decision: DECISION }),
+    ],
+    [
+      'cancel_return',
+      'Cancelling a return whose exchange was approved needs order approval permission.',
+      (svc) => svc.cancel(RET_ID, { reason: 'Customer kept it' }),
+    ],
+    [
+      'change_return_replacement',
+      'Changing the replacement or issuing a new one needs order approval permission.',
+      (svc) =>
+        svc.changeReplacement(RET_ID, {
+          expectedRevision: 1,
+          lines: [{ exchangeLineId: XLINE_ID, itemId: ITEM_L, quantity: 1 }],
+          reason: 'Wrong size',
+          whenShort: 'refuse',
+        }),
+    ],
+    [
+      'cancel_return_replacement',
+      'Cancelling the replacement needs order approval permission.',
+      (svc) => svc.cancelReplacement(RET_ID, { expectedRevision: 1, reason: 'Wrong colour' }),
+    ],
+    [
+      'close_return_replacement_rest',
+      'Closing the rest of the replacement needs order approval permission.',
+      (svc) => svc.closeReplacementRest(RET_ID, { expectedRevision: 1, reason: 'Rest no longer needed', shownStatus: 'backordered' }),
+    ],
+    [
+      'release_return_replacement_early',
+      'Releasing the replacement before the return is received needs order approval permission.',
+      (svc) => svc.releaseEarly(RET_ID, { orderId: REPL_ID, reason: 'Swap at delivery: the driver collects the returned item.' }),
+    ],
+  ])('%s', async (rpc, words, call) => {
+    const e = await refused(rpc, call);
+    expect(e).toBeInstanceOf(ServiceError);
+    expect(e).toMatchObject({ code: 'forbidden', message: words, details: { reason: 'orders_approve' } });
+  });
+
+  it('the approval step through the steps answer says approving', async () => {
+    const { svc } = svcFor({ 'rpc:approve_return': NO_ORDERS });
+    const { ran } = await svc.runSteps(RET_ID, { steps: ['approve'], expectedRevision: 0, approve: DECISION } as never);
+    expect(ran[0]).toMatchObject({
+      step: 'approve',
+      outcome: 'refused',
+      reason: 'orders_approve',
+      message: 'Approving the replacement needs order approval permission.',
+    });
+  });
+
+  it('with no action the words claim none', () => {
+    const e = returnRpcError({ code: '42501', hint: 'orders_approve', message: 'orders_approve' });
+    expect(e).toMatchObject({ code: 'forbidden', message: 'Needs order approval permission.', details: { reason: 'orders_approve' } });
+    expect(returnRpcError({ code: '42501', hint: 'orders_approve' }, { action: 'release' }).message).toBe(
+      'Releasing the replacement before the return is received needs order approval permission.',
+    );
+  });
+
+  // A source guard: every call of a database function that can raise
+  // orders_approve maps its refusal with its action, wherever it is called
+  // from (a later caller, such as S7's, is caught too).
+  it('every call of those functions passes its action to returnRpcError', () => {
+    const ACTION_OF: Record<string, string> = {
+      approve_return: 'approve',
+      cancel_return: 'cancel_return',
+      change_return_replacement: 'change',
+      cancel_return_replacement: 'cancel_replacement',
+      close_return_replacement_rest: 'close_rest',
+      release_return_replacement_early: 'release',
+    };
+    const SRC = path.resolve(__dirname, '../..');
+    const files: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const full = path.join(dir, name);
+        if (statSync(full).isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name)) files.push(full);
+      }
+    };
+    walk(SRC);
+    const sites: string[] = [];
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8');
+      for (const [rpc, action] of Object.entries(ACTION_OF)) {
+        const call = new RegExp(`\\.rpc\\(\\s*'${rpc}'`, 'g');
+        for (const m of text.matchAll(call)) {
+          const rest = text.slice(m.index! + m[0].length);
+          const next = rest.search(/\.rpc\(/);
+          const scope = next >= 0 ? rest.slice(0, next) : rest;
+          const mapped = /returnRpcError\(([^)]*)\)/.exec(scope);
+          const where = `${path.relative(SRC, file)} ${rpc}`;
+          sites.push(where);
+          expect(mapped?.[1], where).toBe(`error, { action: '${action}' }`);
+        }
+      }
+    }
+    // Never vacuous: today's six call sites are all found.
+    expect(sites).toEqual(expect.arrayContaining(Object.keys(ACTION_OF).map((rpc) => `server/services/returns.ts ${rpc}`)));
   });
 });

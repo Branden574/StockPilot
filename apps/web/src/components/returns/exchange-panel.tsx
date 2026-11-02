@@ -471,6 +471,9 @@ function ReasonField({
   onChange: (v: string) => void;
   max?: number;
 }) {
+  // B21 (13.17): the help is the box's description, so a screen reader reads
+  // who sees the reason with the box, as the phone reads it as the box's hint.
+  const helpId = `${id}-help`;
   return (
     <div className="space-y-1.5">
       <Label htmlFor={id} className="text-[12.5px]">
@@ -482,8 +485,13 @@ function ReasonField({
         onChange={(e) => onChange(e.target.value)}
         rows={2}
         maxLength={max}
+        aria-describedby={help ? helpId : undefined}
       />
-      {help ? <p className="text-muted-foreground text-[12px]">{help}</p> : null}
+      {help ? (
+        <p id={helpId} className="text-muted-foreground text-[12px]">
+          {help}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -592,13 +600,33 @@ export function ReplacementOrderSection({
 // ── Dialogs ─────────────────────────────────────────────────────────────────
 
 /** A refusal kept inside the open dialog, announced (pattern 20; fix round 1, completeness C-3). */
-function DialogError({ error }: { error: string | null }) {
+export function DialogError({ error }: { error: string | null }) {
   if (!error) return null;
   return (
     <p className="text-destructive text-[13px]" role="alert">
       {error}
     </p>
   );
+}
+
+/**
+ * A replacement dialog's reason, empty each time the dialog opens (B21
+ * review). Clearing it in the Radix close handler alone missed every close
+ * made in code: the workbench closing the dialog after a save or after a
+ * refusal that meant the screen was stale, and the dialog's own Keep button,
+ * which calls the parent's handler. The next open then showed the old words
+ * (and Release its old preset as pressed) against a return that had changed.
+ * The reset is made while rendering, when `open` turns true, so the old
+ * words never show for a frame (an effect would paint them first).
+ */
+function useReasonOnOpen(open: boolean): [string, (reason: string) => void] {
+  const [reason, setReason] = React.useState('');
+  const [openSeen, setOpenSeen] = React.useState(open);
+  if (open !== openSeen) {
+    setOpenSeen(open);
+    if (open) setReason('');
+  }
+  return [reason, setReason];
 }
 
 export function ReleaseEarlyDialog({
@@ -615,14 +643,13 @@ export function ReleaseEarlyDialog({
   error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
@@ -647,6 +674,8 @@ export function ReleaseEarlyDialog({
         <ReasonField
           id="release-early-reason"
           label={RETURNS_COPY.releaseEarlyReasonLabel}
+          // B21: who sees the reason, as every other replacement reason box says.
+          help={RETURNS_COPY.replacementReasonHelp}
           value={reason}
           onChange={setReason}
           max={RETURN_RELEASE_REASON_MAX}
@@ -693,7 +722,7 @@ export function CancelReplacementDialog({
   consequences: ReadonlyArray<{ key: ExchangeConsequenceKey; text: string }>;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   const effect = consequences.find((c) => c.key === 'effect')?.text ?? null;
   return (
     <Dialog
@@ -701,7 +730,6 @@ export function CancelReplacementDialog({
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
@@ -835,14 +863,13 @@ export function CloseAsReturnOnlyDialog({
   error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
@@ -893,14 +920,13 @@ export function CloseReplacementRestDialog({
   error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">

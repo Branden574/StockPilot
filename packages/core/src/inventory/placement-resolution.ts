@@ -40,7 +40,8 @@
  * ───────────────────────────────────────────────────────────────────────────
  *
  *   0. HOLDINGS (`item_stock_levels`) when they are known to CONTRADICT a
- *      single label. Two ways that happens, and only these two:
+ *      single label. Two ways that happens for every caller, and a third
+ *      (c) only for a caller that asks for it:
  *
  *        a. SPLIT — stock sits on more than one holding. One label names one
  *           rack while the stock sits on several; a picker walking to just
@@ -67,6 +68,27 @@
  *      A single RACK holding falls through: the label and the holding name the
  *      same shelf, and the label is the richer render (it carries the book's
  *      crate summary alongside).
+ *
+ *        c. SINGLE (opt-in, `singleHoldingCheck`; B21) — exactly one holding,
+ *           a RACK, and the item has no saved rack (a crate summary may still
+ *           be saved), or its saved rack holds none of the stock
+ *           (`holdingsContradictRack`). The fall-through above ASSUMES the
+ *           label and the holding name the same shelf; this checks. A saved
+ *           rack the holding sits on still answers STRUCTURED. Either way a
+ *           book keeps its crate summary: this answer carries it as
+ *           `crateLabel`, because a plain rack holding says nothing about
+ *           crates. A crate can be label-only, recorded nowhere but the
+ *           book's summary, and a put-away onto a plain rack keeps that
+ *           summary unless clearing it was shown and agreed (see
+ *           `syncBookCratePlacement` in the web app's inventory service).
+ *           The ONLY caller that opts in is
+ *           apps/web/src/lib/pdf/slip-location.ts (the pick slip and the
+ *           warehouse packing slip, which printed "No rack set", or a rack the
+ *           stock had left, while the return named the holding). Every other
+ *           surface keeps the precedence without it; taking the rule to all of
+ *           them is a separate placement item, and the guard test keeps the
+ *           slip cases out of its cross-surface agreement arm on purpose. A
+ *           holding of unknown `kind` is never assumed to be a rack.
  *
  *   1. STRUCTURED rack/crate from `custom_fields` — books read the
  *      `book_rack_*` / `book_crate_*` keys, everything else the neutral
@@ -105,7 +127,26 @@ export type PlacementResolution =
    * contradiction so a caller can label the row honestly (the native scan
    * sheet says "Split stock" for one and "In crate" for the other).
    */
-  | { source: 'holdings'; reason: 'split' | 'crate'; holdings: readonly RackHoldingLike[] }
+  | {
+      source: 'holdings';
+      reason: 'split' | 'crate';
+      holdings: readonly RackHoldingLike[];
+    }
+  /**
+   * Rule 0c, only for a caller that passed `singleHoldingCheck` (the native
+   * rows never do): the one RACK holding names where the stock is.
+   * `crateLabel` is a book's crate summary, carried with it because a plain
+   * rack holding says nothing about crates (see rule 0c); null for a
+   * non-book or when none is saved. `formatPlacementLabel` names the holding
+   * alone, so a surface with a second line renders the crate there, as the
+   * order slips do.
+   */
+  | {
+      source: 'holdings';
+      reason: 'single';
+      holdings: readonly RackHoldingLike[];
+      crateLabel: string | null;
+    }
   /**
    * The item's own structured rack/crate keys. At least one of the two is
    * non-null — a resolution with both null is never produced.
@@ -129,6 +170,12 @@ export interface PlacementInput {
    * cannot fire and a stale rack keeps printing.
    */
   holdings?: readonly RackHoldingLike[];
+  /**
+   * Rule 0c (B21): name the one rack holding, with a book's crate summary,
+   * when the saved rack is missing or holds none of the stock. Only the
+   * order slips pass it (slip-location.ts).
+   */
+  singleHoldingCheck?: boolean;
 }
 
 /**
@@ -174,6 +221,20 @@ export function resolvePlacement(input: PlacementInput): PlacementResolution {
   }
 
   const { rackLabel, crateLabel } = readStructured(input.itemType, input.customFields);
+
+  // Rule 0c (opt-in): one RACK holding, and no saved rack or a saved rack it
+  // refutes. `kind === 'rack'` is a positive assertion, like rule 0b's. The
+  // answer carries a book's crate summary (null when none is saved), for a
+  // missing rack and a refuted one alike.
+  if (
+    input.singleHoldingCheck === true &&
+    holdings.length === 1 &&
+    holdings[0]!.kind === 'rack' &&
+    (!rackLabel || holdingsContradictRack(rackLabel, holdings))
+  ) {
+    return { source: 'holdings', reason: 'single', holdings, crateLabel };
+  }
+
   if (rackLabel || crateLabel) return { source: 'structured', rackLabel, crateLabel };
 
   const bin = input.binLocation?.trim();
