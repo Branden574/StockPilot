@@ -28,6 +28,15 @@ vi.mock('@/lib/rate-limit', () => ({
 }));
 
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn(async () => {}) }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
+
+// GoTrue's wrong-code answer, in the shape auth-js hands it back.
+const GOTRUE_WRONG_CODE = {
+  name: 'AuthApiError',
+  status: 422,
+  code: 'mfa_verification_failed',
+  message: 'Invalid TOTP code entered',
+};
 
 const mfaStub = {
   challenge: vi.fn(async () => ({ data: { id: 'challenge-1' }, error: null })),
@@ -215,7 +224,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
   it('does not audit an enrollment whose code was rejected', async () => {
     mfaStub.verify.mockResolvedValue({
       data: null,
-      error: { message: 'Invalid TOTP code entered' },
+      error: GOTRUE_WRONG_CODE,
     } as unknown as Awaited<ReturnType<typeof mfaStub.verify>>);
 
     const res = await verifyEnrollmentAction({
@@ -276,7 +285,7 @@ describe('challengeFactorAction', () => {
   it('reports a rejected code as a validation error, not an internal one', async () => {
     mfaStub.verify.mockResolvedValue({
       data: null,
-      error: { message: 'Invalid TOTP code entered' },
+      error: GOTRUE_WRONG_CODE,
     } as unknown as Awaited<ReturnType<typeof mfaStub.verify>>);
 
     const res = await challengeFactorAction({ factorId: 'f1', code: '123456' });

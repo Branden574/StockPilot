@@ -3,10 +3,10 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   MODULE_REGISTRY,
@@ -214,9 +214,6 @@ export async function setModuleEnabledAction(
     for (const c of changes) c.enabled ? nextEnabled.add(c.moduleId) : nextEnabled.delete(c.moduleId);
     return ok({ enabled: [...nextEnabled] });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.module_settings.set_module_enabled');
   }
 }

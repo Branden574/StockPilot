@@ -19,6 +19,7 @@ import {
   classifyPasswordUpdateError,
   isBannedUserAuthError,
 } from '@/server/actions/auth-error-classify';
+import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
 
 import {
@@ -513,9 +514,9 @@ export async function completePasswordResetAction(
   });
   if (error) {
     // GoTrue's refusals of the new password, in plain words (docket B50). Read
-    // by GoTrue's code only (auth-error-classify.ts); any other refusal keeps
-    // GoTrue's own words, as before. Nothing below has run: nobody is signed
-    // out and the old password still works.
+    // by GoTrue's code only (auth-error-classify.ts); any other refusal is
+    // reported and says the fixed sentence, never GoTrue's text (S31). Nothing
+    // below has run: nobody is signed out and the old password still works.
     const refusal = classifyPasswordUpdateError(error);
     if (refusal?.kind === 'aal') {
       // GoTrue still wants AAL2, so the code step above did not run (as when
@@ -550,7 +551,7 @@ export async function completePasswordResetAction(
         'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
       );
     }
-    return err('internal_error', error.message);
+    return unexpectedActionError(error, 'actions.auth.password_reset');
   }
 
   // The account the new password was set for. A failed first read (a GoTrue

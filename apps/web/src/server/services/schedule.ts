@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { kitRefusal } from './bundles';
@@ -524,7 +525,9 @@ export class ScheduleService {
     // cancelled event re-fire on completion. We tighten to require
     // the prior status to be exactly 'in_progress' — the normal
     // workflow path. Reopen → in_progress → complete still works.
-    let autoDistFailed: { message: string; bundleId: string } | null = null;
+    // `message` is a refusal distribute_bundle words (0365, 0415); null for
+    // any other failure, whose text is reported, never shown (S31).
+    let autoDistFailed: { message: string | null; bundleId: string } | null = null;
     // Whether the event has a distribution once this call is done, from what
     // the call itself saw. The completion audit records it; the re-read below
     // is for display and degrades to "not distributed" when it fails.
@@ -609,13 +612,16 @@ export class ScheduleService {
               // emitting audit events. distribute_bundle's refusals are
               // codes (0365, 0415) or the permission hint (0415); the
               // manager reads the sentence instead.
-              autoDistFailed = {
-                message:
-                  dbGuardRefusal(distErr, 'kit_distribute')?.message ??
-                  kitRefusal(msg)?.message ??
-                  distErr.message,
-                bundleId,
-              };
+              const refusal =
+                dbGuardRefusal(distErr, 'kit_distribute')?.message ?? kitRefusal(msg)?.message ?? null;
+              if (refusal === null) {
+                void reportError(new Error(msg || 'distribute_bundle failed'), {
+                  tag: 'schedule.auto_distribute',
+                  organizationId: this.ctx.organizationId,
+                  extra: { code: code ?? null, bundleId, scheduleEventId: id },
+                });
+              }
+              autoDistFailed = { message: refusal, bundleId };
             }
           }
         }
@@ -675,10 +681,13 @@ export class ScheduleService {
     }
 
     if (autoDistFailed) {
+      const retry = `Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`;
       throw new ServiceError(
         'conflict',
-        `Event marked complete, but bundle distribution failed: ` +
-          `${autoDistFailed.message.replace(/\.$/, '')}. Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`,
+        autoDistFailed.message === null
+          ? `Event marked complete, but the bundle could not be distributed. ${retry}`
+          : `Event marked complete, but bundle distribution failed: ` +
+              `${autoDistFailed.message.replace(/\.$/, '')}. ${retry}`,
       );
     }
 

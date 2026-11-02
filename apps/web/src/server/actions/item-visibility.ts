@@ -11,6 +11,7 @@ import { assertPermission, ServiceError, withContext } from '@/server/services/c
 import { fetchAllRowsByIds, writeInIdBatches } from '@/server/services/lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from '@/server/services/lib/inventory-list-cache';
 import { publicCatalogTag } from '@/server/services/public-links';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -84,9 +85,7 @@ const setItemPublicDisplaySchema = z.object({
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.item_visibility');
 }
 
 /**

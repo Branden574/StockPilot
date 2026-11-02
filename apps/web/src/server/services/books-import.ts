@@ -7,8 +7,10 @@ import {
 } from '@/lib/auth/warehouse';
 import { COVER_HOST_ALLOWLIST } from '@/lib/books/cover-hosts';
 import { lookupIsbn, normalizeIsbn, type BookMetadata } from '@/lib/books/lookup';
+import { reportError } from '@/lib/error-reporter';
 import { safeFetch } from '@/lib/ssrf-guard';
 import { generateSku } from '@/lib/utils';
+import { asError } from '@/server/lib/api-error-response';
 
 import { PLANS, bookCoverPath, isbnSearchKeys, isUnlimited, type PlanId } from '@stockpilot/core';
 
@@ -402,6 +404,10 @@ export class BooksImportService {
 
     const concurrency = 4;
     let cursor = 0;
+    // S31: a lookup's own text (a book source's quota words, a network error)
+    // is reported once for the preview, never shown on the row.
+    let lookupFailures = 0;
+    let firstLookupFailure: unknown;
     const worker = async () => {
       while (cursor < lookupTargets.length) {
         const idx = cursor++;
@@ -416,13 +422,23 @@ export class BooksImportService {
           }
         } catch (err) {
           rows[t.rowIndex]!.status = 'lookup_failed';
-          rows[t.rowIndex]!.error = err instanceof Error ? err.message : 'Lookup error';
+          rows[t.rowIndex]!.error = 'Could not look this ISBN up. Try again later.';
+          lookupFailures += 1;
+          if (lookupFailures === 1) firstLookupFailure = err;
         }
       }
     };
     await Promise.all(
       Array.from({ length: Math.min(concurrency, lookupTargets.length) }, worker),
     );
+    if (lookupFailures > 0) {
+      void reportError(asError(firstLookupFailure), {
+        tag: 'books_import.lookup',
+        organizationId: this.ctx.organizationId,
+        level: 'warning',
+        extra: { failed: lookupFailures },
+      });
+    }
 
     return { totals: tally(rows), rows };
   }
@@ -657,12 +673,18 @@ export class BooksImportService {
       if (insertErr.code === '23505') {
         // Unique violation — typically duplicate SKU/barcode across the
         // org. Postgres doesn't tell us WHICH row caused it on a batch
-        // insert, but the message usually carries the conflicting value.
-        // Surface a structured, user-actionable error.
+        // insert. Its text names the constraint and table, so it goes to
+        // the report (S31) and the person reads the app's sentence.
+        void reportError(new Error(insertErr.message), {
+          tag: 'books_import.conflict',
+          organizationId: this.ctx.organizationId,
+          level: 'warning',
+          extra: { batchSize: readyRows.length },
+        });
         throw new ServiceError(
           'conflict',
-          `Import rejected: at least one book conflicts with an existing item (duplicate SKU or barcode). No books were imported. ${insertErr.message}`,
-          { batchSize: readyRows.length, postgresMessage: insertErr.message },
+          'Import rejected: at least one book conflicts with an existing item (duplicate SKU or barcode). No books were imported.',
+          { batchSize: readyRows.length },
         );
       }
       throw new ServiceError('internal_error', insertErr.message);

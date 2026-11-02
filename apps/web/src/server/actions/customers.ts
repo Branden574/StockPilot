@@ -3,7 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { ServiceError, withContext } from '@/server/services/context';
+import { rethrowControlFlow } from '@/lib/control-flow';
+import { actionErrorResult } from '@/server/lib/action-error-result';
+import { withContext } from '@/server/services/context';
 import { CustomersService, customerSchema, type CustomerInput } from '@/server/services/customers';
 
 import { err, ok, type ActionResult, type PortalPricingMode } from '@stockpilot/core';
@@ -31,8 +33,8 @@ async function gated(): Promise<{ svc: CustomersService | null; error: ReturnTyp
 }
 
 function toResult(e: unknown): ActionResult<never> {
-  if (e instanceof ServiceError) return err(e.code, e.message);
-  return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  rethrowControlFlow(e);
+  return actionErrorResult(e, 'actions.customers');
 }
 
 export async function createCustomerAction(

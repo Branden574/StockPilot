@@ -39,14 +39,16 @@ vi.mock('@/lib/email/es/families/digest', () => ({
   weeklyDigestText: vi.fn(() => 'digest text'),
 }));
 vi.mock('@/lib/email/resend', () => ({ sendEmail: sendEmailMock }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(async () => supabaseHolder.client) }));
 vi.mock('@/server/services/digest', () => ({
   applySectionOptIns: vi.fn((payload: unknown) => payload),
   getDigestData: getDigestDataMock,
 }));
 
-import { sendDigestPreviewAction } from './digest';
+import { sendDigestPreviewAction, setDigestPrefsAction } from './digest';
 import { requireOrgContext } from '@/lib/auth/session';
+import { reportError } from '@/lib/error-reporter';
 import { env } from '@/lib/env';
 import { mintMemberUnsubscribeToken } from '@/lib/email/member-unsubscribe';
 
@@ -224,5 +226,45 @@ describe('sendDigestPreviewAction: one-click unsubscribe', () => {
         }),
       );
     }
+  });
+});
+
+// S31: a Server Action's result reaches the browser as it is. The preview
+// answered Resend's own response body (lib/email/resend.ts puts it in
+// `error`), and a failed digest switch answered Postgres text; neither was
+// reported. Both say a fixed sentence now, and the text goes to the report.
+describe("the digest actions never answer the provider's or the database's text (S31)", () => {
+  it('a send the provider refused says the email was not sent, and reports the body', async () => {
+    const body = '{"statusCode":403,"message":"The example.test domain is not verified.","name":"validation_error"}';
+    sendEmailMock.mockResolvedValueOnce({ ok: false, error: body } as never);
+    const res = await sendDigestPreviewAction();
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Could not send the email. Try again.' },
+    });
+    expect(JSON.stringify(res)).not.toContain('domain');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((reported as Error).message).toBe(body);
+    expect(context).toEqual({ tag: 'actions.digest.preview', organizationId: 'org-1' });
+  });
+
+  it('a switch the database did not save says so in plain words, and reports the text', async () => {
+    supabaseHolder.client = makeSupabaseStub({
+      'user_profiles.update': {
+        data: null,
+        error: { message: 'new row violates row-level security policy for table "user_profiles"' },
+      },
+    }).client;
+    const res = await setDigestPrefsAction({ optIn: false });
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Could not save your digest settings. Try again.' },
+    });
+    expect(JSON.stringify(res)).not.toContain('row-level');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((reported as Error).message).toContain('row-level security');
+    expect(context).toEqual({ tag: 'actions.digest.prefs', organizationId: 'org-1' });
   });
 });

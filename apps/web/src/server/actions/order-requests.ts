@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
+import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -52,7 +53,7 @@ function toResult<T>(error: unknown): ActionResult<T> {
   // (small fixes slice 2 review). The cycle-count and attachment actions
   // already answer it this way.
   if (error instanceof ForbiddenError) return err('forbidden', error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return unexpectedActionError(error, 'actions.order_requests');
 }
 
 /**
