@@ -52,11 +52,11 @@ export const dynamic = 'force-dynamic';
  *
  * What the device is called comes from those fields only, never from the
  * request's User-Agent: noteLoginDevice shows the name as the stored device,
- * in the email and in the organization's Slack or Teams security feed, which
- * renders it as markup. With no model that passed it is "StockPilot app"
- * (security review of S5a: a User-Agent of `<!channel>` and a masked link
- * reached that feed). The User-Agent still goes to the note, where it is
- * only hashed into the device's identity when the install id is missing.
+ * in the email and in the organization's Slack or Teams security feed. With
+ * no model that passed it is "StockPilot app" (security review of S5a), so
+ * no text the caller typed reaches that feed. The User-Agent still goes to
+ * the note, where it is only hashed into the device's identity when the
+ * install id is missing.
  */
 
 const INSTALL_ID = z.string().uuid();

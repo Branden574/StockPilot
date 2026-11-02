@@ -273,9 +273,9 @@ describe('POST /api/v1/auth/signed-in — the body', () => {
   });
 
   it('no model that passes: the device note calls it "StockPilot app", never by the request’s own User-Agent', async () => {
-    // The device note shows its label in the Slack or Teams security feed,
-    // which renders it as markup (security review of S5a). The User-Agent is
-    // whatever the caller typed; it goes to the note for the device hash only.
+    // The device note shows its label in the Slack or Teams security feed
+    // (security review of S5a). The User-Agent is whatever the caller typed;
+    // it goes to the note for the device hash only.
     const hostile = '<!channel> <https://phish.example/login|Review this sign-in now>';
     for (const device of [{}, { model: '<!here>' }, { osName: 'iOS', osVersion: '18.1' }]) {
       h.noteLoginDevice.mockClear();

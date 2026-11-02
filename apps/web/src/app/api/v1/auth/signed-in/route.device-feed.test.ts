@@ -7,13 +7,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * THE DEFECT. With no device model that passed the route's allowlist, the
  * route had no label, so noteLoginDevice showed the request's own User-Agent
  * header instead: as the stored device, in the email, and as the `device` of
- * the security.new_device_login event, which the Slack request builder sends
- * as mrkdwn without escaping it. Any member signing in to their own account
- * could put `<!channel>` and a masked link into a "New device sign-in" card
- * sent by the StockPilot integration to each organization they belong to.
- * The route now names such a device "StockPilot app", from nothing the caller
- * sent. (The builder's escaping, which the web sign-in also needs, is its own
- * item.)
+ * the security.new_device_login event, which goes to the organization's
+ * Slack or Teams feed. Any member signing in to their own account could put
+ * text of their choosing into a "New device sign-in" card sent by the
+ * StockPilot integration to each organization they belong to. The route now
+ * names such a device "StockPilot app", from nothing the caller sent.
  *
  * The REAL route, the REAL noteLoginDevice and the REAL Slack request
  * builder. Only the identity, the rate limiter, the Audit row, the email
