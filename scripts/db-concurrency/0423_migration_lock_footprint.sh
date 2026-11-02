@@ -8,7 +8,8 @@
 # (purchase_orders, purchase_order_items, recurring_po_templates,
 # po_attachments, storage.objects, and checklist_runs when the receiving
 # checklist is in), CREATE TRIGGER takes SHARE ROW EXCLUSIVE on
-# purchase_orders and recurring_po_templates, supautils takes ACCESS EXCLUSIVE
+# purchase_orders, recurring_po_templates and (security review round,
+# 2026-11-02) locations, supautils takes ACCESS EXCLUSIVE
 # on every table supautils.policy_grants lists for the role (auth, storage,
 # realtime) on each policy statement, and the new policy expressions read
 # locations (ACCESS SHARE) and purchase_orders while they are parsed. The
@@ -25,7 +26,8 @@
 #   1a. Before the prelude the file holds no lock on any table outside the
 #       catalogs (the preflight, next_po_number, the review round's
 #       functions, their grants and their comments lock nothing).
-#   1b. The prelude takes ACCESS SHARE on locations, ACCESS EXCLUSIVE on
+#   1b. The prelude takes ACCESS SHARE and SHARE ROW EXCLUSIVE on locations,
+#       ACCESS EXCLUSIVE on
 #       purchase_orders, purchase_order_items, recurring_po_templates,
 #       po_attachments, storage.objects (and checklist_runs when it exists)
 #       and on every existing table in supautils.policy_grants for the role,
@@ -36,7 +38,7 @@
 #   2.  The hold, from the prelude to the end of the file, is under 250 ms on
 #       the local stack.
 #   3.  A purchase order reader, a line writer, an attachment reader, a
-#       template writer or a reader of auth.users, held
+#       template writer, a location writer or a reader of auth.users, held
 #       longer than the retries last: the file retries, holds NO table lock
 #       whenever it is paused between attempts (sampled from pg_locks), and
 #       fails 55P03 after its bounded retries (40 attempts), writing nothing.
@@ -45,13 +47,15 @@
 #   4.  The app's shapes, each already holding its first lock when the file
 #       starts: lines read, then the purchase order read (the open-PO read);
 #       a line written, then its purchase order FOR SHARE (the line guard);
-#       and the reverse, a purchase order written, then its lines read. The
+#       and the reverse, a purchase order written, then its lines read; and
+#       a place written, then a purchase order read. The
 #       person's transaction completes with no error (no 40P01), and the
 #       file, which never waits holding a lock, either runs to the end once it
 #       committed or fails 55P03; never 40P01.
 #   5.  While the file holds its locks (an artificial 1 s), a new purchase
 #       order reader and a new reader of auth.users wait only for the hold,
-#       then read.
+#       then read, and a new reader of locations does not wait at all (SHARE
+#       ROW EXCLUSIVE lets reads through).
 #   6.  CONTROL, the hazard the prelude removes: the same file with the prelude
 #       cut out and lock_timeout 5s, against the first shape of 4. The file
 #       holds purchase_orders (its policies are replaced first) and waits for
@@ -136,10 +140,11 @@ STATE_SQL="select md5(string_agg(x, '|' order by x)) from (
    where p.oid in ('public.next_po_number(uuid)'::regprocedure, 'ledger.reverse_receipt(uuid,text)'::regprocedure,
                    'public._notify_po_status()'::regprocedure, 'public._notify_receipt_posted()'::regprocedure,
                    'public.po_status_in_org(uuid,uuid)'::regprocedure)
-      or p.proname in ('_po_readable_by', 'po_attachment_object_visible', 'tg_po_destination_write_guard')
+      or p.proname in ('_po_readable_by', 'po_attachment_object_visible', 'tg_po_destination_write_guard',
+                       'tg_location_warehouse_move_guard')
   union all
   select 'trigger:' || tgrelid::regclass::text || '.' || tgname
-    from pg_trigger where tgname = 'trg_po_destination_write_guard') s"
+    from pg_trigger where tgname in ('trg_po_destination_write_guard', 'trg_location_warehouse_move_guard')) s"
 echo "local head $HEAD_NOW; FOR ALL purchase order policies present: $HAS_OLD; file $(basename "$MIG")"
 if [ "$HAS_OLD" != "2" ]; then
   echo "needs the head before the purchase order write scope migration (supabase db reset --local --version <the migration before it>)"
@@ -186,6 +191,7 @@ LOCKS_SQL="select string_agg(distinct n.nspname || '.' || c.relname || ':' || l.
   echo "select 'PRELUDE|' || coalesce(($LOCKS_SQL), 'none');"
   echo "select 'EXPECTED|' || string_agg(distinct x, ',' order by x) from (
           select 'public.locations:AccessShareLock' as x
+          union all select 'public.locations:ShareRowExclusiveLock'
           union all select 'public.purchase_order_items:AccessExclusiveLock'
           union all select 'public.purchase_orders:AccessExclusiveLock'
           union all select 'public.recurring_po_templates:AccessExclusiveLock'
@@ -216,7 +222,7 @@ else
   if [ "$PRELUDE" = "$EXPECTED" ]; then
     CR=""
     case ",$EXPECTED," in *",public.checklist_runs:AccessExclusiveLock,"*) CR=" and checklist_runs" ;; esac
-    ok "1b: the prelude takes exactly locations (access share), the purchase order, template and attachment tables$CR and storage.objects (access exclusive) and the $(printf '%s' "$EXPECTED" | tr ',' '\n' | grep -vc '^public\.') storage and supautils.policy_grants tables"
+    ok "1b: the prelude takes exactly locations (access share and share row exclusive), the purchase order, template and attachment tables$CR and storage.objects (access exclusive) and the $(printf '%s' "$EXPECTED" | tr ',' '\n' | grep -vc '^public\.') storage and supautils.policy_grants tables"
   else
     bad "1b: the prelude took: $PRELUDE; expected: $EXPECTED"
   fi
@@ -298,6 +304,7 @@ run_behind line-writer "update public.purchase_order_items set quantity_ordered 
 run_behind auth-reader "select count(*) from auth.users;" 9 fail
 run_behind attachment-reader "select count(*) from public.po_attachments;" 9 fail
 run_behind template-writer "update public.recurring_po_templates set name = name where organization_id = '$ORG';" 9 fail
+run_behind location-writer "update public.locations set name = name where id = '$LOC';" 9 fail
 run_behind 3b-short-po-reader "select count(*) from public.purchase_orders where organization_id = '$ORG';" 0.6 apply
 
 # ── 4. The app's shapes, each already holding its first lock ──────────────
@@ -337,6 +344,9 @@ shape "4b-line-write-then-po-for-share" \
 shape "4c-po-write-then-lines" \
   "update public.purchase_orders set notes = notes where id = '$PO';" \
   "select count(*) from public.purchase_order_items where purchase_order_id = '$PO';"
+shape "4d-place-write-then-po" \
+  "update public.locations set name = name where id = '$LOC';" \
+  "select count(*) from public.purchase_orders where id = '$PO';"
 
 # ── 5. While the file holds its locks, readers wait for the hold only ─────
 {
@@ -350,6 +360,17 @@ BG+=("$!")
 if ! wait_sleeping 0423-lock-migration-5; then
   bad "5: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/5m.err")"
 else
+  # First, while the hold is surely on: a reader of locations is not blocked
+  # by the trigger's SHARE ROW EXCLUSIVE (the file is still in its sleep after).
+  t0="$(now_ms)"
+  R="$(printf "set lock_timeout = '3s';\nselect 'read:' || (count(*) >= 0)::text from public.locations where organization_id = '%s';\n" "$ORG" | "${PSQL[@]}" 2>&1)"
+  t1="$(now_ms)"
+  STILL="$(q "select count(*) from pg_stat_activity where application_name = '0423-lock-migration-5' and wait_event = 'PgSleep'")"
+  if [ "$R" = "read:true" ] && [ $((t1 - t0)) -lt 500 ] && [ "$STILL" = "1" ]; then
+    ok "5: a new reader of locations read after $((t1 - t0)) ms while the file still held its locks"
+  else
+    bad "5: a new reader of locations: $R after $((t1 - t0)) ms (file still holding: $STILL)"
+  fi
   t0="$(now_ms)"
   R="$(printf "set lock_timeout = '3s';\nselect 'read:' || (count(*) >= 0)::text from public.purchase_orders where organization_id = '%s';\n" "$ORG" | "${PSQL[@]}" 2>&1)"
   t1="$(now_ms)"

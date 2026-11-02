@@ -76,6 +76,19 @@
 --      any member the status of any purchase order of the organization;
 --      nothing calls it since 0364 (the line guard uses
 --      po_status_for_line_write).
+--   The security review round (2026-11-02) found what the decisions round's
+--   write-level rule still left open:
+--   9. Every write policy (and purchase_orders_select) reads the destination's
+--      warehouse from locations.warehouse_id, and locations_update (0212:
+--      a manager or locations:manage, WITH CHECK warehouse_in_org only) lets
+--      anyone holding locations:manage change it for any place of the
+--      organization; no trigger guarded it (the only BEFORE UPDATE trigger
+--      on locations is 0002's updated_at). So a viewer or staff member
+--      holding purchase_orders:manage and a locations:manage override could,
+--      through the Data API, move another warehouse's destination into their
+--      own warehouse (or into none), change what is sent there, and move it
+--      back. The web never changes a place's warehouse
+--      (LocationsService.update patches name, type, parent and notes).
 --
 -- ── WHAT THIS MIGRATION DOES ───────────────────────────────────────────────
 --   1. next_po_number becomes plpgsql, STABLE, SECURITY DEFINER (search_path
@@ -174,6 +187,16 @@
 --      WAS WRONG, 7). Reads are unchanged.
 --  11. next_po_number's gate fails closed for an API identity that is
 --      neither a user nor the service role (1).
+--   The security review round (2026-11-02):
+--  12. tg_location_warehouse_move_guard (new, INVOKER) fires before an update
+--      of warehouse_id on locations: for a Data API caller, moving a place to
+--      another warehouse (or to none, or from none into one) needs a manager
+--      of its organization (and of the new one, if that changes too), else
+--      42501 with a sentence. The same value sent back, every other column,
+--      inserts, SECURITY DEFINER functions, the service role and the
+--      database's own cascades are not asked. locations_update itself is
+--      unchanged, so locations:manage still renames, re-notes, archives and
+--      creates places anywhere in the organization.
 --
 -- WHO CHANGES: staff and viewers holding purchase_orders:manage read only
 -- their own warehouses' purchase orders and those with no warehouse; staff
@@ -193,6 +216,10 @@
 -- warehouse they only view, nor (decisions round) change one there, its
 -- lines included; PO status and receipt notifications reach only people who
 -- may read the purchase order (the creator included).
+-- The security review round: a staff member or viewer holding a
+-- locations:manage override can no longer move a place to another warehouse
+-- through the Data API (nothing in the app does that); renaming, archiving
+-- and creating places is unchanged.
 --
 -- WHAT THIS DOES NOT CLOSE:
 --   * approve_po_import_commit (0360, SECURITY DEFINER; gate: member, the
@@ -243,9 +270,12 @@
 -- image (supautils 3.4.0), supautils also takes ACCESS EXCLUSIVE on every
 -- table supautils.policy_grants lists for the role (auth, storage, realtime;
 -- measured for COMMENT ON POLICY too). CREATE TRIGGER takes SHARE ROW
--- EXCLUSIVE on purchase_orders and recurring_po_templates (covered). The new
--- policy expressions read locations (ACCESS SHARE) and purchase_orders while
--- they are parsed. The app reads
+-- EXCLUSIVE on purchase_orders and recurring_po_templates (covered) and, since
+-- the security review round, on locations. The new policy expressions read
+-- locations (ACCESS SHARE) and purchase_orders while they are parsed. SHARE
+-- ROW EXCLUSIVE on locations lets every read of it through (and the key-share
+-- row locks of foreign key checks); only a write to locations waits for the
+-- hold, and an open one makes the prelude retry. The app reads
 -- purchase_order_items and then purchase_orders (the open-PO read, the
 -- cancel keep-checks, the reports), and a raw line write takes FOR SHARE on
 -- its purchase order after the line, so a file that waited for one of these
@@ -259,8 +289,9 @@
 -- deadlock_timeout) bounds anything unforeseen. The bucket's policies come
 -- last, where every file since 0375 keeps its storage.objects policy DDL
 -- (storage-policy-order.guard.test.ts). Purchase order, template and
--- attachment reads and writes, storage requests and sign-ins (the supautils
--- tables) queue for the few milliseconds the file holds the locks.
+-- attachment reads and writes, location writes, storage requests and sign-ins
+-- (the supautils tables) queue for the few milliseconds the file holds the
+-- locks.
 --
 -- The reversal's new purchase order lock (FOR UPDATE, after the receipt's)
 -- comes before every other row it writes, as in post_receipt_v2, which locks
@@ -272,8 +303,9 @@
 -- ── ERRORS ─────────────────────────────────────────────────────────────────
 -- next_po_number raises 42501 with a sentence. The policies refuse an insert,
 -- or an update's new row, with 42501 and match 0 rows on an update or delete
--- the caller may not make; tg_po_destination_write_guard raises 42501 with a
--- sentence. ledger.reverse_receipt raises po_not_found or po_line_not_found
+-- the caller may not make; tg_po_destination_write_guard and
+-- tg_location_warehouse_move_guard raise 42501 with a sentence (no app path
+-- reaches the second). ledger.reverse_receipt raises po_not_found or po_line_not_found
 -- (P0002, as post_receipt_v2's po_not_found; the web maps both to not found).
 -- The push raises 55000 (drift: nothing applied) or 55P03 (busy: nothing
 -- applied). Never 40001 or 40P01 (PostgREST retries those forever, 0367).
@@ -346,7 +378,9 @@ begin
   if to_regprocedure('public._po_readable_by(uuid,uuid)') is not null
      or to_regprocedure('public.po_attachment_object_visible(text)') is not null
      or to_regprocedure('public.tg_po_destination_write_guard()') is not null
-     or exists (select 1 from pg_trigger t where t.tgname = 'trg_po_destination_write_guard') then
+     or to_regprocedure('public.tg_location_warehouse_move_guard()') is not null
+     or exists (select 1 from pg_trigger t
+                 where t.tgname in ('trg_po_destination_write_guard', 'trg_location_warehouse_move_guard')) then
     v_bad := v_bad || ' a function or trigger this file adds already exists;';
   end if;
 
@@ -836,12 +870,51 @@ revoke all on function public.tg_po_destination_write_guard() from public, anon,
 comment on function public.tg_po_destination_write_guard() is
   'S46 (0423): BEFORE INSERT OR UPDATE OF destination_location_id on purchase_orders and recurring_po_templates. For a Data API caller, a new or changed destination in a warehouse must be one the caller may change (user_can_access_warehouse write: managers and above, or staff assigned to it), so a viewer holding purchase_orders:manage cannot create a purchase order or template for, or redirect one into, a warehouse they only view (42501, with a sentence). The write policies ask the same of every row they let a caller write; this runs before their WITH CHECK, so the refusal is said in words. No destination, a place with no warehouse, an unchanged destination, SECURITY DEFINER functions and the service role pass.';
 
+-- Security review round. The write policies above (and purchase_orders_select)
+-- decide by locations.warehouse_id, and locations_update (0212) lets anyone
+-- holding locations:manage change that column for any place of the
+-- organization. Below manager, moving a place between warehouses would move
+-- the purchase orders and templates sent there across the boundary, so a Data
+-- API move needs a manager. Nothing in the app changes a place's warehouse.
+create or replace function public.tg_location_warehouse_move_guard()
+returns trigger
+language plpgsql
+security invoker
+set search_path = public
+as $$
+begin
+  -- A request's own write only. SECURITY DEFINER functions, the service role
+  -- and the database's own cascades (run as the table owner) are not asked.
+  if current_user not in ('authenticated', 'anon') then
+    return new;
+  end if;
+  -- The same warehouse sent back (a whole-row update) is no move.
+  if new.warehouse_id is not distinct from old.warehouse_id then
+    return new;
+  end if;
+  if not public.has_org_role(old.organization_id, 'manager')
+     or (new.organization_id is distinct from old.organization_id
+         and not public.has_org_role(new.organization_id, 'manager')) then
+    raise exception 'Only a manager can move a place to another warehouse.'
+      using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+revoke all on function public.tg_location_warehouse_move_guard() from public, anon, authenticated;
+
+comment on function public.tg_location_warehouse_move_guard() is
+  'S46 (0423, security review round): BEFORE UPDATE OF warehouse_id on locations. The purchase order, line and template write policies, and purchase_orders_select, decide by the destination''s locations.warehouse_id, which locations_update (0212) lets locations:manage change for any place. For a Data API caller, moving a place to another warehouse (or to none, or from none into one) needs a manager of its organization (and of the new one, if that changes too), else 42501 with a sentence, so a staff member or viewer holding locations:manage cannot carry a place, and what is sent to it, across the warehouse boundary. The same warehouse sent back, every other column, inserts, SECURITY DEFINER functions, the service role and cascades pass. No app path changes a place''s warehouse.';
+
 -- ═══ 2. The lock prelude ═════════════════════════════════════════════════════
 -- Every table lock the statements below take, at once and without waiting.
 -- Inside DO because the CLI batch is not a transaction block (a top-level
 -- LOCK TABLE refuses there, as 0373 found); the locks last until the batch
 -- commits.
---   * locations: ACCESS SHARE (read by the purchase_orders policy expressions);
+--   * locations: ACCESS SHARE (read by the purchase_orders policy expressions)
+--     and SHARE ROW EXCLUSIVE (CREATE TRIGGER, security review round): reads
+--     of locations go on; a write to it waits for the hold;
 --   * checklist_runs, when 0419 is in: ACCESS EXCLUSIVE (COMMENT ON POLICY: as
 --     measured on the scratch stack, supautils takes ACCESS EXCLUSIVE on the
 --     policy's own table and on every policy_grants table for it too);
@@ -869,6 +942,7 @@ begin
     v_try := v_try + 1;
     begin
       lock table only public.locations in access share mode nowait;
+      lock table only public.locations in share row exclusive mode nowait;
       if to_regclass('public.checklist_runs') is not null then
         execute 'lock table only public.checklist_runs in access exclusive mode nowait';
       end if;
@@ -1231,7 +1305,7 @@ alter policy "po_attachments manage delete" on public.po_attachments
     )
   );
 
--- ═══ 8. The destination guard on both tables ═════════════════════════════════
+-- ═══ 8. The destination guard on both tables, and the place-move guard ═══════
 create trigger trg_po_destination_write_guard
   before insert or update of destination_location_id on public.purchase_orders
   for each row execute function public.tg_po_destination_write_guard();
@@ -1239,6 +1313,11 @@ create trigger trg_po_destination_write_guard
 create trigger trg_po_destination_write_guard
   before insert or update of destination_location_id on public.recurring_po_templates
   for each row execute function public.tg_po_destination_write_guard();
+
+-- Security review round: only a manager moves a place to another warehouse.
+create trigger trg_location_warehouse_move_guard
+  before update of warehouse_id on public.locations
+  for each row execute function public.tg_location_warehouse_move_guard();
 
 -- ═══ 9. Comments of the review round ═════════════════════════════════════════
 comment on policy recurring_po_templates_insert on public.recurring_po_templates is

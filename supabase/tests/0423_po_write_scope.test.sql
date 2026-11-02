@@ -69,6 +69,20 @@
 --   C7, C11 the catalog: the write policies ask write access, never the read
 --        set, and the read policy is unchanged.
 --
+-- The security review round (2026-11-02) found that the warehouse every write
+-- policy asks about is a column anyone holding locations:manage could change.
+-- On the decisions-round file (head cb07d241f; scratch stack, 401
+-- migrations) 3 of the now 66 fail, exactly LM1, LM2 and C12; LM3 and LM4
+-- hold on both by design:
+--   LM1, LM2  a viewer, or staff, holding purchase_orders:manage and a
+--        locations:manage override moved a place out of a warehouse (or into
+--        their own), then re-noted and cancelled the purchase order sent
+--        there. tg_location_warehouse_move_guard now refuses a Data API move
+--        of a place to another warehouse below manager (42501). LM3: they
+--        still rename, archive and create places; LM4: managers and above,
+--        and the service role, still move places.
+--   C12  the catalog of the new guard and its trigger.
+--
 -- Personas (organization A with warehouses A1 and A2; organization B):
 --   own        owner                       mgr       manager
 --   mgrNoMan   manager, purchase_orders:manage revoked
@@ -91,6 +105,7 @@
 -- R.   Reads: purchase_orders_select alone decides.
 -- W.   Purchase order writes: update, redirect, cancel and place, insert.
 -- V.   A viewer holding manage changes nothing in a warehouse they only view.
+-- LM.  Only a manager moves a place to another warehouse.
 -- L.   Line writes follow the parent purchase order.
 -- N.   next_po_number counts every purchase order for a writer; a non-writer
 --      gets 42501, and so does an API identity that is neither a user nor the
@@ -107,14 +122,16 @@
 --      purchase_orders:read. 0423 does not close that path (docket S46b);
 --      IMP1 pins it so the fix flips it on purpose.
 --
--- Roles: fixtures as the test superuser. Every attempt runs through pg_temp.u
--- or pg_temp.imp (always undone), which switch role and claims with
+-- Roles: fixtures as the test superuser. Every attempt runs through pg_temp.u,
+-- pg_temp.u_loc, pg_temp.loc_move or pg_temp.imp (always undone; u_loc, and
+-- loc_move when asked, grant a locations:manage override inside the same
+-- undone block), which switch role and claims with
 -- set_config inside a subtransaction, so pgTAP's own statements never run as
 -- an API role. begin/rollback: nothing leaks. Namespace 04230000.
 
 begin;
 
-select plan(61);
+select plan(66);
 
 \set orgA       '\'04230000-0000-0000-0000-0000000000a0\''
 \set orgB       '\'04230000-0000-0000-0000-0000000000b0\''
@@ -396,6 +413,66 @@ begin
     r2 := pg_temp.notified('purchase_order.status_changed', '04230000-0000-0000-0000-0000000004d2');
     r3 := pg_temp.notified('po.received', '04230000-0000-0000-0000-0000000004a1');
     raise exception using errcode = 'XX499', message = 'D1:' || r1 || ' D2:' || r2 || ' A1:' || r3;
+  exception when others then
+    get stacked diagnostics st = returned_sqlstate, msg = message_text;
+    if st = 'XX499' then return msg; end if;
+    return 'scenario-err:' || st || ':' || msg;
+  end;
+end $f$;
+-- Section LM: as pg_temp.u, with a locations:manage override granted to p_sub
+-- first (as the superuser); the grant is ALWAYS undone with the rest.
+create function pg_temp.u_loc(p_sub uuid, p_sql text, p_role text default 'authenticated')
+returns text language plpgsql as $f$
+declare v text; st text; msg text;
+begin
+  begin
+    insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
+    values ('04230000-0000-0000-0000-0000000000a0', p_sub, 'locations:manage', true);
+    v := pg_temp.u(p_sub, p_sql, p_role);
+    raise exception using errcode = 'XX499', message = v;
+  exception when others then
+    get stacked diagnostics st = returned_sqlstate, msg = message_text;
+    if st = 'XX499' then return msg; end if;
+    return 'scenario-err:' || st || ':' || msg;
+  end;
+end $f$;
+-- Section LM, the pivot: as p_sub (granted locations:manage first when
+-- p_grant), move place p_loc to warehouse p_wh (null: no warehouse), then
+-- re-note and cancel purchase order p_po. ALWAYS undone. Answers
+-- 'move:<rows or err:SQLSTATE> notes:<rows> cancel:<rows> po:<status> at:<the place's warehouse>',
+-- the last two read as the superuser.
+create function pg_temp.loc_move(p_sub uuid, p_grant boolean, p_loc uuid, p_wh uuid, p_po uuid)
+returns text language plpgsql as $f$
+declare st text; msg text; mv text; n1 int; n2 int; n3 int; v_status text; v_at text;
+begin
+  begin
+    if p_grant then
+      insert into public.user_permission_overrides (organization_id, user_id, permission, granted)
+      values ('04230000-0000-0000-0000-0000000000a0', p_sub, 'locations:manage', true);
+    end if;
+    perform set_config('request.jwt.claim.sub', p_sub::text, true);
+    perform set_config('request.jwt.claim.role', 'authenticated', true);
+    perform set_config('role', 'authenticated', true);
+    begin
+      update public.locations set warehouse_id = p_wh where id = p_loc;
+      get diagnostics n1 = row_count;
+      mv := n1::text;
+    exception when others then
+      get stacked diagnostics st = returned_sqlstate;
+      mv := 'err:' || st;
+    end;
+    update public.purchase_orders set notes = 'po scope probe' where id = p_po;
+    get diagnostics n2 = row_count;
+    update public.purchase_orders set status = 'cancelled' where id = p_po;
+    get diagnostics n3 = row_count;
+    perform set_config('role', 'none', true);
+    select po.status into v_status from public.purchase_orders po where po.id = p_po;
+    select case l.warehouse_id when '04230000-0000-0000-0000-0000000001a1' then 'A1'
+                               when '04230000-0000-0000-0000-0000000001a2' then 'A2'
+                               else coalesce(l.warehouse_id::text, 'none') end
+      into v_at from public.locations l where l.id = p_loc;
+    raise exception using errcode = 'XX499',
+      message = format('move:%s notes:%s cancel:%s po:%s at:%s', mv, n2, n3, v_status, v_at);
   exception when others then
     get stacked diagnostics st = returned_sqlstate, msg = message_text;
     if st = 'XX499' then return msg; end if;
@@ -732,6 +809,34 @@ select is(pg_temp.u(:vwrMan, pg_temp.seen_q()) || ' ' || pg_temp.u(:vwrMan, form
   'ok:A1,D1,ND,OL ok:1 ok:1 ok:1 ok:1 ok:1 ok:saved ok:1',
   'V5 (control): the viewer still reads A1''s purchase orders and templates and still changes those with no destination or a place in no warehouse; staff holding manage in A1 still cancel, edit and arm A1''s');
 
+-- ═══ LM. Only a manager moves a place to another warehouse ══════════════════
+-- Security review round: the write policies (and purchase_orders_select) read
+-- the destination's warehouse from locations.warehouse_id, which
+-- locations_update (0212) lets anyone holding locations:manage change, with
+-- no warehouse term. Without tg_location_warehouse_move_guard, a viewer or
+-- staff member holding both grants moved a place out of a warehouse (or into
+-- their own), changed what is sent there, and could move it back.
+select is(pg_temp.loc_move(:vwrMan, false, :locA1, null, :poA1) || ' | ' || pg_temp.loc_move(:vwrMan, true, :locA1, null, :poA1),
+  'move:0 notes:0 cancel:0 po:ordered at:A1 | move:err:42501 notes:0 cancel:0 po:ordered at:A1',
+  'LM1: the viewer holding manage, with or without locations:manage, cannot move A1''s place to no warehouse (0 rows without it; 42501 with it), so A1''s purchase order stays theirs to read only');
+select is(pg_temp.loc_move(:stfMan, false, :locA2, :whA1, :poA2) || ' | ' || pg_temp.loc_move(:stfMan, true, :locA2, :whA1, :poA2) || ' | '
+          || pg_temp.u_loc(:stfMan, format('update public.locations set warehouse_id = %L where id = %L', :whA2, :locA1)) || ' '
+          || pg_temp.u_loc(:stfMan, format('update public.locations set warehouse_id = %L where id = %L', :whA1, :locOrg)),
+  'move:0 notes:0 cancel:0 po:ordered at:A2 | move:err:42501 notes:0 cancel:0 po:ordered at:A2 | err:42501 err:42501',
+  'LM2: staff holding manage in A1, with locations:manage, cannot re-home A2''s place into A1 (42501; 0 rows without the grant), nor move their own place out or a place with no warehouse in');
+select is(pg_temp.u_loc(:stfMan, format('update public.locations set name = %L, notes = %L where id = %L', 'PO Scope Bin A2 renamed', 'po scope probe', :locA2)) || ' '
+          || pg_temp.u_loc(:stfMan, format('update public.locations set warehouse_id = %L, name = %L where id = %L', :whA2, 'PO Scope Bin A2 resent', :locA2)) || ' '
+          || pg_temp.u_loc(:stfMan, format('update public.locations set deleted_at = now() where id = %L', :locA2)) || ' '
+          || pg_temp.u_loc(:stfMan, format('insert into public.locations (organization_id, warehouse_id, name, type) values (%L, %L, %L, %L)', :orgA, :whA2, 'PO Scope Bin A2 new', 'bin')),
+  'ok:1 ok:1 ok:1 ok:1',
+  'LM3 (control): staff holding locations:manage still rename, re-note, archive and create places, and an update that sends the same warehouse back passes');
+select is(pg_temp.u(:mgr, format('update public.locations set warehouse_id = %L where id = %L', :whA1, :locA2)) || ' '
+          || pg_temp.u(:own, format('update public.locations set warehouse_id = null where id = %L', :locA1)) || ' '
+          || pg_temp.u(:admNoRd, format('update public.locations set warehouse_id = %L where id = %L', :whA2, :locOrg)) || ' '
+          || pg_temp.u(null, format('update public.locations set warehouse_id = %L where id = %L', :whA1, :locA2), 'service_role'),
+  'ok:1 ok:1 ok:1 ok:1',
+  'LM4 (control): a manager, the owner and an admin still move places between warehouses, and the service role is not asked');
+
 -- ═══ AT. PO attachments: the row and the stored file follow the purchase order
 select is(pg_temp.u(:stfMan, pg_temp.att_sel_q(:attA2)) || ' ' || pg_temp.u(:mgrNoRd, pg_temp.att_sel_q(:attA2)) || ' '
           || pg_temp.u(:stfManNoRd, pg_temp.att_sel_q(:attA2)) || ' ' || pg_temp.u(:stf, pg_temp.att_sel_q(:attA2)),
@@ -939,6 +1044,20 @@ select is(
   || 'recurring_po_templates.recurring_po_templates_insert:true|false,recurring_po_templates.recurring_po_templates_select:false|false,'
   || 'recurring_po_templates.recurring_po_templates_update:true|false',
   'C11: the purchase order, line and template write policies ask write access to the warehouse and never the read set; purchase_orders_select still reads by my_warehouse_ids');
+
+-- Security review round: the place-move guard's posture and its trigger.
+select is(
+  (select p.prosecdef::text || '|' || p.provolatile::text || '|' || coalesce(p.proconfig::text, '') || '|'
+          || has_function_privilege('anon', p.oid, 'execute')::text || '|'
+          || has_function_privilege('authenticated', p.oid, 'execute')::text || '|'
+          || (obj_description(p.oid, 'pg_proc') ~ 'S46')::text
+     from pg_proc p where p.oid = to_regprocedure('public.tg_location_warehouse_move_guard()'))
+  || E'\n' ||
+  (select string_agg(pg_get_triggerdef(t.oid) || '|' || t.tgenabled::text, E'\n' order by t.tgname)
+     from pg_trigger t where not t.tgisinternal and t.tgfoid = to_regprocedure('public.tg_location_warehouse_move_guard()')),
+  E'false|v|{search_path=public}|false|false|true\n'
+  'CREATE TRIGGER trg_location_warehouse_move_guard BEFORE UPDATE OF warehouse_id ON public.locations FOR EACH ROW EXECUTE FUNCTION tg_location_warehouse_move_guard()|O',
+  'C12: the place-move guard is an INVOKER trigger function nobody executes, with its search_path and an S46 comment, fired before an update of warehouse_id on locations and nowhere else');
 
 -- ═══ IMP. PO-import approval (not closed by 0423) ═══════════════════════════
 select is(pg_temp.imp(:stfMan) || ' ' || pg_temp.imp(:vwrMan) || ' ' || pg_temp.imp(:mgrNoRd) || ' ' || pg_temp.imp(:stfManNoRd),

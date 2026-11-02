@@ -558,7 +558,13 @@ actually fire.
   made it `SECURITY DEFINER` with its own gate (a manager or
   `purchase_orders:manage`; with no user, only the service role and a call
   with no request claims). Purchase orders are read through
-  `purchase_orders_select` alone.
+  `purchase_orders_select` alone. Every one of these rules reads the
+  destination's warehouse from `locations.warehouse_id`, which
+  `locations_update` (0212) lets `locations:manage` change for any place, so
+  0423 also adds `tg_location_warehouse_move_guard` (`BEFORE UPDATE OF
+  warehouse_id` on `locations`): a Data API caller below manager cannot move a
+  place to another warehouse, and so cannot carry a place, and what is sent to
+  it, across the boundary (security review round, 2026-11-02).
 - **Tested at**: INV-35 (the sweep, plus a stale-entry audit of allowlist G)
   and INV-36 (plants a scoped table with a `FOR ALL` policy and a stale
   allowlist row; both must be caught). 0371's own test pins the exact policy
@@ -566,7 +572,8 @@ actually fire.
   ([`0423_po_write_scope.test.sql`](../../supabase/tests/0423_po_write_scope.test.sql))
   the set on `purchase_orders` and `purchase_order_items` (C1, C2) and the
   write-level warehouse rule of every write policy (C11), with the reads and
-  writes of each persona (R, W, L, V) and the numbering (N).
+  writes of each persona (R, W, L, V), the numbering (N) and the place-move
+  guard (LM1-LM4, C12).
 
 ### INV-C5 — `order_submissions` is owner-only, and only the two writers insert into it
 
