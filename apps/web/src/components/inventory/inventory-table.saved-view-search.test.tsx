@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import * as React from 'react';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -103,6 +104,8 @@ vi.mock('@/components/ui/image-hover-preview', () => ({
 vi.mock('@/lib/cycle-counts/use-count-selection', () => ({
   useCountSelection: (selector: (s: { add: () => void }) => unknown) => selector({ add: vi.fn() }),
 }));
+
+import { offline } from '@/test/rejected-request';
 
 import { InventoryTable, type InstantDatasetItem } from './inventory-table';
 
@@ -453,6 +456,29 @@ describe('Applying a saved view without a search clears a typed search', () => {
     await settle();
     // The dropped search never reached the address.
     expect(tableWrites.filter((w) => w.includes('q='))).toEqual([]);
+  });
+
+  // B40 with B1: the chip switches the warehouse first. When that gets no
+  // answer the view is not applied, so it hands nothing to the box: a search
+  // typed and not yet in the address stays typed (handing the view's empty
+  // search over would drop it at once, as above), and it reaches the address.
+  it('a view whose warehouse switch gets no answer leaves a typed search in the box', async () => {
+    setAddress('/dashboard/inventory');
+    render(tableFor('items', 'instant', { items: ITEMS }));
+    const user = userEvent.setup();
+    actions.setActiveWarehouseAction.mockRejectedValueOnce(offline());
+    // No settle: the box has not written ?q= yet when the chip is pressed.
+    await user.type(searchBox(), 'zz');
+    await user.click(screen.getByRole('button', { name: 'Apply view Science room supplies' }));
+    await vi.waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        "We couldn't apply the view. Check your connection and try again.",
+      ),
+    );
+    await settle();
+    expect(searchBox()).toHaveValue('zz');
+    expect(window.location.search).toBe('?q=zz');
+    expect(routerMock.replace).not.toHaveBeenCalled();
   });
 });
 
