@@ -4,7 +4,6 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -27,6 +26,7 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { ReplacementQuantityStepper } from '@/components/replacement-quantity-stepper';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
+import { Modal } from '@/components/ui/modal';
 import { Body, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';

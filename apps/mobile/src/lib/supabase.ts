@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
 
 import { authStorageKeyFor, readStoredAuthSession, type StoredAuthSession } from './auth-storage';
+import { writeTrackingFetch } from './update-prompt-holds';
 
 import type { Database } from '@stockpilot/core';
 
@@ -98,6 +99,10 @@ export const supabase = createClient<Database>(url, anon, {
     persistSession: true,
     detectSessionInUrl: false,
   },
+  // Every request but a GET or a HEAD (row and storage writes, RPC calls, a
+  // token refresh) counts as a write in flight: the phone update's Restart
+  // now waits for it, since a restart cancels it (update-prompt-holds.ts).
+  global: { fetch: writeTrackingFetch },
 });
 
 /**

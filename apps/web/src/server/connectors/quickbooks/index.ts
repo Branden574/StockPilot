@@ -11,6 +11,7 @@ import type {
 
 import { env } from '@/lib/env';
 
+import { MappingReadError } from '../mapping-read-error';
 import { buildBillFromReceipt, resolveVendor, round2, type BillLine } from './bill';
 import { QboClient, type QboEnv } from './client';
 import { buildReturnCreditJournalEntry, type ReturnCreditLine } from './creditmemo';
@@ -32,6 +33,10 @@ interface QboSettings {
 
 /** Classify a thrown QBO error as transient (retryable) vs caller-error. */
 function isRetryableQboError(e: unknown): boolean {
+  // A failed mapping read is StockPilot's own read, made before anything is
+  // posted, not a QuickBooks answer: retry it with backoff (docket S27). Its
+  // cause can carry PostgREST's status (200 or 204), which is no QuickBooks status.
+  if (e instanceof MappingReadError) return true;
   const status = (e as { status?: number })?.status ?? 0;
   // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
   // transient → retryable. Other 4xx are caller errors → not retryable.

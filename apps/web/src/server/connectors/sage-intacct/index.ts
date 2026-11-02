@@ -9,6 +9,7 @@ import type {
   PushResult,
 } from '@stockpilot/core';
 
+import { MappingReadError } from '../mapping-read-error';
 import { IntacctClient } from './client';
 import {
   buildIntacctPurchaseOrder,
@@ -41,6 +42,10 @@ interface IntacctSettings {
 
 /** Classify a thrown Intacct error as transient (retryable) vs caller-error. */
 function isRetryableIntacctError(e: unknown): boolean {
+  // A failed mapping read is StockPilot's own read, made before anything is
+  // posted, not an Intacct answer: retry it with backoff (docket S27). Its
+  // cause can carry PostgREST's status (200 or 204), which is no Intacct status.
+  if (e instanceof MappingReadError) return true;
   const status = (e as { status?: number })?.status ?? 0;
   // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
   // transient → retryable. Other 4xx are caller errors → not retryable.
