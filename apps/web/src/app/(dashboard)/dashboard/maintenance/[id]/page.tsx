@@ -302,7 +302,15 @@ export default async function MaintenanceRequestDetailPage({
                   <PhotoGrid photos={requesterPhotos} />
                 )
               ) : (
-                <MaintenancePhotosPanelClient requestId={detail.id} photos={requesterPhotos} />
+                // B104: Remove only for whoever remove() lets through, the
+                // requester or a manage-holder; a read_all viewer (such as a
+                // manager whose manage permission is switched off) sees the
+                // photos without it.
+                <MaintenancePhotosPanelClient
+                  requestId={detail.id}
+                  photos={requesterPhotos}
+                  canRemove={canManage || isOwningRequester}
+                />
               )}
               {closed ? (
                 <p className="text-muted-foreground mt-3 text-[12px]">

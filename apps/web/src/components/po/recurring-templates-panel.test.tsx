@@ -43,6 +43,8 @@ vi.mock('@/lib/utils', async (importOriginal) => {
   };
 });
 
+import { shouldAutoSend } from '@/server/services/auto-reorder';
+
 import { RecurringTemplatesPanel, type RecurringTemplateRow } from './recurring-templates-panel';
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -198,5 +200,57 @@ describe('RecurringTemplatesPanel', () => {
       screen.getAllByText('Pre-assembled kit: Reading Kit (__BUNDLE__0a000000)').length,
     ).toBeGreaterThan(0);
     expect(screen.getAllByText('Item not available').length).toBeGreaterThan(0);
+  });
+
+  // ── Mark as ordered automatically (B105) ──────────────────────────────────
+
+  // The page said "opt-in auto-send requires a $ cap" and the form "Without
+  // a cap, it falls back to draft.", but the run decides with shouldAutoSend,
+  // which it calls with a null cap: a template with no cap is marked as
+  // ordered whenever its total is under the organization's PO approval
+  // threshold. And "Auto-send to supplier" promised a send: the run only
+  // marks the purchase order as ordered (updateStatus 'ordered'), and nothing
+  // is sent to anyone.
+  it('a template that marks its PO as ordered with a blank cap says the approval threshold decides, and that nothing is sent', () => {
+    // The rule the words state, as the run applies it (in dollars).
+    expect(shouldAutoSend(50, null, 500)).toBe(true); // no cap, under the threshold
+    expect(shouldAutoSend(500, null, 500)).toBe(false); // no cap, at the threshold
+    expect(shouldAutoSend(50, null, null)).toBe(false); // neither: a draft
+    expect(shouldAutoSend(100, 100, null)).toBe(true); // within the cap
+    expect(shouldAutoSend(101, 100, null)).toBe(false); // over the cap
+    expect(shouldAutoSend(90, 100, 80)).toBe(false); // within the cap, over the threshold
+
+    render(
+      <RecurringTemplatesPanel
+        {...BASE_PROPS}
+        initial={[{ ...TEMPLATE, send_mode: 'send', max_auto_send_cents: null }]}
+      />,
+    );
+    const intro = screen.getByText(/^Templates that create a PO automatically on a cadence\./);
+    expect(intro).toHaveTextContent(
+      'Draft by default; a template can instead mark its PO as ordered automatically, under a cap or your PO approval threshold. Nothing is sent to the supplier.',
+    );
+    expect(intro).not.toHaveTextContent('requires a $ cap');
+    // The list names the mode for what it does.
+    expect(screen.getByText(/· Auto-order/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.getByRole('combobox', { name: 'When the PO is created' })).toHaveTextContent(
+      'Mark as ordered automatically',
+    );
+    const help = screen.getByText(/^Mark as ordered automatically marks the PO as ordered/);
+    expect(help).toHaveTextContent(
+      'Mark as ordered automatically marks the PO as ordered when its total is within the cap and under your PO approval threshold, if you have one. With no cap, it is marked as ordered whenever its total is under your approval threshold. With neither, it stays a draft. Nothing is sent to the supplier. Send them the purchase order yourself.',
+    );
+    expect(help).not.toHaveTextContent('Without a cap, it falls back to draft');
+    // The cap is optional, and says what is left a draft.
+    expect(screen.getByLabelText('Auto-order cap ($, optional)')).toHaveValue(null);
+    expect(
+      screen.getByText(
+        'A PO over this cap stays a draft for review instead of being marked as ordered.',
+      ),
+    ).toBeInTheDocument();
+    // Nothing on the page says the purchase order is sent.
+    expect(document.body).not.toHaveTextContent(/auto-?sen[dt]/i);
   });
 });
