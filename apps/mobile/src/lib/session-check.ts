@@ -69,12 +69,15 @@ export function sessionCheckFromAuthAnswer(status: number, body: unknown): Sessi
 
 /**
  * Ask the Auth server about the session on this phone, with its current
- * access token. Never throws, never removes the session, and answers within
- * `timeoutMs` (the request is aborted then).
+ * access token. Never throws, and answers within `timeoutMs` (the request is
+ * aborted then). The question itself never removes the session; reading the
+ * token can, in one case auth-js decides on its own: a token close to expiry
+ * is refreshed first, and a refresh the Auth server refuses removes the
+ * session (GoTrueClient __loadSession, _callRefreshToken), as the
+ * auto-refresh would have done moments later.
  *
  * No token to ask with: when auth-js holds no session because the Auth server
- * has just refused to refresh it (auth-js removes the session itself then,
- * GoTrueClient _callRefreshToken), that refusal is the answer; offline, or no
+ * has just refused to refresh it, that refusal is the answer; offline, or no
  * session at all, is no answer.
  */
 export async function checkThisSession(
