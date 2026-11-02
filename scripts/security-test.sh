@@ -803,11 +803,13 @@ PGTAP_TESTS=(
   # parent purchase order readable and, below manager, writable;
   # next_po_number is SECURITY DEFINER with a manager or
   # purchase_orders:manage gate (with no user: the service role or no claims),
-  # so numbers still count every purchase order. Personas: staff and viewers
-  # holding manage in one warehouse, in none, managers and admins without
-  # read; reads, updates, redirects, cancel and place, inserts, lines,
-  # numbering, the draft save, receiving. The PO-import approval path that
-  # stays open is pinned (IMP1). The lock footprint is
+  # so numbers still count every purchase order; and a place cannot be moved
+  # to another warehouse below manager (tg_location_warehouse_move_guard), so
+  # locations:manage cannot carry a place across the rule. Personas: staff and
+  # viewers holding manage in one warehouse, in none, managers and admins
+  # without read; reads, updates, redirects, cancel and place, inserts, lines,
+  # numbering, the draft save, receiving, place moves. The PO-import approval
+  # path that stays open is pinned (IMP1). The lock footprint is
   # scripts/db-concurrency/0423_migration_lock_footprint.sh.
   supabase/tests/0423_po_write_scope.test.sql
 
