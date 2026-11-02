@@ -365,7 +365,8 @@ describe('quickbooksConnector via runDrain (integration) — Step 6', () => {
       receipt_lines: { data: [{ qty_accepted_base: 4, unit_cost: 2.5 }] },
       purchase_orders: { data: { supplier_id: 'sup-1' } },
       suppliers: { data: { id: 'sup-1', name: 'Acme' } },
-      connection_mappings: { data: { external_id: 'qbo-vendor-7', external_meta: {} } },
+      // getMapping is a list read (docket S27): its answer is a list.
+      connection_mappings: { data: [{ external_id: 'qbo-vendor-7', external_meta: {} }] },
       // integrations module enabled for org-1 (migration 0144 gate) so the drainer dispatches.
       organization_modules: { data: [{ organization_id: 'org-1' }] },
     };

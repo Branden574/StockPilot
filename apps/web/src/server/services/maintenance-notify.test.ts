@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
 /**
@@ -71,6 +72,8 @@ function buildAdmin(opts: {
   membersError?: { message: string } | null;
   prefRows?: Array<Record<string, unknown>>;
   disabledUserIds?: string[];
+  /** Answers that replace a read's own (docket S27: an answer that is not a list). */
+  answers?: Record<string, unknown>;
 }) {
   const stub = makeSupabaseStub({
     'organization_members.select': opts.membersError
@@ -78,9 +81,10 @@ function buildAdmin(opts: {
       : { data: opts.members ?? [], error: null },
     'role_permission_overrides.select': { data: opts.roleOverrides ?? [], error: null },
     'user_permission_overrides.select': { data: opts.userOverrides ?? [], error: null },
+    // The module's one settings row, read as a list (PostgREST's own shape).
     'organization_modules.select': opts.moduleError
       ? { data: null, error: opts.moduleError }
-      : { data: { settings: { notifyAudience: opts.notifyAudience ?? {} } }, error: null },
+      : { data: [{ settings: { notifyAudience: opts.notifyAudience ?? {} } }], error: null },
     'notification_preferences.select': { data: opts.prefRows ?? [], error: null },
     // createNotification's own disabled-account gate — every recipient
     // shares this canned response (the mock doesn't filter by id), so a
@@ -89,6 +93,7 @@ function buildAdmin(opts: {
     // against whatever this key returns for every .eq('id', userId) call.
     'user_profiles.select': { data: { disabled_at: null }, error: null },
     'notifications.insert': { data: { id: 'notif-x' }, error: null },
+    ...(opts.answers as Record<string, never> | undefined),
   });
   adminHolder.client = stub.client;
   return stub;
@@ -245,6 +250,114 @@ describe('resolveMaintenanceAudience — permission resolution (never _notify_re
       expect.any(Error),
       expect.objectContaining({ tag: 'maintenance_notify.resolve_audience' }),
     );
+  });
+
+  /**
+   * docket S27: an answer with no error that is not a list (postgrest-js
+   * resolves an empty body with data null) was read as "no rows". The role
+   * override read so answered dropped the organization's revoke, so a manager
+   * who chose "all" was told after managers lost read_all and manage; the
+   * member read so answered told nobody, silently; and the module settings
+   * read (maybeSingle) could not tell an empty body from "nobody chose", so
+   * nobody was told and nothing was reported. Each is a failed read: nobody is
+   * told, and it is reported naming the table and the status.
+   */
+  describe('an answer that is not a list is a failed read', () => {
+    const MANAGER_ALL = {
+      members: [{ user_id: 'manager-1', role: 'manager' as const }],
+      notifyAudience: { 'manager-1': 'all' as const },
+    };
+    const resolve = () =>
+      resolveMaintenanceAudience({
+        organizationId: ORG,
+        event: 'new_request',
+        actorUserId: 'someone-else',
+      });
+    function expectOneReport(table: string, status: number) {
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect((err as Error).message).toBe(`${table} answered no list (status ${status})`);
+      expect(context).toEqual({
+        tag: 'maintenance_notify.resolve_audience',
+        extra: { organizationId: ORG, event: 'new_request' },
+      });
+    }
+
+    it('the manager who chose "all" is told, and not once managers lost both permissions (unchanged)', async () => {
+      buildAdmin(MANAGER_ALL);
+      expect(await resolve()).toEqual(['manager-1']);
+      buildAdmin({
+        ...MANAGER_ALL,
+        roleOverrides: [
+          { role: 'manager', permission: 'maintenance_requests:read_all', granted: false },
+          { role: 'manager', permission: 'maintenance_requests:manage', granted: false },
+        ],
+      });
+      expect(await resolve()).toEqual([]);
+      expect(reportError).not.toHaveBeenCalled();
+      // An empty body hid that same override and told the manager.
+      buildAdmin({
+        ...MANAGER_ALL,
+        answers: { 'role_permission_overrides.select': NOT_A_LIST[0][1] },
+      });
+      expect(await resolve()).toEqual([]);
+      expectOneReport('role_permission_overrides', 200);
+    });
+
+    it.each(NOT_A_LIST)(
+      '%s from the role override read tells nobody and is reported',
+      async (_shape, answer) => {
+        buildAdmin({ ...MANAGER_ALL, answers: { 'role_permission_overrides.select': answer } });
+        expect(await resolve()).toEqual([]);
+        expectOneReport('role_permission_overrides', answer.status);
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the member override read tells nobody and is reported',
+      async (_shape, answer) => {
+        buildAdmin({ ...MANAGER_ALL, answers: { 'user_permission_overrides.select': answer } });
+        expect(await resolve()).toEqual([]);
+        expectOneReport('user_permission_overrides', answer.status);
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the member read is reported, never a silent nobody',
+      async (_shape, answer) => {
+        buildAdmin({ ...MANAGER_ALL, answers: { 'organization_members.select': answer } });
+        expect(await resolve()).toEqual([]);
+        expectOneReport('organization_members', answer.status);
+      },
+    );
+
+    it.each(NOT_A_LIST)(
+      '%s from the module settings read is reported, never read as "nobody chose"',
+      async (_shape, answer) => {
+        buildAdmin({ ...MANAGER_ALL, answers: { 'organization_modules.select': answer } });
+        expect(await resolve()).toEqual([]);
+        expectOneReport('organization_modules', answer.status);
+      },
+    );
+
+    it('no settings row is "nobody chose": nobody is told, and nothing is reported', async () => {
+      buildAdmin({
+        ...MANAGER_ALL,
+        answers: { 'organization_modules.select': { data: [], error: null, status: 200 } },
+      });
+      expect(await resolve()).toEqual([]);
+      expect(reportError).not.toHaveBeenCalled();
+      // More than one settings row is no answer either (the read is a list now).
+      const settings = { settings: { notifyAudience: { 'manager-1': 'all' } } };
+      buildAdmin({
+        ...MANAGER_ALL,
+        answers: {
+          'organization_modules.select': { data: [settings, settings], error: null, status: 200 },
+        },
+      });
+      expect(await resolve()).toEqual([]);
+      expect(reportError).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('query-shape pin: role/user override reads are scoped to this organization and narrowed to the two maintenance permissions', async () => {
