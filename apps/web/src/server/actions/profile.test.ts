@@ -49,6 +49,10 @@ const { authState, mfaState, redirectError } = vi.hoisted(() => ({
     orgLess: false,
     /** Signed out: requireSession() redirects to /signin. */
     signedOut: false,
+    /** Reads of the person's memberships so far, by either session reader. */
+    membershipReads: 0,
+    /** The read (1st, 2nd) whose membership list cannot be read, or null. */
+    membershipsUnreadableAt: null as number | null,
   },
   redirectError: (path: string): Error & { digest: string } => {
     const e = new Error('NEXT_REDIRECT') as Error & { digest: string };
@@ -84,11 +88,25 @@ vi.mock('@/lib/auth/session', () => ({
       role: sessionState.role,
     };
   }),
-  getSessionMemberships: vi.fn(async () =>
-    authState.orgLess
+  // A list that cannot be read: readSessionMemberships() says so, and
+  // getSessionMemberships() answers an empty list, as the session loader does.
+  getSessionMemberships: vi.fn(async () => {
+    authState.membershipReads += 1;
+    if (authState.membershipReads === authState.membershipsUnreadableAt) return [];
+    return authState.orgLess
       ? []
-      : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }],
-  ),
+      : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }];
+  }),
+  readSessionMemberships: vi.fn(async () => {
+    authState.membershipReads += 1;
+    if (authState.membershipReads === authState.membershipsUnreadableAt) return { ok: false };
+    return {
+      ok: true,
+      memberships: authState.orgLess
+        ? []
+        : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }],
+    };
+  }),
 }));
 
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
@@ -261,8 +279,11 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 import { audit } from '@/server/services/audit';
 import {
   ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_RETRY_COPY,
   ACCOUNT_DELETE_SIGNED_OUT_COPY,
 } from '@/server/lib/account-deletion';
+
+import { err } from '@stockpilot/core';
 
 import {
   deleteOwnAccountAction,
@@ -281,6 +302,8 @@ const AVATAR_PREFIX =
 beforeEach(() => {
   authState.orgLess = false;
   authState.signedOut = false;
+  authState.membershipReads = 0;
+  authState.membershipsUnreadableAt = null;
   mfaState.orgPolicyRequires = false;
   mfaState.satisfied = true;
   mfaState.enrolled = false;
@@ -1156,6 +1179,63 @@ describe('deleteOwnAccountAction', () => {
       );
     }
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The action reads the person's memberships twice: once at the top, and once
+   * before the delete. A list that cannot be read is not "no workspace":
+   * nothing is deleted and the person is asked to try again.
+   */
+  describe('a membership list that cannot be read', () => {
+    it('the first read: nothing is deleted or written, try again', async () => {
+      authState.membershipsUnreadableAt = 1;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(checkRateLimitMock).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'account.delete.membership_read',
+        extra: { source: 'web' },
+      });
+    });
+
+    it('the second read: nothing is deleted or written, try again', async () => {
+      authState.membershipsUnreadableAt = 2;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(adminRpc).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      // This read comes after the limiter, which counted the attempt.
+      expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'account.delete.membership_read',
+        extra: { source: 'web' },
+      });
+    });
+
+    it('control: a member whose list reads is deleted and the row is filed under their organization', async () => {
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(authState.membershipReads).toBe(2);
+      expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ organization_id: 'org-1', event: 'user.deactivated' }),
+      );
+    });
+
+    it('control: a person with no workspace is deleted and the row has no organization (SP-129)', async () => {
+      authState.orgLess = true;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(authState.membershipReads).toBe(2);
+      expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ organization_id: null, event: 'user.deactivated' }),
+      );
+    });
   });
 
   it('rethrows a redirect instead of reporting it as internal_error', async () => {

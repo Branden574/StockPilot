@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
-import { getSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
+import { readSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { env } from '@/lib/env';
@@ -156,20 +156,35 @@ async function resolveSessionMfaPosture(
  * A member keeps the org gate EXACTLY as before: this is not a way around an
  * org's mfa_policy, only an answer for the case where there is no org to ask.
  */
-async function gateMfaForSelfService(userId: string): Promise<void> {
+async function gateMfaForSelfService(userId: string): Promise<'gated' | 'memberships_unreadable'> {
   // A second read of the session and its memberships: React.cache() does not
   // memoize inside a Server Action (lib/auth/session.ts), so this does not
   // share requireSession()'s. A session that does not verify as `userId` here
   // answers no memberships and takes the branch below, whose posture read is
-  // held to `userId` and refuses it.
-  const memberships = await getSessionMemberships();
-  if (memberships.length > 0) {
+  // held to `userId` and refuses it. A list that cannot be read is not "no
+  // membership": the action stops there and the person tries again.
+  const read = await readSessionMemberships();
+  if (!read.ok) return 'memberships_unreadable';
+  if (read.memberships.length > 0) {
     await gateMfa();
-    return;
+    return 'gated';
   }
   const supabase = await createClient();
   const posture = await resolveSessionMfaPosture(supabase, userId);
   if (posture.mfaRequired && !posture.mfaSatisfied) throw mfaGateError(posture);
+  return 'gated';
+}
+
+/**
+ * Account deletion's answer when the person's memberships could not be read:
+ * nothing was changed, try again. Reported with a fixed message (no ids).
+ */
+function membershipReadFailed(): ActionResult<never> {
+  void reportError(new Error('account deletion: membership read failed'), {
+    tag: 'account.delete.membership_read',
+    extra: { source: 'web' },
+  });
+  return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
 }
 
 /**
@@ -544,7 +559,9 @@ export async function deleteOwnAccountAction(input: {
     const session = await requireSession();
     // SP-129 — NOT gateMfa(): a user with no membership must still be able to
     // delete their account. See gateMfaForSelfService.
-    await gateMfaForSelfService(session.userId);
+    if ((await gateMfaForSelfService(session.userId)) === 'memberships_unreadable') {
+      return membershipReadFailed();
+    }
     const supabase = await createClient();
     const admin = createAdminClient();
 
@@ -605,10 +622,12 @@ export async function deleteOwnAccountAction(input: {
     if (!rl.allowed) return err('rate_limited', ACCOUNT_DELETE_RETRY_COPY);
 
     // The organization the audit row is filed under, read BEFORE the delete
-    // removes the membership (null for a person with no membership, SP-129).
-    const memberships = await getSessionMemberships();
+    // removes the membership (null for a person with no membership, SP-129;
+    // a list that cannot be read stops the action: try again).
+    const read = await readSessionMemberships();
+    if (!read.ok) return membershipReadFailed();
     const auditOrganizationId =
-      memberships.length > 0 ? (await withContext()).organizationId : null;
+      read.memberships.length > 0 ? (await withContext()).organizationId : null;
 
     // Ask first (0388). Every answer but "deletable" changes nothing. There is
     // no profile tombstone any more: nothing reads user_profiles.deleted_at
