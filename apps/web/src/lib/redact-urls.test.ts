@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { asReportableError, nonErrorText } from './error-text';
 import { redactCredentialUrls, redactTokens, redactTokensDeep } from './redact-urls';
 
 /**
@@ -29,8 +30,7 @@ const SHARE_TOKEN = 'a3f9c1d20b7e4856f10c9d2e3b4a5f6708192a3b4c5d6e7f8091a2b3c4d
  * realism. The decoded signature is the ASCII text "AlphaBetaGammaDelta" —
  * there is no key material anywhere in this file.
  */
-const b64url = (value: string) =>
-  Buffer.from(value, 'utf8').toString('base64url');
+const b64url = (value: string) => Buffer.from(value, 'utf8').toString('base64url');
 const SIGNED_URL_JWT = [
   b64url('{"alg":"HS256","typ":"JWT"}'),
   b64url('{"url":"item-images/org/cover.jpg"}'),
@@ -75,9 +75,7 @@ describe('redactTokens — share links carry the credential in the PATH', () => 
   });
 
   it('removes the token even when a query string also needs dropping', () => {
-    const out = redactTokens(
-      `https://stockpilotusa.com/r/${SHARE_TOKEN}?warehouse=abc#frag`,
-    );
+    const out = redactTokens(`https://stockpilotusa.com/r/${SHARE_TOKEN}?warehouse=abc#frag`);
     expect(out).not.toContain(SHARE_TOKEN);
     expect(out).not.toContain('warehouse=abc');
     expect(out).not.toContain('frag');
@@ -118,9 +116,7 @@ describe('redactTokens — a redacted string must not be re-usable', () => {
 
 describe('redactTokens — keeps the alert feed readable', () => {
   it('leaves a plain dashboard path intact', () => {
-    expect(redactTokens('failed at /dashboard/inventory')).toContain(
-      '/dashboard/inventory',
-    );
+    expect(redactTokens('failed at /dashboard/inventory')).toContain('/dashboard/inventory');
   });
 
   it('leaves the non-credential sibling routes under /r/ intact', () => {
@@ -232,5 +228,100 @@ describe('redactCredentialUrls', () => {
       `${APP}/signin?redirect=/invite/${SHARE_TOKEN}#refresh_token=r1`,
     );
     expect(redactCredentialUrls(once)).toBe(once);
+  });
+});
+
+/**
+ * Error reports for a value that is not an Error (docket C21, lib/error-text.ts):
+ * a failed supabase-js call's plain `error` object is reported by its message,
+ * code, hint and, for a request that got no answer, the first "Caused by:"
+ * line. These pin what must never reach the alert: a server error's `details`
+ * (a unique or check violation quotes the row's values, such as an email), a
+ * cause's stack, and any part of a credential that a cut to length could leave
+ * behind (each piece is redacted before it is cut).
+ */
+describe('error report text for a value that is not an Error', () => {
+  const PRIVATE = ['someone@example.com', '555-0100', 'Key (', 'Failing row'];
+
+  /** Every 8-character run of a credential: none may survive. */
+  const runsOf = (secret: string) =>
+    Array.from({ length: secret.length - 7 }, (_, i) => secret.slice(i, i + 8));
+
+  it.each([
+    [
+      'a unique violation',
+      {
+        message: 'duplicate key value violates unique constraint "public_email_unsubscribes_pkey"',
+        code: '23505',
+        details: 'Key (email)=(someone@example.com) already exists.',
+        hint: null,
+      },
+    ],
+    [
+      'a check violation',
+      {
+        message: 'new row for relation "order_signatures" violates check constraint "signer_check"',
+        code: '23514',
+        details:
+          'Failing row contains (00000000-0000-4000-8000-000000000001, someone@example.com, 555-0100).',
+        hint: null,
+      },
+    ],
+  ])("%s never carries the row's values", (_label, refusal) => {
+    const made = asReportableError(refusal);
+    for (const text of [nonErrorText(refusal), made.message, made.stack ?? '']) {
+      for (const value of PRIVATE) expect(text).not.toContain(value);
+    }
+    expect(made.message).toContain(`(code ${refusal.code})`);
+  });
+
+  it("a request that got no answer keeps only the cause line, never the cause's stack", () => {
+    const shape = {
+      message: 'TypeError: fetch failed',
+      details: [
+        'TypeError: fetch failed',
+        '',
+        'Caused by: Error: connect ECONNREFUSED 127.0.0.1:5432 (ECONNREFUSED)',
+        'Error: connect ECONNREFUSED 127.0.0.1:5432',
+        '    at TCPConnectWrap.afterConnect [as oncomplete] (node:net:1555:16)',
+      ].join('\n'),
+      hint: '',
+      code: '',
+    };
+    const text = nonErrorText(shape);
+    expect(text).toBe(
+      'TypeError: fetch failed (cause: Error: connect ECONNREFUSED 127.0.0.1:5432 (ECONNREFUSED))',
+    );
+    expect(text).not.toContain('    at ');
+    expect(asReportableError(shape).stack).not.toContain('afterConnect');
+  });
+
+  it('a cut to length that falls inside a share token leaves no part of it', () => {
+    const lead = `${'x'.repeat(478)} /orders/sign/`;
+    // The 500-character cut falls 8 characters into the token.
+    expect(lead.length + 8).toBe(500);
+    const text = nonErrorText({ message: `${lead}${SHARE_TOKEN} was refused`, code: 'P0001' });
+    for (const run of runsOf(SHARE_TOKEN)) expect(text).not.toContain(run);
+  });
+
+  it("a cut to length that falls inside a token's payload leaves no part of it", () => {
+    const lead = `${'y'.repeat(445)} Bearer `;
+    const [header, payload] = SIGNED_URL_JWT.split('.');
+    // The 500-character cut falls inside the second of the token's three parts.
+    const payloadStart = lead.length + header!.length + 1;
+    expect(payloadStart).toBeLessThan(500);
+    expect(payloadStart + payload!.length).toBeGreaterThan(500);
+    const text = nonErrorText({ message: `${lead}${SIGNED_URL_JWT} rejected` });
+    for (const run of runsOf(SIGNED_URL_JWT)) expect(text).not.toContain(run);
+  });
+
+  it("a hint that carries a signed URL loses the URL's token", () => {
+    const text = nonErrorText({
+      message: 'object not found',
+      code: 'P0001',
+      hint: `Sign again: https://supabase.example.test/storage/v1/object/sign/b/p.jpg?token=${SIGNED_URL_JWT}`,
+    });
+    expect(text).toContain('hint: Sign again');
+    for (const run of runsOf(SIGNED_URL_JWT)) expect(text).not.toContain(run);
   });
 });
