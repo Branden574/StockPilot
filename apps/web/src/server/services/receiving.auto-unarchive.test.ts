@@ -57,6 +57,8 @@ const baseInput: PostReceiptInput = {
 describe('ReceivingService.postReceipt — auto-unarchive scoping (Task 9)', () => {
   it('scopes the "which items are archived" check to auto_archived=true rows only', async () => {
     const stub = makeSupabaseStub({
+      // The PO, read in the organization before the function (S39).
+      'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
       'rpc:post_receipt_v2': { data: receiptRow, error: null },
       'purchase_order_items.select': {
         data: [
@@ -112,6 +114,8 @@ describe('ReceivingService.postReceipt — auto-unarchive scoping (Task 9)', () 
 
   it('is a no-op when none of the targeted items are auto_archived (all manually archived)', async () => {
     const stub = makeSupabaseStub({
+      // The PO, read in the organization before the function (S39).
+      'purchase_orders.select.maybeSingle': { data: { id: 'po-1' }, error: null },
       'rpc:post_receipt_v2': { data: receiptRow, error: null },
       'purchase_order_items.select': {
         data: [{ id: '22222222-2222-2222-2222-222222222222', item_id: 'item-manual' }],
