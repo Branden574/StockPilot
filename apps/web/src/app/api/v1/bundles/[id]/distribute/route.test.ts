@@ -7,7 +7,7 @@ import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { POST } from './route';
 
@@ -25,6 +25,15 @@ vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
 const BUNDLE = '2f0b8f7e-1111-4222-8333-444455556666';
 const WH = '3a1c9e8d-1111-4222-8333-444455556666';
 const KEY = '7f1d3c2a-0000-4000-8000-000000000001';
+
+/**
+ * The kit, in this context's organization ('org-1'): the real service reads it
+ * there before anything else (S39), so the cases below that run it reach the
+ * warehouse check and the function.
+ */
+const KIT_IN_ORG = {
+  'bundles.select': servedLikePostgrest([{ id: BUNDLE, organization_id: 'org-1' }]),
+};
 
 function buildCtx() {
   const stub = makeSupabaseStub({});
@@ -135,6 +144,7 @@ describe('POST /api/v1/bundles/[id]/distribute — 0365 refusals are 400s', () =
       '@/server/services/bundles',
     );
     const stub = makeSupabaseStub({
+      ...KIT_IN_ORG,
       'rpc:distribute_bundle': {
         data: null,
         error: { message: 'component_not_visible', code: 'P0001' },
@@ -174,6 +184,7 @@ describe('POST /api/v1/bundles/[id]/distribute — warehouse refusals', () => {
       '@/server/services/bundles',
     );
     const stub = makeSupabaseStub({
+      ...KIT_IN_ORG,
       'rpc:distribute_bundle': { data: [{ distribution_id: 'dist-1' }], error: null },
     });
     vi.mocked(withApiContext).mockResolvedValueOnce({
