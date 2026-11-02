@@ -59,7 +59,8 @@ const CANDIDATE_LIMIT = 200;
  * by this long after the route starts, and the last 10 s stay spare for the
  * response and a cold start. The route hands this deadline to the export
  * drain and the monthly valuation; the webhook drain runs first, inside its
- * own share of the run (integration-events.ts WEBHOOK_DRAIN_SHARE_MS).
+ * own share of the run (integration-events.ts WEBHOOK_DRAIN_SHARE_MS), and
+ * again to this deadline when its share left due deliveries.
  */
 export const DRAIN_OUTBOX_DEADLINE_MS = 50_000;
 

@@ -5,7 +5,9 @@
  * the middle of an export left it 'pending' for a blind re-send at the next
  * tick. The route now gives every stage one deadline, DRAIN_OUTBOX_DEADLINE_MS
  * after it starts; the webhook drain runs first, inside its own share of the
- * run (integrator R3), and a stage that left work for the next tick says so.
+ * run (integrator R3), and again with the time the other stages leave when its
+ * share left due deliveries (review); a stage that left work for the next tick
+ * says so.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -37,9 +39,8 @@ vi.mock('@/server/services/integration-events', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/integration-events')>()),
   drainIntegrationDeliveries,
 }));
-vi.mock('@/server/services/platform/impersonation', () => ({
-  sweepExpiredImpersonations: vi.fn(async () => undefined),
-}));
+const sweepExpiredImpersonations = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@/server/services/platform/impersonation', () => ({ sweepExpiredImpersonations }));
 vi.mock('@/server/connectors/quickbooks', () => ({
   quickbooksConnector: { id: 'quickbooks', refreshAuth: vi.fn() },
 }));
@@ -168,12 +169,12 @@ describe('GET /api/cron/drain-outbox: work left for the next tick is said', () =
   });
 
   it('each stage the deadline cut short answers skipped: deadline, and one warn line names them', async () => {
-    adminWithOneQuickBooksConnection();
-    drainIntegrationDeliveries.mockResolvedValue({
-      attempted: 4,
-      delivered: 4,
-      skipped: 'deadline',
-    });
+    const stub = adminWithOneQuickBooksConnection();
+    // Its share and the time left after the other stages both end with due
+    // deliveries unstarted.
+    drainIntegrationDeliveries
+      .mockResolvedValueOnce({ attempted: 4, delivered: 4, skipped: 'deadline' })
+      .mockResolvedValueOnce({ attempted: 3, delivered: 2, skipped: 'deadline' });
     // The export drain stops at its reserve: 24 s are left for the valuation.
     runDrain.mockImplementation(async () => {
       vi.setSystemTime(START.getTime() + 26_000);
@@ -189,8 +190,11 @@ describe('GET /api/cron/drain-outbox: work left for the next tick is said', () =
       failed: 0,
       deadlettered: 0,
       skipped: 'deadline',
-      webhooks: { attempted: 4, delivered: 4, skipped: 'deadline' },
+      webhooks: { attempted: 7, delivered: 6, skipped: 'deadline' },
       valuation: { skipped: 'deadline' },
+    });
+    expect(drainIntegrationDeliveries).toHaveBeenNthCalledWith(2, stub.client, START, undefined, {
+      deadlineAt: START.getTime() + DRAIN_OUTBOX_DEADLINE_MS,
     });
     expect(maybePostMonthlyValuation).not.toHaveBeenCalled();
     expect(warn.mock.calls).toEqual([
@@ -198,6 +202,37 @@ describe('GET /api/cron/drain-outbox: work left for the next tick is said', () =
         '[drain-outbox] stopped at the run deadline, the rest waits for the next tick: webhooks, exports, valuation',
       ],
     ]);
+  });
+
+  /**
+   * docket B81 review (2026-11-02): the share starts deliveries for 7 s only,
+   * and the route called the drain once, so a slow host at the head of the
+   * queue kept every other due alert waiting even when the exports had
+   * nothing to do. Run last on main, the drain had 30 s of its own.
+   */
+  it('when its share left due deliveries, the webhook drain runs again after the other stages, to the run deadline, and adds its counts', async () => {
+    const stub = adminWithOneQuickBooksConnection();
+    drainIntegrationDeliveries
+      .mockResolvedValueOnce({ attempted: 10, delivered: 0, skipped: 'deadline' })
+      .mockResolvedValueOnce({ attempted: 90, delivered: 90 });
+
+    const res = await GET(cronRequest());
+
+    expect(await res.json()).toEqual({
+      ...EMPTY_DRAIN,
+      webhooks: { attempted: 100, delivered: 90 },
+    });
+    expect(drainIntegrationDeliveries).toHaveBeenCalledTimes(2);
+    expect(drainIntegrationDeliveries).toHaveBeenNthCalledWith(2, stub.client, START, undefined, {
+      deadlineAt: START.getTime() + DRAIN_OUTBOX_DEADLINE_MS,
+    });
+    // After the exports, the valuation and the impersonation sweep: the sweep
+    // never waits on deliveries.
+    const second = drainIntegrationDeliveries.mock.invocationCallOrder[1] ?? 0;
+    expect(runDrain.mock.invocationCallOrder[0]).toBeLessThan(second);
+    expect(maybePostMonthlyValuation.mock.invocationCallOrder[0]).toBeLessThan(second);
+    expect(sweepExpiredImpersonations.mock.invocationCallOrder[0]).toBeLessThan(second);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('a run with time to spare answers no skip and logs no warn line', async () => {

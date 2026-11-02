@@ -116,7 +116,9 @@ export const DRAIN_TIME_BUDGET_MS = 30_000;
  * deliveries for the first 7 s, and the last one it starts (with at least
  * CLAIM_LEASE_MS left) ends inside the share, so the exports that follow get
  * the rest of the run. Run last, it was left no time when the exports used
- * the run, and due retries waited tick after tick.
+ * the run, and due retries waited tick after tick. When the share leaves due
+ * rows unstarted, the cron drains again after the other stages, to the run's
+ * deadline, with the time they left (drain-outbox route).
  */
 export const WEBHOOK_DRAIN_SHARE_MS = CLAIM_LEASE_MS + 7_000;
 

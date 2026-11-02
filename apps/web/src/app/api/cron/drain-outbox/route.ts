@@ -143,6 +143,30 @@ async function runMonthlyValuation(
   return false;
 }
 
+type WebhookDrainResult = Awaited<ReturnType<typeof drainIntegrationDeliveries>>;
+
+/**
+ * The webhook drain's second pass, to the run's deadline, after its share
+ * left due deliveries unstarted. Its counts add to the share's, and whether
+ * it left any decides the answer's `skipped`. Never throws: should the drain
+ * ever reject, the rows the share left are counted as still waiting.
+ */
+async function drainRest(
+  admin: ReturnType<typeof createAdminClient>,
+  now: Date,
+  deadlineAt: number,
+  share: WebhookDrainResult,
+): Promise<WebhookDrainResult> {
+  const rest: WebhookDrainResult = await drainIntegrationDeliveries(admin, now, undefined, {
+    deadlineAt,
+  }).catch(() => ({ attempted: 0, delivered: 0, skipped: 'deadline' as const }));
+  return {
+    attempted: share.attempted + rest.attempted,
+    delivered: share.delivered + rest.delivered,
+    ...(rest.skipped ? { skipped: rest.skipped } : {}),
+  };
+}
+
 /**
  * Outbox drainer. Wired to Vercel Cron via vercel.json (every 5 minutes).
  * Uses the service-role client to span all orgs and fan each outbox event out
@@ -175,20 +199,31 @@ export async function GET(req: Request) {
     // inside its own share of the run: run last, it was left no time whenever
     // the exports used the run (docket B81). Self-contained + never throws
     // (mirrors the valuation fail-open posture).
-    const webhooks: Awaited<ReturnType<typeof drainIntegrationDeliveries>> =
-      await drainIntegrationDeliveries(admin, now, undefined, {
-        deadlineAt: now.getTime() + WEBHOOK_DRAIN_SHARE_MS,
-      }).catch(() => ({ attempted: 0, delivered: 0 }));
+    const share: WebhookDrainResult = await drainIntegrationDeliveries(admin, now, undefined, {
+      deadlineAt: now.getTime() + WEBHOOK_DRAIN_SHARE_MS,
+    }).catch(() => ({ attempted: 0, delivered: 0 }));
     const result = await runDrain(admin, CONNECTORS, now, { deadlineAt });
     // Monthly valuation runs AFTER the drain and must never fail the response —
     // runMonthlyValuation swallows + reports its own errors.
     const valuationSkipped = await runMonthlyValuation(admin, now, deadlineAt);
     // Safety net: revoke any expired platform-admin "act as" grants globally,
     // so an impersonation that was never explicitly exited still auto-expires.
-    // Fail-open — never blocks the drain response.
+    // Fail-open — never blocks the drain response. Before the webhook drain's
+    // second pass, so it never waits on deliveries.
     await sweepExpiredImpersonations(now.getTime()).catch((e) =>
       reportError(e, { tag: 'cron.impersonation-sweep' }),
     );
+    // The webhook drain takes back the time the exports and the valuation left
+    // (docket B81 review). Its share starts deliveries for its first 7 s only:
+    // ten to a host that hangs to the 8 s timeout fill it, so drained only
+    // once, every other due alert would wait a tick even when the exports had
+    // nothing to do (run last, the drain had 30 s of its own). When the share
+    // left due deliveries unstarted, it drains again to the run's deadline,
+    // from the same `now`: the rows the share started are leased or backed off
+    // by now, so this pass reads only the ones left. It starts nothing with
+    // less than CLAIM_LEASE_MS left (and reads nothing then), so it ends inside
+    // the run.
+    const webhooks = share.skipped ? await drainRest(admin, now, deadlineAt, share) : share;
     // NO SILENT CUTS: a stage the deadline cut short says so, in the answer
     // (skipped: 'deadline') and in one log line, never as an empty success.
     const cut = [
