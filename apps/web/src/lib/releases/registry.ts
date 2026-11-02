@@ -552,15 +552,17 @@ export const RELEASES: Release[] = [
         // connection that no longer worked". The plan's sentence ("if a change
         // on the Integrations page is not saved, for example disconnecting
         // QuickBooks Online or rotating a webhook secret") is narrowed to the
-        // changes checked: no page offers a webhook secret rotation
-        // (rotateIntegrationEndpointSecretAction has no caller,
-        // server/actions/actions-are-reachable.test.ts:79-82), and a refused
-        // connect, webhook or replay, which now says the same sentence, showed
-        // an error before, not a change done. The title says the web, as the
-        // phone's Integrations screen (app-integrations-access-denied) is for
-        // owners and admins, whom the row rule does not refuse. The page
-        // opening: connections.ts:200-205 takes the manage key of each
-        // module that is on; 8ac9f4862 connections.ts:186-208 picked it by the
+        // changes checked: no page offers a webhook secret rotation (its
+        // server action in server/actions/integration-endpoints.ts has no
+        // caller: actions-are-reachable.test.ts:79-82 lists it, and the action
+        // is not named here, as that guard counts any mention in a source file
+        // as a caller), and a refused connect, webhook or replay, which now
+        // says the same sentence, showed an error before, not a change done.
+        // The title says the web, as the phone's Integrations screen
+        // (app-integrations-access-denied) is for owners and admins, whom the
+        // row rule does not refuse. The page opening: connections.ts:200-205
+        // takes the manage key of each module that is on; 8ac9f4862
+        // connections.ts:186-208 picked it by the
         // static role, so with both modules on the page's failed-sync list
         // (settings/integrations/page.tsx:98) failed for a manager given
         // Manage shipping and for an admin whose Manage integrations was
