@@ -3,8 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /**
  * The code budget has two buckets: one per account and client address
  * (10 per 15 minutes) and one per account across every address (20 per hour).
- * An attempt goes ahead only when both allow it, every attempt counts once in
- * each, and either bucket failing to answer refuses.
+ * An attempt goes ahead only when both allow it, and either bucket failing to
+ * answer refuses. The account-and-address bucket is asked first and counts
+ * every attempt; the account bucket is asked only for an attempt the first one
+ * allowed, so presses already refused at one address never spend the
+ * account's ceiling.
  *
  * These run the real checkRateLimit (lib/rate-limit.ts) against an in-memory
  * model of the increment_rate_limit function (migration 0048): a fixed window
@@ -148,36 +151,72 @@ describe('the code budget has a ceiling per account across addresses', () => {
     }
   });
 
-  it('every attempt counts once in the account-and-address bucket and once in the account bucket', async () => {
+  it('an attempt the account-and-address bucket allows counts once in it, then once in the account bucket', async () => {
     from('203.0.113.7');
 
-    await allowMfaCodeAttempt('u1');
+    expect(await allowMfaCodeAttempt('u1')).toBe(true);
 
-    expect(rpcCalls).toHaveLength(2);
-    expect(rpcCalls).toEqual(
-      expect.arrayContaining([
-        { p_key: 'mfa-code:u1:203.0.113.7', p_limit: 10, p_window_ms: 15 * MINUTE },
-        { p_key: 'mfa-code-account:u1', p_limit: 20, p_window_ms: 60 * MINUTE },
-      ]),
-    );
+    expect(rpcCalls).toEqual([
+      { p_key: 'mfa-code:u1:203.0.113.7', p_limit: 10, p_window_ms: 15 * MINUTE },
+      { p_key: 'mfa-code-account:u1', p_limit: 20, p_window_ms: 60 * MINUTE },
+    ]);
     expect(buckets.get('mfa-code:u1:203.0.113.7')?.count).toBe(1);
     expect(buckets.get('mfa-code-account:u1')?.count).toBe(1);
   });
 
-  it('an attempt one bucket refuses still counts once in the other', async () => {
+  it('30 presses from one address in 15 minutes leave the account ceiling at 10 used, so the account can still enter a code from another address', async () => {
+    const start = clock.now;
+    from('203.0.113.7');
+    let allowed = 0;
+    // One press every 25 seconds: the 30th lands at minute 12, inside the
+    // address bucket's 15 minutes.
+    for (let i = 0; i < 30; i++) {
+      clock.now = start + i * 25_000;
+      if (await allowMfaCodeAttempt('u1')) allowed += 1;
+    }
+
+    expect(allowed).toBe(10);
+    expect(buckets.get('mfa-code:u1:203.0.113.7')?.count).toBe(10);
+    // The 20 presses refused at that address never reached the account bucket.
+    expect(buckets.get('mfa-code-account:u1')?.count).toBe(10);
+
+    clock.now = start + 13 * MINUTE;
+    from('198.51.100.9');
+    expect(await allowMfaCodeAttempt('u1')).toBe(true);
+    expect(buckets.get('mfa-code-account:u1')?.count).toBe(11);
+  });
+
+  it('a press the account-and-address bucket refuses never reaches the account bucket', async () => {
     from('203.0.113.7');
     for (let i = 0; i < 10; i++) await allowMfaCodeAttempt('u1');
     rpcCalls.length = 0;
 
-    // The address bucket is full: refused, and the account bucket counts it.
     expect(await allowMfaCodeAttempt('u1')).toBe(false);
 
-    expect(rpcCalls.map((c) => c.p_key).sort()).toEqual([
-      'mfa-code-account:u1',
-      'mfa-code:u1:203.0.113.7',
-    ]);
+    expect(rpcCalls.map((c) => c.p_key)).toEqual(['mfa-code:u1:203.0.113.7']);
     expect(buckets.get('mfa-code:u1:203.0.113.7')?.count).toBe(10);
-    expect(buckets.get('mfa-code-account:u1')?.count).toBe(11);
+    expect(buckets.get('mfa-code-account:u1')?.count).toBe(10);
+  });
+
+  it('a press the account ceiling refuses is still counted at its address', async () => {
+    const start = clock.now;
+    for (let i = 1; i <= 20; i++) {
+      clock.now = start + i * MINUTE;
+      from(`203.0.113.${i}`);
+      await allowMfaCodeAttempt('u1');
+    }
+    clock.now = start + 30 * MINUTE;
+    from('198.51.100.9');
+    rpcCalls.length = 0;
+
+    expect(await allowMfaCodeAttempt('u1')).toBe(false);
+
+    expect(rpcCalls.map((c) => c.p_key)).toEqual([
+      'mfa-code:u1:198.51.100.9',
+      'mfa-code-account:u1',
+    ]);
+    expect(buckets.get('mfa-code:u1:198.51.100.9')?.count).toBe(1);
+    expect(buckets.get('mfa-code-account:u1')?.count).toBe(20);
   });
 
   it.each(['error', 'throw'] as const)(
@@ -193,10 +232,16 @@ describe('the code budget has a ceiling per account across addresses', () => {
     },
   );
 
-  it('the account-and-address bucket failing to answer refuses the attempt, as before', async () => {
-    failing.prefix = 'mfa-code:';
-    from('203.0.113.7');
+  it.each(['error', 'throw'] as const)(
+    'the account-and-address bucket failing to answer (%s) refuses the attempt and leaves the account bucket alone',
+    async (how) => {
+      failing.prefix = 'mfa-code:';
+      failing.how = how;
+      from('203.0.113.7');
 
-    expect(await allowMfaCodeAttempt('u1')).toBe(false);
-  });
+      expect(await allowMfaCodeAttempt('u1')).toBe(false);
+      expect(rpcCalls.map((c) => c.p_key)).toEqual(['mfa-code:u1:203.0.113.7']);
+      expect(buckets.has('mfa-code-account:u1')).toBe(false);
+    },
+  );
 });

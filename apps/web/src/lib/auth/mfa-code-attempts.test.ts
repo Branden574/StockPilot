@@ -111,6 +111,46 @@ describe('allowMfaCodeAttempt — per account and client address, and per accoun
     }));
     await expect(allowMfaCodeAttempt('u1')).resolves.toBe(false);
   });
+
+  it('a press the account-and-address bucket refuses never asks the account bucket', async () => {
+    vi.stubEnv('VERCEL', '1');
+    requestHeaders.current = new Headers({ 'x-forwarded-for': '203.0.113.7' });
+    checkRateLimit.mockImplementation(async (key: string) => ({
+      allowed: !key.startsWith('mfa-code:'),
+      count: 10,
+      resetAt: 0,
+    }));
+
+    await expect(allowMfaCodeAttempt('u1')).resolves.toBe(false);
+
+    expect(checkRateLimit.mock.calls).toEqual([['mfa-code:u1:203.0.113.7', 10, 900000, 'closed']]);
+  });
+
+  it('asks the account bucket only once the account-and-address bucket has allowed the press', async () => {
+    vi.stubEnv('VERCEL', '1');
+    requestHeaders.current = new Headers({ 'x-forwarded-for': '203.0.113.7' });
+    type Answer = { allowed: boolean; count: number; resetAt: number };
+    let answerAtAddress: (answer: Answer) => void = () => {};
+    checkRateLimit.mockImplementation((key: string) =>
+      key.startsWith('mfa-code:')
+        ? new Promise<Answer>((resolve) => {
+            answerAtAddress = resolve;
+          })
+        : Promise.resolve({ allowed: true, count: 1, resetAt: 0 }),
+    );
+
+    const pending = allowMfaCodeAttempt('u1');
+    // Let every queued step run: the address bucket has not answered yet.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(checkRateLimit.mock.calls.map((c) => c[0])).toEqual(['mfa-code:u1:203.0.113.7']);
+
+    answerAtAddress({ allowed: true, count: 1, resetAt: 0 });
+    await expect(pending).resolves.toBe(true);
+    expect(checkRateLimit.mock.calls.map((c) => c[0])).toEqual([
+      'mfa-code:u1:203.0.113.7',
+      'mfa-code-account:u1',
+    ]);
+  });
 });
 
 describe('recordRefusedMfaCode', () => {

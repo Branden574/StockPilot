@@ -659,6 +659,9 @@ describe('completePasswordResetAction', () => {
       expect(challenge).not.toHaveBeenCalled();
       expect(verify).not.toHaveBeenCalled();
       expect(updateUser).not.toHaveBeenCalled();
+      // Refused at this address: the account's ceiling at every address is not
+      // asked, so the press does not spend it.
+      expect(codeBudgetCalls()).toEqual([['mfa-code:u1:unknown', 10, 900000, 'closed']]);
     });
 
     it('the account’s ceiling across addresses, spent alone, pauses the code step in the same words', async () => {

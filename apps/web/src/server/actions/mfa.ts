@@ -266,9 +266,9 @@ export async function unenrollFactorAction(input: {
  * (components/auth/step-up-modal.tsx), at AAL1 or AAL2.
  *
  * Each press spends one attempt of the account's code budget (once at this
- * client address, once for the account at any address), shared with the
- * reset's code step, and a code GoTrue judged wrong writes an mfa.code_refused
- * row (lib/auth/mfa-code-attempts.ts).
+ * client address, then, only when that allowed it, once for the account at any
+ * address), shared with the reset's code step, and a code GoTrue judged wrong
+ * writes an mfa.code_refused row (lib/auth/mfa-code-attempts.ts).
  */
 const signInChallengeSchema = z.object({
   factorId: z.string().min(1),

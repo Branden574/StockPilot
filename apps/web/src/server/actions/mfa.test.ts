@@ -421,6 +421,11 @@ describe('challengeFactorAction — code budget, words and rows', () => {
     const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
 
     expect(res).toEqual({ ok: false, error: { code: 'rate_limited', message: BUDGET_SPENT } });
+    // Refused at this address: the account's ceiling at every address is not
+    // asked, so the press does not spend it.
+    expect(vi.mocked(checkRateLimit).mock.calls).toEqual([
+      ['mfa-code:user-1:unknown', 10, 15 * 60_000, 'closed'],
+    ]);
     expect(mfaStub.challenge).not.toHaveBeenCalled();
     expect(mfaStub.verify).not.toHaveBeenCalled();
     expect(emitAuthAudit).not.toHaveBeenCalled();
@@ -441,7 +446,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
 
       await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
 
-      // Each press counts once in each bucket, both before GoTrue is asked.
+      // An allowed press counts once in each bucket, both before GoTrue is asked.
       expect(checkRateLimit).toHaveBeenCalledTimes(2);
       expect(checkRateLimit).toHaveBeenCalledWith(
         'mfa-code:verified-account:unknown',
