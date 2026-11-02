@@ -14,12 +14,17 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
+import {
+  REMEMBER_SESSION_COOKIE,
+  SUPABASE_AUTH_COOKIE,
+  rememberPreferenceOptions,
+} from '@/lib/supabase/session-cookies';
 import {
   classifyPasswordUpdateError,
   isBannedUserAuthError,
 } from '@/server/actions/auth-error-classify';
 import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
+import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 
 import {
   ACCOUNT_DISABLED_MESSAGE,
@@ -321,37 +326,91 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();
 
-  // Snapshot the user BEFORE signOut so we still have a userId to
-  // attribute the audit row to. Best-effort: a missing user just yields
-  // a null-attributed row, which is fine on the sign-out path.
+  // The account this sign-out is for, read BEFORE signOut so the broadcast
+  // and the audit row below can name it after the session is gone. When
+  // GoTrue's answer names nobody (a 5xx or no answer: auth-js then returns no
+  // user and keeps the stored session), the session's verified claims name
+  // it instead, read here because the sign-out clears the cookie. Only a
+  // token whose signature checks out names anyone (lib/auth/verified-claims),
+  // and with no verified account nothing is broadcast or written: anyone can
+  // post this action with no session at all.
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  const claims = user ? null : await readVerifiedSessionClaims(supabase);
+  const accountId = user?.id ?? claims?.userId ?? null;
 
   // scope: 'global' revokes ALL refresh tokens for the user across
   // every device + tab. Default ('local') only kills the calling
   // tab's token, leaving other browser tabs and the mobile app
   // alive until natural expiry (~1h). For an internal enterprise
   // tool, "Sign out" should mean "log me out everywhere."
-  await supabase.auth.signOut({ scope: 'global' });
+  //
+  // auth-js returns a failure rather than throwing, so the answer is read.
+  // No error means nothing was reported, not that every session ended: GoTrue
+  // answering 401/403/404 for this token is no error either.
+  const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
+  let databaseRevoke: 'not_needed' | 'ok' | 'failed' | 'no_account' = 'not_needed';
+  const cookieStore = await cookies();
+  if (revokeError) {
+    // Every other session of the account is still alive. End them in the
+    // database instead (the by-user-id revoke behind member removal and
+    // account disable), which tells the devices itself when it worked.
+    databaseRevoke = accountId
+      ? (await revokeAllSessionsForUser(accountId)).ok
+        ? 'ok'
+        : 'failed'
+      : 'no_account';
+    // And this browser's own session: when auth-js could not load it (an
+    // expired access token whose refresh failed) it returns that error
+    // BEFORE removing the local session, so the cookies would stay and be
+    // refreshed once the Auth server answers again. The same backstop as
+    // app/auth/session-ended/route.ts.
+    for (const c of cookieStore.getAll()) {
+      if (SUPABASE_AUTH_COOKIE.test(c.name)) cookieStore.set(c.name, '', { path: '/', maxAge: 0 });
+    }
+    // Never GoTrue's message: the name, code and status say what failed.
+    void reportError(new Error('Sign out could not confirm that every session ended'), {
+      tag: 'auth.sign_out_revoke_failed',
+      level: 'warning',
+      extra: {
+        name: revokeError.name,
+        code: revokeError.code ?? null,
+        status: revokeError.status ?? null,
+        database_revoke: databaseRevoke,
+      },
+    });
+  }
   // The revoke above only kills REFRESH tokens — devices coast on their
   // current access token for up to ~1h ("signed out on web, phone still
   // let me in", owner-observed 2026-07-02). The broadcast makes every
   // device's session-revocation listener sign out locally within ~1s.
   // keepId:null targets ALL sessions (see use-session-revocation.ts).
-  if (user) {
-    await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId: null });
+  //
+  // Sent also when neither revoke could be confirmed: the person asked to be
+  // signed out everywhere, so the phone signs out as asked, and a web tab
+  // asks GoTrue first and stays while its session is alive. Not sent twice
+  // when the database revoke already did.
+  if (accountId && databaseRevoke !== 'ok') {
+    await broadcastToChannel(`user:${accountId}:sessions`, 'revoked', { keepId: null });
   }
-  const cookieStore = await cookies();
   cookieStore.delete(REMEMBER_SESSION_COOKIE);
 
-  if (user) {
-    const { organizationId } = await resolveDefaultOrgAndRole(user.id);
+  if (accountId) {
+    const { organizationId } = await resolveDefaultOrgAndRole(accountId);
     await emitAuthAudit({
       event: 'user.signed_out',
-      userId: user.id,
+      userId: accountId,
       organizationId,
-      extra: { email: user.email ?? null, scope: 'global' },
+      extra: {
+        email: user?.email ?? null,
+        scope: 'global',
+        // What is known, never "confirmed": GoTrue's code (or the error's
+        // name) when the sign-out returned one, and what the database
+        // revoke did then.
+        revoke_error: revokeError ? (revokeError.code ?? revokeError.name) : null,
+        database_revoke: databaseRevoke,
+      },
     });
   }
 
