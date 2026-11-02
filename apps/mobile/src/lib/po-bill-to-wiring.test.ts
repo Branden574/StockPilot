@@ -38,14 +38,29 @@ function between(src: string, start: string, end: string): string {
   return src.slice(a, b + end.length);
 }
 
-const load = () =>
-  between(
-    screen,
-    'const load = React.useCallback(async () => {',
-    '}, [id, orgId, loadRunGroups, loadReceiptHistory]);',
-  );
+/**
+ * load() runs from its opening line to its dependency list. The end marker is
+ * the list's stable prefix, without the closing `]);`, so a branch that adds a
+ * dependency to load() (the receiving checklist adds loadChecks) still finds
+ * the end of the body instead of failing every pin that reads it.
+ */
+const LOAD_START = 'const load = React.useCallback(async () => {';
+const LOAD_DEPS_PREFIX = '}, [id, orgId, loadRunGroups, loadReceiptHistory';
+const loadOf = (src: string) => between(src, LOAD_START, LOAD_DEPS_PREFIX);
+const load = () => loadOf(screen);
 
 describe("the PO screen's bill-to line", () => {
+  // Mutation caught: the end marker pinned to the exact dependency list.
+  it('finds the end of load() when another branch adds a dependency to it', () => {
+    const body = 'const charterId = null; await loadReceiptHistory(); setLoading(false);';
+    for (const deps of ['', ', loadChecks']) {
+      const src = `${LOAD_START} ${body} }, [id, orgId, loadRunGroups, loadReceiptHistory${deps}]); const other = 1;`;
+      const slice = loadOf(src);
+      expect(slice).toContain(body);
+      expect(slice).not.toContain('const other');
+    }
+  });
+
   // Mutation caught: the charter embedded in the PO read.
   it('reads charter_id as a plain column of the PO, never a charters embed', () => {
     const select = between(load(), ".from('purchase_orders') .select(", ')');
