@@ -14,8 +14,12 @@ import { describe, expect, it } from 'vitest';
  * request-cache.ts (the list the dashboard gate and resolveMfaState read) and
  * the ownership transfer in server/actions/team.ts now read it with
  * readMfaFactorList (lib/auth/mfa-factors.ts), which says whose list it is and
- * throws on an error (tested in mfa-factors.test.ts). Seven files remain for
- * this scan.
+ * throws on an error (tested in mfa-factors.test.ts). Two more no longer call
+ * it (S50a): account deletion in server/actions/profile.ts reads it with
+ * readMfaFactorList too, and the email change in
+ * server/actions/email-change.ts takes the factors from the getUser() answer
+ * that names the user. Five files remain for this scan. The scan reads each
+ * file's raw text, comments included.
  */
 
 const SRC = path.resolve(__dirname, '../..');
@@ -57,7 +61,7 @@ describe('an unreadable MFA factor list never reads as "not enrolled"', () => {
           : false;
       if (!checked) offenders.push(rel);
     }
-    expect(sites).toBeGreaterThanOrEqual(7);
+    expect(sites).toBeGreaterThanOrEqual(5);
     expect(offenders).toEqual([]);
   });
 });

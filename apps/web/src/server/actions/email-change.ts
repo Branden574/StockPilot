@@ -10,6 +10,7 @@ import {
 } from '@stockpilot/core';
 
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
+import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
 import {
@@ -57,22 +58,20 @@ async function resolvePrincipal(
     return { ok: false, result: err('forbidden', ACCOUNT_DISABLED_MESSAGE) };
   }
 
-  // MFA posture from the cookie session. Enrollment escalates: a verified
-  // factor must be satisfied whatever the org policy says.
-  const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors();
-  // Unreadable is not "not enrolled": that would drop the step-up an enrolled
-  // account needs before its sign-in address can change.
-  if (factorsError) {
-    return {
-      ok: false,
-      result: err('internal_error', 'Could not check your two-factor status. Please try again.'),
-    };
-  }
-  const enrolled = (factors?.totp ?? []).some((f) => f.status === 'verified');
+  // MFA posture of the user getUser() named, and of no one else (docket
+  // S50a). Enrollment escalates: a verified factor must be satisfied whatever
+  // the org policy says.
+  //  - Enrolled: a verified factor of any type in the same getUser() answer,
+  //    GoTrue's own list for this user (the list a separate factor read would
+  //    fetch with one more round trip). An unreadable answer already stopped
+  //    above with "Sign in required", never read as "not enrolled".
+  //  - aal2: the verified session claims of this same user
+  //    (readVerifiedSessionClaimsOf). Anything else is not aal2.
+  const enrolled = (user.factors ?? []).some((f) => f.status === 'verified');
   let aal2 = false;
   if (enrolled) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    aal2 = aal?.currentLevel === 'aal2';
+    const claims = await readVerifiedSessionClaimsOf(supabase, user.id);
+    aal2 = claims?.aal === 'aal2';
   }
   return { ok: true, principal: { userId: user.id, mfa: { enrolled, aal2 } } };
 }

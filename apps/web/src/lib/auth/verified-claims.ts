@@ -109,6 +109,14 @@ function isVerdictOnToken(error: { name?: string; status?: number }): boolean {
 export async function readVerifiedSessionClaims(
   supabase: AuthReader,
 ): Promise<VerifiedSessionClaims | null> {
+  return (await readVerifiedSession(supabase))?.claims ?? null;
+}
+
+/**
+ * The cookie session's access token with its verified claims, or null: the
+ * file's one session load, then the checks described above. Never throws.
+ */
+async function readVerifiedSession(supabase: AuthReader): Promise<VerifiedSessionToken | null> {
   // The access token only: never `session.user`, the stored object auth-js
   // warns about.
   let token: string | undefined;
@@ -119,7 +127,15 @@ export async function readVerifiedSessionClaims(
     return null;
   }
   if (!token) return null;
+  const claims = await readVerifiedTokenClaims(supabase, token);
+  return claims ? { token, claims } : null;
+}
 
+/** The verified claims of `token` (see readVerifiedSessionClaims), or null. Never throws. */
+async function readVerifiedTokenClaims(
+  supabase: AuthReader,
+  token: string,
+): Promise<VerifiedSessionClaims | null> {
   try {
     const { data, error } = await supabase.auth.getClaims(token);
     // No error: the claims of a token whose signature checked out.
@@ -164,11 +180,36 @@ export async function readVerifiedSessionClaimsOf(
   supabase: AuthReader,
   userId: string,
 ): Promise<VerifiedSessionClaims | null> {
-  const claims = await readVerifiedSessionClaims(supabase);
-  if (!claims) return null;
-  if (claims.userId === userId) return claims;
-  // Never the ids: a fixed line, so a cookie built to swap accounts shows in
-  // the runtime logs.
+  return (await readVerifiedSessionTokenOf(supabase, userId))?.claims ?? null;
+}
+
+/** A verified cookie session: its access token, and that token's verified claims. */
+export interface VerifiedSessionToken {
+  /**
+   * The access token the claims are of. A client built for this token alone
+   * (lib/supabase/access-token-client) never loads a session, so a call made
+   * with it runs as this token's subject and no one else.
+   */
+  token: string;
+  claims: VerifiedSessionClaims;
+}
+
+/**
+ * readVerifiedSessionClaimsOf with the access token the claims are of (docket
+ * S50a): the token and its claims only when the verified token's subject is
+ * `userId`, the user the request already validated; null otherwise. The same
+ * one session load. A caller that must act as that account and no other (a
+ * recovery code is spent and minted for whoever the call runs as) makes its
+ * database call with `token`, on a client that never loads a session.
+ */
+export async function readVerifiedSessionTokenOf(
+  supabase: AuthReader,
+  userId: string,
+): Promise<VerifiedSessionToken | null> {
+  const session = await readVerifiedSession(supabase);
+  if (!session) return null;
+  if (session.claims.userId === userId) return session;
+  // Never the ids: one fixed line, which the runtime logs can count.
   console.warn(
     '[verified-claims] the session now holds another account than the one this request validated',
   );
