@@ -778,10 +778,15 @@ export function ReturnWorkbench({
       case 'process':
         void processReturn();
         return;
+      // B21 review: each opens with an empty reason. Their Keep it button
+      // closes them in code, past the clear in the Radix handler, so clearing
+      // on close alone showed the old words at the next open.
       case 'deny':
+        setDenyReason('');
         setDenyOpen(true);
         return;
       case 'cancel':
+        setCancelReason('');
         setCancelOpen(true);
         return;
       case 'change_destination':

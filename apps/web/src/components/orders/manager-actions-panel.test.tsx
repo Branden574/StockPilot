@@ -1251,6 +1251,55 @@ describe('ManagerActionsPanel — an exchange replacement (returns RX-2)', () =>
     await waitFor(() => expect(within(dialog).queryByRole('alert')).toBeNull());
   });
 
+  // B21 review (2026-11-02): the refusal also clears when the dialog closes.
+  // The panel opens the dialog with a bare setReleaseOpen(true), so only the
+  // close handler stands between an old refusal and the next open.
+  it('a refused release, closed with Keep waiting and opened again, shows no old refusal', async () => {
+    releaseReplacement.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'conflict',
+        message: 'Another person changed this return. Review it again.',
+        details: { reason: 'return_changed' },
+      },
+    });
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: waiting })} />);
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    let dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /Release before return is received/ }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('Another person changed this return. Review it again.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Keep waiting' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+  });
+
+  // B21 review (2026-11-02): the release dialog cleared its reason only in
+  // its Radix close handler; Keep waiting (and the close after a release)
+  // close it in code, so the next open showed the old reason and its preset
+  // pressed. It now opens empty, however it closed.
+  it('a reason typed and then kept with Keep waiting is gone when the dialog opens again', async () => {
+    render(<ManagerActionsPanel {...baseProps({ status: 'approved', canApprove: true, replacement: waiting })} />);
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    let dialog = await screen.findByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    expect(within(dialog).getByLabelText('Reason for releasing early (required)')).toHaveValue(
+      'Customer is completing an in-person exchange today.',
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Keep waiting' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await userEvent.click(screen.getByRole('button', { name: /Release before return is received/ }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByLabelText('Reason for releasing early (required)')).toHaveValue('');
+    expect(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+    expect(releaseReplacement).not.toHaveBeenCalled();
+  });
+
   // RX-2 review fix P5: a replacement approved on backorder holds nothing,
   // so the gate line never says "Replacement reserved".
   it('while gated, a replacement that holds nothing says it is not in stock yet', () => {

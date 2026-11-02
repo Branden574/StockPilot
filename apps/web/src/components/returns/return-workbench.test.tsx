@@ -395,6 +395,30 @@ describe('ReturnWorkbench states', () => {
     expect(toast.error).not.toHaveBeenCalled();
   });
 
+  // B21 review (2026-11-02): Deny and Cancel return cleared their reason in
+  // the Radix close handler and on the stale path, but their Keep it button
+  // closes in code and skipped it, so the next open showed the old words.
+  // Each now opens empty, however it closed, as the replacement dialogs do.
+  it('Deny and Cancel return open empty again after Keep it', async () => {
+    render(<ReturnWorkbench workbench={bench('requested')} />);
+    for (const [opener, box] of [
+      ['Deny', 'Reason for denying'],
+      ['Cancel return', 'Reason (optional)'],
+    ] as const) {
+      fireEvent.click(screen.getByRole('button', { name: opener }));
+      const dialog = await screen.findByRole('dialog');
+      fireEvent.change(within(dialog).getByLabelText(box), { target: { value: 'Typed, then kept' } });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: opener }));
+      const again = await screen.findByRole('dialog');
+      expect(within(again).getByLabelText(box), opener).toHaveValue('');
+      fireEvent.click(within(again).getByRole('button', { name: 'Keep it' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    }
+    expect(denyAction).not.toHaveBeenCalled();
+  });
+
   it('closed, denied and cancelled offer nothing; a reader without returns:manage sees why', () => {
     const { unmount } = render(<ReturnWorkbench workbench={bench('closed', null)} />);
     expect(screen.getByText('No further steps for this return.')).toBeInTheDocument();

@@ -1216,3 +1216,183 @@ describe('the REPLACEMENT card once its replacement was handed over', () => {
     expect(within(card()).getByText('Qty requested: 1')).toBeInTheDocument();
   });
 });
+
+// B21 review (2026-11-02), two findings on the stale close.
+//
+// 1. Release, Cancel replacement, Close as return only and Close the rest
+//    cleared their reason only in their Radix close handler, and every close
+//    made in code skipped it: the workbench closing the dialog after a stale
+//    refusal or a save, and the dialog's own Keep button, which calls the
+//    workbench's handler. The next open showed the old words, and Release its
+//    old preset as pressed, against a return that had changed, while What's
+//    New says a reason you typed needs typing again. Each dialog now opens
+//    empty, however it closed.
+// 2. The stale close of a Release refused by the server, of Close as return
+//    only and of Change replacement had no test.
+const STALE_ANSWER = {
+  ok: false,
+  error: { code: 'conflict', message: 'Another person changed this return. Review it again.', details: { reason: 'return_changed' } },
+};
+
+describe('B21 review: a replacement dialog opens empty, however it closed', () => {
+  const RETURN_ONLY = {
+    ...WAITING,
+    status: 'replacement_cancelled',
+    statusLabel: 'Replacement cancelled: issue a new one or close as return only',
+    lines: [exchangeLine({ status: 'cancelled', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: ITEM_L })],
+    replacement: { ...WAITING.replacement, status: 'cancelled', live: false, class: 'none' },
+  };
+  const PARTLY = {
+    ...WAITING,
+    status: 'partly_handed_over',
+    statusLabel: 'Partly handed over; rest on backorder',
+    replacement: { ...WAITING.replacement, status: 'backordered', live: true, class: 'handed_over', owed: 1, held: 0 },
+  };
+  const DIALOGS = [
+    {
+      name: 'Release before return is received',
+      action: releaseAction,
+      workbench: () => bench('approved', WAITING),
+      opener: 'Release replacement before return is received',
+      box: 'Reason for releasing early (required)',
+      send: 'Release before return is received',
+      keep: 'Keep waiting',
+    },
+    {
+      name: 'Cancel replacement',
+      action: cancelReplacementAction,
+      workbench: () => bench('approved', WAITING),
+      opener: 'Cancel replacement',
+      box: 'Reason for cancelling the replacement (required)',
+      send: 'Cancel replacement',
+      keep: 'Keep it',
+    },
+    {
+      name: 'Close as return only',
+      action: declineAction,
+      workbench: () => bench('closed', RETURN_ONLY, { revision: 2 }),
+      opener: 'Close as return only',
+      box: 'Reason for keeping the return only (required)',
+      send: 'Close as return only',
+      keep: 'Keep it open',
+    },
+    {
+      name: 'Close the rest',
+      action: closeRestAction,
+      workbench: () => bench('received', PARTLY),
+      opener: 'Close the rest',
+      box: 'Reason for closing the rest (required)',
+      send: 'Close the rest',
+      keep: 'Keep it open',
+    },
+  ];
+  type DialogCase = (typeof DIALOGS)[number];
+
+  async function openAndType(d: DialogCase) {
+    fireEvent.click(screen.getByRole('button', { name: d.opener }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText(d.box), { target: { value: 'Typed before the return changed' } });
+    return dialog;
+  }
+
+  async function expectEmptyWhenOpenedAgain(d: DialogCase) {
+    fireEvent.click(screen.getByRole('button', { name: d.opener }));
+    const again = await screen.findByRole('dialog');
+    expect(within(again).getByLabelText(d.box)).toHaveValue('');
+    expect(within(again).getByRole('button', { name: d.send })).toBeDisabled();
+  }
+
+  it.each(DIALOGS.map((d) => [d.name, d] as const))('%s, closed by a stale refusal', async (_name, d) => {
+    d.action.mockResolvedValueOnce(STALE_ANSWER);
+    render(<ReturnWorkbench workbench={d.workbench()} />);
+    const dialog = await openAndType(d);
+    fireEvent.click(within(dialog).getByRole('button', { name: d.send }));
+    await screen.findByRole('alert', { name: 'This return changed' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await expectEmptyWhenOpenedAgain(d);
+  });
+
+  it.each(DIALOGS.map((d) => [d.name, d] as const))('%s, closed by its own Keep button', async (_name, d) => {
+    render(<ReturnWorkbench workbench={d.workbench()} />);
+    const dialog = await openAndType(d);
+    fireEvent.click(within(dialog).getByRole('button', { name: d.keep }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(d.action).not.toHaveBeenCalled();
+    await expectEmptyWhenOpenedAgain(d);
+  });
+
+  it('Release: the preset pressed before a stale close is not pressed when it opens again', async () => {
+    releaseAction.mockResolvedValueOnce(STALE_ANSWER);
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Release replacement before return is received' }));
+    const dialog = await screen.findByRole('dialog');
+    const preset = within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' });
+    fireEvent.click(preset);
+    expect(preset).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Release before return is received' }));
+    await screen.findByRole('alert', { name: 'This return changed' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Release replacement before return is received' }));
+    const again = await screen.findByRole('dialog');
+    expect(within(again).getByRole('button', { name: 'Customer is completing an in-person exchange today.' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
+  });
+});
+
+describe('B21 review: the stale close of Release, Close as return only and Change replacement', () => {
+  it('Release refused by the server as stale: the dialog closes and the notice says why, without a toast', async () => {
+    releaseAction.mockResolvedValueOnce(STALE_ANSWER);
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Release replacement before return is received' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Customer is completing an in-person exchange today.' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Release before return is received' }));
+    const notice = await screen.findByRole('alert', { name: 'This return changed' });
+    expect(notice).toHaveTextContent('Another person changed this return. Review it again.');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(releaseAction).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('Close as return only refused invalid_status_transition: the dialog closes and the notice says why, without a toast', async () => {
+    const cancelled = {
+      ...WAITING,
+      status: 'replacement_cancelled',
+      statusLabel: 'Replacement cancelled: issue a new one or close as return only',
+      lines: [exchangeLine({ status: 'cancelled', approvedItemId: 'item-l', approvedQuantity: 1, approvedItem: ITEM_L })],
+      replacement: { ...WAITING.replacement, status: 'cancelled', live: false, class: 'none' },
+    };
+    declineAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'conflict', message: 'This return changed. It now shows the latest.', details: { reason: 'invalid_status_transition' } },
+    });
+    render(<ReturnWorkbench workbench={bench('closed', cancelled, { revision: 2 })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close as return only' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('Reason for keeping the return only (required)'), { target: { value: 'x' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close as return only' }));
+    const notice = await screen.findByRole('alert', { name: 'This return changed' });
+    expect(notice).toHaveTextContent('This return changed. It now shows the latest.');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(refresh).toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('Change replacement refused return_changed: the dialog closes and the notice says why, without a toast', async () => {
+    changeAction.mockResolvedValueOnce(STALE_ANSWER);
+    render(<ReturnWorkbench workbench={bench('approved', WAITING)} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Change replacement' }));
+    const change = await screen.findByRole('dialog', { name: 'Change replacement' });
+    fireEvent.change(within(change).getByLabelText('Reason (required)'), { target: { value: 'Wrong size' } });
+    fireEvent.click(within(change).getByRole('button', { name: 'Change replacement' }));
+    const notice = await screen.findByRole('alert', { name: 'This return changed' });
+    expect(notice).toHaveTextContent('Another person changed this return. Review it again.');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(changeAction).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalled();
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+});

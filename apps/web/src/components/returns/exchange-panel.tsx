@@ -609,6 +609,26 @@ export function DialogError({ error }: { error: string | null }) {
   );
 }
 
+/**
+ * A replacement dialog's reason, empty each time the dialog opens (B21
+ * review). Clearing it in the Radix close handler alone missed every close
+ * made in code: the workbench closing the dialog after a save or after a
+ * refusal that meant the screen was stale, and the dialog's own Keep button,
+ * which calls the parent's handler. The next open then showed the old words
+ * (and Release its old preset as pressed) against a return that had changed.
+ * The reset is made while rendering, when `open` turns true, so the old
+ * words never show for a frame (an effect would paint them first).
+ */
+function useReasonOnOpen(open: boolean): [string, (reason: string) => void] {
+  const [reason, setReason] = React.useState('');
+  const [openSeen, setOpenSeen] = React.useState(open);
+  if (open !== openSeen) {
+    setOpenSeen(open);
+    if (open) setReason('');
+  }
+  return [reason, setReason];
+}
+
 export function ReleaseEarlyDialog({
   open,
   onOpenChange,
@@ -623,14 +643,13 @@ export function ReleaseEarlyDialog({
   error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
@@ -703,7 +722,7 @@ export function CancelReplacementDialog({
   consequences: ReadonlyArray<{ key: ExchangeConsequenceKey; text: string }>;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   const effect = consequences.find((c) => c.key === 'effect')?.text ?? null;
   return (
     <Dialog
@@ -711,7 +730,6 @@ export function CancelReplacementDialog({
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
@@ -845,14 +863,13 @@ export function CloseAsReturnOnlyDialog({
   error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
@@ -903,14 +920,13 @@ export function CloseReplacementRestDialog({
   error?: string | null;
   onConfirm: (reason: string) => void;
 }) {
-  const [reason, setReason] = React.useState('');
+  const [reason, setReason] = useReasonOnOpen(open);
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
         if (busy) return;
         onOpenChange(v);
-        if (!v) setReason('');
       }}
     >
       <DialogContent className="max-w-md">
