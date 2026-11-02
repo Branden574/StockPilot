@@ -40,8 +40,9 @@ export const PUSH_TOKEN_STORAGE_KEY = 'sp_push_token_v1';
  * hands RootGate a new user object, the hook below runs again, and its
  * registration would bind the phone to the account once more after the
  * unbind. Each sign-out takes its own hold (two can overlap: a sign-out and a
- * message from another device), and registration waits for every hold to be
- * released.
+ * message from another device). While any hold is taken, registration sends
+ * nothing; a sign-out the session survives registers again once it releases
+ * its hold (push-unbind.ts afterSessionEnd).
  */
 const holds = new Set<symbol>();
 
