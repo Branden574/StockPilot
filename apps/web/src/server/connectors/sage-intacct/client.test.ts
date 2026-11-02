@@ -295,38 +295,54 @@ describe('IntacctClient: a call that got no answer', () => {
 /**
  * The failure shapes above were copied from a loopback probe on Node 22 and
  * undici 6; production runs Node 24, as CI does. These run the never-sent rule
- * against this runtime's own fetch, over 127.0.0.1 only: a refused connect
- * must read as never sent, and a connection the server drops after reading
- * the whole request must not.
+ * against this runtime's own fetch, over 127.0.0.1 only: a refused connect,
+ * to a host with one address or two, must read as never sent; a connection
+ * the server drops after reading the whole request, and a request it read and
+ * never answered, must not.
  */
 describe('IntacctClient against the runtime fetch (loopback only)', () => {
   const runtimeFetch = globalThis.fetch;
   let target = '';
+  /** Merged into the next call's options (the two-address case's dispatcher). */
+  let extraInit: Record<string, unknown> = {};
   let server: Server | null = null;
+  const sockets = new Set<Socket>();
   beforeEach(() => {
     vi.stubGlobal('fetch', (_input: RequestInfo | URL, init?: RequestInit) =>
-      runtimeFetch(target, init),
+      runtimeFetch(target, { ...init, ...extraInit } as RequestInit),
     );
   });
   afterEach(async () => {
     vi.unstubAllGlobals();
+    extraInit = {};
+    for (const socket of sockets) socket.destroy();
+    sockets.clear();
     const open = server;
     server = null;
     if (open?.listening) await new Promise<void>((resolve) => open.close(() => resolve()));
   });
 
   async function listen(onConnection?: (socket: Socket) => void): Promise<number> {
-    server = onConnection ? createServer(onConnection) : createServer();
+    server = createServer((socket) => {
+      sockets.add(socket);
+      onConnection?.(socket);
+    });
     const listening = server;
     await new Promise<void>((resolve) => listening.listen(0, '127.0.0.1', resolve));
     return (listening.address() as AddressInfo).port;
   }
 
-  it('a refused connection was never sent: a create may be sent again', async () => {
+  /** A loopback port nothing listens on: a connect to it is refused. */
+  async function refusedPort(): Promise<number> {
     const port = await listen();
     const closing = server!;
     server = null;
     await new Promise<void>((resolve) => closing.close(() => resolve()));
+    return port;
+  }
+
+  it('a refused connection was never sent: a create may be sent again', async () => {
+    const port = await refusedPort();
     target = `http://127.0.0.1:${port}/objects/x`;
 
     const err = await new IntacctClient(SECRETS, { requestTimeoutMs: 5_000 })
@@ -358,5 +374,69 @@ describe('IntacctClient against the runtime fetch (loopback only)', () => {
       /^This export may have reached Sage Intacct\. .* got no answer \((UND_ERR_SOCKET|ECONNRESET)\)$/,
     );
     expect((err as IntacctNoAnswerError).retryable).toBe(false);
+  });
+
+  it('a request the server read and never answered may have arrived: the create stops at its timeout', async () => {
+    // Reads everything and answers nothing.
+    const port = await listen((socket) => socket.on('data', () => undefined));
+    target = `http://127.0.0.1:${port}/objects/x`;
+
+    const err = await new IntacctClient(SECRETS, { requestTimeoutMs: 300 })
+      .post('/objects/x', {})
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(IntacctNoAnswerError);
+    expect((err as Error).message).toBe(
+      `${INTACCT_MAY_HAVE_POSTED} Intacct POST /objects/x got no answer (TimeoutError)`,
+    );
+    expect((err as IntacctNoAnswerError).retryable).toBe(false);
+  });
+
+  it('a refused connect to a host with two addresses was never sent: a create may be sent again', async () => {
+    const port = await refusedPort();
+    // The runtime's own undici Agent, the one its fetch uses, set up on the
+    // first call. Its lookup answers two addresses, one per family, for one
+    // name, so the connect tries both (on Node 22 and undici 6 the failure is
+    // an AggregateError whose inner errors carry syscall 'connect').
+    await runtimeFetch(`http://127.0.0.1:${port}/`).catch(() => undefined);
+    const runtimeDispatcher = (globalThis as unknown as Record<symbol, unknown>)[
+      Symbol.for('undici.globalDispatcher.1')
+    ];
+    expect(runtimeDispatcher).toBeTruthy();
+    const RuntimeAgent = (
+      runtimeDispatcher as { constructor: new (options: unknown) => { close(): Promise<void> } }
+    ).constructor;
+    const agent = new RuntimeAgent({
+      connect: {
+        lookup: (
+          _hostname: string,
+          options: { all?: boolean } | undefined,
+          callback: (...args: unknown[]) => void,
+        ) => {
+          const addresses = [
+            { address: '127.0.0.1', family: 4 },
+            { address: '::ffff:127.0.0.1', family: 6 },
+          ];
+          if (options?.all) callback(null, addresses);
+          else callback(null, addresses[0]!.address, addresses[0]!.family);
+        },
+      },
+    });
+    extraInit = { dispatcher: agent };
+    target = `http://two-addresses.invalid:${port}/objects/x`;
+
+    try {
+      const err = await new IntacctClient(SECRETS, { requestTimeoutMs: 5_000 })
+        .post('/objects/x', {})
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(IntacctNoAnswerError);
+      expect((err as Error).message).toMatch(
+        /^Intacct POST \/objects\/x got no answer \(E[A-Z]+\)$/,
+      );
+      expect((err as IntacctNoAnswerError).retryable).toBe(true);
+    } finally {
+      await agent.close();
+    }
   });
 });
