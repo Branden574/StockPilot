@@ -46,6 +46,8 @@ import { describe, expect, it } from 'vitest';
  *   String(e), e.toString(), JSON.stringify(e), `${e}`, 'failed: ' + e
  *   const { message } = e as Error
  *   NextResponse.json({ error }), { detail: err }, { ...err }   (a whole error in an answer)
+ *   rawErrorText(x), nonErrorText(x), postgrestErrorText(x), reportedMessage(x),
+ *   asReportableError(x).message   (the error-to-text helpers: ERROR_TEXT_HELPERS)
  *
  * where an error is a catch clause's binding or a rejection handler's
  * parameter (whatever its name), a name such as e, err, error, uploadErr,
@@ -153,8 +155,8 @@ const ALLOWED: Record<string, { lines: number; why: string }> = {
  */
 const ALLOWED_ACTIONS: Record<string, { lines: number; why: string }> = {
   'lib/ai/embeddings.ts': {
-    lines: 2,
-    why: "errorText feeds console lines and a backfill batch's firstError; the backfill action answers counts only (server/actions/embeddings.ts)",
+    lines: 5,
+    why: "errorText's body and its three callers: the text feeds console lines and a batch's firstError, which only the hourly sweep cron answers (to the CRON_SECRET holder); the backfill action and the AI tool answer counts only",
   },
   'lib/email/resend.ts': {
     lines: 1,
@@ -200,6 +202,22 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
     lines: 2,
     why: 'the start and post mappers match our RAISE codes and answer app sentences, else internal_error',
   },
+  'server/services/inventory.ts': {
+    lines: 3,
+    why: "moveSeededStockToUnplaced's local report(): its argument goes only to reportError(new Error(detail)) at warning level; the dialog answers locationName null",
+  },
+  'server/services/integration-events.ts': {
+    lines: 2,
+    why: "DispatchStepError's message for a failed endpoints read or deliveries insert: thrown inside withDispatchRetries and only reported by dispatch's catch; dispatch answers nothing",
+  },
+  'server/services/opening-stock-compensation.ts': {
+    lines: 1,
+    why: "verifyErr: a failed re-read's text, only in the console.error line; the thrown ServiceError is internal_error with the app's own sentence",
+  },
+  'server/services/po-imports.ts': {
+    lines: 3,
+    why: "archiveImportCreatedItems' local skip(): its message goes only to reportError(new Error(message)); cancelling the import answers nothing about it",
+  },
   'server/services/exception-recount.ts': {
     lines: 1,
     why: 'mapRecountError matches our RAISE codes and hints and answers app sentences, else internal_error',
@@ -213,8 +231,8 @@ const ALLOWED_SERVICES: Record<string, { lines: number; why: string }> = {
     why: "a failed host lookup's text in SsrfLookupFailedError, for the server: the webhook test and the ISBN lookup answer their own sentences",
   },
   'server/services/lib/fetch-by-ids.ts': {
-    lines: 1,
-    why: 'rawErrorText is for server logs: every caller passes it to reportError, new Error or an internal_error ServiceError',
+    lines: 5,
+    why: "rawErrorText's body (2) is for server logs: every caller passes it to reportError, new Error or an internal_error ServiceError; writeInIdBatches' result.error (2) and settleAsDataError's error.message (1) are read by callers as a database error, which this census counts wherever it is answered",
   },
   'server/services/lib/postgrest-error.ts': {
     lines: 1,
@@ -442,6 +460,36 @@ const APP_ERRORS = new Set([
   'AccountStatusUnavailableError',
 ]);
 const BUILTIN_ERRORS = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError']);
+/**
+ * Helpers that turn an error (or any value) into its text, so their result is
+ * an error's own text whatever their argument is named (S31 guard helpers):
+ *   rawErrorText        server/services/lib/fetch-by-ids.ts: a ServiceError's
+ *                       internalDetail, else the message, else nonErrorText
+ *   nonErrorText        lib/error-text.ts: a non-Error's message, code and hint
+ *   postgrestErrorText  server/services/lib/postgrest-error.ts: a PostgREST
+ *                       error's message, else its status, code, details, hint
+ *   reportedMessage     lib/error-text.ts: an internal error's internalDetail
+ *   errorText           lib/ai/embeddings.ts (module-local): a PostgREST
+ *                       error's message, else String(value)
+ * Their bodies are listed below with their reasons; this set holds their
+ * callers to the same rules. Never narrowed by `instanceof ServiceError`:
+ * rawErrorText and reportedMessage of a ServiceError are its internalDetail.
+ * A call by an imported alias (`import { nonErrorText as t }`) or through a
+ * namespace (`errorText.nonErrorText(e)`) counts too.
+ */
+const ERROR_TEXT_HELPERS = new Set([
+  'rawErrorText',
+  'nonErrorText',
+  'postgrestErrorText',
+  'reportedMessage',
+  'errorText',
+]);
+/**
+ * Helpers whose result is an error: `.message`, `.stack`, String() of it are
+ * its text. asReportableError (lib/error-text.ts) gives a non-Error a message
+ * built by nonErrorText.
+ */
+const ERROR_VALUE_HELPERS = new Set(['asReportableError']);
 /** String methods whose result is still the text. */
 const TEXT_METHODS = new Set([
   'toLowerCase',
@@ -566,7 +614,38 @@ function isError(node: ts.Expression): boolean {
   const x = unwrap(node);
   if (ts.isIdentifier(x)) return bindsAThrow(x) || ERROR_NAME.test(x.text) || isErrorParameter(x);
   if (ts.isPropertyAccessExpression(x)) return isErrorField(x);
+  if (ts.isCallExpression(x)) return callsHelper(x, ERROR_VALUE_HELPERS);
   return false;
+}
+
+const HELPER_ALIASES = new WeakMap<ts.SourceFile, Map<string, string>>();
+
+/** Local name -> helper name for every import of a helper under another name. */
+function helperAliases(sf: ts.SourceFile): Map<string, string> {
+  const cached = HELPER_ALIASES.get(sf);
+  if (cached) return cached;
+  const aliases = new Map<string, string>();
+  for (const st of sf.statements) {
+    const bindings = ts.isImportDeclaration(st) ? st.importClause?.namedBindings : undefined;
+    if (!bindings || !ts.isNamedImports(bindings)) continue;
+    for (const el of bindings.elements) {
+      if (el.propertyName && ts.isIdentifier(el.propertyName)) {
+        aliases.set(el.name.text, el.propertyName.text);
+      }
+    }
+  }
+  HELPER_ALIASES.set(sf, aliases);
+  return aliases;
+}
+
+/** A call of one of `helpers`: by name, by an imported alias, or through a namespace. */
+function callsHelper(call: ts.CallExpression, helpers: Set<string>): boolean {
+  const callee = unwrap(call.expression);
+  if (ts.isIdentifier(callee)) {
+    const name = helperAliases(call.getSourceFile()).get(callee.text) ?? callee.text;
+    return helpers.has(name);
+  }
+  return ts.isPropertyAccessExpression(callee) && helpers.has(callee.name.text);
 }
 
 /** `res.error`, `result.lastError`: a property named as an error. */
@@ -982,6 +1061,9 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
       isError(node.expression)
     ) {
       text(node, node.expression);
+    } else if (ts.isCallExpression(node) && callsHelper(node, ERROR_TEXT_HELPERS)) {
+      // An error-to-text helper's result is an error's text (never narrowed).
+      if (!isWriteTarget(node) && !staysOnServer(node)) hit(node);
     } else if (ts.isCallExpression(node) && node.arguments[0] && isError(node.arguments[0])) {
       const callee = node.expression;
       const isString = ts.isIdentifier(callee) && callee.text === 'String';
@@ -1097,9 +1179,16 @@ describe("API routes never answer an error's own text", () => {
       "return { ok: false, notes: `AI extraction unavailable (${e instanceof Error ? e.message : 'error'}).` };",
       'return work().catch((problem) => NextResponse.json({ message: String(problem) }));',
       'return work().catch(({ message }) => NextResponse.json({ message }));',
+      // The error-to-text helpers are text producers, whatever their argument (S31).
+      'return NextResponse.json({ message: rawErrorText(e) });',
+      'return NextResponse.json({ message: nonErrorText(failure) });',
+      'return NextResponse.json({ message: postgrestErrorText(res.error ?? {}, res) });',
+      'return NextResponse.json({ message: reportedMessage(e as Error) });',
+      'return NextResponse.json({ message: asReportableError(e).message });',
+      'return NextResponse.json({ detail: `failed: ${errorTextHelpers.rawErrorText(e).slice(0, 80)}` });',
     ]);
     expect(hitsIn('sample.ts', sample).map((hit) => hit.line)).toEqual(
-      Array.from({ length: 22 }, (_, i) => i + 2),
+      Array.from({ length: 28 }, (_, i) => i + 2),
     );
   });
 
@@ -1212,10 +1301,25 @@ describe("Server Actions and services never answer an error's own text (S31)", (
       "return ok({ failures: [{ id, error: summary.firstError || 'failed' }] });",
       "throw new ServiceError('validation_error', `Set NEXT_PUBLIC_PRICE_${plan} in Vercel env.`);",
       "return err('conflict', ok_ ? 'fine' : outcome.lastError);",
+      // The error-to-text helpers in an action's result (S31 guard helpers).
+      "return err('internal_error', nonErrorText(e));",
+      "return { ok: false, error: { code: 'internal_error', message: nonErrorText(e) } };",
+      'return ok({ failures: [{ id, reason: rawErrorText(e) }] });',
+      "throw new ServiceError('validation_error', postgrestErrorText(res.error));",
+      "return { ok: false, error: { code: 'conflict', message: asReportableError(e).message } };",
+      "const why = reportedMessage(asReportableError(e)); return err('conflict', why);",
+      // Never narrowed: a ServiceError's rawErrorText and reportedMessage are its internal detail.
+      'if (e instanceof ServiceError) return err(e.code, rawErrorText(e));',
     ]);
     expect(hitsIn('sample.ts', sample, 'actions').map((hit) => hit.line)).toEqual([
-      2, 3, 4, 5, 6, 7,
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
     ]);
+    // A helper imported under another name is still a helper.
+    const renamed = [
+      "import { nonErrorText as describe } from '@/lib/error-text';",
+      "export async function act() { try { await work(); } catch (e) { return err('internal_error', describe(e)); } }",
+    ].join('\n');
+    expect(hitsIn('sample.ts', renamed, 'actions').map((hit) => hit.line)).toEqual([2]);
     // A parameter a same-file call passes a catch binding is an error.
     const helper = [
       'function fail(x: unknown): never {',
@@ -1247,6 +1351,13 @@ describe("Server Actions and services never answer an error's own text (S31)", (
       "const key = process.env['FOO_SECRET_KEY'];",
       "if (res.error) return err('internal_error', UNEXPECTED_ERROR_MESSAGE);",
       "return ok({ 'FOO_SECRET_KEY': present, missing: NOT_SET_UP_MESSAGE });",
+      // The helpers' text kept on the server: a report, a log line, an Error, an internal_error, a test.
+      "void reportError(asReportableError(e), { tag: 't', extra: { detail: rawErrorText(e) } });",
+      "console.warn('[x] failed:', nonErrorText(e), postgrestErrorText(res.error, res));",
+      'throw new Error(`read failed: ${rawErrorText(e)}`);',
+      "throw new ServiceError('internal_error', postgrestErrorText(res.error, res));",
+      "const why = nonErrorText(e); console.error('[x]', why); if (why.includes('timeout')) return retry();",
+      "if (reportedMessage(asReportableError(e)).startsWith('x')) return retry();",
     ]);
     expect(hitsIn('sample.ts', sample, 'actions')).toEqual([]);
     // In the API scope an error field counts only in a JSON body: the
