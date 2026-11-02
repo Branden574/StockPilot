@@ -28,8 +28,9 @@ import { RELEASES } from './registry';
  * restarts for an update (B44 #418, whose draft release,
  * mobile-app-asks-before-restarting, is folded into this one and removed), the
  * phone fixes of B10 #403 and B60 #420, Overview's approvals row (B11 Part 1
- * #422), and the plain sentences of S16 #421 on the web. It needs a web deploy
- * only.
+ * #422), the plain sentences of S16 #421 on the web, and #431's fallback entry
+ * for S27a's Integrations page (due with this batch, as its part b has not
+ * deployed). It needs a web deploy only.
  *
  * Its own file, so the release tests other open branches edit stay as they
  * are. These tests pin what a published release must hold (when it was
@@ -103,7 +104,10 @@ const WEB_ENTRIES = [
   'web-unexpected-failure-plain-sentence',
   'bulk-isbn-unreadable-file',
   'ai-assistant-web-message-too-long',
+  'integrations-unsaved-changes-say-so',
 ];
+/** The one line with a link, and where it goes. */
+const INTEGRATIONS_LINK = { href: '/dashboard/settings/integrations', label: 'Open Integrations' };
 
 describe('the update-ready-and-fixes release', () => {
   it('is published once, at the top, at revision 1, with the B44 draft folded in and no draft left', () => {
@@ -145,6 +149,7 @@ describe('the update-ready-and-fixes release', () => {
       'ai-assistant-web-message-too-long',
       'app-integrations-access-denied',
       'app-clears-other-workspace-again',
+      'integrations-unsaved-changes-say-so',
     ]);
     expect([...PHONE_ENTRIES, ...WEB_ENTRIES].sort()).toEqual([...ids].sort());
     expect(new Set(ids).size).toBe(ids.length);
@@ -154,18 +159,18 @@ describe('the update-ready-and-fixes release', () => {
       expect(pageExistsFor(e.link.href), e.id).toBe(true);
       expect(e.audience, e.id).toBeDefined();
     }
-    // No line links, so an old phone build shows the title and the summary
-    // with no button.
+    // One line links: #431's fallback entry, to the Integrations page.
     expect(
       release()
         .entries.filter((e) => e.link)
-        .map((e) => e.id),
-    ).toEqual([]);
+        .map((e) => [e.id, e.link]),
+    ).toEqual([['integrations-unsaved-changes-say-so', INTEGRATIONS_LINK]]);
+    expect(pageExistsFor(INTEGRATIONS_LINK.href)).toBe(true);
     // S4's line (bundle-required-component) is held until its lab walk.
     expect(ids).not.toContain('bundle-required-component');
   });
 
-  it('reaches every member and is the first notice for each with nothing read; an old phone build shows its title and summary', () => {
+  it('reaches every member and is the first notice for each with nothing read; an old phone build shows its title and summary, with the Integrations button only for a reader that line reaches', () => {
     const told = (v: ReleaseViewer) =>
       visibleReleases(RELEASES, v)
         .find((r) => r.id === ID)
@@ -175,13 +180,30 @@ describe('the update-ready-and-fixes release', () => {
     expect(told(member)).toEqual(['update-ready-message', 'app-text-size-tabs-lists-buttons']);
     for (const v of [everyone, member]) {
       expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
-        id: ID,
-        date: '2026-11-02',
-        title: release().title,
-        body: release().summary,
-      });
     }
+    // The old phone builds' list takes its button from the first line with a
+    // link that the reader is told.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, {})[0]).toEqual({
+      id: ID,
+      date: '2026-11-02',
+      title: release().title,
+      body: release().summary,
+      cta: INTEGRATIONS_LINK,
+    });
+    expect(legacyAnnouncementsFor(RELEASES, member, {})[0]).toEqual({
+      id: ID,
+      date: '2026-11-02',
+      title: release().title,
+      body: release().summary,
+    });
+    // Every phone build with What's New hides that button: the Integrations
+    // page has no phone screen of its own, so the rewrite sends it home.
+    expect(phone('src/components/onboarding/whats-new.tsx')).toContain(
+      "const showCta = !!cta && rewriteWebPath(cta.href) !== '/';",
+    );
+    const rewrite = phone('src/lib/web-path-rewrite.ts');
+    expect(rewrite).not.toMatch(/settings/);
+    expect(rewrite).toContain("{ re: /^\\/dashboard(\\/.*)?$/, to: () => '/' },");
     // Publishing it changes what clients observe.
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
@@ -232,6 +254,12 @@ describe('the update-ready-and-fixes release', () => {
     const ai = entry('ai-assistant-web-message-too-long');
     expect(ai.title).toContain('on the web');
     expect(ai.howItAffectsYou).toContain('On the web, ');
+    // The phone has an Overview screen and an Integrations screen of its own,
+    // so the titles about the web's say so, and so does the release title,
+    // which an old phone build shows (2026-11-02 review).
+    expect(entry('overview-approvals-follow-permission').title).toMatch(/^On the web, /);
+    expect(entry('integrations-unsaved-changes-say-so').title).toMatch(/^On the web, /);
+    expect(release().title).toMatch(/; web Overview counts approvals$/);
     // The open tab's rows can keep the old text size (B61, not fixed), said as
     // a limit.
     expect(entry('app-text-size-tabs-lists-buttons').howItAffectsYou).toContain(
@@ -276,6 +304,10 @@ describe('the update-ready-and-fixes release', () => {
       anyPermission: ['bundles:read', 'bundles:distribute'],
       modules: ['bundles'],
     });
+    expect(entry('integrations-unsaved-changes-say-so').audience).toEqual({
+      anyPermission: ['integrations:manage', 'shipping:manage'],
+      modules: ['integrations', 'shipping'],
+    });
 
     const shown = (v: ReleaseViewer) =>
       visibleReleases(RELEASES, v)
@@ -307,5 +339,83 @@ describe('the update-ready-and-fixes release', () => {
         enabledModules: ['integrations'],
       }),
     ).not.toContain('app-integrations-access-denied');
+    // The web's Integrations page opens for Manage integrations or Manage
+    // shipping, and shows its module-off notice unless the integrations or the
+    // shipping module is on (or API access, for owners and admins only).
+    const integrationsPage = source('app/(dashboard)/dashboard/settings/integrations/page.tsx');
+    expect(integrationsPage).toContain(
+      "if (!can(ctx, 'integrations:manage') && !can(ctx, 'shipping:manage') && !showApiKeys) {",
+    );
+    expect(integrationsPage).toContain(
+      'if (!integrationsAccess.enabled && !shippingAccess.enabled && !apiAccessAccess.enabled) {',
+    );
+    expect(integrationsPage).toContain(
+      'const showApiKeys = apiAccessAccess.enabled && isAdminRole(ctx.role);',
+    );
+    // A manager given only Manage shipping, with both modules on, is told.
+    expect(
+      shown({
+        role: 'manager',
+        permissions: ['shipping:manage'],
+        enabledModules: ['integrations', 'shipping'],
+      }),
+    ).toContain('integrations-unsaved-changes-say-so');
+    // A member with neither key, or with neither module on, is not.
+    expect(
+      shown({ role: 'staff', permissions: ['items:read'], enabledModules: ['integrations'] }),
+    ).not.toContain('integrations-unsaved-changes-say-so');
+    expect(
+      shown({ role: 'admin', permissions: ['integrations:manage'], enabledModules: ['orders'] }),
+    ).not.toContain('integrations-unsaved-changes-say-so');
+  });
+
+  // #431's fallback entry quotes the services' own refusal, and each change
+  // it names is one the web's cards offer and the services refuse with it.
+  it("quotes the Integrations page's refusal word for word, for the changes that used to show as done", () => {
+    const e = entry('integrations-unsaved-changes-say-so');
+    const refused = exportedString(
+      source('server/services/integration-events.ts'),
+      'INTEGRATION_WRITE_REFUSED',
+    );
+    expect(refused).toBe(
+      'This change was not saved: your access does not allow it. Ask an owner or an admin.',
+    );
+    expect(e.whatChanged).toContain(
+      `the Integrations page now says “${refused}” Before, it showed as done.`,
+    );
+    // A disconnect, the QuickBooks account mapping and the Sage Intacct
+    // settings each ask for the row they changed and refuse when there is none.
+    const connections = source('server/services/connections.ts');
+    expect(
+      connections.match(
+        /if \(!updated\) throw new ServiceError\('forbidden', INTEGRATION_WRITE_REFUSED\);/g,
+      ),
+    ).toHaveLength(3);
+    // The cards call these actions, which pass a ServiceError's own words on.
+    const panel = source('components/settings/integrations-panel.tsx');
+    const intacct = source('components/settings/sage-intacct-card.tsx');
+    expect(panel).toContain("const res = await disconnectAction({ provider: 'quickbooks' });");
+    expect(panel).toContain('const res = await saveAccountMappingAction({');
+    expect(panel).toContain('const res = await disconnectEasyPostAction();');
+    expect(intacct).toContain("const res = await disconnectAction({ provider: 'sage_intacct' });");
+    expect(intacct).toContain('const res = await saveIntacctSettingsAction({');
+    expect(source('server/actions/connections.ts')).toContain(
+      'if (e instanceof ServiceError) return err(e.code, e.message, e.details);',
+    );
+    // The plan's other example, rotating a webhook secret, has no button.
+    expect(e.whatChanged).not.toMatch(/webhook|rotat/i);
+    expect(source('components/settings/webhooks-panel.tsx')).not.toContain(
+      'rotateIntegrationEndpointSecretAction',
+    );
+    // With both modules on, the page's failed-sync list takes the manage key
+    // of each module that is on, so a member who holds only Manage shipping
+    // opens the page.
+    expect(connections).toContain(
+      "if (this.ctx.enabledModules.has('shipping')) keys.push('shipping:manage');",
+    );
+    expect(connections).toContain('assertAnyPermission(this.ctx, keys);');
+    expect(e.whatChanged).toContain(
+      'A member who can manage only shipping can now open the Integrations page when Integrations is also switched on.',
+    );
   });
 });

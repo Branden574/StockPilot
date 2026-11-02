@@ -65,21 +65,35 @@ export const RELEASES: Release[] = [
     //   overview-approvals-follow-permission;
     // - S16 #421, 7c28c3a9c (2026-11-01 03:16:46Z, build 8de1f2ee2828):
     //   web-unexpected-failure-plain-sentence, bulk-isbn-unreadable-file and
-    //   ai-assistant-web-message-too-long, each on the web only.
-    // Every entry is the 2026-11-01 fact-check's, with every finding and every
-    // skeptic's fix applied: the B44 summary note and the "crashed" clause
-    // gone; the tabs "when they do not fit" (an iPad never stacks them) and
-    // only the lists named, each back at its top; Release before return is
-    // received, the button's own words; a refused Create return's cap; the
-    // workspace refusal only when the previous account did not use Sign out,
-    // and the offline advice; the Integrations why and its audience (the
-    // screen's own check, owner or admin); Viewers on Overview; S16 split in
-    // two (Bulk ISBN import's readers differ), Separate POs, and the AI
-    // line's "on the web", "after typing" and its note's own words. Added:
-    // the count scanner keeps a typed number it could not save (the phone
-    // skeptic's miss), and "or pull down to refresh" for the open tab's rows
-    // (tonight's walk). "Settings > Integrations" is "Integrations in
+    //   ai-assistant-web-message-too-long, each on the web only;
+    // - S27a #431, f584141ba (2026-11-02 02:50:14Z, build 66b26fd665c1):
+    //   integrations-unsaved-changes-say-so, #431's fallback entry. #431's
+    //   body and its plan (section 7) publish it "if part b has not deployed
+    //   by the next What's New batch after this deploy or within 7 days".
+    //   This is that batch, and part b is not built, so it is here; part b's
+    //   release tells the rest. Its sentences were checked at f584141ba
+    //   before publishing (its comment).
+    // Every other entry is the 2026-11-01 fact-check's, with every finding
+    // and every skeptic's fix applied: the B44 summary note and the "crashed"
+    // clause gone; the tabs "when they do not fit" (a full-screen iPad never
+    // stacks them) and only the lists named, each back at its top; Release
+    // before return is received, the button's own words; a refused Create
+    // return's cap; the workspace refusal only when the previous account did
+    // not use Sign out, and the offline advice; the Integrations why and its
+    // audience (the screen's own check, owner or admin); Viewers on Overview;
+    // S16 split in two (Bulk ISBN import's readers differ), Separate POs, and
+    // the AI line's "on the web", "after typing" and its note's own words.
+    // Added: the count scanner keeps a typed number it could not save (the
+    // phone skeptic's miss), and "or pull down to refresh" for the open tab's
+    // rows (tonight's walk). "Settings > Integrations" is "Integrations in
     // Settings": the schema refuses < and >.
+    // Review of 2026-11-02, before the merge: the release title and the
+    // Overview line's title say the web, as the phone has an Overview screen
+    // of its own with no approvals row (core modules/registry.ts:115,
+    // apps/mobile/app/(drawer)/(tabs)/index.tsx); the Separate POs clause is
+    // gone, as B80 (#436, b3abc74be, live 2026-11-02 04:27:19Z, before this
+    // release can deploy) changed what that mode says for a page that is not
+    // a purchase order; and #431's fallback entry was added (above).
     // Walks:
     // - c11-simwalk-1102, 2026-11-02 to 03:59Z, on EAS simulator build
     //   9711b737 of f584141ba, in Demo Co, PASS. w1 (iPhone 17 Pro and Pro
@@ -106,7 +120,10 @@ export const RELEASES: Release[] = [
     // sentence (walks 13-18 need two accounts in different organizations),
     // the cache clear tried again, the Integrations authenticator sentences
     // (no QuickBooks connection there), the Release and Create return
-    // refusals, and the three S16 lines.
+    // refusals, the three S16 lines, and the Integrations page's refusal and
+    // its opening for a member who can manage only shipping (Demo Co has both
+    // modules off, so #431's read-only check after its deploy saw only the
+    // module-off notice).
     // Left out:
     // - S4 #379 (3d458cff4, migration 0415; live): its entry
     //   (bundle-required-component) is HELD until the lab walk proves its
@@ -130,11 +147,9 @@ export const RELEASES: Release[] = [
     //   no member sees a change (S20 and S22 by owner decision; for S22 the
     //   owner reported no PostHog surveys, tours or flags, and the code draws
     //   nothing on screen; S34 changes only what leaves our server).
-    // - S27a #431 (f584141ba): no entry tonight. It changes nothing while the
-    //   database answers normally, and its Integrations sentences reach only
-    //   members who hold Manage integrations or Manage shipping and are not
-    //   admins, and admins missing one of the two. Its part b's release tells
-    //   them, or #431's fallback entry if part b has not shipped within 7 days.
+    // - S27a's other parts change nothing while the database answers normally
+    //   (the S19 precedent): the readers that now refuse an answer that is not
+    //   a list, and the export retried after a failed supplier mapping read.
     // - S19 #419 (5c6b4074b) and S17 #416: recorded exceptions (nothing
     //   changes while the database answers; example text only). Their
     //   packages/core changes, and #379's, show nothing on the phone.
@@ -146,14 +161,19 @@ export const RELEASES: Release[] = [
     // - B61, not fixed: an item's open tab can keep its rows at the old text
     //   size until another tab is opened or the screen is pulled to refresh;
     //   app-text-size-tabs-lists-buttons says so as a limit.
-    // - Not merged, so not here: #423 (B41, B42, B45), #406 (B23), #426 (B50),
-    //   #425 (B62), #427 (B63), #436 (B80) and the other section 4 PRs, whose
-    //   entries go in the next web batch, and #435 (B75).
+    // - Merged after f584141ba (from 2026-11-02 04:12Z), so not here: #423
+    //   (B41, B42, B45), #406 (B23), #426 (B50), #425 (B62), #427 (B63), #436
+    //   (B80) and the other section 4 PRs, whose entries go in the next web
+    //   batch, and #435 (B75), whose phone part is in no phone update yet.
     // The summary says "In the app" and "On the web", as a phone shows only
     // the title and the summary; it carries B44's first message with the next
     // update, and the load step with a connection (B10's refusal at a first
-    // open offline). No entry has a link, so the old phone builds' list shows
-    // it with no button (logic.ts legacyAnnouncementsFor).
+    // open offline). One entry links, integrations-unsaved-changes-say-so, so
+    // the old phone builds' list (logic.ts legacyAnnouncementsFor) carries
+    // Open Integrations only for a reader that entry reaches, and every phone
+    // build with What's New hides it: a /dashboard/settings path opens no
+    // screen of its own there (apps/mobile/src/components/onboarding/
+    // whats-new.tsx:158, and web-path-rewrite.ts:176 sends it home).
     // Who is told: every member, as update-ready-message and
     // app-text-size-tabs-lists-buttons have no audience: it is the first
     // notice for each of them until it is read. Each other entry names the
@@ -163,7 +183,7 @@ export const RELEASES: Release[] = [
     // 'withdrawn' and a withdrawnNote).
     status: 'published',
     title:
-      'The mobile app asks before restarting for an update, item tabs stack when they do not fit, and Overview counts approvals',
+      'The mobile app asks before restarting for an update and stacks item tabs that do not fit; web Overview counts approvals',
     summary:
       'After the latest update, the mobile app opens once instead of restarting by itself, and from the next update on a message says when one is ready. In the app, item tabs stack when they do not fit at larger text sizes, an order shows its current status after a refused action, and the app says why a count was not saved. On the web, Overview counts the order requests you can approve. Close the app completely and open it again with a connection to load the update; it may restart by itself once.',
     publishedAt: '2026-11-02T04:21:00Z',
@@ -204,10 +224,13 @@ export const RELEASES: Release[] = [
         // platform: phone. From: B10 #403 and B60 #420. Checked at f584141ba:
         // apps/mobile/app/item/[id].tsx:509 (shouldStackItemTabs,
         // src/lib/dynamic-type-layout.ts:201-206: at the largest sizes they
-        // stack on every phone and stay side by side on an iPad, hence "when
-        // Movements does not fit"); :518 with :1737, :1860, :1905 and :1939
-        // (the header, Tap to add photo, Replace and the tabs laid out again
-        // at a new text size); src/components/data-list-screen.tsx:108, :123
+        // stack on every phone and stay side by side on a full-screen iPad;
+        // the rule reads the window's width, and an iPad window in Split View
+        // or Slide Over can be narrow (app.config.ts:65 supportsTablet, with
+        // no requireFullScreen), hence "when Movements does not fit"); :518
+        // with :1737, :1860, :1905 and :1939 (the header, Tap to add photo,
+        // Replace and the tabs laid out again at a new text size);
+        // src/components/data-list-screen.tsx:108, :123
         // and :142 (the head and the rows, so each list goes back to its top),
         // used by the lists named; src/components/ui/button.tsx:136 (wrap),
         // used by the four returns components, and core
@@ -241,11 +264,14 @@ export const RELEASES: Release[] = [
         // requests (orders/page.tsx:156) on Needs approval (:92), which lists
         // every warehouse. Walked: walk-422. Audience: page.tsx:212 and :220
         // (the permission, every role but viewer) and the Orders module the
-        // row's link checks (orders/page.tsx:85-87).
+        // row's link checks (orders/page.tsx:85-87). The title says the web:
+        // the phone's menu has an Overview screen too, with no approvals row
+        // (core modules/registry.ts:115; apps/mobile/app/(drawer)/(tabs)/
+        // index.tsx).
         id: 'overview-approvals-follow-permission',
         category: 'fixed',
         area: 'Orders',
-        title: 'Overview counts the order requests you can approve',
+        title: 'On the web, Overview counts the order requests you can approve',
         whatChanged:
           "On the web, the Needs attention card on Overview has a row for the order requests awaiting your approval. It used to show to owners, admins and managers by role. It now follows the Approve / fulfill orders permission: a staff member who has it now gets the row, which counts the requests waiting in the warehouses they work in, and an admin or manager who had it removed no longer gets it. Viewers do not get it. The row's note now reads “Requests are blocked until someone who can approve orders moves them forward.”",
         whyItMatters:
@@ -355,13 +381,18 @@ export const RELEASES: Release[] = [
         // words, :300), shown inside the Customize export dialog
         // (export-builder-dialog.tsx:406); the scan,
         // app/api/po-imports/scan/route.ts:348, for one file or files
-        // combined, while Separate POs, the form's default for two or more
-        // files (components/po-imports/po-scan-form.tsx:47 and :133), keeps
-        // "Could not read this file as a purchase order." (route.ts:293-296,
-        // unchanged). Before (98f6e8128) each showed the error's own text, and
-        // each was reported then too, hence "still recorded". Code only: an
-        // unexpected failure cannot be brought about safely on production
-        // (the route tests). Audience: the export's items:export
+        // combined. Separate POs, the form's default for two or more files
+        // (components/po-imports/po-scan-form.tsx:47 and :133), is not quoted:
+        // at f584141ba it kept "Could not read this file as a purchase order."
+        // (route.ts:293-296), but B80 (#436, b3abc74be, live 2026-11-02
+        // 04:27:19Z, before this release can deploy) makes a page that is not
+        // a purchase order say the extractor's own sentence in both modes
+        // (lib/po-scan/extract.ts), and B80's entry tells that. The last
+        // sentence says what this change leaves alone, so it holds with B80
+        // (2026-11-02 review). Before (98f6e8128) each showed the error's own
+        // text, and each was reported then too, hence "still recorded". Code
+        // only: an unexpected failure cannot be brought about safely on
+        // production (the route tests). Audience: the export's items:export
         // (route.tsx:77) and the scan's purchase_orders:manage
         // (services/po-imports.ts:985); Bulk ISBN import has its own entry, as
         // its readers differ (2026-11-01 skeptic).
@@ -374,7 +405,7 @@ export const RELEASES: Release[] = [
         whyItMatters:
           "These messages showed the error's own technical text, which was written for developers and did not say what to do.",
         howItAffectsYou:
-          'You see a plain sentence, and the details are still recorded for us to look into. Messages about problems StockPilot expects, such as a missing permission or a file type it does not accept, are unchanged, and with Separate POs a file that cannot be read still says “Could not read this file as a purchase order.”',
+          'You see a plain sentence, and the details are still recorded for us to look into. This does not change the messages about problems StockPilot expects, such as a missing permission or a file type it does not accept.',
         whatToDo: 'If you see the message, try again.',
         audience: { anyPermission: ['items:export', 'purchase_orders:manage'] },
       },
@@ -412,10 +443,11 @@ export const RELEASES: Release[] = [
         // chat-panel.tsx:387-390 for a Word, Excel, CSV or text file with ISBNs
         // found. Before (98f6e8128): zod's issue list as JSON. On the phone
         // the same refusal shows inside the raw answer (apps/mobile/app/ai/
-        // chat.tsx), so every clause says on the web; B75 changes the phone's
-        // chat later. An attached file's ISBN list can pass the limit too,
-        // which the person did not type, hence "after typing" (B76 changes
-        // that, not merged). The 2,000 is left to the app's own sentence.
+        // chat.tsx), so the title, whatChanged and howItAffectsYou say on the
+        // web; B75 changes the phone's chat later. An attached file's ISBN
+        // list can pass the limit too, which the person did not type, hence
+        // "after typing" (B76 changes that, not merged). The 2,000 is left to
+        // the app's own sentence.
         // Code only: route.refusals.test.ts:90-94; no walk was recorded, and
         // the AI module is never switched on in Demo Co for one. Audience: the
         // AI Assistant page's checks ((dashboard)/dashboard/ai/page.tsx:19 and
@@ -493,6 +525,67 @@ export const RELEASES: Release[] = [
         whatToDo:
           'No action needed. Close the app completely and open it again to load the latest update.',
         audience: { anyPermission: ['bundles:read', 'bundles:distribute'], modules: ['bundles'] },
+      },
+      {
+        // platform: web. From: S27a #431, its fallback entry (#431's body and
+        // its plan, section 7: published with the next What's New batch after
+        // S27a's deploy if part b has not deployed; part b is not built).
+        // Checked at f584141ba: the sentence,
+        // server/services/integration-events.ts:649-650
+        // (INTEGRATION_WRITE_REFUSED), thrown for a disconnect the row rule
+        // refused (services/connections.ts:770: QuickBooks Online, Sage
+        // Intacct and EasyPost) and for the QuickBooks account mapping and the
+        // Sage Intacct settings (:835 and :895), passed on as written by
+        // server/actions/connections.ts:53-58 and shown by the page's cards
+        // (components/settings/integrations-panel.tsx:160, :178 and :486;
+        // sage-intacct-card.tsx:121 and :140). The row rule is admin-only
+        // (migration 0146_connector_framework.sql:115-119), while the services
+        // check Manage integrations or Manage shipping, so a member given one
+        // who is not an admin is refused. Before (8ac9f4862 connections.ts:
+        // 703-708 with :714-716, :764-769 and :820-825) those updates asked for
+        // no row: a refused one changed 0 rows with no error, the card said
+        // QuickBooks disconnected, Account mapping saved, EasyPost
+        // disconnected, Sage Intacct disconnected or Sage Intacct settings
+        // saved (integrations-panel.tsx:158, :176 and :484;
+        // sage-intacct-card.tsx:119 and :138; neither card changed in #431),
+        // and a disconnect deleted the stored secret anyway, hence "a
+        // connection that no longer worked". The plan's sentence ("if a change
+        // on the Integrations page is not saved, for example disconnecting
+        // QuickBooks Online or rotating a webhook secret") is narrowed to the
+        // changes checked: no page offers a webhook secret rotation
+        // (rotateIntegrationEndpointSecretAction has no caller,
+        // server/actions/actions-are-reachable.test.ts:79-82), and a refused
+        // connect, webhook or replay, which now says the same sentence, showed
+        // an error before, not a change done. The title says the web, as the
+        // phone's Integrations screen (app-integrations-access-denied) is for
+        // owners and admins, whom the row rule does not refuse. The page
+        // opening: connections.ts:200-205 takes the manage key of each
+        // module that is on; 8ac9f4862 connections.ts:186-208 picked it by the
+        // static role, so with both modules on the page's failed-sync list
+        // (settings/integrations/page.tsx:98) failed for a manager given
+        // Manage shipping and for an admin whose Manage integrations was
+        // removed (page.test.tsx:141-166); with only Shipping on, such a
+        // member could already open it (#431's review, finding 5). Code only:
+        // connections.test.ts:782 on, and page.test.tsx; Demo Co has both
+        // modules off. Audience: the page's checks, settings/integrations/
+        // page.tsx:61-63 (Manage integrations or Manage shipping) and :71-73
+        // (the integrations or the shipping module, else the module-off
+        // notice), as #431's body gives it.
+        id: 'integrations-unsaved-changes-say-so',
+        category: 'fixed',
+        area: 'Integrations',
+        title: 'On the web, Integrations says when a change was not saved',
+        whatChanged:
+          'On the web, when disconnecting QuickBooks Online, Sage Intacct or EasyPost, or saving the QuickBooks account mapping or the Sage Intacct settings, is refused because your access does not allow it, the Integrations page now says “This change was not saved: your access does not allow it. Ask an owner or an admin.” Before, it showed as done. A member who can manage only shipping can now open the Integrations page when Integrations is also switched on.',
+        whyItMatters:
+          'A change that only looked saved could leave a connection that no longer worked.',
+        howItAffectsYou: 'If a change is not saved, ask an owner or an admin to make it.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: {
+          anyPermission: ['integrations:manage', 'shipping:manage'],
+          modules: ['integrations', 'shipping'],
+        },
       },
     ],
   },
