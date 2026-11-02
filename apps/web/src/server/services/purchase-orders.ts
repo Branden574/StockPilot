@@ -32,7 +32,13 @@ import { audit, auditMany } from './audit';
 import { dispatchEvent } from './integration-events';
 import { ItemImagesService } from './item-images';
 import { InventoryService } from './inventory';
-import { createItemSchema, pastExpectedDayCutoff } from '@stockpilot/core';
+import {
+  billToCharterReadFrom,
+  createItemSchema,
+  pastExpectedDayCutoff,
+  type BillToCharter,
+  type BillToCharterRead,
+} from '@stockpilot/core';
 
 /** Notifications created at once by one fan-out (maintenance-notify.ts uses
  *  the same number for the same reason). */
@@ -2466,6 +2472,38 @@ export class PurchaseOrdersService {
       skippedNoSupplier: plan.skippedNoSupplier,
       supplierFailures,
     };
+  }
+
+  /**
+   * The charter a purchase order is billed to (purchase_orders.charter_id), for
+   * the PO page's Bill to row (B56): the organization's charter by id, at ANY
+   * status, since a charter archived after the PO was made still billed it (the
+   * PDF route reads it the same way). A label read: it never throws and asserts
+   * nothing. The page calls it only after get() has asserted the module, the
+   * permission and the warehouse rule, and every member can read the
+   * organization's charters anyway (charters_select). An error, no row or a
+   * thrown client error is 'unreadable', reported once as a degraded read, and
+   * the page says the name could not be loaded. Never the charter that owns an
+   * item's stock.
+   */
+  async readBillToCharter(charterId: string | null | undefined): Promise<BillToCharterRead> {
+    if (!charterId) return { state: 'none' };
+    try {
+      const { data, error } = await this.ctx.supabase
+        .from('charters')
+        .select('id, name, code, status')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', charterId)
+        .maybeSingle();
+      // A returned PostgREST error is a plain object: its text rides in an Error.
+      if (error) throw new Error(error.message);
+      const read = billToCharterReadFrom(data as BillToCharter | null, charterId);
+      if (read.state === 'unreadable') throw new Error('no charter row');
+      return read;
+    } catch (err) {
+      reportDegradedRead('purchase_orders.detail.bill_to', err, { ids: 1 });
+      return { state: 'unreadable', charterId };
+    }
   }
 }
 

@@ -10,6 +10,9 @@ import {
   type PoPdfLine,
   type PoPdfReceipt,
 } from './po';
+import { pdfStyles } from './styles';
+
+import { billToCharterName } from '@stockpilot/core';
 
 /**
  * Lightweight tree-walker tests for PurchaseOrderPdf. We can't actually render
@@ -253,6 +256,52 @@ describe('PurchaseOrderPdf', () => {
     expect(allText).not.toContain('North Region Campus');
     // The org line is still present under "Bill to".
     expect(allText).toContain('Acme Co');
+  });
+
+  // B56: the PO page and the phone print the bill-to charter with core's
+  // billToCharterName, and so does the PDF, so the three read the same. The
+  // bold lines under "Bill to" are the organization, then the charter.
+  const boldIdentityLines = (nodes: TreeNode[]) =>
+    nodes
+      .filter((n) => {
+        const style = n.props.style;
+        return (
+          Array.isArray(style) &&
+          style.includes(pdfStyles.bold) &&
+          style.includes(pdfStyles.identityLine)
+        );
+      })
+      .map((n) => textOf(n.props.children));
+  const charterOf = (name: string, code: string | null): PoPdfBillToCharter => ({
+    name,
+    code,
+    addressLines: [],
+    contactName: null,
+    contactEmail: null,
+    contactPhone: null,
+  });
+
+  it("prints the bill-to charter's line as the PO page does (core billToCharterName)", () => {
+    const fixture = charterOf('North Region Campus', 'NRC');
+    expect(boldIdentityLines(render({ billToCharter: fixture }))).toEqual([
+      'Acme Co',
+      billToCharterName(fixture),
+    ]);
+    expect(billToCharterName(fixture)).toBe('North Region Campus (NRC)');
+  });
+
+  it('names a charter with a blank name "Unnamed charter", never a bare code', () => {
+    expect(boldIdentityLines(render({ billToCharter: charterOf('', 'NC') }))).toEqual([
+      'Acme Co',
+      'Unnamed charter (NC)',
+    ]);
+  });
+
+  it('prints a padded name trimmed, and no empty brackets for a code of spaces', () => {
+    expect(boldIdentityLines(render({ billToCharter: charterOf(' North Campus ', ' ') }))).toEqual([
+      'Acme Co',
+      'North Campus',
+    ]);
   });
 
   it('keeps existing totals + line items intact', () => {

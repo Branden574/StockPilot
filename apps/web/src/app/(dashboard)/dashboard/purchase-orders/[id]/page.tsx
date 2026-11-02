@@ -13,6 +13,7 @@ import { PoSetDestination } from '@/components/po/po-set-destination';
 import { PoStatusBadge } from '@/components/po/po-status-badge';
 import { PoActions } from '@/components/po/po-actions';
 import { PoFileActions, PoAttachmentsList } from '@/components/po/po-attachments-panel';
+import { PoBillToRow } from '@/components/po/po-bill-to-row';
 import { ReceiptHistory } from '@/components/po/receipt-history';
 import { Button } from '@/components/ui/button';
 import {
@@ -121,7 +122,13 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   const referencedIds = Array.from(new Set([...lineItemIds, ...receiptItemIds]));
   // includeDeleted: this is historical display — a since-deleted (e.g. auto-
   // cleaned-up) item should still show its name on past lines/receipts.
-  const referencedItems = await inventorySvc.byIds(referencedIds, { includeDeleted: true });
+  // The bill-to charter (B56) is read beside them, only when the PO has one:
+  // purchase_orders.charter_id, never the charter that owns a line's stock.
+  // Its read never throws; a failure shows as "Could not be loaded".
+  const [referencedItems, billTo] = await Promise.all([
+    inventorySvc.byIds(referencedIds, { includeDeleted: true }),
+    po.charter_id ? poSvc.readBillToCharter(po.charter_id as string) : null,
+  ]);
   const itemsById = new Map(referencedItems.map((i) => [i.id, i]));
 
   const supplier = suppliers.find((s) => s.id === po.supplier_id);
@@ -315,6 +322,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
             <DetailSection title="Summary" flush>
               <KeyValueList>
                 <KeyValueRow label="Supplier">{supplierName ?? '—'}</KeyValueRow>
+                <PoBillToRow read={billTo} />
                 <KeyValueRow label="Destination">{(location?.name as string) ?? '—'}</KeyValueRow>
                 {/* A DAY stored as its UTC midnight, read in UTC: in the server's
                     zone it was the day before on any server west of UTC. */}

@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const poGet = vi.fn();
+const poReadBillTo = vi.fn();
 const inventoryByIds = vi.fn();
 const locationsList = vi.fn();
 const listForPurchaseOrder = vi.fn(async () => ({ receipts: [], lines: [] }));
@@ -83,7 +84,9 @@ vi.mock('@/components/items/item-thumb', () => ({
 }));
 
 vi.mock('@/server/services/purchase-orders', () => ({
-  PurchaseOrdersService: { forCurrentUser: vi.fn(async () => ({ get: poGet })) },
+  PurchaseOrdersService: {
+    forCurrentUser: vi.fn(async () => ({ get: poGet, readBillToCharter: poReadBillTo })),
+  },
 }));
 vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: {
@@ -227,6 +230,92 @@ describe('the PO page header', () => {
     expect(
       within(cancelled.container).queryByRole('button', { name: 'Edit PO number' }),
     ).toBeNull();
+  });
+});
+
+// B56: the Summary names the charter the purchase order is billed to
+// (purchase_orders.charter_id), right after Supplier, as its PDF prints it
+// under Bill to. Only the PO's own bill-to is read: never the charter that
+// owns a line's stock. No bill-to, no row and no read.
+describe('the PO page Summary: Bill to', () => {
+  const C = '0b000000-0000-4000-8000-0000000000c1';
+  const X = '0b000000-0000-4000-8000-0000000000e1';
+  const billed = (charterId: string | null) => {
+    const base = po();
+    return { ...base, po: { ...base.po, charter_id: charterId } };
+  };
+  const summaryRows = () => {
+    const summary = screen.getByRole('heading', { name: 'Summary' }).closest('section')!;
+    return Array.from(summary.querySelectorAll('dt')).map((dt) => [
+      dt.textContent,
+      dt.nextElementSibling?.textContent,
+    ]);
+  };
+
+  it('names the bill-to charter right after Supplier, read once by its id', async () => {
+    poGet.mockResolvedValue(billed(C));
+    poReadBillTo.mockResolvedValue({
+      state: 'found',
+      charter: { id: C, name: 'North Campus', code: 'NC', status: 'active' },
+    });
+    await renderPage();
+    expect(summaryRows()).toEqual([
+      ['Supplier', 'Lantern Peak School Supply'],
+      ['Bill to', 'North Campus (NC)'],
+      ['Destination', 'North DC Building'],
+      ['Expected', '10/9/2026'],
+      ['Subtotal', '$3,860.00'],
+      ['Total', '$3,910.00'],
+    ]);
+    expect(poReadBillTo).toHaveBeenCalledTimes(1);
+    expect(poReadBillTo).toHaveBeenCalledWith(C);
+  });
+
+  it('marks a charter archived since', async () => {
+    poGet.mockResolvedValue(billed(C));
+    poReadBillTo.mockResolvedValue({
+      state: 'found',
+      charter: { id: C, name: 'North Campus', code: 'NC', status: 'archived' },
+    });
+    await renderPage();
+    expect(summaryRows()[1]).toEqual(['Bill to', 'North Campus (NC) (archived)']);
+  });
+
+  it('still renders the page when the charter could not be read', async () => {
+    poGet.mockResolvedValue(billed(C));
+    poReadBillTo.mockResolvedValue({ state: 'unreadable', charterId: C });
+    await renderPage();
+    expect(summaryRows()[1]).toEqual(['Bill to', 'Could not be loaded']);
+    expect(screen.getAllByTestId('po-line')).toHaveLength(2);
+  });
+
+  it('has no Bill to row, and reads nothing, for a purchase order billed to no charter', async () => {
+    poGet.mockResolvedValue(billed(null));
+    await renderPage();
+    expect(poReadBillTo).not.toHaveBeenCalled();
+    expect(summaryRows().map(([label]) => label)).toEqual([
+      'Supplier',
+      'Destination',
+      'Expected',
+      'Subtotal',
+      'Total',
+    ]);
+  });
+
+  it("never takes the bill-to from the charter that owns a line's stock", async () => {
+    poGet.mockResolvedValue(billed(null));
+    inventoryByIds.mockResolvedValue([
+      {
+        id: 'item-1',
+        name: 'L4L Polo — Men’s',
+        sku: 'POLO-M',
+        tracking_type: 'none',
+        charter_id: X,
+      },
+    ]);
+    await renderPage();
+    expect(poReadBillTo).not.toHaveBeenCalled();
+    expect(summaryRows().map(([label]) => label)).not.toContain('Bill to');
   });
 });
 

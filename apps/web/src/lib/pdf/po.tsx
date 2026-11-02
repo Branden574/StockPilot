@@ -1,5 +1,7 @@
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer';
 
+import { billToCharterName } from '@stockpilot/core';
+
 import { BrandedHeader } from './branding';
 import {
   PDF_COLORS,
@@ -397,13 +399,14 @@ export function PurchaseOrderPdf({
             {/*
              * Bill-to charter (purchase_orders.charter_id) — the campus/entity
              * this PO is billed to. Renders its name, code, mailing address, and
-             * contact beneath the org so the supplier sees who to invoice.
+             * contact beneath the org so the supplier sees who to invoice. The
+             * name line is core's billToCharterName, the one the PO page and the
+             * phone print (B56).
              */}
             {billToCharter ? (
               <>
                 <Text style={[pdfStyles.bold, pdfStyles.identityLine]}>
-                  {billToCharter.name}
-                  {billToCharter.code ? ` (${billToCharter.code})` : ''}
+                  {billToCharterName(billToCharter)}
                 </Text>
                 {billToCharter.addressLines.map((line, i) => (
                   <Text key={`bca-${i}`} style={[pdfStyles.muted, pdfStyles.identityLine]}>

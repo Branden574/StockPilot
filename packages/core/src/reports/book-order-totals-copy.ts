@@ -12,6 +12,7 @@
  */
 
 import type { OrderStatusKey } from '../customization/order-status';
+import { recordStatusSuffix } from '../labels/record-status-suffix';
 import { VERIFICATION_SESSION_ENDED_COPY } from '../warehouse/verification';
 
 import {
@@ -221,15 +222,9 @@ export function bookReportStatusLine(
   return `Status: ${labels}. ${leftOut}${included}`;
 }
 
-function warehouseStatusSuffix(status: string | null | undefined): string {
-  if (status === 'archived') return ' (archived)';
-  if (status === 'inactive') return ' (inactive)';
-  return '';
-}
-
 /** A warehouse as a filter option: 'North', 'North (archived)'. */
 export function bookReportWarehouseOptionLabel(w: { name: string; status: string }): string {
-  return `${w.name}${warehouseStatusSuffix(w.status)}`;
+  return `${w.name}${recordStatusSuffix(w.status)}`;
 }
 
 /** A category as a filter option: 'Fiction', 'Fiction (deleted)'. */
@@ -249,7 +244,7 @@ export function bookReportWarehouseLine(
 ): string {
   if (!warehouse) return `Warehouse: ${BOOK_REPORT_ALL_WAREHOUSES}`;
   const view = source === 'view' ? ' (your warehouse view)' : '';
-  return `Warehouse: ${warehouse.name}${warehouseStatusSuffix(warehouse.status)}${view}`;
+  return `Warehouse: ${warehouse.name}${recordStatusSuffix(warehouse.status)}${view}`;
 }
 
 /** 'Category: Fiction', 'Category: Fiction (deleted)', 'Category: No
@@ -319,7 +314,7 @@ export function bookReportCharterOptionLabel(c: {
   const name = (c.name ?? '').trim() || 'Unnamed charter';
   const code = (c.code ?? '').trim();
   const withCode = code && code.toLowerCase() !== name.toLowerCase() ? `${name} · ${code}` : name;
-  return `${withCode}${warehouseStatusSuffix(c.status)}`;
+  return `${withCode}${recordStatusSuffix(c.status)}`;
 }
 
 /**
