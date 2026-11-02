@@ -16,7 +16,7 @@ import {
 } from './context';
 import { keepAlive } from './lib/defer';
 import { listRows } from './lib/list-rows';
-import { postgrestErrorText } from './lib/postgrest-error';
+import { isPermanentRefusal, postgrestErrorText } from './lib/postgrest-error';
 
 /**
  * Outbound event delivery — the engine behind generic webhooks + Slack/Teams
@@ -125,7 +125,8 @@ export const WEBHOOK_DRAIN_SHARE_MS = CLAIM_LEASE_MS + 7_000;
  * insert, again after a failure: three tries in all (docket B82). A brief
  * failure lost the event, because the cron retries only deliveries that
  * exist. A read changes nothing, and the delivery ids are chosen before the
- * first try, so either step is safe to repeat on any failure.
+ * first try, so either step is safe to repeat. Each wait is its delay times
+ * 0.5 to 1.5 (withDispatchRetries).
  */
 export const DISPATCH_RETRY_DELAYS_MS = [1_000, 3_000];
 /** Backoff: ~1m, 2m, 4m, 8m, 16m, capped at 30m. */
@@ -485,8 +486,34 @@ export function dispatchEvent(
 }
 
 /**
- * Runs `step` until it resolves, waiting DISPATCH_RETRY_DELAYS_MS between
- * tries; the last try's failure is thrown.
+ * A dispatch step's failed database call, with the code it was refused with,
+ * so withDispatchRetries can tell a refusal the same request meets again from
+ * a brief failure.
+ */
+class DispatchStepError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null,
+  ) {
+    super(message);
+    this.name = 'DispatchStepError';
+  }
+}
+
+/**
+ * Runs `step` until it resolves, at most three tries; the last try's failure
+ * is thrown. Between tries it waits each DISPATCH_RETRY_DELAYS_MS delay times
+ * 0.5 to 1.5, so the dispatches one brief failure stopped together do not all
+ * try again in the same moment. A refusal the same request meets again
+ * (isPermanentRefusal: bad data, a constraint, a missing table, column or
+ * right, PostgREST refusing the request) is thrown at once: a retry cannot
+ * change it (integrator R4).
+ *
+ * No deadline: every caller fires dispatchEvent around its response, kept
+ * alive past it (keepAlive; order-requests through defer), and none has a
+ * deadline of its own, so a step takes at most its three tries and 6 s of
+ * waiting. A caller that has a deadline must pass it in, and this must then
+ * stop at it.
  */
 async function withDispatchRetries<T>(step: () => Promise<T>): Promise<T> {
   for (let attempt = 0; ; attempt++) {
@@ -495,7 +522,8 @@ async function withDispatchRetries<T>(step: () => Promise<T>): Promise<T> {
     } catch (e) {
       const delay = DISPATCH_RETRY_DELAYS_MS[attempt];
       if (delay === undefined) throw e;
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (e instanceof DispatchStepError && isPermanentRefusal(e)) throw e;
+      await new Promise((resolve) => setTimeout(resolve, delay * (0.5 + Math.random())));
     }
   }
 }
@@ -520,8 +548,9 @@ async function dispatchEventNow(
         .eq('enabled', true)
         .contains('event_types', [eventType]);
       if (endpointsRes.error) {
-        throw new Error(
+        throw new DispatchStepError(
           `integration_endpoints select: ${postgrestErrorText(endpointsRes.error, endpointsRes)}`,
+          endpointsRes.error.code ?? null,
         );
       }
       return listRows<EndpointRow>('integration_endpoints', endpointsRes);
@@ -554,8 +583,9 @@ async function dispatchEventNow(
         .select('id, endpoint_id, event_type, payload, attempts, max_attempts');
       // A failed insert lost the event's deliveries just the same: reported below.
       if (insertRes.error) {
-        throw new Error(
+        throw new DispatchStepError(
           `integration_deliveries insert: ${postgrestErrorText(insertRes.error, insertRes)}`,
+          insertRes.error.code ?? null,
         );
       }
       return listRows<DeliveryRow>('integration_deliveries', insertRes);

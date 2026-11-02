@@ -59,3 +59,20 @@ export function isDefiniteRefusal(error: PostgrestLikeError | null | undefined):
   const code = typeof error?.code === 'string' ? error.code : '';
   return /^[0-9A-Z]{5}$/.test(code) || /^PGRST\d{3}$/.test(code);
 }
+
+/**
+ * Whether a failed PostgREST call was refused for a reason the same request
+ * meets again, so trying it again cannot succeed (docket B82): the database
+ * rejected the data (SQLSTATE class 22), a constraint (class 23), or the
+ * statement or the caller's right to run it (class 42); or PostgREST refused
+ * the request itself (PGRST1xx), could not find what it names in its schema
+ * cache (PGRST2xx), or refused the credentials (PGRST3xx). Narrower than
+ * isDefiniteRefusal on purpose: a serialization failure (40001), a deadlock
+ * (40P01), a statement timeout (57014), a lost or refused connection (08xxx,
+ * 53xxx) and PostgREST's own connection errors (PGRST000-003) are definite
+ * answers too, but brief, and a retry is what they need.
+ */
+export function isPermanentRefusal(error: PostgrestLikeError | null | undefined): boolean {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  return /^(22|23|42)[0-9A-Z]{3}$/.test(code) || /^PGRST[123]\d{2}$/.test(code);
+}

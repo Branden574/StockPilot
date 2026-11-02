@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isDefiniteRefusal, postgrestErrorText } from './postgrest-error';
+import { isDefiniteRefusal, isPermanentRefusal, postgrestErrorText } from './postgrest-error';
 
 describe('postgrestErrorText', () => {
   it('returns a non-empty message unchanged', () => {
@@ -51,5 +51,60 @@ describe('isDefiniteRefusal (F1-5: did the call surely not commit?)', () => {
     ]) {
       expect(isDefiniteRefusal(error)).toBe(false);
     }
+  });
+});
+
+describe('isPermanentRefusal (B82, integrator R4: will the same request be refused again?)', () => {
+  it('bad data, a constraint, a missing table, column or right, or PostgREST refusing the request', () => {
+    for (const code of [
+      '22P02',
+      '22001',
+      '23502',
+      '23503',
+      '23505',
+      '42501',
+      '42P01',
+      '42703',
+      'PGRST100',
+      'PGRST116',
+      'PGRST204',
+      'PGRST205',
+      'PGRST300',
+      'PGRST301',
+    ]) {
+      expect(isPermanentRefusal({ message: 'x', code })).toBe(true);
+    }
+  });
+
+  it('a brief failure is not, though isDefiniteRefusal counts it: a retry is what it needs', () => {
+    for (const code of [
+      '40001',
+      '40P01',
+      '57014',
+      '08006',
+      '53300',
+      'PGRST000',
+      'PGRST001',
+      'PGRST002',
+      'PGRST003',
+    ]) {
+      expect(isDefiniteRefusal({ message: 'x', code })).toBe(true);
+      expect(isPermanentRefusal({ message: 'x', code })).toBe(false);
+    }
+  });
+
+  it('no code, or one that is not a SQLSTATE or a PGRST code, is not', () => {
+    for (const error of [
+      { message: 'TypeError: fetch failed', code: '' },
+      { message: 'Bad Gateway' },
+      { message: '', code: null },
+      { message: 'x', code: 'ECONNRESET' },
+      { message: 'x', code: '2350' },
+      { message: 'x', code: 'PGRST10' },
+    ]) {
+      expect(isPermanentRefusal(error)).toBe(false);
+    }
+    expect(isPermanentRefusal(null)).toBe(false);
+    expect(isPermanentRefusal(undefined)).toBe(false);
   });
 });

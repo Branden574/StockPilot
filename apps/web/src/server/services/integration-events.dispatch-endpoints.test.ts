@@ -13,6 +13,12 @@
  * changes nothing, and the delivery ids are chosen before the first try and
  * inserted with ON CONFLICT (id) DO NOTHING, so a repeated insert cannot queue
  * a delivery twice. Only the third failure is reported, with the organization.
+ *
+ * Integrator R4 (2026-11-02): a refusal that the same request meets again
+ * (bad data, a constraint, a missing table, column or right, PostgREST
+ * refusing the request) is reported after one try, and each wait is its delay
+ * times 0.5 to 1.5, so dispatches that one brief failure stopped together do
+ * not all try again in the same moment.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -206,7 +212,7 @@ describe('dispatchEvent: the delivery insert', () => {
     expect(dispatchReports).toEqual([]);
   });
 
-  it('an insert refused three times is tried three times with the same ids, and reported with the organization', async () => {
+  it('an insert refused by a constraint is tried once, and reported with the organization', async () => {
     const { stub, dispatchReports } = await dispatchWith(
       { data: [ENDPOINT], error: null },
       {
@@ -218,10 +224,7 @@ describe('dispatchEvent: the delivery insert', () => {
         },
       },
     );
-    const upserts = stub.chainArgsAll.get('integration_deliveries.insert') ?? [];
-    expect(upserts).toHaveLength(3);
-    const ids = upserts.map((args) => (args[0]?.[0] as Array<{ id: string }>)[0]!.id);
-    expect(new Set(ids).size).toBe(1);
+    expect(stub.chainArgsAll.get('integration_deliveries.insert') ?? []).toHaveLength(1);
     expect(dispatchReports).toHaveLength(1);
     expect((dispatchReports[0]?.[0] as Error).message).toBe(
       'integration_deliveries insert: insert or update on table "integration_deliveries" violates foreign key constraint',
@@ -271,5 +274,146 @@ describe('dispatchEvent: the delivery insert', () => {
     expect(stub.chainsAll.get('integration_deliveries.insert')).toHaveLength(2);
     expect(stub.chainsAll.get('integration_deliveries.update') ?? []).toHaveLength(0);
     expect(dispatchReports).toEqual([]);
+  });
+});
+
+describe('dispatchEvent: which failures are tried again (integrator R4)', () => {
+  /** Refusals the same request meets again: SQLSTATE classes 22, 23 and 42,
+   *  and PostgREST's PGRST1xx, PGRST2xx and PGRST3xx. */
+  const REFUSALS: Array<[string, string]> = [
+    ['22P02', 'invalid input syntax for type uuid: "x"'],
+    ['23502', 'null value in column "organization_id" violates not-null constraint'],
+    ['23505', 'duplicate key value violates unique constraint'],
+    ['42501', 'permission denied for table integration_endpoints'],
+    ['42P01', 'relation "public.integration_endpoints" does not exist'],
+    ['PGRST100', 'failed to parse filter'],
+    ['PGRST204', "Could not find the 'event_types' column in the schema cache"],
+    ['PGRST301', 'JWSError JWSInvalidSignature'],
+  ];
+  /** Brief failures: they are what B82 retries. */
+  const BRIEF: Array<[string, QueryResult]> = [
+    [
+      '40001 (serialization failure)',
+      {
+        data: null,
+        error: { message: 'could not serialize access due to concurrent update', code: '40001' },
+      },
+    ],
+    [
+      '57014 (statement timeout)',
+      {
+        data: null,
+        error: { message: 'canceling statement due to statement timeout', code: '57014' },
+      },
+    ],
+    [
+      'PGRST002 (schema cache)',
+      {
+        data: null,
+        error: {
+          message: 'Could not query the database for the schema cache. Retrying.',
+          code: 'PGRST002',
+        },
+      },
+    ],
+    [
+      'a fetch that threw, as postgrest-js resolves it',
+      {
+        data: null,
+        error: { message: 'TypeError: fetch failed', code: '' },
+        status: 0,
+        statusText: '',
+      } as unknown as QueryResult,
+    ],
+  ];
+
+  it.each(REFUSALS)('a read refused with %s is tried once and reported', async (code, message) => {
+    const { stub, dispatchReports } = await dispatchWith({
+      data: null,
+      error: { message, code },
+    });
+    expect(stub.chainsAll.get('integration_endpoints.select')).toHaveLength(1);
+    expect(dispatchReports).toHaveLength(1);
+    expect((dispatchReports[0]?.[0] as Error).message).toBe(
+      `integration_endpoints select: ${message}`,
+    );
+    expect(dispatchReports[0]?.[1]).toEqual(EXPECTED_REPORT_CONTEXT);
+  });
+
+  it.each(REFUSALS)(
+    'an insert refused with %s is tried once and reported',
+    async (code, message) => {
+      const { stub, dispatchReports } = await dispatchWith(
+        { data: [ENDPOINT], error: null },
+        { data: null, error: { message, code } },
+      );
+      expect(stub.chainsAll.get('integration_deliveries.insert')).toHaveLength(1);
+      expect(dispatchReports).toHaveLength(1);
+      expect((dispatchReports[0]?.[0] as Error).message).toBe(
+        `integration_deliveries insert: ${message}`,
+      );
+    },
+  );
+
+  it.each(BRIEF)('a read that met %s is tried three times', async (_failure, answer) => {
+    const { stub, dispatchReports } = await dispatchWith(answer);
+    expect(stub.chainsAll.get('integration_endpoints.select')).toHaveLength(3);
+    expect(dispatchReports).toHaveLength(1);
+  });
+
+  it.each(BRIEF)('an insert that met %s is tried three times', async (_failure, answer) => {
+    const { stub, dispatchReports } = await dispatchWith({ data: [ENDPOINT], error: null }, answer);
+    expect(stub.chainsAll.get('integration_deliveries.insert')).toHaveLength(3);
+    expect(dispatchReports).toHaveLength(1);
+  });
+
+  it('a read whose request threw is tried three times', async () => {
+    const { stub, dispatchReports } = await dispatchWith(() => {
+      throw new TypeError('fetch failed');
+    });
+    expect(stub.chainsAll.get('integration_endpoints.select')).toHaveLength(3);
+    expect(dispatchReports).toHaveLength(1);
+    expect((dispatchReports[0]?.[0] as Error).message).toBe('fetch failed');
+  });
+});
+
+describe('dispatchEvent: the waits between tries (integrator R4)', () => {
+  /** Dispatches with a read that always fails, and counts the reads as the
+   *  fake clock moves. */
+  async function readsOverTime(random: number, steps: Array<[advanceMs: number, reads: number]>) {
+    vi.spyOn(Math, 'random').mockReturnValue(random);
+    const stub = makeSupabaseStub({
+      'integration_endpoints.select': emptyGatewayAnswer(502, 'Bad Gateway'),
+    });
+    adminHolder.client = stub.client;
+    const done = dispatchEvent('org-1', 'order.approved', { orderId: 'order-1' });
+    const seen: number[] = [];
+    for (const [advanceMs] of steps) {
+      await vi.advanceTimersByTimeAsync(advanceMs);
+      seen.push(stub.chainsAll.get('integration_endpoints.select')?.length ?? 0);
+    }
+    await vi.runAllTimersAsync();
+    await done;
+    expect(seen).toEqual(steps.map(([, reads]) => reads));
+  }
+
+  it('each wait is its delay times 0.5 at the least: 0.5 s, then 1.5 s', async () => {
+    await readsOverTime(0, [
+      [0, 1],
+      [499, 1],
+      [1, 2],
+      [1_499, 2],
+      [1, 3],
+    ]);
+  });
+
+  it('and times 1.5 at the most: just under 1.5 s, then just under 4.5 s', async () => {
+    await readsOverTime(0.999, [
+      [0, 1],
+      [1_498, 1],
+      [1, 2],
+      [4_496, 2],
+      [1, 3],
+    ]);
   });
 });
