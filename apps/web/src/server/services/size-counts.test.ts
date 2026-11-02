@@ -26,6 +26,15 @@ vi.mock('@/lib/auth/session', () => ({
   })),
 }));
 
+// The training-sample photos are signed with the service-role client (the
+// listTrainingSamples suite below); no other suite here reaches it.
+const { adminHolder, reportError } = vi.hoisted(() => ({
+  adminHolder: { client: null as unknown },
+  reportError: vi.fn(async (_err: unknown, _context: unknown) => undefined),
+}));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.client }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+
 import { SizeCountsService } from './size-counts';
 
 const withIsc = new Set<ModuleId>([...DEFAULT_MODULE_IDS, 'instant_size_count']);
@@ -392,5 +401,81 @@ describe('SizeCountsService.getSession — group context for the tally screen', 
     const res = await svc.getSession('s3');
     expect(res.group).toBeNull();
     expect(res.tally).toEqual([{ size: '10', quantity: 4 }]);
+  });
+});
+
+/**
+ * The training-sample grid's photos are signed in ONE createSignedUrls call
+ * (one path a sample; the read is limited to at most 1,000 rows, the most one
+ * call takes). A failed call was ignored: every sample came back without a
+ * photo and nothing was reported (B20a). It is reported now; the samples
+ * still come back as before, each with a null url.
+ */
+describe('SizeCountsService.listTrainingSamples — signing the photos', () => {
+  const samples = [
+    {
+      id: 's-2',
+      size_label: 'M',
+      is_negative: false,
+      image_storage_path: 'org-test/s-2.webp',
+      captured_at: '2026-10-02T10:00:00Z',
+    },
+    {
+      id: 's-1',
+      size_label: 'L',
+      is_negative: true,
+      image_storage_path: 'org-test/s-1.webp',
+      captured_at: '2026-10-01T10:00:00Z',
+    },
+  ];
+
+  function arrange(answer: { data: unknown; error: unknown }) {
+    const stub = makeSupabaseStub({
+      'size_count_training_samples.select': { data: samples, error: null },
+    });
+    const admin = makeSupabaseStub({});
+    const createSignedUrls = vi.fn(async (_paths: string[], _ttl: number) => answer);
+    admin.client.storage.from = vi.fn(() => ({ createSignedUrls }));
+    adminHolder.client = admin.client;
+    const svc = new SizeCountsService(
+      makeServiceContext(stub.client, { organizationId: 'org-test', enabledModules: withIsc }),
+    );
+    return { svc, createSignedUrls };
+  }
+
+  it('signs every sample in one call and reports nothing when it works', async () => {
+    const { svc, createSignedUrls } = arrange({
+      data: samples.map((s) => ({
+        path: s.image_storage_path,
+        signedUrl: `https://signed.example/${s.image_storage_path}`,
+        error: null,
+      })),
+      error: null,
+    });
+    const listed = await svc.listTrainingSamples();
+    expect(createSignedUrls).toHaveBeenCalledTimes(1);
+    expect(listed.map((s) => s.url)).toEqual(
+      samples.map((s) => `https://signed.example/${s.image_storage_path}`),
+    );
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  // Mutation caught: the call's error ignored again.
+  it('a failed signing call is reported once, and the samples still come back, each without a photo', async () => {
+    const failure = Object.assign(new Error('fetch failed'), { name: 'StorageUnknownError' });
+    const { svc } = arrange({ data: null, error: failure });
+    const listed = await svc.listTrainingSamples();
+    expect(listed.map((s) => [s.id, s.sizeLabel, s.url])).toEqual([
+      ['s-2', 'M', null],
+      ['s-1', 'L', null],
+    ]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [err, context] = reportError.mock.calls[0]!;
+    expect(err).toBe(failure);
+    expect(context).toMatchObject({
+      tag: 'size-counts.samples.sign',
+      organizationId: 'org-test',
+      extra: { samples: 2 },
+    });
   });
 });

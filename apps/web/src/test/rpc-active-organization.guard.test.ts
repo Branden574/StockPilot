@@ -133,7 +133,6 @@ const REGISTRY: Record<string, Entry> = {
     'not_org_data',
     'Scheduled purge of old AI chat history in every organization; no active organization.',
   ],
-  'app/api/orders/freq/route.ts::order_request_top_skus_for_warehouse': RO(),
   'app/api/orders/sign/route.ts::confirm_order_signature': [
     'not_org_data',
     'Public sign link: the signature token names the order; no active organization.',

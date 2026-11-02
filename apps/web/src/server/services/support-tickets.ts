@@ -298,6 +298,8 @@ export async function listMyTickets(opts: {
 export async function createAttachmentSignedUrls(paths: string[]): Promise<Record<string, string>> {
   if (paths.length === 0) return {};
   const admin = createAdminClient();
+  // sign-bound: one path a ticket, and the one caller (the platform support
+  // page) passes the tickets listSupportTickets reads, at most 500.
   const { data, error } = await admin.storage
     .from('support-attachments')
     .createSignedUrls(paths, 60 * 60);
