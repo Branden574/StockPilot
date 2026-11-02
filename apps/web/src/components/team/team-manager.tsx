@@ -108,6 +108,13 @@ interface Member {
   disabledAt: string | null;
 }
 
+/** A charter a member holds that the active charter list lacks (S44). */
+interface UnlistedCharter {
+  id: string;
+  name: string;
+  status: 'active' | 'inactive' | 'archived';
+}
+
 interface PendingInvite {
   id: string;
   email: string;
@@ -121,6 +128,11 @@ interface TeamManagerProps {
   members: Member[];
   pendingInvites: PendingInvite[];
   charters: Array<{ id: string; name: string }>;
+  /** Charters that members hold and `charters` (the active list) lacks, by id,
+   *  with name and status: an archived or inactive charter keeps its links and
+   *  assignments, so the member Charters dialog names it and keeps it (S44).
+   *  Labels only; empty when none is held or the read failed. */
+  unlistedCharters?: UnlistedCharter[];
   warehouses: Array<{ id: string; name: string }>;
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   /** All active categories in the org. Drives the viewer category-access
@@ -152,6 +164,7 @@ export function TeamManager({
   members,
   pendingInvites,
   charters,
+  unlistedCharters = [],
   warehouses,
   warehouseCharters,
   allCategories,
@@ -205,6 +218,7 @@ export function TeamManager({
                 allCategories={allCategories}
                 initiallyGranted={grantsByUser[m.userId] ?? []}
                 charters={charters}
+                unlistedCharters={unlistedCharters}
                 warehouses={warehouses}
                 warehouseCharters={warehouseCharters}
                 charterSingular={charterSingular}
@@ -259,6 +273,7 @@ function MemberRow({
   allCategories,
   initiallyGranted,
   charters,
+  unlistedCharters,
   warehouses,
   warehouseCharters,
   charterSingular,
@@ -270,6 +285,7 @@ function MemberRow({
   allCategories: Array<{ id: string; name: string }>;
   initiallyGranted: string[];
   charters: Array<{ id: string; name: string }>;
+  unlistedCharters: UnlistedCharter[];
   warehouses: Array<{ id: string; name: string }>;
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   charterSingular: string;
@@ -614,6 +630,7 @@ function MemberRow({
             displayName={displayName}
             currentCharterIds={member.charterIds}
             charters={charters}
+            unlistedCharters={unlistedCharters}
             warehouseCharters={warehouseCharters}
             charterSingular={charterSingular}
             warehouseSingular={warehouseSingular}
@@ -861,6 +878,12 @@ function CharterChecklist({
  * Per-member charter editor. Reconciles which charters an existing member
  * oversees at their (primary) warehouse via setMemberChartersAction. Empty
  * selection = "all charters" at that warehouse.
+ *
+ * The save REPLACES the member's set with what is ticked, so the dialog lists
+ * every charter the member holds: the active ones the warehouse links, then
+ * any held charter the active list lacks (an archived or inactive charter
+ * keeps its links and assignments), ticked and named '(archived)' or
+ * '(inactive)' (S44). A save keeps each one unless it is unticked.
  */
 function MemberChartersDialog({
   open,
@@ -870,6 +893,7 @@ function MemberChartersDialog({
   displayName,
   currentCharterIds,
   charters,
+  unlistedCharters,
   warehouseCharters,
   charterSingular,
   warehouseSingular,
@@ -881,28 +905,61 @@ function MemberChartersDialog({
   displayName: string;
   currentCharterIds: string[];
   charters: Array<{ id: string; name: string }>;
+  unlistedCharters: UnlistedCharter[];
   warehouseCharters: Array<{ warehouse_id: string; charter_id: string }>;
   charterSingular: string;
   warehouseSingular: string;
 }) {
   const router = useRouter();
 
-  // Charters this member's warehouse actually services.
-  const chartersForWarehouse = React.useMemo(() => {
-    const allowed = new Set(
-      warehouseCharters.filter((wc) => wc.warehouse_id === warehouseId).map((wc) => wc.charter_id),
-    );
-    return charters.filter((c) => allowed.has(c.id));
-  }, [charters, warehouseCharters, warehouseId]);
+  // Every charter this member's warehouse links, at any status.
+  const linkedIds = React.useMemo(
+    () =>
+      new Set(
+        warehouseCharters
+          .filter((wc) => wc.warehouse_id === warehouseId)
+          .map((wc) => wc.charter_id),
+      ),
+    [warehouseCharters, warehouseId],
+  );
 
-  // Seed selection from the member's current charters (pruned to ones the
-  // warehouse still services). The parent remounts this component with a fresh
-  // `key` each time the dialog opens, so this initializer re-reads props after a
-  // save + router.refresh() — no re-seed effect needed.
-  const [selected, setSelected] = React.useState<string[]>(() => {
-    const allowed = new Set(chartersForWarehouse.map((c) => c.id));
-    return currentCharterIds.filter((id) => allowed.has(id));
-  });
+  // The active charters it links: the ones offered to pick.
+  const chartersForWarehouse = React.useMemo(
+    () => charters.filter((c) => linkedIds.has(c.id)),
+    [charters, linkedIds],
+  );
+
+  // Then every charter the member holds that those rows lack, named from the
+  // active list or the page's read: '{name} (archived)', '{name} (inactive)',
+  // or a neutral label when the read failed (never the id). Shown so a save
+  // never drops a charter the admin could not see.
+  const heldRows = React.useMemo(() => {
+    const offered = new Set(chartersForWarehouse.map((c) => c.id));
+    const activeName = new Map(charters.map((c) => [c.id, c.name]));
+    const unlisted = new Map(unlistedCharters.map((c) => [c.id.toLowerCase(), c]));
+    return [...new Set(currentCharterIds)]
+      .filter((id) => !offered.has(id))
+      .map((id) => {
+        const listed = activeName.get(id);
+        if (listed !== undefined) return { id, name: listed };
+        const row = unlisted.get(id.toLowerCase());
+        const name = row?.name.trim();
+        if (!row || !name) {
+          return { id, name: `${charterSingular} (name could not be loaded)` };
+        }
+        if (row.status === 'archived') return { id, name: `${name} (archived)` };
+        if (row.status === 'inactive') return { id, name: `${name} (inactive)` };
+        return { id, name };
+      });
+  }, [chartersForWarehouse, charters, unlistedCharters, currentCharterIds, charterSingular]);
+
+  // Seed selection from EVERY charter the member holds, never pruned: an
+  // assignment cannot outlive its warehouse link (the foreign key cascades),
+  // and one the active list lacks is listed above, so what is ticked is what
+  // they hold. The parent remounts this component with a fresh `key` each time
+  // the dialog opens, so this initializer re-reads props after a save +
+  // router.refresh() — no re-seed effect needed.
+  const [selected, setSelected] = React.useState<string[]>(() => [...new Set(currentCharterIds)]);
   const [busy, setBusy] = React.useState(false);
 
   const toggleCharter = (id: string) => {
@@ -935,11 +992,17 @@ function MemberChartersDialog({
         </DialogHeader>
         <div className="space-y-1.5">
           <CharterChecklist
-            charters={chartersForWarehouse}
+            charters={[...chartersForWarehouse, ...heldRows]}
             selected={selected}
             onToggle={toggleCharter}
             disabled={busy}
-            emptyHint={`This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s — this member already sees all stock at this ${warehouseSingular.toLowerCase()}.`}
+            emptyHint={
+              // Shown only with no row at all, so the member holds no charter
+              // here and sees all of this warehouse's stock.
+              linkedIds.size > 0
+                ? `This ${warehouseSingular.toLowerCase()} has no active ${charterSingular.toLowerCase()}s linked. Restore one in Admin → ${charterSingular}s or link one in Admin → ${warehouseSingular}s — this member already sees all stock at this ${warehouseSingular.toLowerCase()}.`
+                : `This ${warehouseSingular.toLowerCase()} has no ${charterSingular.toLowerCase()}s linked yet. Link some in Admin → ${warehouseSingular}s — this member already sees all stock at this ${warehouseSingular.toLowerCase()}.`
+            }
           />
           <p className="text-muted-foreground text-[12px]">
             {selected.length > 0
