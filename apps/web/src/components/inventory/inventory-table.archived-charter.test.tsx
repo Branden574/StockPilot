@@ -255,4 +255,30 @@ describe('the Charter cell names an archived charter (B97)', () => {
     expect(group).not.toBeNull();
     expect(cardMeta(container, group.getAttribute('data-group-key')!)).toMatch(/OC \(archived\)$/);
   });
+
+  it('grid group cards leave out an unknown charter, with no stray dot', () => {
+    // A size run and a SKU family (two placements of one SKU), each tagged to
+    // a charter the lookup does not know: the header shows nothing for it.
+    const items = [
+      row('hood-s', { name: 'Hoodie - S', sku: 'HOOD-S', charter_id: UNKNOWN }),
+      row('hood-m', { name: 'Hoodie - M', sku: 'HOOD-M', charter_id: UNKNOWN }),
+      row('mug-a', { name: 'Mug', sku: 'MUG-1', charter_id: UNKNOWN }),
+      row('mug-b', { name: 'Mug', sku: 'MUG-1', charter_id: UNKNOWN }),
+    ];
+    const { container } = renderTable({
+      initialView: 'grid',
+      items: items as never,
+      total: items.length,
+    });
+    const style = container.querySelector(
+      '[data-slot="grid-card"][data-group-key^="style-group:"]',
+    );
+    const sku = container.querySelector(
+      '[data-slot="grid-card"][data-group-key="sku-group:MUG-1"]',
+    );
+    expect(style).not.toBeNull();
+    expect(sku).not.toBeNull();
+    expect(cardMeta(container, style!.getAttribute('data-group-key')!)).toBe('Swag');
+    expect(cardMeta(container, 'sku-group:MUG-1')).toBe('Swag');
+  });
 });

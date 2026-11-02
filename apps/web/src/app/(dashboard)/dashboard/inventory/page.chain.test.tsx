@@ -400,6 +400,8 @@ describe('Items page: the Charter cell names archived charters (B97)', () => {
     render(await callPage({ sort: 'name_asc' }));
     expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
     expect(charterLookup().get('ch-9')).toMatchObject({ status: 'archived' });
+    // The Charter filter keeps offering active charters only.
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
   });
 
   it("staff, live path: from the member's own read of the archived and inactive charters", async () => {

@@ -350,6 +350,33 @@ describe('Books page: the Charter cell names archived charters (B97)', () => {
     expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
   });
 
+  it('manager, default view over the instant cap: from the cached list', async () => {
+    // No instant dataset (over the cap), so the default view is served by the
+    // cached list; only that payload names the archived charter.
+    m.loadInventoryDataset.mockImplementation(async () => null);
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [BOOK],
+      total: 1,
+      valueOnHand: 3,
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+      trends: {},
+      expectedCount: 0,
+    }));
+    render(await callPage());
+    expect(m.loadInventoryList).toHaveBeenCalled();
+    expect(m.inventoryList).not.toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).not.toHaveProperty('instant');
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(charterLookup().get('ch-1')).toEqual({ name: 'North Campus', code: 'NC' });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
   it("staff: from the member's own read of the archived and inactive charters", async () => {
     h.role = 'staff';
     m.charterLabels.mockImplementation(async () => [ARCHIVED]);
