@@ -3,6 +3,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -22,9 +25,33 @@ import { BulkPlaceDialog, type BulkPlaceRow } from './bulk-place-dialog';
 // The 2026-07-23 incident warehouse: 1-A and 10-A exist, no 100-A. Plus a crate.
 const DESTINATIONS_MAP = {
   'wh-1': [
-    { id: 'r-1a', name: '1-A', kind: 'rack', rackNumber: '1', rackRow: 'A', crateColor: null, crateNumber: null },
-    { id: 'r-10a', name: '10-A', kind: 'rack', rackNumber: '10', rackRow: 'A', crateColor: null, crateNumber: null },
-    { id: 'c-red7', name: 'Red #7', kind: 'crate', rackNumber: null, rackRow: null, crateColor: 'red', crateNumber: '7' },
+    {
+      id: 'r-1a',
+      name: '1-A',
+      kind: 'rack',
+      rackNumber: '1',
+      rackRow: 'A',
+      crateColor: null,
+      crateNumber: null,
+    },
+    {
+      id: 'r-10a',
+      name: '10-A',
+      kind: 'rack',
+      rackNumber: '10',
+      rackRow: 'A',
+      crateColor: null,
+      crateNumber: null,
+    },
+    {
+      id: 'c-red7',
+      name: 'Red #7',
+      kind: 'crate',
+      rackNumber: null,
+      rackRow: null,
+      crateColor: 'red',
+      crateNumber: '7',
+    },
   ],
 };
 
@@ -36,30 +63,63 @@ function storage(color: string | null, number: string | null): BookStorageInfo {
     crateNumber: number,
     grade: null,
     rackLabel: null,
-    crateLabel: number ? `${color ? color[0]!.toUpperCase() + color.slice(1) : ''} ${number}`.trim() : null,
+    crateLabel: number
+      ? `${color ? color[0]!.toUpperCase() + color.slice(1) : ''} ${number}`.trim()
+      : null,
   };
 }
 
 // Books with NOTHING recorded — a first assignment is never a confirmation, so
 // these keep the rack-guard tests measuring only the rack guard.
 const ROWS: BulkPlaceRow[] = [
-  { itemId: 'i-1', name: 'Persepolis', itemType: 'book', sourceLocationId: 'stg-1', quantity: 140, warehouseId: 'wh-1', bookStorage: storage(null, null) },
-  { itemId: 'i-2', name: 'Maus I', itemType: 'book', sourceLocationId: 'stg-1', quantity: 40, warehouseId: 'wh-1', bookStorage: storage(null, null) },
+  {
+    itemId: 'i-1',
+    name: 'Persepolis',
+    itemType: 'book',
+    sourceLocationId: 'stg-1',
+    quantity: 140,
+    warehouseId: 'wh-1',
+    bookStorage: storage(null, null),
+  },
+  {
+    itemId: 'i-2',
+    name: 'Maus I',
+    itemType: 'book',
+    sourceLocationId: 'stg-1',
+    quantity: 40,
+    warehouseId: 'wh-1',
+    bookStorage: storage(null, null),
+  },
 ];
 
 /** 8 books: 4 in Blue 4, 2 in Green 2, 2 with nothing recorded. */
 const EIGHT_BOOKS: BulkPlaceRow[] = [
   ...Array.from({ length: 4 }, (_, i) => ({
-    itemId: `blue-${i}`, name: `Blue book ${i}`, itemType: 'book',
-    sourceLocationId: 'stg-1', quantity: 1, warehouseId: 'wh-1', bookStorage: storage('blue', '4'),
+    itemId: `blue-${i}`,
+    name: `Blue book ${i}`,
+    itemType: 'book',
+    sourceLocationId: 'stg-1',
+    quantity: 1,
+    warehouseId: 'wh-1',
+    bookStorage: storage('blue', '4'),
   })),
   ...Array.from({ length: 2 }, (_, i) => ({
-    itemId: `green-${i}`, name: `Green book ${i}`, itemType: 'book',
-    sourceLocationId: 'stg-1', quantity: 1, warehouseId: 'wh-1', bookStorage: storage('green', '2'),
+    itemId: `green-${i}`,
+    name: `Green book ${i}`,
+    itemType: 'book',
+    sourceLocationId: 'stg-1',
+    quantity: 1,
+    warehouseId: 'wh-1',
+    bookStorage: storage('green', '2'),
   })),
   ...Array.from({ length: 2 }, (_, i) => ({
-    itemId: `none-${i}`, name: `Unrecorded book ${i}`, itemType: 'book',
-    sourceLocationId: 'stg-1', quantity: 1, warehouseId: 'wh-1', bookStorage: storage(null, null),
+    itemId: `none-${i}`,
+    name: `Unrecorded book ${i}`,
+    itemType: 'book',
+    sourceLocationId: 'stg-1',
+    quantity: 1,
+    warehouseId: 'wh-1',
+    bookStorage: storage(null, null),
   })),
 ];
 
@@ -178,7 +238,15 @@ describe('BulkPlaceDialog — new-rack confirmation (2026-07-23 incident)', () =
 
 const MIXED: BulkPlaceRow[] = [
   ROWS[0]!,
-  { itemId: 'i-3', name: 'Acer Chromebook', itemType: 'product', sourceLocationId: 'stg-1', quantity: 5, warehouseId: 'wh-1', bookStorage: null },
+  {
+    itemId: 'i-3',
+    name: 'Acer Chromebook',
+    itemType: 'product',
+    sourceLocationId: 'stg-1',
+    quantity: 5,
+    warehouseId: 'wh-1',
+    bookStorage: null,
+  },
 ];
 
 describe('BulkPlaceDialog — book crates', () => {
@@ -259,7 +327,9 @@ describe('BulkPlaceDialog — book crates', () => {
 
     expect(screen.queryByLabelText(/crate number/i)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/rack number/i)).toBeInTheDocument();
-    expect(screen.getByText(/place books on their own to place them into a crate/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/place books on their own to place them into a crate/i),
+    ).toBeInTheDocument();
   });
 
   it('a MIXED selection placed into an EXISTING crate says which rows get no crate', async () => {
@@ -299,8 +369,12 @@ describe('BulkPlaceDialog — book crates', () => {
       currentFingerprint: string;
     }>;
     expect(ack).toHaveLength(6);
-    expect(ack.filter((a) => a.currentFingerprint === bookCrateFingerprint('blue', '4'))).toHaveLength(4);
-    expect(ack.filter((a) => a.currentFingerprint === bookCrateFingerprint('green', '2'))).toHaveLength(2);
+    expect(
+      ack.filter((a) => a.currentFingerprint === bookCrateFingerprint('blue', '4')),
+    ).toHaveLength(4);
+    expect(
+      ack.filter((a) => a.currentFingerprint === bookCrateFingerprint('green', '2')),
+    ).toHaveLength(2);
     expect(ack.some((a) => a.itemId.startsWith('none-'))).toBe(false);
   });
 
@@ -468,7 +542,8 @@ describe('BulkPlaceDialog — book crates', () => {
       ok: false,
       error: {
         code: 'conflict',
-        message: 'Persepolis is recorded in Blue 4 on rack 38-A. Placing it here will change that to Red 7. Rack 38-A will be cleared.',
+        message:
+          'Persepolis is recorded in Blue 4 on rack 38-A. Placing it here will change that to Red 7. Rack 38-A will be cleared.',
         details: {
           reason: 'BOOK_CRATE_CHANGE_REQUIRES_CONFIRMATION',
           items: [
@@ -732,7 +807,13 @@ describe('BulkPlaceDialog — book crates', () => {
       ],
       notes: undefined,
       destination: {
-        newRack: { warehouseId: 'wh-1', crateNumber: '4', crateColor: 'red', rackNumber: '38', rackRow: 'B' },
+        newRack: {
+          warehouseId: 'wh-1',
+          crateNumber: '4',
+          crateColor: 'red',
+          rackNumber: '38',
+          rackRow: 'B',
+        },
       },
       acknowledgedRackChanges: [],
     });
@@ -804,5 +885,40 @@ describe('BulkPlaceDialog — book crates', () => {
     expect(mockToast.warning).toHaveBeenCalledWith(
       'Some titles kept a crate label this placement would have cleared — nobody was asked, so it was left as it was and may now be wrong.',
     );
+  });
+});
+
+// B40: Place set `submitting`, awaited the action with no catch and cleared it
+// only when it answered. A call that got no answer (offline, a server error, a
+// deploy) left Place spinning forever with no message, and the new-rack
+// confirmation stuck open with its Continue button spinning.
+describe('BulkPlaceDialog when the placement gets no answer', () => {
+  it('says to check Staging before trying again, and Place works again', async () => {
+    mockBulkPlace.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderDialog();
+    await open(user);
+    await chooseExisting(user, '1-A');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+    expect(mockToast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(offline(), 'the stock was placed', 'Staging'),
+    );
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();
+  });
+
+  it('closes the new-rack confirmation instead of leaving it spinning', async () => {
+    mockBulkPlace.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderDialog();
+    await open(user);
+    await user.type(screen.getByLabelText(/rack number/i), '100-A');
+    await user.click(screen.getByRole('button', { name: /^place 2$/i }));
+    await user.click(screen.getByRole('button', { name: /create and place/i }));
+    expect(mockToast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(offline(), 'the stock was placed', 'Staging'),
+    );
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^place 2$/i })).toBeEnabled();
   });
 });

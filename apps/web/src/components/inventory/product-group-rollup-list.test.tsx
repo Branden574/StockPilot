@@ -3,6 +3,9 @@ import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 // Task 18 review fixes, both visible here:
 //   • variants load ON EXPAND, one group at a time — a collapsed page reads
 //     none, so it can neither waste a query nor hit PostgREST's max_rows and
@@ -358,5 +361,72 @@ describe('ProductGroupRollupList — layout follows the card, not the window', (
     await user.click(screen.getByRole('button', { name: /expand nike pegasus 41/i }));
     const variantHeader = await screen.findByRole('columnheader', { name: 'Variant' });
     expect(variantHeader).toHaveClass('pl-4', '@min-[560px]/groups:pl-[52px]');
+  });
+});
+
+// B40: each of these awaited its action inside a transition with no catch. A
+// call that got no answer (offline, a server error, a deploy) left "Loading
+// variants…" or the Archive and Restore spinners up, and the rejection, thrown
+// out of the transition, replaced the page with the error card.
+describe('ProductGroupRollupList when a request gets no answer', () => {
+  it('a variants read says so, with Try again, instead of loading forever', async () => {
+    loadVariantsMock.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(requestFailedMessage(offline(), 'load the variants'));
+    expect(screen.queryByText('Loading variants…')).toBeNull();
+    await user.click(within(alert).getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByText('PEG-9')).toBeInTheDocument();
+  });
+
+  it('an unlink says the item was not unlinked and keeps its row', async () => {
+    unlinkMock.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /expand/i }));
+    await screen.findByText('PEG-9');
+    await user.click(screen.getByRole('button', { name: /unlink size 9 from/i }));
+    await user.type(screen.getByRole('textbox', { name: /reason for unlinking/i }), 'Wrong style');
+    await user.click(screen.getByRole('button', { name: 'Confirm unlink' }));
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'unlink the item'),
+      ),
+    );
+    expect(screen.getByText('PEG-9')).toBeInTheDocument();
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
+  it('an archive says the group was not archived and never refreshes', async () => {
+    archiveMock.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<ProductGroupRollupList groups={[group()]} />);
+    await user.click(screen.getByRole('button', { name: /^archive nike pegasus 41$/i }));
+    await user.click(screen.getByRole('button', { name: /confirm archive of nike pegasus 41/i }));
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'archive the product group'),
+      ),
+    );
+    expect(routerMock.refresh).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: /confirm archive of nike pegasus 41/i }),
+    ).toBeEnabled();
+  });
+
+  it('a restore says the group was not restored and Restore works again', async () => {
+    restoreMock.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<ProductGroupRollupList groups={[group()]} archived />);
+    await user.click(screen.getByRole('button', { name: /restore nike pegasus 41/i }));
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'restore the product group'),
+      ),
+    );
+    expect(routerMock.refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /restore nike pegasus 41/i })).toBeEnabled();
   });
 });

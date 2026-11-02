@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cancelOrderRequestAction } from '@/server/actions/order-requests';
 
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -29,6 +31,9 @@ export function CancelOrderButton({ orderId, status }: Props) {
   // half-typed reason doesn't leak into the next request the user
   // cancels in the same session.
   const [reason, setReason] = React.useState('');
+  // Why the last try failed, inside the confirm (a toast sits behind it). The
+  // reason typed stays. Cleared on open and on each try.
+  const [error, setError] = React.useState<string | null>(null);
 
   // Reset reason whenever the dialog closes — covers both confirm-path
   // and explicit-dismiss.
@@ -41,13 +46,26 @@ export function CancelOrderButton({ orderId, status }: Props) {
 
   async function confirmCancel() {
     setBusy(true);
+    setError(null);
     const trimmed = reason.trim();
-    const res = await cancelOrderRequestAction({
-      id: orderId,
-      reason: trimmed.length > 0 ? trimmed : undefined,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof cancelOrderRequestAction>>;
+    try {
+      res = await cancelOrderRequestAction({
+        id: orderId,
+        reason: trimmed.length > 0 ? trimmed : undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'cancel the request');
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
+      setError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -58,12 +76,15 @@ export function CancelOrderButton({ orderId, status }: Props) {
 
   return (
     <>
-      <Button variant="ghost" onClick={() => setOpen(true)} disabled={busy}>
-        {busy ? (
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-        ) : (
-          <X className="h-3.5 w-3.5" />
-        )}
+      <Button
+        variant="ghost"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+        disabled={busy}
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
         Cancel request
       </Button>
       <DestructiveConfirm
@@ -73,16 +94,13 @@ export function CancelOrderButton({ orderId, status }: Props) {
         description={
           <div className="space-y-3">
             <p>
-              The request is marked cancelled and any stock reservations
-              attached to it are released back to available stock. The
-              request stays on the record for the audit trail.
+              The request is marked cancelled and any stock reservations attached to it are released
+              back to available stock. The request stays on the record for the audit trail.
             </p>
             <div className="space-y-1.5">
               <Label htmlFor="cancel-order-reason">
                 Reason
-                <span className="ml-1 font-normal text-muted-foreground">
-                  (optional)
-                </span>
+                <span className="text-muted-foreground ml-1 font-normal">(optional)</span>
               </Label>
               <Textarea
                 id="cancel-order-reason"
@@ -99,6 +117,7 @@ export function CancelOrderButton({ orderId, status }: Props) {
         confirmLabel="Cancel request"
         cancelLabel="Keep request"
         pending={busy}
+        error={error}
         onConfirm={confirmCancel}
       />
     </>

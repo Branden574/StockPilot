@@ -42,6 +42,8 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveCharterAction,
   createCharterAction,
@@ -241,8 +243,19 @@ function CharterTableRow({
   async function confirmArchive() {
     setArchiveBusy(true);
     setConfirmError(null);
-    const res = await archiveCharterAction(row.id);
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveCharterAction>>;
+    try {
+      res = await archiveCharterAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the charter');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);
@@ -256,8 +269,19 @@ function CharterTableRow({
   async function confirmRestore() {
     setRestoreBusy(true);
     setConfirmError(null);
-    const res = await restoreCharterAction(row.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreCharterAction>>;
+    try {
+      res = await restoreCharterAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the charter');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);
@@ -437,9 +461,26 @@ function CharterDialog({
       contactEmail: values.contactEmail || undefined,
       contactPhone: values.contactPhone || undefined,
     };
-    const res = editing
-      ? await updateCharterAction(editing.id, payload)
-      : await createCharterAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateCharterAction>>
+      | Awaited<ReturnType<typeof createCharterAction>>;
+    try {
+      res = editing
+        ? await updateCharterAction(editing.id, payload)
+        : await createCharterAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. A code is optional, so a
+      // create that may have landed says to look first.
+      const term = termSingular.toLowerCase();
+      toast.error(
+        editing
+          ? requestFailedMessage(e, `save the ${term}`)
+          : requestUnconfirmedMessage(e, `the ${term} was created`, `the ${term}s list`),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

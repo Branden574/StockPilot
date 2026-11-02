@@ -14,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { generateMfaRecoveryCodesAction } from '@/server/actions/mfa-recovery';
 
 interface MfaRecoveryCodesProps {
@@ -26,6 +28,9 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [codes, setCodes] = React.useState<string[] | null>(null);
   const [busy, setBusy] = React.useState(false);
+  // Why the last Regenerate got no answer, inside the confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [generateError, setGenerateError] = React.useState<string | null>(null);
   // D4: hold the dialog open until the user has at least copied OR
   // downloaded the codes — otherwise an accidental close throws away
   // values that are unrecoverable. The "I've saved them" button is
@@ -38,13 +43,27 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
       void generate();
       return;
     }
+    setGenerateError(null);
     setConfirmOpen(true);
   }
 
   async function generate() {
     setBusy(true);
-    const r = await generateMfaRecoveryCodesAction();
-    setBusy(false);
+    setGenerateError(null);
+    let r: Awaited<ReturnType<typeof generateMfaRecoveryCodesAction>>;
+    try {
+      r = await generateMfaRecoveryCodesAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The confirm stays open and says why; Regenerate can be pressed again.
+      const message = requestFailedMessage(e, 'make new recovery codes');
+      setGenerateError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     setConfirmOpen(false);
     if (!r.ok) {
       toast.error(r.error.message);
@@ -132,6 +151,7 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
         description="Any existing recovery codes will stop working immediately. Make sure you have access to your authenticator app, or save the new codes before closing the next dialog."
         confirmLabel="Regenerate"
         pending={busy}
+        error={generateError}
         onConfirm={generate}
       />
 

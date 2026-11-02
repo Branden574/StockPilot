@@ -16,6 +16,8 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setModuleEnabledAction } from '@/server/actions/module-settings';
 import { computeModuleChangeSet, MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
@@ -72,9 +74,36 @@ export function ModuleToggles({ modules, enabledIds, comped = false }: ModuleTog
     });
     setSavingId(moduleId);
 
+    // Undo each change of the optimistic set: flip it back.
+    const revert = () =>
+      setEnabled((prev) => {
+        const reverted = new Set(prev);
+        for (const c of changes) {
+          c.enabled ? reverted.delete(c.moduleId) : reverted.add(c.moduleId);
+        }
+        return reverted;
+      });
     startTransition(async () => {
-      const res = await setModuleEnabledAction({ moduleId, enabled: next });
-      setSavingId(null);
+      let res: Awaited<ReturnType<typeof setModuleEnabledAction>>;
+      try {
+        res = await setModuleEnabledAction({ moduleId, enabled: next });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer: the switch goes back and says so. A rejection thrown out
+        // of this transition would replace the settings page with its error
+        // page.
+        revert();
+        toast.error(
+          requestFailedMessage(
+            e,
+            `${next ? 'turn on' : 'turn off'} ${MODULE_REGISTRY[moduleId].title}`,
+          ),
+        );
+        return;
+      } finally {
+        setSavingId(null);
+      }
       if (res.ok) {
         setEnabled(new Set(res.data.enabled));
         // Re-render the server tree (dashboard layout → DashboardShell →
@@ -92,14 +121,7 @@ export function ModuleToggles({ modules, enabledIds, comped = false }: ModuleTog
         );
       } else {
         // Revert the optimistic update.
-        setEnabled((prev) => {
-          const reverted = new Set(prev);
-          for (const c of changes) {
-            // Undo each change: flip it back.
-            c.enabled ? reverted.delete(c.moduleId) : reverted.add(c.moduleId);
-          }
-          return reverted;
-        });
+        revert();
         toast.error(res.error.message);
       }
     });

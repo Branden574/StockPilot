@@ -2,6 +2,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: refreshMock, back: vi.fn() }),
@@ -10,7 +13,10 @@ vi.mock('next/navigation', () => ({
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 vi.mock('sonner', () => ({
-  toast: { error: (...a: unknown[]) => toastError(...a), success: (...a: unknown[]) => toastSuccess(...a) },
+  toast: {
+    error: (...a: unknown[]) => toastError(...a),
+    success: (...a: unknown[]) => toastSuccess(...a),
+  },
 }));
 
 type ActionResult = { ok: true } | { ok: false; error: { message: string } };
@@ -26,7 +32,9 @@ const MEMBERS = [
   { userId: 'u-2', name: 'Jordan Stone' },
 ];
 
-function renderPanel(overrides: Partial<React.ComponentProps<typeof MaintenanceSettingsPanel>> = {}) {
+function renderPanel(
+  overrides: Partial<React.ComponentProps<typeof MaintenanceSettingsPanel>> = {},
+) {
   return render(
     <MaintenanceSettingsPanel
       initialCategories={['Facilities', 'Electrical']}
@@ -118,9 +126,9 @@ describe('MaintenanceSettingsPanel — photo links in email', () => {
 describe('MaintenanceSettingsPanel — notification audience', () => {
   it('renders one audience selector per member, defaulting to None', () => {
     renderPanel();
-    expect(screen.getByRole('combobox', { name: 'Notification audience for Jane Smith' })).toHaveTextContent(
-      'None',
-    );
+    expect(
+      screen.getByRole('combobox', { name: 'Notification audience for Jane Smith' }),
+    ).toHaveTextContent('None');
     expect(
       screen.getByRole('combobox', { name: 'Notification audience for Jordan Stone' }),
     ).toHaveTextContent('None');
@@ -162,7 +170,9 @@ describe('MaintenanceSettingsPanel — recipients pin (mutation self-check 3)', 
     renderPanel();
     const editable = [
       ...screen.queryAllByRole('textbox'),
-      ...(document.querySelectorAll('input[type="text"], input:not([type]), textarea') as unknown as HTMLInputElement[]),
+      ...(document.querySelectorAll(
+        'input[type="text"], input:not([type]), textarea',
+      ) as unknown as HTMLInputElement[]),
     ] as HTMLInputElement[];
     for (const el of editable) {
       expect(el.value ?? '').not.toContain('@');
@@ -211,7 +221,9 @@ describe('MaintenanceSettingsPanel — vocabulary sweep (mutation self-check 4, 
   it('the OPEN per-member audience listbox (portalled to document.body) never contains forbidden vocabulary', async () => {
     const user = userEvent.setup();
     renderPanel();
-    await user.click(screen.getByRole('combobox', { name: 'Notification audience for Jane Smith' }));
+    await user.click(
+      screen.getByRole('combobox', { name: 'Notification audience for Jane Smith' }),
+    );
     await screen.findByRole('listbox');
     sweep();
   });
@@ -223,5 +235,21 @@ describe('MaintenanceSettingsPanel — vocabulary sweep (mutation self-check 4, 
     await user.click(screen.getByRole('button', { name: /add/i }));
     await user.click(screen.getByRole('checkbox', { name: /secure photo link/i }));
     sweep();
+  });
+});
+
+// B40: a save that got no answer (offline, a server error, a deploy) left Save
+// settings spinning with nothing said.
+describe('MaintenanceSettingsPanel when the save gets no answer', () => {
+  it('says the settings were not saved and Save settings works again', async () => {
+    updateSettings.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: 'Save settings' }));
+    expect(toastError).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'save the maintenance settings'),
+    );
+    expect(screen.getByRole('button', { name: 'Save settings' })).toBeEnabled();
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 });

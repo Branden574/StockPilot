@@ -51,6 +51,7 @@ import { usePerfUseful } from '@/components/perf/perf-useful';
 import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
+import { isControlFlow } from '@/lib/control-flow';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { ELSEWHERE_PLACEMENT_KIND, elsewhereSuffix } from '@/lib/placements';
 import {
@@ -122,6 +123,7 @@ import {
 import { listEmptyMessage } from '@/lib/inventory/list-empty-message';
 import { itemsTypeNarrowing } from '@/lib/inventory/list-filter-active';
 import { rememberLastListUrl } from '@/lib/last-list-url';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { isSplitRackItem } from '@/lib/inventory/rack-holdings';
 import { formatCurrency, formatNumber, formatRelative } from '@/lib/utils';
 import { cn } from '@/lib/utils';
@@ -5853,9 +5855,21 @@ function SavedViewChip({
   const [deleting, setDeleting] = React.useState(false);
   const [sharing, setSharing] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // Why the last Delete failed, inside its confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   async function apply() {
-    await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    try {
+      await setActiveWarehouseAction(view.state.warehouseId ?? null);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a deploy): the warehouse was not switched, so
+      // applying the rest would show the view under the wrong warehouse.
+      toast.error(requestFailedMessage(e, 'apply the view'));
+      return;
+    }
     onApply?.(view.state);
     const next = new URLSearchParams();
     if (view.state.q) next.set('q', view.state.q);
@@ -5872,14 +5886,28 @@ function SavedViewChip({
 
   function remove(e: React.MouseEvent) {
     e.stopPropagation();
+    setDeleteError(null);
     setDeleteOpen(true);
   }
 
   async function confirmDelete() {
     setDeleting(true);
-    const res = await deleteSavedViewAction(view.id, scope);
-    setDeleting(false);
+    setDeleteError(null);
+    let res: Awaited<ReturnType<typeof deleteSavedViewAction>>;
+    try {
+      res = await deleteSavedViewAction(view.id, scope);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the view');
+      setDeleteError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setDeleting(false);
+    }
     if (!res.ok) {
+      setDeleteError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -5892,8 +5920,17 @@ function SavedViewChip({
     e.stopPropagation();
     const next = !view.isShared;
     setSharing(true);
-    const res = await toggleSavedViewShareAction(view.id, next, scope);
-    setSharing(false);
+    let res: Awaited<ReturnType<typeof toggleSavedViewShareAction>>;
+    try {
+      res = await toggleSavedViewShareAction(view.id, next, scope);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, next ? 'share the view' : 'make the view private'));
+      return;
+    } finally {
+      setSharing(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -5985,6 +6022,7 @@ function SavedViewChip({
         }
         confirmLabel="Delete view"
         pending={deleting}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </span>
@@ -6003,32 +6041,60 @@ function SaveCurrentViewButton({
   const [name, setName] = React.useState('');
   const [shareWithTeam, setShareWithTeam] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  // Why the last Save failed, in the popover (a toast sits outside it). The
+  // name stays. Cleared on each try and when the popover closes.
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+  // Counts each opening and closing. The popover can be closed (Escape, a
+  // click outside) while Save is out, and opened again before the answer: an
+  // answer for an earlier one is never shown in, and never closes, a later one.
+  const sessionRef = React.useRef(0);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const nameId = React.useId();
   const shareNoteId = React.useId();
 
   React.useEffect(() => {
+    sessionRef.current += 1;
     if (open) {
       setTimeout(() => inputRef.current?.focus(), 50);
     } else {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
       setName('');
       setShareWithTeam(false);
+      setSaveError(null);
     }
   }, [open]);
 
   async function save() {
     const trimmed = name.trim();
     if (trimmed.length === 0) return;
+    const session = sessionRef.current;
+    // Still the popover that asked (not closed, or closed and opened again).
+    const sameSession = () => sessionRef.current === session;
     setSaving(true);
-    const res = await createSavedViewAction({
-      scope,
-      name: trimmed,
-      state: currentState as Parameters<typeof createSavedViewAction>[0]['state'],
-      isShared: shareWithTeam,
-    });
-    setSaving(false);
+    setSaveError(null);
+    let res: Awaited<ReturnType<typeof createSavedViewAction>>;
+    try {
+      res = await createSavedViewAction({
+        scope,
+        name: trimmed,
+        state: currentState as Parameters<typeof createSavedViewAction>[0]['state'],
+        isShared: shareWithTeam,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // B40: no answer (offline, a server error the action threw, a deploy
+      // that no longer has it). The popover stays open with the name kept.
+      // The toast says it even when the popover has closed since.
+      const message = requestFailedMessage(e, 'save the view');
+      if (sameSession()) setSaveError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (!res.ok) {
+      if (sameSession()) setSaveError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -6037,7 +6103,7 @@ function SaveCurrentViewButton({
         ? `View "${trimmed}" saved and shared with the team.`
         : `View "${trimmed}" saved.`,
     );
-    setOpen(false);
+    if (sameSession()) setOpen(false);
     router.refresh();
   }
 
@@ -6091,6 +6157,11 @@ function SaveCurrentViewButton({
               Everyone in your org will see this view. Only you can edit or delete it.
             </p>
           </div>
+          {saveError && (
+            <p role="alert" className="text-destructive text-[12.5px] leading-[18px]">
+              {saveError}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={saving}>
               Cancel

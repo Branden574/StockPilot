@@ -12,6 +12,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   setItemPublicVisibilityAction,
   type ItemPublicVisibility,
@@ -57,8 +59,18 @@ export function PublicVisibilityControl({
     setBusy(true);
     setError(null);
     setCurrent(visibility);
-    const res = await setItemPublicVisibilityAction({ itemId, visibility });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof setItemPublicVisibilityAction>>;
+    try {
+      res = await setItemPublicVisibilityAction({ itemId, visibility });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setCurrent(previous);
+      setError(requestFailedMessage(e, 'change the public visibility'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       setCurrent(previous);
       setError(res.error.message);

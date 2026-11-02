@@ -6,6 +6,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { COUNT_START_MANAGER_ONLY_COPY } from '@stockpilot/core';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import { StartCycleCountForm } from './start-cycle-count-form';
 
 // The Whole warehouse scope: snapshot one warehouse or every active item, with
@@ -65,5 +68,24 @@ describe('StartCycleCountForm', () => {
     });
     expect(routerMock.push).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Start count' })).toBeEnabled();
+  });
+});
+
+// B40: a start that got no answer (offline, a server error, a deploy) left
+// Start count spinning with nothing said. It may have started the count before
+// the answer was lost, so the message says to look before starting another.
+describe('StartCycleCountForm when Start count gets no answer', () => {
+  it('says to check Cycle counts before trying again and stays on the form', async () => {
+    const user = userEvent.setup();
+    startActionMock.mockRejectedValueOnce(offline());
+    render(<StartCycleCountForm warehouses={WAREHOUSES} />);
+    await user.click(screen.getByRole('button', { name: 'Start count' }));
+    await vi.waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        requestUnconfirmedMessage(offline(), 'the count was started', 'Cycle counts'),
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Start count' })).toBeEnabled();
+    expect(routerMock.push).not.toHaveBeenCalled();
   });
 });

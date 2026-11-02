@@ -9,6 +9,8 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { formatRelative } from '@/lib/utils';
 import { formatOrgDateTime } from '@stockpilot/core';
 import {
@@ -76,6 +78,8 @@ function CommentRow({
   const [editBody, setEditBody] = React.useState(comment.body);
   const [busy, setBusy] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  // Why the last Delete failed, inside the confirm. Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
 
   const isDeleted = comment.deleted_at !== null;
@@ -96,6 +100,10 @@ function CommentRow({
       }
       setEditing(false);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the comment'));
     } finally {
       setBusy(false);
     }
@@ -103,16 +111,26 @@ function CommentRow({
 
   async function confirmDelete() {
     setDeleteBusy(true);
+    setDeleteError(null);
     try {
       const res = await deleteProcedureCommentAction(comment.id);
       if (!res.ok) {
+        setDeleteError(res.error.message);
         toast.error(res.error.message);
         return;
       }
+      // Closed only once it worked: a failure keeps the confirm open, with
+      // the reason inside it.
+      setDeleteOpen(false);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the comment');
+      setDeleteError(message);
+      toast.error(message);
     } finally {
       setDeleteBusy(false);
-      setDeleteOpen(false);
     }
   }
 
@@ -214,7 +232,10 @@ function CommentRow({
                 variant="ghost"
                 size="sm"
                 className="text-destructive hover:text-destructive px-2"
-                onClick={() => setDeleteOpen(true)}
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeleteOpen(true);
+                }}
               >
                 <Trash2 className="mr-1 h-3 w-3" /> Delete
               </Button>
@@ -254,6 +275,7 @@ function CommentRow({
           description="The comment is hidden from the thread. Replies stay so the discussion still reads correctly."
           confirmLabel="Delete"
           pending={deleteBusy}
+          error={deleteError}
           onConfirm={confirmDelete}
         />
       </div>

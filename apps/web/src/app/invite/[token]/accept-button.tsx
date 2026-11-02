@@ -6,6 +6,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { acceptInviteAction } from '@/server/actions/team';
 
 export function AcceptInviteButton({ token }: { token: string }) {
@@ -14,8 +16,17 @@ export function AcceptInviteButton({ token }: { token: string }) {
 
   async function accept() {
     setSubmitting(true);
-    const res = await acceptInviteAction({ token });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof acceptInviteAction>>;
+    try {
+      res = await acceptInviteAction({ token });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'accept the invite'));
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

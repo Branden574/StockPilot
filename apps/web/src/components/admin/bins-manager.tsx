@@ -28,6 +28,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { archiveBinAction, createBinAction } from '@/server/actions/bins';
 
 import type { BinRow, BinType } from '@/server/services/bins';
@@ -70,14 +72,23 @@ export function BinsManager({
       return;
     }
     setBusy(true);
-    const r = await createBinAction({
-      warehouseId,
-      code: code.trim(),
-      name: name.trim(),
-      binType,
-      isDefault,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof createBinAction>>;
+    try {
+      r = await createBinAction({
+        warehouseId,
+        code: code.trim(),
+        name: name.trim(),
+        binType,
+        isDefault,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'create the bin'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
@@ -92,8 +103,19 @@ export function BinsManager({
     if (!archiveTarget) return;
     setArchiveBusy(true);
     setArchiveError(null);
-    const r = await archiveBinAction(archiveTarget.id);
-    setArchiveBusy(false);
+    let r: Awaited<ReturnType<typeof archiveBinAction>>;
+    try {
+      r = await archiveBinAction(archiveTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the bin');
+      setArchiveError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!r.ok) {
       setArchiveError(r.error.message);
       toast.error(r.error.message);

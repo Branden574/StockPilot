@@ -18,6 +18,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { prettifyFileNameForDisplay } from '@/lib/po-imports/display-name';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { renamePoImportAction } from '@/server/actions/po-imports';
 
 import { PO_IMPORT_DISPLAY_NAME_MAX } from '@stockpilot/core';
@@ -62,8 +64,17 @@ export function PoImportRenameButton({
       return;
     }
     setBusy(true);
-    const res = await renamePoImportAction({ poImportId, displayName: next });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof renamePoImportAction>>;
+    try {
+      res = await renamePoImportAction({ poImportId, displayName: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'rename the import'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

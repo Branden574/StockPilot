@@ -2,6 +2,9 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
 }));
@@ -194,5 +197,22 @@ describe('RemoveFromRackDialog — the crate label is never left silent', () => 
     expect(mockToast.success).toHaveBeenCalledTimes(1);
     expect(mockToast.success).toHaveBeenCalledWith('Removed 40 from Blue #4.');
     expect(mockToast.warning).not.toHaveBeenCalled();
+  });
+});
+
+// B40: Remove stock set `submitting`, awaited the action with no catch and
+// cleared it only when it answered. A write-off that got no answer (offline, a
+// server error, a deploy) left the button spinning forever with no message.
+describe('RemoveFromRackDialog when the write-off gets no answer', () => {
+  it("says to check the item's Movements tab before trying again, and Remove stock works again", async () => {
+    mockRemoveStockFromLocationAction.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    renderDialog();
+    await removeWholeHolding(user);
+    expect(mockToast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(offline(), 'the stock was removed', "the item's Movements tab"),
+    );
+    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /remove stock/i })).toBeEnabled();
   });
 });

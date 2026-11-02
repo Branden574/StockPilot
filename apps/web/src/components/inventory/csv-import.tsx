@@ -35,6 +35,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { parseCsv, rowsToObjects, toCsv } from '@/lib/csv';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { importItemsAction, prepareItemImportAction } from '@/server/actions/import';
 import { cn } from '@/lib/utils';
 
@@ -228,13 +230,22 @@ export function CsvImport({
       nextDecisions: Record<string, AmbiguousColumnMeaning>,
     ) => {
       setReviewing(true);
-      const res = await prepareItemImportAction({
-        rows: file.rows,
-        headers: file.header,
-        headerDecisions: nextDecisions,
-        fileName: file.fileName,
-      });
-      setReviewing(false);
+      let res: Awaited<ReturnType<typeof prepareItemImportAction>>;
+      try {
+        res = await prepareItemImportAction({
+          rows: file.rows,
+          headers: file.header,
+          headerDecisions: nextDecisions,
+          fileName: file.fileName,
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestFailedMessage(e, 'check the file'));
+        return;
+      } finally {
+        setReviewing(false);
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         return;
@@ -333,6 +344,10 @@ export function CsvImport({
       setAcknowledgeDuplicate(false);
       toast.success(`Imported ${res.data.created} of ${res.data.total} rows.`);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestUnconfirmedMessage(e, 'the file was imported', 'the Items list'));
     } finally {
       setImporting(false);
       submitting.current = false;

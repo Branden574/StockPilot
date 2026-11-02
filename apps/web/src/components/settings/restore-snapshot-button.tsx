@@ -10,6 +10,7 @@ import { useStepUp } from '@/components/auth/step-up-modal';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { useHydrated } from '@/lib/use-hydrated';
 import {
   restoreFromPointAction,
@@ -118,17 +119,25 @@ export function RestoreSnapshotButton({
     if (!checkSettled) return;
     setBusy(true);
     const payload = { id, confirm };
-    let r = await restoreFromPointAction(payload);
-    // Fresh MFA step-up needed → prompt for the authenticator code in-place
-    // (no sign-out) and retry with the identical payload.
-    if (!r.ok && r.error.details?.reason === 'aal2_required') {
-      if (!(await stepUp.ensure())) {
-        setBusy(false);
-        return;
-      }
+    let r: Awaited<ReturnType<typeof restoreFromPointAction>>;
+    try {
       r = await restoreFromPointAction(payload);
+      // Fresh MFA step-up needed → prompt for the authenticator code in-place
+      // (no sign-out) and retry with the identical payload.
+      if (!r.ok && r.error.details?.reason === 'aal2_required') {
+        if (!(await stepUp.ensure())) return;
+        r = await restoreFromPointAction(payload);
+      }
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, a restore sets each item to the restore point's values,
+      // measured from what is there now, so nothing is applied twice.
+      toast.error(requestFailedMessage(e, 'restore from the restore point'));
+      return;
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
     if (!r.ok) {
       toast.error(r.error.message);
       return;

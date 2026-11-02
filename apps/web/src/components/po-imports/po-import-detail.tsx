@@ -35,6 +35,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   approvePoImportAction,
   cancelPoImportAction,
@@ -50,7 +52,6 @@ import {
 
 import { MappingConfirmation } from '@/components/po-imports/mapping-confirmation';
 
-import { isControlFlow } from '@/lib/control-flow';
 import { dedupeItemsBySku } from '@/lib/po-imports/dedupe-items';
 
 import { BLOCKING_LINE_RESULTS, LINE_RESULT_LABELS, type LineResult } from '@stockpilot/core';
@@ -239,6 +240,9 @@ export function PoImportDetail({
   const [busy, setBusy] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [cancelOpen, setCancelOpen] = React.useState(false);
+  // Why the last Cancel import failed, inside its confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [cancelError, setCancelError] = React.useState<string | null>(null);
   const [createOpen, setCreateOpen] = React.useState(false);
   const [createLines, setCreateLines] = React.useState<PoImportLineRow[]>([]);
 
@@ -304,8 +308,17 @@ export function PoImportDetail({
 
   async function reparse() {
     setBusy(true);
-    const r = await parsePoImportAction(header.id);
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof parsePoImportAction>>;
+    try {
+      r = await parsePoImportAction(header.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'parse the import again'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) toast.error(r.error.message);
     else {
       toast.success('Import re-parsed.');
@@ -314,9 +327,22 @@ export function PoImportDetail({
   }
   async function confirmCancel() {
     setBusy(true);
-    const r = await cancelPoImportAction(header.id);
-    setBusy(false);
+    setCancelError(null);
+    let r: Awaited<ReturnType<typeof cancelPoImportAction>>;
+    try {
+      r = await cancelPoImportAction(header.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'cancel the import');
+      setCancelError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
+      setCancelError(r.error.message);
       toast.error(r.error.message);
       return;
     }
@@ -495,7 +521,10 @@ export function PoImportDetail({
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setCancelOpen(true)}
+              onClick={() => {
+                setCancelError(null);
+                setCancelOpen(true);
+              }}
               disabled={busy}
               className="hover:text-destructive"
             >
@@ -513,6 +542,7 @@ export function PoImportDetail({
         confirmLabel="Cancel import"
         cancelLabel="Keep import"
         pending={busy}
+        error={cancelError}
         onConfirm={confirmCancel}
       />
 

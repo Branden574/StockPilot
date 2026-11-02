@@ -8,6 +8,8 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { formatRelative } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { addMaintenanceNoteAction } from '@/server/actions/maintenance-requests';
 
 export interface MaintenanceNoteRow {
@@ -43,7 +45,13 @@ interface Props {
  * NOT a Zendesk comment thread; the panel's own copy says so explicitly so
  * nothing here is ever mistaken for ticket conversation.
  */
-export function MaintenanceNotesPanel({ requestId, canManage, notes, authorNames, truncated }: Props) {
+export function MaintenanceNotesPanel({
+  requestId,
+  canManage,
+  notes,
+  authorNames,
+  truncated,
+}: Props) {
   const router = useRouter();
   const [body, setBody] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
@@ -57,8 +65,19 @@ export function MaintenanceNotesPanel({ requestId, canManage, notes, authorNames
     if (!text) return;
     setSubmitting(true);
     setError(null);
-    const res = await addMaintenanceNoteAction(requestId, text);
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof addMaintenanceNoteAction>>;
+    try {
+      res = await addMaintenanceNoteAction(requestId, text);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestUnconfirmedMessage(e, 'the note was added', "the request's notes");
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if ('error' in res) {
       setError(res.error.message);
       toast.error(res.error.message);

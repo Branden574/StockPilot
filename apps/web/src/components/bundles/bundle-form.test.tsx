@@ -10,7 +10,9 @@ vi.mock('@/server/actions/bundles', () => ({
 
 import { toast } from 'sonner';
 
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createBundleAction, updateBundleAction } from '@/server/actions/bundles';
+import { offline } from '@/test/rejected-request';
 
 import { COMPONENT_SEARCH_DEBOUNCE_MS } from './bundle-component-picker';
 import { BundleForm } from './bundle-form';
@@ -216,5 +218,87 @@ describe('BundleForm checkboxes and lines (redesign: the shared Checkbox)', () =
     expect(toast.error).toHaveBeenLastCalledWith('Add at least one component to the bundle.');
     expect(createBundleAction).not.toHaveBeenCalled();
     expect(screen.getByText(/No components yet\. Search for items above/)).toBeInTheDocument();
+  });
+});
+
+// B40: Save cleared its spinner in finally but had no catch, so a save that got
+// no answer (offline, a server error, a deploy) ended in silence. Creating a
+// bundle twice would make two, so a lost create says to look first.
+describe('BundleForm when the save gets no answer', () => {
+  const initial = {
+    id: 'b-1',
+    name: 'Kit',
+    sku: 'KIT-1',
+    description: null,
+    preassemblyEnabled: false,
+    components: [
+      { itemId: 'i-1', itemName: 'Pencil No. 2', itemSku: 'PEN-2', quantity: 1, isOptional: false },
+    ],
+  };
+
+  afterEach(() => {
+    vi.mocked(updateBundleAction).mockReset();
+    vi.mocked(createBundleAction).mockReset();
+    vi.mocked(toast.error).mockReset();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it('Save changes says the bundle was not saved and can be pressed again', async () => {
+    vi.mocked(updateBundleAction).mockRejectedValueOnce(offline());
+    render(<BundleForm initial={initial} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    });
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the bundle'));
+    expect(screen.getByRole('button', { name: 'Save changes' })).toBeEnabled();
+  });
+
+  it('Create bundle says to check the Bundles list before trying again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          items: [
+            {
+              id: 'i-pencil',
+              sku: 'PEN-2',
+              name: 'Pencil No. 2',
+              barcode: null,
+              item_type: 'product',
+              quantity_on_hand: 40,
+              awaiting_first_receipt: false,
+              warehouse_name: 'DC4',
+              match: 'prefix',
+            },
+          ],
+          total: 1,
+        }),
+      })),
+    );
+    vi.mocked(createBundleAction).mockRejectedValueOnce(offline());
+    render(<BundleForm />);
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Kit' } });
+    const search = screen.getByRole('combobox');
+    search.focus();
+    fireEvent.change(search, { target: { value: 'pencil' } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(COMPONENT_SEARCH_DEBOUNCE_MS);
+    });
+    await act(async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create bundle' }));
+    });
+    expect(createBundleAction).toHaveBeenCalledTimes(1);
+    expect(toast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(offline(), 'the bundle was created', 'the Bundles list'),
+    );
+    expect(screen.getByRole('button', { name: 'Create bundle' })).toBeEnabled();
   });
 });

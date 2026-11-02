@@ -9,6 +9,8 @@ import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   enrollFactorAction,
   unenrollFactorAction,
@@ -38,11 +40,24 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
   const [password, setPassword] = React.useState('');
   const [pending, setPending] = React.useState(false);
   const [disableTarget, setDisableTarget] = React.useState<string | null>(null);
+  // Why the last Disable got no answer, inside the confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [disableError, setDisableError] = React.useState<string | null>(null);
 
   async function startEnroll() {
     setPending(true);
-    const res = await enrollFactorAction();
-    setPending(false);
+    let res: Awaited<ReturnType<typeof enrollFactorAction>>;
+    try {
+      res = await enrollFactorAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, setup first removes the authenticator that was never verified.
+      toast.error(requestFailedMessage(e, 'start setting up the authenticator'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -62,12 +77,21 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
       return;
     }
     setPending(true);
-    const res = await verifyEnrollmentAction({
-      factorId: enrollment.factorId,
-      code,
-      password,
-    });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof verifyEnrollmentAction>>;
+    try {
+      res = await verifyEnrollmentAction({
+        factorId: enrollment.factorId,
+        code,
+        password,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'turn on the authenticator'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -91,9 +115,22 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
   async function confirmDisable() {
     if (!disableTarget) return;
     setPending(true);
-    const res = await unenrollFactorAction({ factorId: disableTarget });
-    setPending(false);
+    setDisableError(null);
+    let res: Awaited<ReturnType<typeof unenrollFactorAction>>;
+    try {
+      res = await unenrollFactorAction({ factorId: disableTarget });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'turn off the authenticator');
+      setDisableError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
+      setDisableError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -128,7 +165,10 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setDisableTarget(f.id)}
+                  onClick={() => {
+                    setDisableError(null);
+                    setDisableTarget(f.id);
+                  }}
                   disabled={pending}
                 >
                   <ShieldOff aria-hidden className="h-3.5 w-3.5" /> Disable
@@ -152,6 +192,7 @@ export function MfaEnrollment({ verifiedFactors, policyRequired }: MfaEnrollment
           description="You'll only need your password to sign in until you re-enroll. We strongly recommend keeping an authenticator app on your account."
           confirmLabel="Disable"
           pending={pending}
+          error={disableError}
           onConfirm={confirmDisable}
         />
       </div>

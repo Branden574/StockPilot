@@ -1,7 +1,11 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderToString } from 'react-dom/server';
+import { toast } from 'sonner';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 // Radix Select needs pointer-capture APIs happy-dom doesn't implement.
 beforeAll(() => {
@@ -28,7 +32,14 @@ vi.mock('@/server/actions/item-visibility', () => ({
   setCategoryPublicVisibilityAction: vi.fn(),
 }));
 
-import { createCategoryAction, updateCategoryAction } from '@/server/actions/categories';
+import {
+  archiveCategoryAction,
+  createCategoryAction,
+  restoreCategoryAction,
+  setupSportsCategoriesAction,
+  updateCategoryAction,
+} from '@/server/actions/categories';
+import { setCategoryPublicVisibilityAction } from '@/server/actions/item-visibility';
 
 import { CategoriesManager } from './categories-manager';
 
@@ -423,6 +434,94 @@ describe('CategoriesManager — header, cards and gates (redesign)', () => {
     expect(roots[0]).toHaveTextContent('Shoes');
     expect(roots[0]).toHaveTextContent('Jerseys');
     expect(screen.getByRole('button', { name: /Add subcategory/ })).toBeTruthy();
+  });
+});
+
+// B40: each of these set its busy flag, awaited the action with no catch and
+// cleared the flag only when it answered. A call that got no answer (offline,
+// a server error, a deploy) left the spinner on with nothing said; the archive
+// and restore confirms refuse to close while pending, so the page was stuck.
+describe('CategoriesManager when a request gets no answer', () => {
+  const ROWS = [
+    row({ id: 'cat-a', name: 'Apparel', parent_id: null, sports_subcategory_key: null }),
+  ];
+
+  beforeEach(() => {
+    vi.mocked(toast.error).mockReset();
+  });
+
+  it('Archive says the category was not archived and its confirm works again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(archiveCategoryAction).mockRejectedValueOnce(offline());
+    renderEditable(ROWS);
+    await user.click(screen.getByRole('button', { name: 'Archive Apparel' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'archive the category'),
+      ),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
+  });
+
+  it('Restore says the category was not restored and its confirm works again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(restoreCategoryAction).mockRejectedValueOnce(offline());
+    render(
+      <CategoriesManager
+        initial={ROWS}
+        view="archived"
+        canManage
+        canManagePublicVisibility={false}
+        sportsEnabled
+        canManageSports
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: /Restore/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'restore the category'),
+      ),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
+  });
+
+  it('Set up Sports says the categories were not set up and can be pressed again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(setupSportsCategoriesAction).mockRejectedValueOnce(offline());
+    renderEditable(ROWS);
+    await user.click(screen.getByRole('button', { name: /Set up Sports/ }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'set up the Sports categories'),
+      ),
+    );
+    expect(screen.getByRole('button', { name: /Set up Sports/ })).toBeEnabled();
+  });
+
+  it('the Public visibility select goes back to what it was and says why', async () => {
+    const user = userEvent.setup();
+    vi.mocked(setCategoryPublicVisibilityAction).mockRejectedValueOnce(offline());
+    render(
+      <CategoriesManager
+        initial={ROWS}
+        canManage
+        canManagePublicVisibility
+        sportsEnabled={false}
+        canManageSports={false}
+      />,
+    );
+    const select = screen.getByRole('combobox', { name: 'Public visibility for Apparel' });
+    await user.click(select);
+    await user.click(await screen.findByRole('option', { name: 'Internal only' }));
+    expect(
+      await screen.findByText(requestFailedMessage(offline(), 'change who can see the category')),
+    ).toBeTruthy();
+    expect(select).toHaveTextContent('Public');
+    expect(select).toBeEnabled();
   });
 });
 

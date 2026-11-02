@@ -19,6 +19,8 @@ import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn, formatNumber } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { unlinkItemsAction } from '@/server/actions/product-group-linking';
 import {
   archiveProductGroupAction,
@@ -173,8 +175,17 @@ function GroupRow({
     setLoading(true);
     setLoadError(null);
     startTransition(async () => {
-      const res = await loadGroupVariantsAction(group.id);
-      setLoading(false);
+      let res: Awaited<ReturnType<typeof loadGroupVariantsAction>>;
+      try {
+        res = await loadGroupVariantsAction(group.id);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        setLoadError(requestFailedMessage(e, 'load the variants'));
+        return;
+      } finally {
+        setLoading(false);
+      }
       if (!res.ok) {
         setLoadError(res.error.message);
         return;
@@ -211,7 +222,17 @@ function GroupRow({
 
   function unlink(itemId: string, reason: string) {
     startTransition(async () => {
-      const res = await unlinkItemsAction({ itemIds: [itemId], reason });
+      let res: Awaited<ReturnType<typeof unlinkItemsAction>>;
+      try {
+        res = await unlinkItemsAction({ itemIds: [itemId], reason });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer (offline, a server error, a deploy). Thrown out of the
+        // transition it would replace the page with the error card.
+        toast.error(requestFailedMessage(e, 'unlink the item'));
+        return;
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         // A conflict can follow a write (the item left, but its SKU's record
@@ -246,11 +267,20 @@ function GroupRow({
   function archive(acknowledgeActiveVariants: boolean) {
     setBusy('archive');
     startTransition(async () => {
-      const res = await archiveProductGroupAction(
-        group.id,
-        acknowledgeActiveVariants ? { acknowledgeActiveVariants: true } : {},
-      );
-      setBusy(null);
+      let res: Awaited<ReturnType<typeof archiveProductGroupAction>>;
+      try {
+        res = await archiveProductGroupAction(
+          group.id,
+          acknowledgeActiveVariants ? { acknowledgeActiveVariants: true } : {},
+        );
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestFailedMessage(e, 'archive the product group'));
+        return;
+      } finally {
+        setBusy(null);
+      }
       if (!res.ok) {
         // The variant guard is the ONLY validation_error this action raises, so
         // a validation_error on a non-acknowledged attempt is unambiguously
@@ -274,8 +304,17 @@ function GroupRow({
   function restore() {
     setBusy('restore');
     startTransition(async () => {
-      const res = await restoreProductGroupAction(group.id);
-      setBusy(null);
+      let res: Awaited<ReturnType<typeof restoreProductGroupAction>>;
+      try {
+        res = await restoreProductGroupAction(group.id);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestFailedMessage(e, 'restore the product group'));
+        return;
+      } finally {
+        setBusy(null);
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         return;

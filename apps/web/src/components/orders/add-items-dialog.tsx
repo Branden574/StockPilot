@@ -18,6 +18,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { isPickingSettled } from '@stockpilot/core';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { cn, formatNumber } from '@/lib/utils';
 import { addOrderRequestLinesAction } from '@/server/actions/order-requests';
 
@@ -376,11 +378,26 @@ function AddItemsBody({
 
   async function submit() {
     setPending(true);
-    const res = await addOrderRequestLinesAction({
-      id: orderId,
-      lines: entries.map((p) => ({ itemId: p.row.id, quantity: p.qty })),
-    });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof addOrderRequestLinesAction>>;
+    try {
+      res = await addOrderRequestLinesAction({
+        id: orderId,
+        lines: entries.map((p) => ({ itemId: p.row.id, quantity: p.qty })),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy): the add may have been
+      // saved, and the same picks sent again would add them a second time,
+      // so the sentence says to look at the order first. The dialog stays
+      // open with the picks, and the page is left as it is: reading the
+      // order again with no connection becomes a full page load, which shows
+      // the browser's error page (B40 plan 3.4).
+      toast.error(requestUnconfirmedMessage(e, 'the items were added', 'the order'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       if (addLinesRefusalIsTerminal(res.error)) {

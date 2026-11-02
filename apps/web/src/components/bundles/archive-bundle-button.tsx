@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { archiveBundleAction } from '@/server/actions/bundles';
 
 export function ArchiveBundleButton({
@@ -19,12 +21,28 @@ export function ArchiveBundleButton({
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  // Why the last try failed, inside the confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [error, setError] = React.useState<string | null>(null);
 
   async function confirmArchive() {
     setBusy(true);
-    const res = await archiveBundleAction(bundleId);
-    setBusy(false);
+    setError(null);
+    let res: Awaited<ReturnType<typeof archiveBundleAction>>;
+    try {
+      res = await archiveBundleAction(bundleId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the bundle');
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
+      setError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -35,7 +53,14 @@ export function ArchiveBundleButton({
 
   return (
     <>
-      <Button variant="ghost" onClick={() => setOpen(true)} disabled={busy}>
+      <Button
+        variant="ghost"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+        disabled={busy}
+      >
         {busy ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
@@ -49,13 +74,14 @@ export function ArchiveBundleButton({
         title={`Archive "${bundleName}"?`}
         description={
           <>
-            The bundle is hidden from the active list. Existing distributions stay readable
-            and on the audit trail. You can restore the bundle later from the{' '}
+            The bundle is hidden from the active list. Existing distributions stay readable and on
+            the audit trail. You can restore the bundle later from the{' '}
             <strong>Archived view</strong>.
           </>
         }
         confirmLabel="Archive"
         pending={busy}
+        error={error}
         onConfirm={confirmArchive}
       />
     </>

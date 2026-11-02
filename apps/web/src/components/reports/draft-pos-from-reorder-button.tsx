@@ -6,6 +6,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { createDraftPosFromReorderForecastAction } from '@/server/actions/purchase-orders';
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -59,8 +61,19 @@ export function DraftPosFromReorderButton({
 
   async function run() {
     setBusy(true);
-    const r = await createDraftPosFromReorderForecastAction();
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof createDraftPosFromReorderForecastAction>>;
+    try {
+      r = await createDraftPosFromReorderForecastAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, an item already on an open purchase order (a draft
+      // included) is skipped, so drafts that were made are not made twice.
+      toast.error(requestFailedMessage(e, 'draft the purchase orders'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

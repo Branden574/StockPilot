@@ -16,6 +16,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import {
+  isActionOutOfDate,
+  requestFailedMessage,
+  requestUnconfirmedMessage,
+} from '@/lib/request-failure';
 import {
   archiveCustomFieldAction,
   createCustomFieldAction,
@@ -132,6 +138,12 @@ export function CustomFieldsEditor({
         toast.success(draft.id ? 'Field updated.' : 'Field added.');
         setDraft(null);
       }
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, an update writes the same values and a create is refused by
+      // the field key's unique rule ("A field with that key already exists.").
+      toast.error(requestFailedMessage(e, draft.id ? 'save the field' : 'add the field'));
     } finally {
       setPending(false);
     }
@@ -143,6 +155,12 @@ export function CustomFieldsEditor({
       const result = await archiveCustomFieldAction({ id: def.id, archived: archivedNext });
       const updated = applyResult(result);
       if (updated) toast.success(archivedNext ? 'Field archived.' : 'Field restored.');
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestFailedMessage(e, archivedNext ? 'archive the field' : 'restore the field'),
+      );
     } finally {
       setPending(false);
     }
@@ -164,6 +182,16 @@ export function CustomFieldsEditor({
       ]);
       applyResult(r1);
       applyResult(r2);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The two writes go out together and one may have landed: the order on
+      // the page is kept, and only a reload shows what was saved.
+      toast.error(
+        isActionOutOfDate(e)
+          ? requestUnconfirmedMessage(e, 'the fields were reordered', 'their order')
+          : "We couldn't confirm that the fields were reordered. Reload the page to see their order before trying again.",
+      );
     } finally {
       setPending(false);
     }

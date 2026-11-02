@@ -15,6 +15,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { startCycleCountAction } from '@/server/actions/cycle-counts';
 
 const ALL = '__all';
@@ -38,11 +40,20 @@ export function StartCycleCountForm({
 
   async function start() {
     setBusy(true);
-    const r = await startCycleCountAction({
-      warehouseId: warehouseId === ALL ? null : warehouseId,
-      notes: notes.trim() || null,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof startCycleCountAction>>;
+    try {
+      r = await startCycleCountAction({
+        warehouseId: warehouseId === ALL ? null : warehouseId,
+        notes: notes.trim() || null,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestUnconfirmedMessage(e, 'the count was started', 'Cycle counts'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

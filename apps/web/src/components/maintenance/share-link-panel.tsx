@@ -9,6 +9,8 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { useHydrated } from '@/lib/use-hydrated';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   issueMaintenanceShareLinkAction,
   revokeMaintenanceShareLinkAction,
@@ -79,6 +81,10 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
   const [copied, setCopied] = React.useState(false);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const [revoking, setRevoking] = React.useState(false);
+  // Why the last Revoke got no answer, inside the confirm (a toast sits
+  // behind it). The confirm stays open and Cancel closes it. Cleared on open
+  // and on each try.
+  const [revokeError, setRevokeError] = React.useState<string | null>(null);
 
   // A link exists if the server said so, or we just generated one.
   const hasActiveLink = generatedUrl !== null || status !== null;
@@ -89,8 +95,17 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
 
   async function generate() {
     setGenerating(true);
-    const res = await issueMaintenanceShareLinkAction(requestId);
-    setGenerating(false);
+    let res: Awaited<ReturnType<typeof issueMaintenanceShareLinkAction>>;
+    try {
+      res = await issueMaintenanceShareLinkAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'create the share link'));
+      return;
+    } finally {
+      setGenerating(false);
+    }
     if ('error' in res) {
       toast.error(res.error.message);
       return;
@@ -114,8 +129,20 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
 
   async function revoke() {
     setRevoking(true);
-    const res = await revokeMaintenanceShareLinkAction(requestId);
-    setRevoking(false);
+    setRevokeError(null);
+    let res: Awaited<ReturnType<typeof revokeMaintenanceShareLinkAction>>;
+    try {
+      res = await revokeMaintenanceShareLinkAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'revoke the share link');
+      setRevokeError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRevoking(false);
+    }
     setConfirmOpen(false);
     if ('error' in res) {
       toast.error(res.error.message);
@@ -138,19 +165,19 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
       bodyClassName="space-y-2.5"
     >
       <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
-        Grants photo access to this request for about 180 days, without a StockPilot account. Revocable at
-        any time.
+        Grants photo access to this request for about 180 days, without a StockPilot account.
+        Revocable at any time.
       </p>
 
       {generatedUrl ? (
         <p className="text-foreground text-[12.5px] font-medium leading-[18.75px]">
-          Link generated — copy it now. For security it is shown only this once; generating again replaces
-          it.
+          Link generated — copy it now. For security it is shown only this once; generating again
+          replaces it.
         </p>
       ) : hasActiveLink ? (
         <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
-          An active share link exists. Its URL is not stored and cannot be shown again — generate a new
-          link to get a copyable URL (the current one stops working).
+          An active share link exists. Its URL is not stored and cannot be shown again — generate a
+          new link to get a copyable URL (the current one stops working).
         </p>
       ) : (
         <p className="text-muted-foreground text-[12.5px] leading-[18.75px]">
@@ -169,7 +196,13 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
             {copied ? 'Copied' : 'Copy URL'}
           </Button>
         ) : null}
-        <Button type="button" variant="outline" size="sm" disabled={generating} onClick={() => void generate()}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={generating}
+          onClick={() => void generate()}
+        >
           {generating ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
           ) : hasActiveLink ? (
@@ -185,7 +218,10 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
             variant="outline"
             size="sm"
             className="text-destructive hover:text-destructive"
-            onClick={() => setConfirmOpen(true)}
+            onClick={() => {
+              setRevokeError(null);
+              setConfirmOpen(true);
+            }}
           >
             Revoke
           </Button>
@@ -207,6 +243,7 @@ export function ShareLinkPanel({ requestId, status, canRevoke }: Props) {
           description="The link stops granting photo access immediately. Generate a new link whenever this request needs one again."
           confirmLabel="Revoke link"
           pending={revoking}
+          error={revokeError}
           onConfirm={() => void revoke()}
         />
       ) : null}

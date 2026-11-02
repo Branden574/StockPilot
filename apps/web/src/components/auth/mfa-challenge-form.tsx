@@ -18,6 +18,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { challengeFactorAction } from '@/server/actions/mfa';
 import { signOutAction } from '@/server/actions/auth';
 import { consumeMfaRecoveryCodeAction } from '@/server/actions/mfa-recovery';
@@ -54,8 +56,17 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
       return;
     }
     setPending(true);
-    const res = await challengeFactorAction({ factorId, code });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof challengeFactorAction>>;
+    try {
+      res = await challengeFactorAction({ factorId, code });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'check the code'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       setCode('');
@@ -76,11 +87,20 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
       return;
     }
     setRecoveryPending(true);
-    const res = await consumeMfaRecoveryCodeAction({
-      code: recoveryCode.trim(),
-      password: recoveryPassword,
-    });
-    setRecoveryPending(false);
+    let res: Awaited<ReturnType<typeof consumeMfaRecoveryCodeAction>>;
+    try {
+      res = await consumeMfaRecoveryCodeAction({
+        code: recoveryCode.trim(),
+        password: recoveryPassword,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'use the recovery code'));
+      return;
+    } finally {
+      setRecoveryPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -98,7 +118,15 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     // A sign-out on purpose leaves nothing an interrupted run kept in this tab
     // (lib/interrupted-run). Before the request, which answers with a redirect.
     purgeInterruptedRuns();
-    await signOutAction();
+    try {
+      await signOutAction();
+    } catch (e) {
+      // Signed out: the action answers with a redirect to sign-in, so this is
+      // the usual way out, and the router is already on its way.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'sign you out'));
+      return;
+    }
     router.replace('/signin');
     router.refresh();
   }
@@ -191,10 +219,9 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
           <DialogHeader>
             <DialogTitle>Use a recovery code</DialogTitle>
             <DialogDescription>
-              Enter one of the recovery codes you saved when you set up
-              two-factor authentication. The code will be consumed and your
-              authenticator factor will be removed so you can re-enroll a new
-              device.
+              Enter one of the recovery codes you saved when you set up two-factor authentication.
+              The code will be consumed and your authenticator factor will be removed so you can
+              re-enroll a new device.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={recover} className="space-y-4">

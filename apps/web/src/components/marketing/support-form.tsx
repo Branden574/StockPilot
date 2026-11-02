@@ -8,6 +8,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createSupportTicketAction } from '@/server/actions/support-tickets';
 
 const CATEGORIES: Array<{ value: string; label: string }> = [
@@ -43,17 +45,35 @@ export function SupportForm() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
-    const res = await createSupportTicketAction({
-      name: name.trim() || undefined,
-      email: email.trim(),
-      category: category as never,
-      priority: priority as never,
-      subject: subject.trim(),
-      message: message.trim(),
-      pageUrl: typeof document !== 'undefined' ? document.referrer || undefined : undefined,
-      company: company || undefined,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof createSupportTicketAction>>;
+    try {
+      res = await createSupportTicketAction({
+        name: name.trim() || undefined,
+        email: email.trim(),
+        category: category as never,
+        priority: priority as never,
+        subject: subject.trim(),
+        message: message.trim(),
+        pageUrl: typeof document !== 'undefined' ? document.referrer || undefined : undefined,
+        company: company || undefined,
+      });
+    } catch (e) {
+      // A redirect: the router is already navigating.
+      if (isControlFlow(e)) return;
+      // A ticket has no rule against a second copy, so one saved before the
+      // answer was lost would be sent twice. Every saved ticket emails its
+      // receipt to the address given, so that is where to look first.
+      toast.error(
+        requestUnconfirmedMessage(
+          e,
+          'your ticket was sent',
+          'your inbox for our confirmation email',
+        ),
+      );
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

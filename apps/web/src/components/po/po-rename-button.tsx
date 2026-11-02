@@ -17,6 +17,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { renamePoNumberAction } from '@/server/actions/purchase-orders';
 
 /**
@@ -44,8 +46,17 @@ export function PoRenameButton({ poId, currentNumber }: { poId: string; currentN
       return;
     }
     setBusy(true);
-    const res = await renamePoNumberAction(poId, next);
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof renamePoNumberAction>>;
+    try {
+      res = await renamePoNumberAction(poId, next);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'rename the purchase order'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -66,8 +77,8 @@ export function PoRenameButton({ poId, currentNumber }: { poId: string; currentN
         <DialogHeader>
           <DialogTitle>Edit PO number</DialogTitle>
           <DialogDescription>
-            Change this purchase order&apos;s number — for example, to match the vendor&apos;s own PO
-            number. It must be unique among your active purchase orders.
+            Change this purchase order&apos;s number — for example, to match the vendor&apos;s own
+            PO number. It must be unique among your active purchase orders.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">

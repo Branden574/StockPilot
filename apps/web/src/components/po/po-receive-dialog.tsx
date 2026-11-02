@@ -21,6 +21,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { cn, formatNumber } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { isActionOutOfDate, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { postReceiptAction } from '@/server/actions/receiving';
 
 import {
@@ -85,6 +87,15 @@ interface LineEntry {
   serials: string[];
 }
 
+/**
+ * A post that got no answer (B40). The key it carried is posted again by the
+ * next Post receipt, so pressing it again is safe: post_receipt_v2 answers the
+ * same key and entries with the receipt it already posted
+ * (server/services/receiving.ts postReceipt).
+ */
+export const RECEIPT_UNCONFIRMED_MESSAGE =
+  "We couldn't confirm that the receipt was posted. Press Post receipt again: a receipt is never posted twice.";
+
 function blankEntry(): LineEntry {
   // Start blank (0 → rendered empty by BlankZeroNumberInput) so the user types
   // what actually arrived rather than clearing a pre-filled quantity. The "All"
@@ -147,6 +158,12 @@ export function PoReceiveDialog({
 
   // Idempotency key: one per dialog open. New key when re-opening (resets state).
   const [idempotencyKey, setIdempotencyKey] = React.useState(() => crypto.randomUUID());
+  // The key of a post that got no answer (B40). It may have landed, so the
+  // next open on this page posts with it again instead of a new one: the same
+  // entries get the receipt that was posted, different entries are refused
+  // ("A different receipt was already submitted..."), and a key the server
+  // never saw posts normally. Any answer, a receipt or a refusal, clears it.
+  const unconfirmedKeyRef = React.useRef<string | null>(null);
 
   // Latest `lines` without making it an effect dependency — see the reset
   // effect below for why its identity must not trigger a reset.
@@ -170,8 +187,8 @@ export function PoReceiveDialog({
   // submits correctly without this effect re-running.
   React.useEffect(() => {
     if (open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset on open/close
-      setIdempotencyKey(crypto.randomUUID());
+      // Reset on open. The key is the unconfirmed one when there is one.
+      setIdempotencyKey(unconfirmedKeyRef.current ?? crypto.randomUUID());
       setEntries(Object.fromEntries(linesRef.current.map((l) => [l.id, blankEntry()])));
       setNotes('');
       setServerError(null);
@@ -274,37 +291,57 @@ export function PoReceiveDialog({
     }
 
     setSubmitting(true);
-    const res = await postReceiptAction({
-      purchaseOrderId: poId,
-      warehouseId,
-      lines: submittable.map(({ line, entry }) => ({
-        poLineId: line.id,
-        qtyReceived: entry.received,
-        qtyAccepted: entry.accepted,
-        qtyRejected: entry.rejected,
-        notes: entry.notes || undefined,
-        lots:
-          line.trackingType === 'lot' && entry.accepted > 0
-            ? entry.lots.map((l) => ({
-                lotNumber: l.lotNumber.trim(),
-                expirationDate: l.expirationDate || null,
-                qtyBase: Number(l.qtyBase),
-              }))
-            : undefined,
-        // Blanks are filtered out, so a serial_optional line with an untouched
-        // grid sends an empty array (a legitimate pure-quantity receipt) and a
-        // partially filled grid sends only the tags that were actually
-        // scanned. For 'serial' the filter is a no-op — validation above
-        // already rejected any blank.
-        serials:
-          wantsSerials(line.trackingType) && entry.accepted > 0
-            ? entry.serials.map((s) => s.trim()).filter((s) => s.length > 0)
-            : undefined,
-      })),
-      notes: notes || undefined,
-      idempotencyKey,
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof postReceiptAction>>;
+    try {
+      res = await postReceiptAction({
+        purchaseOrderId: poId,
+        warehouseId,
+        lines: submittable.map(({ line, entry }) => ({
+          poLineId: line.id,
+          qtyReceived: entry.received,
+          qtyAccepted: entry.accepted,
+          qtyRejected: entry.rejected,
+          notes: entry.notes || undefined,
+          lots:
+            line.trackingType === 'lot' && entry.accepted > 0
+              ? entry.lots.map((l) => ({
+                  lotNumber: l.lotNumber.trim(),
+                  expirationDate: l.expirationDate || null,
+                  qtyBase: Number(l.qtyBase),
+                }))
+              : undefined,
+          // Blanks are filtered out, so a serial_optional line with an untouched
+          // grid sends an empty array (a legitimate pure-quantity receipt) and a
+          // partially filled grid sends only the tags that were actually
+          // scanned. For 'serial' the filter is a no-op — validation above
+          // already rejected any blank.
+          serials:
+            wantsSerials(line.trackingType) && entry.accepted > 0
+              ? entry.serials.map((s) => s.trim()).filter((s) => s.length > 0)
+              : undefined,
+        })),
+        notes: notes || undefined,
+        idempotencyKey,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The receipt may have been posted before the answer was lost. The
+      // dialog keeps the entries, and Post receipt sends the same key, here
+      // or after the dialog is opened again, so a receipt that did land is
+      // answered again, never posted twice.
+      unconfirmedKeyRef.current = idempotencyKey;
+      fail(
+        isActionOutOfDate(e)
+          ? requestUnconfirmedMessage(e, 'the receipt was posted', 'the receipts')
+          : RECEIPT_UNCONFIRMED_MESSAGE,
+      );
+      return;
+    } finally {
+      setSubmitting(false);
+    }
+    // An answer: the key is spent (a receipt) or was never stored (a refusal).
+    unconfirmedKeyRef.current = null;
     if (!res.ok) {
       fail(res.error.message);
       return;

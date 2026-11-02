@@ -41,6 +41,8 @@ import {
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   archiveWarehouseAction,
   createWarehouseAction,
@@ -222,8 +224,19 @@ function WarehouseTableRow({
   async function confirmArchive() {
     setArchiveBusy(true);
     setConfirmError(null);
-    const res = await archiveWarehouseAction(row.id);
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveWarehouseAction>>;
+    try {
+      res = await archiveWarehouseAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the warehouse');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);
@@ -237,8 +250,19 @@ function WarehouseTableRow({
   async function confirmRestore() {
     setRestoreBusy(true);
     setConfirmError(null);
-    const res = await restoreWarehouseAction(row.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreWarehouseAction>>;
+    try {
+      res = await restoreWarehouseAction(row.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the warehouse');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       setConfirmError(res.error.message);
       toast.error(res.error.message);
@@ -416,9 +440,23 @@ function WarehouseDialog({
       notes: values.notes || undefined,
       status: 'active' as const,
     };
-    const res = editing
-      ? await updateWarehouseAction(editing.id, payload)
-      : await createWarehouseAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateWarehouseAction>>
+      | Awaited<ReturnType<typeof createWarehouseAction>>;
+    try {
+      res = editing
+        ? await updateWarehouseAction(editing.id, payload)
+        : await createWarehouseAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Sent again after it went
+      // through, a create is refused by the code's unique rule ("A warehouse
+      // with code ... already exists.").
+      const term = termSingular.toLowerCase();
+      toast.error(requestFailedMessage(e, editing ? `save the ${term}` : `create the ${term}`));
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

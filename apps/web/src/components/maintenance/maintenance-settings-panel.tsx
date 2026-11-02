@@ -19,6 +19,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updateMaintenanceSettingsAction } from '@/server/actions/maintenance-settings';
 
 export type MaintenanceNotifyMode = 'all' | 'urgent_only' | 'none';
@@ -94,12 +96,21 @@ export function MaintenanceSettingsPanel({
 
   async function save() {
     setBusy(true);
-    const res = await updateMaintenanceSettingsAction({
-      categories,
-      includeShareLinksInEmail,
-      notifyAudience: audience,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof updateMaintenanceSettingsAction>>;
+    try {
+      res = await updateMaintenanceSettingsAction({
+        categories,
+        includeShareLinksInEmail,
+        notifyAudience: audience,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the maintenance settings'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

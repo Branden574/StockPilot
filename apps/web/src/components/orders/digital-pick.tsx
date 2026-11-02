@@ -25,6 +25,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { completePickingAction, recordPickedLineAction } from '@/server/actions/order-requests';
 import type { OrderRequestLineWithItem } from '@/server/services/order-requests';
 import type { FefoSuggestion } from '@/server/services/lots';
@@ -77,8 +79,19 @@ export function DigitalPick({
 
   async function save(lineId: string, qty: number) {
     setSavingLine(lineId);
-    const res = await recordPickedLineAction({ orderId, lineId, quantity: qty });
-    setSavingLine(null);
+    let res: Awaited<ReturnType<typeof recordPickedLineAction>>;
+    try {
+      res = await recordPickedLineAction({ orderId, lineId, quantity: qty });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return false;
+      // No answer (offline, a server error, a deploy). The picked quantity is
+      // set, not added, so the same Save is safe to send again.
+      toast.error(requestFailedMessage(e, 'save the picked quantity'));
+      return false;
+    } finally {
+      setSavingLine(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return false;
@@ -105,27 +118,36 @@ export function DigitalPick({
       })
       .filter((x): x is { lineId: string; qty: number } => x !== null);
 
-    for (const f of flushes) {
-      const res = await recordPickedLineAction({
-        orderId,
-        lineId: f.lineId,
-        quantity: f.qty,
-      });
+    try {
+      for (const f of flushes) {
+        const res = await recordPickedLineAction({
+          orderId,
+          lineId: f.lineId,
+          quantity: f.qty,
+        });
+        if (!res.ok) {
+          toast.error(`Couldn't save line before completing: ${res.error.message}`);
+          return;
+        }
+      }
+
+      const res = await completePickingAction({ id: orderId });
       if (!res.ok) {
-        setCompleting(false);
-        toast.error(`Couldn't save line before completing: ${res.error.message}`);
+        toast.error(res.error.message);
         return;
       }
+      toast.success('Picking complete. Stock decremented.');
+      router.push(`/dashboard/orders/${orderId}`);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy). Completing again is
+      // safe: complete_picking refuses an order that already completed, and
+      // the saved quantities are set, not added.
+      toast.error(requestFailedMessage(e, 'complete picking'));
+    } finally {
+      setCompleting(false);
     }
-
-    const res = await completePickingAction({ id: orderId });
-    setCompleting(false);
-    if (!res.ok) {
-      toast.error(res.error.message);
-      return;
-    }
-    toast.success('Picking complete. Stock decremented.');
-    router.push(`/dashboard/orders/${orderId}`);
   }
 
   const allLinesPicked = initialLines.every((l) => (picked[l.id] ?? 0) > 0);

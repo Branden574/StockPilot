@@ -6,7 +6,10 @@ import { toast } from 'sonner';
 
 import { MAINTENANCE_RESOLUTION_NOTE_MAX, maintenanceResolveSchema } from '@stockpilot/core';
 
-import { MaintenancePhotosPanel, type PanelPhoto } from '@/components/maintenance/maintenance-photos-panel';
+import {
+  MaintenancePhotosPanel,
+  type PanelPhoto,
+} from '@/components/maintenance/maintenance-photos-panel';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -18,6 +21,8 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { resolveMaintenanceRequestAction } from '@/server/actions/maintenance-requests';
 
 interface Props {
@@ -87,8 +92,18 @@ export function ResolveRequestDialog({
   async function handleConfirm() {
     if (confirmDisabled) return;
     setPending(true);
-    const res = await resolveMaintenanceRequestAction(requestId, { note });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof resolveMaintenanceRequestAction>>;
+    try {
+      res = await resolveMaintenanceRequestAction(requestId, { note });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Stays open, as on a refusal: the typed note and staged photos are kept.
+      toast.error(requestFailedMessage(e, 'resolve the request'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if ('error' in res) {
       toast.error(res.error.message);
       // Stays open on error — unlike archive/cancel, losing the typed note
@@ -137,8 +152,8 @@ export function ResolveRequestDialog({
           <div className="space-y-1.5">
             <p className="text-[13px] font-medium">Proof photos (optional)</p>
             <p className="text-muted-foreground text-[12px] leading-[18px]">
-              Proof photos upload immediately and stay attached to this request even if you close this dialog
-              without confirming. Remove any you do not want to keep before confirming.
+              Proof photos upload immediately and stay attached to this request even if you close
+              this dialog without confirming. Remove any you do not want to keep before confirming.
             </p>
             <MaintenancePhotosPanel
               requestId={requestId}
@@ -150,10 +165,20 @@ export function ResolveRequestDialog({
         </div>
 
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
             Cancel
           </Button>
-          <Button type="button" variant="default" onClick={() => void handleConfirm()} disabled={confirmDisabled}>
+          <Button
+            type="button"
+            variant="default"
+            onClick={() => void handleConfirm()}
+            disabled={confirmDisabled}
+          >
             {pending ? 'Resolving...' : 'Mark resolved'}
           </Button>
         </DialogFooter>

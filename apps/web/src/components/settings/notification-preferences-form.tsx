@@ -4,11 +4,13 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { isControlFlow } from '@/lib/control-flow';
 import {
   NOTIFICATION_PREF_KEYS,
   type NotificationPrefKey,
   type NotificationPreferences,
 } from '@/lib/notification-prefs';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { Switch } from '@/components/ui/switch';
 import { updateNotificationPreferencesAction } from '@/server/actions/notification-preferences';
 
@@ -173,8 +175,18 @@ export function NotificationPreferencesForm({ initial }: NotificationPreferences
   async function toggle(key: NotificationPrefKey, next: boolean) {
     markSaving(key, true);
     setPrefs((p) => ({ ...p, [key]: next })); // optimistic
-    const res = await updateNotificationPreferencesAction({ [key]: next });
-    markSaving(key, false);
+    let res: Awaited<ReturnType<typeof updateNotificationPreferencesAction>>;
+    try {
+      res = await updateNotificationPreferencesAction({ [key]: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setPrefs((p) => ({ ...p, [key]: !next })); // revert
+      toast.error(requestFailedMessage(e, 'save the notification setting'));
+      return;
+    } finally {
+      markSaving(key, false);
+    }
     if (!res.ok) {
       setPrefs((p) => ({ ...p, [key]: !next })); // revert
       toast.error(res.error.message);

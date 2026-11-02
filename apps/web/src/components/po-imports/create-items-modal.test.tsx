@@ -1,6 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 const createItemsFromPoLinesAction = vi.fn();
 const findDuplicatesForPoLinesAction = vi.fn();
@@ -153,5 +157,49 @@ describe('CreateItemsModal duplicate matching stays advisory', () => {
       mode: 'use_existing',
       itemId: 'itm-cvw-existing',
     });
+  });
+});
+
+/**
+ * B40: Confirm set `busy`, awaited the create with no catch and cleared it
+ * only when it answered; the duplicate scan had no catch either. A create
+ * that got no answer (offline, a server error, a deploy) left Confirm
+ * spinning with nothing said. Sent again, a line that already got its item is
+ * skipped (po-imports-lines.ts createItemsFromPoLines), so the sentence says
+ * to try again.
+ */
+describe('CreateItemsModal when a request gets no answer', () => {
+  it('Confirm says the items were not created, stays open, and works again', async () => {
+    const errorToast = vi.spyOn(toast, 'error').mockImplementation(() => 'toast');
+    findDuplicatesForPoLinesAction.mockResolvedValue({ ok: true, data: { matches: {} } });
+    createItemsFromPoLinesAction.mockReset();
+    createItemsFromPoLinesAction.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    const { onSuccess, onOpenChange } = renderModal();
+    await user.click(await screen.findByRole('button', { name: /^confirm$/i }));
+    await waitFor(() =>
+      expect(errorToast).toHaveBeenCalledWith(requestFailedMessage(offline(), 'create the items')),
+    );
+    expect(screen.getByRole('button', { name: /^confirm$/i })).toBeEnabled();
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    errorToast.mockRestore();
+  });
+
+  it('a duplicate scan that gets no answer leaves the modal usable, without hints', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    findDuplicatesForPoLinesAction.mockRejectedValueOnce(offline());
+    createItemsFromPoLinesAction.mockReset();
+    createItemsFromPoLinesAction.mockResolvedValue({
+      ok: true,
+      data: { created: 1, mapped: 0, linked: 0, skipped: 0 },
+    });
+    const user = userEvent.setup();
+    renderModal();
+    await waitFor(() => expect(warn).toHaveBeenCalledWith('duplicate scan got no answer'));
+    expect(screen.queryByText(/possible duplicate/i)).toBeNull();
+    await user.click(screen.getByRole('button', { name: /^confirm$/i }));
+    expect(createItemsFromPoLinesAction).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 });

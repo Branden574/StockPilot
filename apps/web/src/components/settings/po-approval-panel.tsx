@@ -9,6 +9,8 @@ import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setPoApprovalSettingsAction } from '@/server/actions/po-approval-settings';
 
 /**
@@ -31,8 +33,17 @@ export function PoApprovalPanel({ initialAmount }: { initialAmount: number }) {
       return;
     }
     setBusy(true);
-    const r = await setPoApprovalSettingsAction({ approvalThresholdAmount: value });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setPoApprovalSettingsAction>>;
+    try {
+      r = await setPoApprovalSettingsAction({ approvalThresholdAmount: value });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the approval threshold'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

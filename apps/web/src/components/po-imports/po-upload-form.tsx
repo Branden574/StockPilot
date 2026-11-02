@@ -8,7 +8,9 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
 import { prettifyFileNameForDisplay } from '@/lib/po-imports/display-name';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   parsePoImportAction,
   presignPoUploadAction,
@@ -23,6 +25,10 @@ import {
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const ACCEPT = ['application/pdf', 'text/csv'];
+
+/** The upload was recorded, but reading it got no answer (B40). */
+export const PO_UPLOAD_READ_UNANSWERED_MESSAGE =
+  "The file was uploaded, but we couldn't start reading it. Open it from PO imports and press Re-parse.";
 
 export function PoUploadForm() {
   const router = useRouter();
@@ -73,6 +79,9 @@ export function PoUploadForm() {
       }
     }
     setSubmitting(true);
+    // The import that was recorded, once it is: a lost answer after this
+    // point is about reading the file, not about uploading it.
+    let recordedId: string | null = null;
     try {
       const presign = await presignPoUploadAction({
         fileName: file.name,
@@ -119,6 +128,7 @@ export function PoUploadForm() {
         toast.error(recorded.error.message);
         return;
       }
+      recordedId = recorded.data.id;
       if (recorded.data.duplicateOf) {
         // Still a genuine duplicate: the file's previous import is either
         // in-flight or produced a PO that is still live.
@@ -144,6 +154,22 @@ export function PoUploadForm() {
         toast.error(parsed.error.message);
       }
       router.push(`/dashboard/purchase-orders/imports/${recorded.data.id}`);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      if (recordedId !== null) {
+        // The upload was recorded and only the read got no answer. The page
+        // stays put (opening the import with no connection becomes a full
+        // page load), and the import is in PO imports, where Re-parse reads
+        // it again.
+        toast.error(PO_UPLOAD_READ_UNANSWERED_MESSAGE);
+        return;
+      }
+      // No answer before the upload was recorded (offline, a server error, a
+      // deploy, a dropped upload). The same file sent again is safe: the
+      // upload is recorded by its checksum, so a file that did land opens its
+      // existing import.
+      toast.error(requestFailedMessage(e, 'upload the file'));
     } finally {
       setSubmitting(false);
     }

@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createRestorePointAction } from '@/server/actions/restore-points';
 
 /** "Create restore point" — captures a snapshot now, with an optional label. */
@@ -17,8 +19,20 @@ export function CreateRestorePointButton() {
 
   async function create() {
     setBusy(true);
-    const r = await createRestorePointAction({ label: label.trim() || undefined });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof createRestorePointAction>>;
+    try {
+      r = await createRestorePointAction({ label: label.trim() || undefined });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, a restore point that was made is made twice.
+      toast.error(
+        requestUnconfirmedMessage(e, 'the restore point was created', 'the restore points list'),
+      );
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

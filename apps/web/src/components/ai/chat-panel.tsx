@@ -8,6 +8,8 @@ import { filterChipClass } from '@/components/patterns/chip';
 import { StatePanel } from '@/components/patterns/state-panel';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cn } from '@/lib/utils';
 
 interface ChatTurn {
@@ -255,6 +257,12 @@ export function ChatPanel() {
           const target = stored && list.find((s) => s.id === stored) ? stored : null;
           if (target) await loadSession(target);
         }
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer (offline, a server error): the panel still opens on a new
+        // chat, and says why the past chats are missing.
+        if (!cancelled) toast.error(requestFailedMessage(e, 'load your past chats'));
       } finally {
         if (!cancelled) setHydrating(false);
       }

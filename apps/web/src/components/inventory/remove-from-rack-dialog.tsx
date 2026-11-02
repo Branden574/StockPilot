@@ -18,6 +18,8 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { removeStockFromLocationAction } from '@/server/actions/inventory';
 
 import { formatStockQuantity } from '@stockpilot/core';
@@ -81,20 +83,29 @@ export function RemoveFromRackDialog({
       return;
     }
     setSubmitting(true);
-    const res = await removeStockFromLocationAction({
-      itemId,
-      locationId,
-      quantity: qtyNum,
-      reason: reason.trim(),
-    });
-    setSubmitting(false);
+    let res: Awaited<ReturnType<typeof removeStockFromLocationAction>>;
+    try {
+      res = await removeStockFromLocationAction({
+        itemId,
+        locationId,
+        quantity: qtyNum,
+        reason: reason.trim(),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(
+        requestUnconfirmedMessage(e, 'the stock was removed', "the item's Movements tab"),
+      );
+      return;
+    } finally {
+      setSubmitting(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
     }
-    toast.success(
-      `Removed ${formatStockQuantity(qtyNum)} from ${locationName}.`,
-    );
+    toast.success(`Removed ${formatStockQuantity(qtyNum)} from ${locationName}.`);
     // The stock genuinely left in every one of these cases; they say what
     // happened to the book's crate LABEL. Reported the same way, and in the
     // same order, as the place / put-away dialogs report them — a bare "Removed
@@ -152,9 +163,7 @@ export function RemoveFromRackDialog({
         `The crate label on ${itemName} was left as it was and may now be wrong — nobody was asked about clearing it.`,
       );
     } else if (res.data.crateSyncUpdated) {
-      toast.warning(
-        `The crate label on ${itemName} was changed to follow the stock it has left.`,
-      );
+      toast.warning(`The crate label on ${itemName} was changed to follow the stock it has left.`);
     }
     setOpen(false);
     router.refresh();

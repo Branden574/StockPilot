@@ -26,6 +26,9 @@ vi.mock('@/server/actions/locations', () => ({
   updateLocationAction: vi.fn(),
 }));
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 import { LocationsManager } from './locations-manager';
 
 // ---------------------------------------------------------------------------
@@ -350,5 +353,61 @@ describe('LocationsManager — refusals are announced inside the dialog', () => 
     expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
       'A location with this name already exists.',
     );
+  });
+});
+
+// B40: Archive and Restore set their busy flag, awaited the action with no
+// catch and cleared the flag only when it answered. A call that got no answer
+// (offline, a server error, a deploy) left the confirm spinning, and a pending
+// confirm refuses to close, so the page was stuck.
+describe('LocationsManager when a request gets no answer', () => {
+  beforeEach(async () => {
+    const actions = await import('@/server/actions/locations');
+    vi.mocked(actions.archiveLocationAction).mockReset();
+    vi.mocked(actions.restoreLocationAction).mockReset();
+    vi.mocked(toast.error).mockReset();
+  });
+
+  it('archive says the location was not archived, inside the dialog, and never acknowledges stock unseen', async () => {
+    const { archiveLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(archiveLocationAction)
+      .mockRejectedValueOnce(offline())
+      .mockResolvedValueOnce({ ok: true, data: undefined } as never);
+    const user = userEvent.setup();
+    render(<LocationsManager initial={ROWS} canManage />);
+    await user.click(screen.getByRole('button', { name: /archive dc4/i }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        requestFailedMessage(offline(), 'archive the location'),
+      ),
+    );
+    expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'archive the location'),
+    );
+    const again = within(dialog).getByRole('button', { name: 'Archive' });
+    expect(again).toBeEnabled();
+    await user.click(again);
+    expect(vi.mocked(archiveLocationAction).mock.calls.map((c) => c[1])).toEqual([
+      { acknowledgeStock: false },
+      { acknowledgeStock: false },
+    ]);
+  });
+
+  it('restore says the location was not restored, inside the dialog', async () => {
+    const { restoreLocationAction } = await import('@/server/actions/locations');
+    vi.mocked(restoreLocationAction).mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<LocationsManager initial={[ROWS[0]!]} view="archived" canManage />);
+    await user.click(screen.getByRole('button', { name: /Restore/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert')).toHaveTextContent(
+        requestFailedMessage(offline(), 'restore the location'),
+      ),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
 });

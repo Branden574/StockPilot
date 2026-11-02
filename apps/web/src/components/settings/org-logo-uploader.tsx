@@ -7,6 +7,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { createClient } from '@/lib/supabase/client';
 import { setOrgLogoUrlAction } from '@/server/actions/profile';
 
@@ -71,6 +73,10 @@ export function OrgLogoUploader({
       setUrl(cacheBust);
       toast.success('Organization logo updated.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'update the logo'));
     } finally {
       setBusy(false);
     }
@@ -87,6 +93,10 @@ export function OrgLogoUploader({
       setUrl(null);
       toast.success('Organization logo removed.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'remove the logo'));
     } finally {
       setBusy(false);
     }

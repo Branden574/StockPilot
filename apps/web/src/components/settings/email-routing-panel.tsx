@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SettingsPanel } from '@/components/settings/settings-nav';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setOrgEmailRoutingAction } from '@/server/actions/email-routing-settings';
 
 import {
@@ -223,8 +225,19 @@ function FeatureCard({
     }
     setServerError(null);
     setBusy(true);
-    const res = await callAction(toRecipientsInput(fields));
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof callAction>>;
+    try {
+      res = await callAction(toRecipientsInput(fields));
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'save the email routing');
+      setServerError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res) return; // step-up dismissed
     if (!res.ok) {
       setServerError(res.error.message);
@@ -237,8 +250,20 @@ function FeatureCard({
   async function clearRouting() {
     setServerError(null);
     setBusy(true);
-    const res = await callAction(null);
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof callAction>>;
+    try {
+      res = await callAction(null);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The confirm stays open, so Confirm clear can be pressed again.
+      const message = requestFailedMessage(e, 'clear the email routing');
+      setServerError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     setConfirmClear(false);
     if (!res) return;
     if (!res.ok) {
@@ -323,7 +348,11 @@ function FeatureCard({
       ) : null}
 
       {fieldError ? <p className="text-destructive text-[13px]">{fieldError}</p> : null}
-      {serverError ? <p className="text-destructive text-[13px]">{serverError}</p> : null}
+      {serverError ? (
+        <p role="alert" className="text-destructive text-[13px]">
+          {serverError}
+        </p>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <Button onClick={() => void save()} disabled={busy}>

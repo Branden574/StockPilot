@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updateOrgPoTermsAction } from '@/server/actions/organization';
 
 interface PoTermsEditorProps {
@@ -30,10 +32,19 @@ export function PoTermsEditor({ current }: PoTermsEditorProps) {
   async function save() {
     if (!dirty) return;
     setBusy(true);
-    const r = await updateOrgPoTermsAction({
-      poTerms: value.length === 0 ? null : value,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof updateOrgPoTermsAction>>;
+    try {
+      r = await updateOrgPoTermsAction({
+        poTerms: value.length === 0 ? null : value,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the purchase order terms'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

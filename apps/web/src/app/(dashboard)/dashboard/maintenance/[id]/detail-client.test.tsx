@@ -1,6 +1,10 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn(), back: vi.fn() }),
@@ -27,7 +31,10 @@ import { MaintenanceRequestActions } from './detail-client';
 // never silently starts depending on a real network call again. None of
 // these tests assert on it.
 beforeEach(() => {
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false }) as Response));
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => ({ ok: false }) as Response),
+  );
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -59,7 +66,12 @@ const BASE_PROPS = { requestId: 'r1', requesterName: 'Jane Smith', resolutionPho
 describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Important 3)', () => {
   it('the OPEN Cancel confirm dialog never contains forbidden ticket/notification vocabulary', async () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={false} showCancel={true} showResolve={false} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={false}
+        showCancel={true}
+        showResolve={false}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Cancel request' }));
     // Confirms the dialog actually opened before sweeping — an accidental
@@ -74,7 +86,12 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
 
   it('the OPEN Archive confirm dialog never contains forbidden ticket/notification vocabulary', async () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={true} showCancel={false} showResolve={false} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={true}
+        showCancel={false}
+        showResolve={false}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
     expect(screen.getByText('Archive this maintenance request?')).toBeInTheDocument();
@@ -87,7 +104,12 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
 
   it('the OPEN Resolve dialog never contains forbidden ticket/notification vocabulary', async () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={false} showCancel={false} showResolve={true} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={false}
+        showCancel={false}
+        showResolve={true}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Resolve' }));
     expect(screen.getByText('Resolve this maintenance request?')).toBeInTheDocument();
@@ -100,7 +122,12 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
 
   it('a closed sweep before any dialog is opened would prove nothing — all three buttons render but no dialog is in the DOM yet', () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={true} showCancel={true} showResolve={true} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={true}
+        showCancel={true}
+        showResolve={true}
+      />,
     );
     expect(screen.queryByText('Cancel this maintenance request?')).not.toBeInTheDocument();
     expect(screen.queryByText('Archive this maintenance request?')).not.toBeInTheDocument();
@@ -111,7 +138,12 @@ describe('MaintenanceRequestActions confirm-dialog vocabulary sweep (fix wave Im
 describe('MaintenanceRequestActions — Resolve affordance (Task 7 Step 1 test 6)', () => {
   it('showResolve renders the Resolve button and clicking it opens the dialog', async () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={false} showCancel={false} showResolve={true} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={false}
+        showCancel={false}
+        showResolve={true}
+      />,
     );
     const resolveButton = screen.getByRole('button', { name: 'Resolve' });
     expect(resolveButton).toBeInTheDocument();
@@ -121,7 +153,12 @@ describe('MaintenanceRequestActions — Resolve affordance (Task 7 Step 1 test 6
 
   it('showResolve=false never renders a Resolve button', () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={true} showCancel={true} showResolve={false} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={true}
+        showCancel={true}
+        showResolve={false}
+      />,
     );
     expect(screen.queryByRole('button', { name: 'Resolve' })).not.toBeInTheDocument();
   });
@@ -136,7 +173,12 @@ describe('MaintenanceRequestActions — resolutionPhotos prop-threaded into the 
         showCancel={false}
         showResolve={true}
         resolutionPhotos={[
-          { id: 'proof-1', originalFilename: 'after.jpg', url: 'https://signed/after.jpg', thumbUrl: null },
+          {
+            id: 'proof-1',
+            originalFilename: 'after.jpg',
+            url: 'https://signed/after.jpg',
+            thumbUrl: null,
+          },
         ]}
       />,
     );
@@ -149,7 +191,12 @@ describe('MaintenanceRequestActions — resolutionPhotos prop-threaded into the 
 
   it('an empty resolutionPhotos array renders the dialog with no staged photos', async () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={false} showCancel={false} showResolve={true} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={false}
+        showCancel={false}
+        showResolve={true}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Resolve' }));
     expect(screen.getByText('Resolve this maintenance request?')).toBeInTheDocument();
@@ -160,7 +207,12 @@ describe('MaintenanceRequestActions — resolutionPhotos prop-threaded into the 
 describe('MaintenanceRequestActions — Archive confirm copy (Task 7 Step 1 test 7)', () => {
   it('pins the updated D1 re-bucket sentence and confirms the STALE sentence is gone', async () => {
     render(
-      <MaintenanceRequestActions {...BASE_PROPS} showArchive={true} showCancel={false} showResolve={false} />,
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={true}
+        showCancel={false}
+        showResolve={false}
+      />,
     );
     await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
     expect(
@@ -169,5 +221,54 @@ describe('MaintenanceRequestActions — Archive confirm copy (Task 7 Step 1 test
       ),
     ).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('requests that are already resolved');
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) left
+// both confirms' buttons pending for good, with nothing said.
+// Each confirm stays open with the reason inside it, and Cancel closes it.
+describe('MaintenanceRequestActions when the request gets no answer', () => {
+  it('Archive says inside the confirm that the request was not archived, and the confirm works again', async () => {
+    archive.mockRejectedValueOnce(offline());
+    render(
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={true}
+        showCancel={false}
+        showResolve={false}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    const sentence = requestFailedMessage(offline(), 'archive the request');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
+
+    // Closed and opened again, it starts clean.
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await userEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    expect(within(screen.getByRole('dialog')).queryByRole('alert')).toBeNull();
+  });
+
+  it('Cancel request says inside the confirm that the request was not cancelled', async () => {
+    cancel.mockRejectedValueOnce(offline());
+    render(
+      <MaintenanceRequestActions
+        {...BASE_PROPS}
+        showArchive={false}
+        showCancel={true}
+        showResolve={false}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel request' }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel request' }));
+    const sentence = requestFailedMessage(offline(), 'cancel the request');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 });

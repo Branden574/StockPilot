@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { restoreProcedureAction } from '@/server/actions/procedures';
 
 /**
@@ -18,26 +20,47 @@ export function RestoreButton({ procedureId, title }: { procedureId: string; tit
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  // Why the last try failed, inside the confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [error, setError] = React.useState<string | null>(null);
 
   async function onConfirm() {
     setBusy(true);
+    setError(null);
     try {
       const res = await restoreProcedureAction(procedureId);
       if (!res.ok) {
+        setError(res.error.message);
         toast.error(res.error.message);
         return;
       }
+      // Closed only once it worked: a failure keeps the confirm open, with
+      // the reason inside it, and Cancel closes it.
+      setOpen(false);
       toast.success('Procedure restored.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the procedure');
+      setError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
-      setOpen(false);
     }
   }
 
   return (
     <>
-      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)}>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+      >
         {busy ? (
           <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
         ) : (
@@ -53,6 +76,7 @@ export function RestoreButton({ procedureId, title }: { procedureId: string; tit
         confirmLabel="Restore"
         tone="primary"
         pending={busy}
+        error={error}
         onConfirm={onConfirm}
       />
     </>

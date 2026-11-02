@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 /**
  * The admin Warehouses list and dialog in the redesign (W-AD-03, W-AD-03a):
@@ -181,5 +185,41 @@ describe('WarehousesManager', () => {
     );
     finish({ ok: true });
     await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) used
+// to leave the spinner on with nothing said.
+describe('WarehousesManager when the request gets no answer', () => {
+  it('Archive stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.archive.mockRejectedValueOnce(offline());
+    renderManager();
+    const row = screen.getByRole('link', { name: 'North DC' }).closest('tr')!;
+    fireEvent.click(within(row).getByRole('button', { name: 'Archive' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'archive the warehouse'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'archive the warehouse'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('Restore stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.restore.mockRejectedValueOnce(offline());
+    renderManager('archived');
+    fireEvent.click(screen.getByRole('button', { name: /Restore/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'restore the warehouse'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'restore the warehouse'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
   });
 });

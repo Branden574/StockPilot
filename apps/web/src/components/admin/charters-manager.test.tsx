@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 /**
  * The admin Charters list and dialog in the redesign (W-AD-02, W-AD-02a):
@@ -9,7 +13,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const refresh = vi.fn();
-vi.mock('next/navigation', () => ({
+// The real unstable_rethrow stays, so isControlFlow recognises a redirect.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
   useRouter: () => ({ push: vi.fn(), refresh }),
   usePathname: () => '/dashboard/admin/charters',
   useSearchParams: () => new URLSearchParams(),
@@ -158,3 +164,73 @@ describe('ChartersManager', () => {
     expect(actions.create).not.toHaveBeenCalled();
   });
 });
+
+// B40: a request that got no answer (offline, a server error, a deploy) used
+// to leave the spinner on with nothing said.
+describe('ChartersManager when the request gets no answer', () => {
+  it('Archive stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.archive.mockRejectedValueOnce(offline());
+    renderManager([NO_ADDRESS]);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'archive the charter'),
+    );
+    expect(toast.error).toHaveBeenCalledWith(
+      requestFailedMessage(offline(), 'archive the charter'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('Restore says why inside the confirm, which stays open and can be closed', async () => {
+    actions.restore.mockRejectedValueOnce(offline());
+    render(
+      <ChartersManager
+        initial={[{ ...NO_ADDRESS, status: 'archived' as const }]}
+        termSingular="Region"
+        eyebrow="Admin"
+        title="Regions"
+        subline="Top-level groupings for warehouses."
+        view="archived"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Restore/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    const sentence = requestFailedMessage(offline(), 'restore the charter');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(sentence);
+    expect(toast.error).toHaveBeenCalledWith(sentence);
+    expect(within(dialog).getByRole('button', { name: 'Restore' })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('Restore answered with a redirect says nothing, and nothing is left to escape', async () => {
+    actions.restore.mockRejectedValueOnce(signInRedirect());
+    render(
+      <ChartersManager
+        initial={[{ ...NO_ADDRESS, status: 'archived' as const }]}
+        termSingular="Region"
+        eyebrow="Admin"
+        title="Regions"
+        subline="Top-level groupings for warehouses."
+        view="archived"
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Restore/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Restore' }));
+    await waitFor(() => expect(actions.restore).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(within(dialog).queryByRole('alert')).toBeNull();
+  });
+});
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();

@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/utils';
 import { submitDashboardTicketAction } from '@/server/actions/support-tickets';
@@ -148,6 +150,12 @@ export function SupportTicketForm({ userId }: { userId: string }) {
       replaceFile(null);
       // Pull the fresh "My submissions" list into the server-rendered section.
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // What was typed stays. A request that was sent before the answer was
+      // lost is sent twice if sent again.
+      setError(requestUnconfirmedMessage(e, 'your request was sent', 'My submissions'));
     } finally {
       setBusy(false);
     }

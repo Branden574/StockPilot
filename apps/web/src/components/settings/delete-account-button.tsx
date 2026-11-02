@@ -7,7 +7,9 @@ import { toast } from 'sonner';
 import { DELETE_ACCOUNT_DIALOG_COPY } from '@/components/settings/delete-account-copy';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { isControlFlow } from '@/lib/control-flow';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { deleteOwnAccountAction } from '@/server/actions/profile';
 
 /**
@@ -47,8 +49,18 @@ export function DeleteAccountButton() {
     // the browser's other tabs (lib/interrupted-run) goes before the request
     // does.
     purgeInterruptedRuns();
-    const res = await deleteOwnAccountAction({ confirm: 'DELETE' });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof deleteOwnAccountAction>>;
+    try {
+      res = await deleteOwnAccountAction({ confirm: 'DELETE' });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Inside the dialog, which stays open, like a refusal (no toast: L112).
+      setRefusal({ message: requestFailedMessage(e, 'delete your account'), lastOwner: false });
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       const reason = (res.error.details as { reason?: unknown } | undefined)?.reason;
       setRefusal({ message: res.error.message, lastOwner: reason === 'last_owner' });

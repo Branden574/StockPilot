@@ -2,6 +2,9 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 // Radix Select needs pointer-capture APIs happy-dom doesn't implement.
 beforeAll(() => {
   Element.prototype.hasPointerCapture ??= () => false;
@@ -21,6 +24,8 @@ vi.mock('@/server/actions/import', () => ({
   importItemsAction: vi.fn(),
   prepareItemImportAction: vi.fn(),
 }));
+
+import { toast } from 'sonner';
 
 import { importItemsAction, prepareItemImportAction } from '@/server/actions/import';
 
@@ -147,9 +152,7 @@ describe('CsvImport — the template is module-gated', () => {
     const note = screen.getByText(/Applied on import:/);
     expect(note.textContent).not.toMatch(/jersey_number|size_system|product group/i);
     render(<CsvImport sportsEnabled />);
-    expect(screen.getAllByText(/Applied on import:/).at(-1)?.textContent).toMatch(
-      /jersey_number/,
-    );
+    expect(screen.getAllByText(/Applied on import:/).at(-1)?.textContent).toMatch(/jersey_number/);
   });
 });
 
@@ -195,9 +198,7 @@ describe('CsvImport — the destination warehouse', () => {
   });
 
   it('locks the picker to the assignment of a warehouse-scoped user', () => {
-    render(
-      <CsvImport sportsEnabled={false} warehouses={WAREHOUSES} forcedWarehouseId="wh-demo" />,
-    );
+    render(<CsvImport sportsEnabled={false} warehouses={WAREHOUSES} forcedWarehouseId="wh-demo" />);
     expect(screen.getByRole('combobox').getAttribute('data-disabled')).not.toBeNull();
   });
 
@@ -210,9 +211,9 @@ describe('CsvImport — the destination warehouse', () => {
     const user = userEvent.setup();
     render(<CsvImport sportsEnabled={false} warehouses={[]} forcedWarehouseId={null} />);
     await uploadOneRow(user);
-    expect(
-      screen.getByRole('button', { name: /import 1 item/i }).hasAttribute('disabled'),
-    ).toBe(true);
+    expect(screen.getByRole('button', { name: /import 1 item/i }).hasAttribute('disabled')).toBe(
+      true,
+    );
     expect(importItemsAction).not.toHaveBeenCalled();
   });
 });
@@ -226,7 +227,10 @@ describe('CsvImport — the destination warehouse', () => {
  * then silently ignored with Import enabled immediately; and a byte-identical
  * re-upload produced no duplicate warning at all.
  */
-async function upload(user: ReturnType<typeof userEvent.setup>, text = 'name,sku\nWireless Mouse,SP-MOUSE-001\n') {
+async function upload(
+  user: ReturnType<typeof userEvent.setup>,
+  text = 'name,sku\nWireless Mouse,SP-MOUSE-001\n',
+) {
   const file = new File([text], 'items.csv', { type: 'text/csv' });
   Object.defineProperty(file, 'text', { value: async () => text });
   await user.upload(document.getElementById('csv-upload') as HTMLInputElement, file);
@@ -446,9 +450,9 @@ describe('CsvImport — the same file, uploaded twice', () => {
     await upload(user);
 
     expect(await screen.findByText(/already imported/i)).toBeTruthy();
-    expect(
-      screen.getByRole('button', { name: /import 1 item/i }).hasAttribute('disabled'),
-    ).toBe(true);
+    expect(screen.getByRole('button', { name: /import 1 item/i }).hasAttribute('disabled')).toBe(
+      true,
+    );
   });
 
   it('requires an explicit override, then sends it — a hash is never a dead end', async () => {
@@ -652,5 +656,39 @@ describe('CsvImport — the step cards keep the outline', () => {
       'Step 2 — upload your CSV',
       'Imported 1 item',
     ]);
+  });
+});
+
+// B40: the review set `reviewing`, awaited the action with no catch and
+// cleared it only when it answered, so a review that got no answer (offline, a
+// server error, a deploy) said "Reviewing…" forever and Import stayed off. The
+// import cleared its flag but said nothing at all, so nobody knew whether the
+// rows had been created.
+describe('CsvImport when a request gets no answer', () => {
+  it('a review says the file could not be checked, and stops saying Reviewing', async () => {
+    vi.mocked(prepareItemImportAction).mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'check the file')),
+    );
+    expect(screen.queryByText('Reviewing…')).toBeNull();
+  });
+
+  it('an import says to check the Items list before trying again, and keeps the file', async () => {
+    vi.mocked(importItemsAction).mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<CsvImport sportsEnabled={false} warehouses={WH} />);
+    await upload(user);
+    await user.click(await screen.findByRole('button', { name: /import 1 item/i }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestUnconfirmedMessage(offline(), 'the file was imported', 'the Items list'),
+      ),
+    );
+    expect(screen.getByRole('table')).toBeTruthy();
+    expect(screen.getByRole('button', { name: /import 1 item/i })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

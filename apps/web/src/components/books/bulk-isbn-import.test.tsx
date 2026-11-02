@@ -14,7 +14,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
 import { getUnsavedSources, resetUnsavedSourcesForTests } from '@/lib/unsaved-work';
+import { offline } from '@/test/rejected-request';
 
 const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => router }));
@@ -295,5 +297,29 @@ describe('BulkIsbnImport covers', () => {
     expect(withCover!.querySelector('[data-slot="missing-photo"]')).toBeNull();
     expect(without!.querySelector('img')).toBeNull();
     expect(without!.querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+  });
+});
+
+// B40: an Import that got no answer (offline, a server error, a deploy) left
+// the button spinning for good with nothing said. Books already in the
+// organization are skipped by ISBN, so trying again cannot create twins.
+describe('BulkIsbnImport when the import gets no answer', () => {
+  it('stops the spinner, keeps the rows and says the books were not imported', async () => {
+    bulkCreate.mockRejectedValueOnce(offline());
+    renderImport();
+    fireEvent.change(list(), { target: { value: `${ISBN_A}\n${ISBN_B}` } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Look up' }));
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Import 1 book' })).toBeEnabled(),
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Import 1 book' }));
+    });
+    expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'import the books'));
+    expect(screen.getByRole('button', { name: 'Import 1 book' })).toBeEnabled();
+    expect(screen.getByLabelText(`Title for ${ISBN_A}`)).toHaveValue(`Book ${ISBN_A}`);
+    expect(router.push).not.toHaveBeenCalled();
   });
 });

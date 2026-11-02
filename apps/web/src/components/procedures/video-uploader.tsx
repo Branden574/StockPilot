@@ -9,6 +9,11 @@ import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { Input } from '@/components/ui/input';
 import { isControlFlow } from '@/lib/control-flow';
+import {
+  isActionOutOfDate,
+  requestFailedMessage,
+  requestUnconfirmedMessage,
+} from '@/lib/request-failure';
 import { cn } from '@/lib/utils';
 import { createClient } from '@/lib/supabase/client';
 import { uploadWithProgress } from '@/lib/upload-with-progress';
@@ -75,7 +80,9 @@ type VideoUploaderProps = ImmediateProps | StagedProps;
 interface PendingUpload {
   key: string;
   name: string;
-  status: 'uploading' | 'recording' | 'done' | 'error';
+  /** 'unconfirmed': the file is up, but its record step got no answer, so
+   *  whether the video was saved is unknown (the toast says where to look). */
+  status: 'uploading' | 'recording' | 'done' | 'error' | 'unconfirmed';
   /** Real transported percentage for this file, or null before the first
    *  transport event. Never synthesised — see lib/upload-with-progress.ts. */
   percent: number | null;
@@ -143,6 +150,39 @@ export async function uploadPosterFor(
   } catch {
     return null;
   }
+}
+
+/**
+ * What a video upload that got no answer says (offline, a server error, a
+ * deploy): every step that can reject is a request (the upload address, the
+ * PUT, the record step). Before the record step nothing was saved; at it, the
+ * video may have been, and adding it again would make a second copy, so its
+ * row says "Not confirmed" and the toast says where to look first.
+ */
+function videoUploadNoAnswer(
+  e: unknown,
+  fileName: string,
+  recording: boolean,
+): { row: Pick<PendingUpload, 'status' | 'error'>; message: string } {
+  if (isActionOutOfDate(e)) {
+    // The action is not on the server, so nothing ran; only a reload helps.
+    return {
+      row: { status: 'error', error: 'reload the page' },
+      message: recording
+        ? requestUnconfirmedMessage(e, `"${fileName}" was saved`, "the procedure's videos")
+        : requestFailedMessage(e, `upload "${fileName}"`),
+    };
+  }
+  if (recording) {
+    return {
+      row: { status: 'unconfirmed' },
+      message: requestUnconfirmedMessage(e, `"${fileName}" was saved`, "the procedure's videos"),
+    };
+  }
+  return {
+    row: { status: 'error', error: 'no answer' },
+    message: requestFailedMessage(e, `upload "${fileName}"`),
+  };
 }
 
 function formatBytes(bytes: number | null | undefined): string {
@@ -230,6 +270,8 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
   const [pending, setPending] = React.useState<PendingUpload[]>([]);
   const [deleteTarget, setDeleteTarget] = React.useState<UploadedVideo | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // Why the last Remove failed, inside the confirm. Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- async fetch lifecycle
@@ -256,6 +298,9 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
 
       setPending((p) => [...p, { key, name: file.name, status: 'uploading', percent: null }]);
 
+      // Set once the record step is sent: from then on, a call with no answer
+      // may still have saved the video.
+      let recording = false;
       try {
         const { duration } = await probeVideoMetadata(file);
         const ext = extensionFromMime(file.type) || (file.name.split('.').pop() ?? 'mp4');
@@ -305,6 +350,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
 
         setPending((p) => p.map((x) => (x.key === key ? { ...x, status: 'recording' } : x)));
 
+        recording = true;
         const record = await recordProcedureVideoAction({
           procedureId,
           storagePath: path,
@@ -332,18 +378,19 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
       } catch (e) {
         // A redirect (the session ended): the router is already navigating.
         if (isControlFlow(e)) return;
-        const msg = e instanceof Error ? e.message : 'Upload failed';
-        setPending((p) =>
-          p.map((x) => (x.key === key ? { ...x, status: 'error', error: msg } : x)),
-        );
-        toast.error(msg);
+        const failure = videoUploadNoAnswer(e, file.name, recording);
+        setPending((p) => p.map((x) => (x.key === key ? { ...x, ...failure.row } : x)));
+        toast.error(failure.message);
       }
     }
 
     if (successCount > 0) {
       toast.success(successCount === 1 ? 'Video uploaded.' : `${successCount} videos uploaded.`);
+      // Read the page again only when a video was saved: with no connection a
+      // refresh is a full page load (the browser's offline page), which would
+      // take the messages above with it.
+      router.refresh();
     }
-    router.refresh();
     // Clear successful pending rows after a short delay so the user sees
     // them flip to "done" before they disappear.
     setTimeout(() => {
@@ -354,18 +401,28 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleteBusy(true);
+    setDeleteError(null);
     try {
       const res = await deleteProcedureVideoAction(deleteTarget.id);
       if (!res.ok) {
+        setDeleteError(res.error.message);
         toast.error(res.error.message);
         return;
       }
       setVideos((arr) => arr.filter((v) => v.id !== deleteTarget.id));
+      // Closed only once it worked: a failure keeps the confirm open, with
+      // the reason inside it.
+      setDeleteTarget(null);
       toast.success('Video removed.');
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'remove the video');
+      setDeleteError(message);
+      toast.error(message);
     } finally {
       setDeleteBusy(false);
-      setDeleteTarget(null);
     }
   }
 
@@ -386,7 +443,10 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
                   variant="ghost"
                   size="sm"
                   className="w-7 px-0"
-                  onClick={() => setDeleteTarget(v)}
+                  onClick={() => {
+                    setDeleteError(null);
+                    setDeleteTarget(v);
+                  }}
                   aria-label={`Delete ${v.title ?? 'video'}`}
                 >
                   <Trash2 className="h-4 w-4" />
@@ -407,6 +467,8 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
             >
               {p.status === 'error' ? (
                 <span className="text-destructive">Failed: {p.error ?? 'unknown'}</span>
+              ) : p.status === 'unconfirmed' ? (
+                <span className="text-warning">Not confirmed</span>
               ) : p.status === 'done' ? (
                 <span className="text-success">Uploaded</span>
               ) : (
@@ -443,6 +505,7 @@ function ImmediateUploader({ procedureId, initialVideos }: ImmediateProps) {
         description="The video file is deleted from storage and the procedure no longer shows it. This cannot be undone."
         confirmLabel="Remove"
         pending={deleteBusy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </div>

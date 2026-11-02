@@ -14,6 +14,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setPoDestinationWarehouseAction } from '@/server/actions/purchase-orders';
 
 interface Props {
@@ -45,8 +47,17 @@ export function PoSetDestination({ poId, warehouses, hasUnreceivableDestination 
       return;
     }
     setBusy(true);
-    const r = await setPoDestinationWarehouseAction({ poId, warehouseId });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setPoDestinationWarehouseAction>>;
+    try {
+      r = await setPoDestinationWarehouseAction({ poId, warehouseId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'set the destination'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

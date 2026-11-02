@@ -5,7 +5,15 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { assignMaintenanceOwnerAction } from '@/server/actions/maintenance-requests';
 
 /** Radix Select rejects an empty-string item value, so the "no owner"
@@ -40,8 +48,18 @@ export function AssignOwnerSelect({ requestId, currentOwnerUserId, members }: Pr
     const previous = value;
     setValue(next);
     setPending(true);
-    const res = await assignMaintenanceOwnerAction(requestId, next === UNASSIGNED ? null : next);
-    setPending(false);
+    let res: Awaited<ReturnType<typeof assignMaintenanceOwnerAction>>;
+    try {
+      res = await assignMaintenanceOwnerAction(requestId, next === UNASSIGNED ? null : next);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'assign the owner'));
+      setValue(previous);
+      return;
+    } finally {
+      setPending(false);
+    }
     if ('error' in res) {
       toast.error(res.error.message);
       setValue(previous);

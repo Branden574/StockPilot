@@ -6,6 +6,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { useHydrated } from '@/lib/use-hydrated';
 import { restoreDeletedAction } from '@/server/actions/recovery';
 
@@ -33,6 +35,10 @@ export function RestoreButton({
       }
       toast.success(`Restored "${label}".`);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, `restore "${label}"`));
     } finally {
       setBusy(false);
     }

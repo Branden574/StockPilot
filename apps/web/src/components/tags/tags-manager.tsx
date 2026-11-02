@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { createTagAction, deleteTagAction, updateTagAction } from '@/server/actions/tags';
 
 import { TAG_DEFAULT_COLOR, tagColor } from './tag-color';
@@ -77,6 +79,9 @@ export function TagsManager({
   const [open, setOpen] = React.useState(false);
   const [deleteTarget, setDeleteTarget] = React.useState<TagManagerRow | null>(null);
   const [deleteBusy, setDeleteBusy] = React.useState(false);
+  // Why the last Delete failed, inside the confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [deleteError, setDeleteError] = React.useState<string | null>(null);
 
   function openNew() {
     setEditing(null);
@@ -90,9 +95,22 @@ export function TagsManager({
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleteBusy(true);
-    const res = await deleteTagAction(deleteTarget.id);
-    setDeleteBusy(false);
+    setDeleteError(null);
+    let res: Awaited<ReturnType<typeof deleteTagAction>>;
+    try {
+      res = await deleteTagAction(deleteTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the tag');
+      setDeleteError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setDeleteBusy(false);
+    }
     if (!res.ok) {
+      setDeleteError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -158,7 +176,10 @@ export function TagsManager({
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setDeleteTarget(tag)}
+                    onClick={() => {
+                      setDeleteError(null);
+                      setDeleteTarget(tag);
+                    }}
                     aria-label={`Delete ${tag.name}`}
                   >
                     <Trash2 className="text-muted-foreground h-4 w-4" />
@@ -185,6 +206,7 @@ export function TagsManager({
         }
         confirmLabel="Delete"
         pending={deleteBusy}
+        error={deleteError}
         onConfirm={confirmDelete}
       />
     </>
@@ -228,9 +250,19 @@ function TagDialog({
       name: values.name,
       color: values.color || null,
     };
-    const res = editing
-      ? await updateTagAction(editing.id, payload)
-      : await createTagAction(payload);
+    let res:
+      Awaited<ReturnType<typeof updateTagAction>> | Awaited<ReturnType<typeof createTagAction>>;
+    try {
+      res = editing ? await updateTagAction(editing.id, payload) : await createTagAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Sent again, a create that
+      // landed is refused by the name's unique rule ("A tag with that name
+      // already exists").
+      toast.error(requestFailedMessage(e, editing ? 'save the tag' : 'create the tag'));
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

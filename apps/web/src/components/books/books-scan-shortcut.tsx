@@ -5,6 +5,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { IsbnScanner } from '@/components/inventory/isbn-scanner';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { lookupBookByIsbnAction } from '@/server/actions/books-lookup';
 
 export interface BooksScanShortcutHandle {
@@ -47,18 +49,17 @@ export const BooksScanShortcut = React.forwardRef<BooksScanShortcutHandle>(
           return;
         }
         router.push(`/dashboard/books?q=${encodeURIComponent(isbn)}`);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestFailedMessage(e, 'look up the book'));
       } finally {
         setBusy(false);
       }
     }
 
     return (
-      <IsbnScanner
-        open={open}
-        onOpenChange={setOpen}
-        onDetected={handleDetected}
-        mode="isbn"
-      />
+      <IsbnScanner open={open} onOpenChange={setOpen} onDetected={handleDetected} mode="isbn" />
     );
   },
 );

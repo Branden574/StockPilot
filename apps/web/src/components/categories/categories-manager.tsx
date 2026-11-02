@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveCategoryAction,
   createCategoryAction,
@@ -196,6 +198,9 @@ export function CategoriesManager({
   const [archiveBusy, setArchiveBusy] = React.useState(false);
   const [restoreTarget, setRestoreTarget] = React.useState<CategoryRow | null>(null);
   const [restoreBusy, setRestoreBusy] = React.useState(false);
+  // Why the last Archive or Restore failed, inside its confirm (a toast sits
+  // behind it). Cleared on open and on each try.
+  const [confirmError, setConfirmError] = React.useState<string | null>(null);
   const [setupBusy, setSetupBusy] = React.useState(false);
 
   const byId = React.useMemo(() => new Map(initial.map((c) => [c.id, c])), [initial]);
@@ -251,9 +256,22 @@ export function CategoriesManager({
   async function confirmArchive() {
     if (!archiveTarget) return;
     setArchiveBusy(true);
-    const res = await archiveCategoryAction(archiveTarget.id);
-    setArchiveBusy(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof archiveCategoryAction>>;
+    try {
+      res = await archiveCategoryAction(archiveTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the category');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -265,9 +283,22 @@ export function CategoriesManager({
   async function confirmRestore() {
     if (!restoreTarget) return;
     setRestoreBusy(true);
-    const res = await restoreCategoryAction(restoreTarget.id);
-    setRestoreBusy(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof restoreCategoryAction>>;
+    try {
+      res = await restoreCategoryAction(restoreTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the category');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
+      setConfirmError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -278,8 +309,17 @@ export function CategoriesManager({
 
   async function handleSetupSports() {
     setSetupBusy(true);
-    const res = await setupSportsCategoriesAction();
-    setSetupBusy(false);
+    let res: Awaited<ReturnType<typeof setupSportsCategoriesAction>>;
+    try {
+      res = await setupSportsCategoriesAction();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'set up the Sports categories'));
+      return;
+    } finally {
+      setSetupBusy(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -338,7 +378,14 @@ export function CategoriesManager({
         </div>
         {canManage &&
           (isArchivedView ? (
-            <Button variant="outline" size="sm" onClick={() => setRestoreTarget(row)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setConfirmError(null);
+                setRestoreTarget(row);
+              }}
+            >
               <RotateCcw className="h-3.5 w-3.5" /> Restore
             </Button>
           ) : (
@@ -346,7 +393,10 @@ export function CategoriesManager({
               variant="ghost"
               size="icon"
               className={cn('-mr-1 -mt-1', HOVER_REVEAL)}
-              onClick={() => setArchiveTarget(row)}
+              onClick={() => {
+                setConfirmError(null);
+                setArchiveTarget(row);
+              }}
               aria-label={`Archive ${row.name}`}
             >
               <Trash2 className="text-muted-foreground h-4 w-4" />
@@ -472,6 +522,7 @@ export function CategoriesManager({
         }
         confirmLabel="Archive"
         pending={archiveBusy}
+        error={confirmError}
         onConfirm={confirmArchive}
       />
 
@@ -485,6 +536,7 @@ export function CategoriesManager({
         confirmLabel="Restore"
         tone="primary"
         pending={restoreBusy}
+        error={confirmError}
         onConfirm={confirmRestore}
       />
     </>
@@ -678,9 +730,25 @@ function CategoryDialog({
       // new category states its whole sports intent by definition.
       ...(editing ? dropUnchangedSportsFields(sportsFields, editing) : sportsFields),
     };
-    const res = editing
-      ? await updateCategoryAction(editing.id, payload)
-      : await createCategoryAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateCategoryAction>>
+      | Awaited<ReturnType<typeof createCategoryAction>>;
+    try {
+      res = editing
+        ? await updateCategoryAction(editing.id, payload)
+        : await createCategoryAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. Category names are not
+      // unique, so a create that may have landed says to look first.
+      toast.error(
+        editing
+          ? requestFailedMessage(e, 'save the category')
+          : requestUnconfirmedMessage(e, 'the category was created', 'the categories list'),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -887,11 +955,21 @@ function CategoryVisibilityControl({ category }: { category: CategoryRow }) {
     setBusy(true);
     setError(null);
     setValue(visibility);
-    const res = await setCategoryPublicVisibilityAction({
-      categoryId: category.id,
-      visibility,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof setCategoryPublicVisibilityAction>>;
+    try {
+      res = await setCategoryPublicVisibilityAction({
+        categoryId: category.id,
+        visibility,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      setValue(previous);
+      setError(requestFailedMessage(e, 'change who can see the category'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       setValue(previous);
       setError(res.error.message);

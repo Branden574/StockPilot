@@ -3,10 +3,13 @@
 import { Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import * as React from 'react';
+import { toast } from 'sonner';
 
 import { SettingsPanel } from '@/components/settings/settings-nav';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   setPublicRequestBlurbAction,
   setWarehousePublicOrderableAction,
@@ -51,10 +54,22 @@ export function PublicRequestsGlobalSettings({
     const t = setTimeout(async () => {
       setSavingBlurb(true);
       setBlurbError(null);
-      const res = await setPublicRequestBlurbAction({
-        blurb: blurb.trim() ? blurb : null,
-      });
-      setSavingBlurb(false);
+      let res: Awaited<ReturnType<typeof setPublicRequestBlurbAction>>;
+      try {
+        res = await setPublicRequestBlurbAction({
+          blurb: blurb.trim() ? blurb : null,
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        const message = requestFailedMessage(e, 'save the public blurb');
+        setBlurbError(message);
+        // One toast for the autosave, however many pauses in typing fail.
+        toast.error(message, { id: 'public-blurb-save' });
+        return;
+      } finally {
+        setSavingBlurb(false);
+      }
       if (!res.ok) {
         setBlurbError(res.error.message);
         return;
@@ -68,11 +83,25 @@ export function PublicRequestsGlobalSettings({
   async function toggleWarehouse(warehouseId: string, on: boolean) {
     setTogglingWarehouseId(warehouseId);
     setWarehouseError(null);
-    const res = await setWarehousePublicOrderableAction({
-      warehouseId,
-      isPublicOrderable: on,
-    });
-    setTogglingWarehouseId(null);
+    let res: Awaited<ReturnType<typeof setWarehousePublicOrderableAction>>;
+    try {
+      res = await setWarehousePublicOrderableAction({
+        warehouseId,
+        isPublicOrderable: on,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(
+        e,
+        on ? 'let the warehouse take public requests' : 'stop the warehouse taking public requests',
+      );
+      setWarehouseError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setTogglingWarehouseId(null);
+    }
     if (!res.ok) {
       setWarehouseError(res.error.message);
       return;

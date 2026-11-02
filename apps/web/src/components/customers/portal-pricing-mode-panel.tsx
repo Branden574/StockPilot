@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { Button } from '@/components/ui/button';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { setPortalPricingModeAction } from '@/server/actions/customers';
 
 import type { PortalPricingMode } from '@stockpilot/core';
@@ -47,8 +49,17 @@ export function PortalPricingModePanel({ initial }: { initial: PortalPricingMode
   async function save() {
     if (!dirty) return;
     setBusy(true);
-    const r = await setPortalPricingModeAction(mode);
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setPortalPricingModeAction>>;
+    try {
+      r = await setPortalPricingModeAction(mode);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the pricing mode'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

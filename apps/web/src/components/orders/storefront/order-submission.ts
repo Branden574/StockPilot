@@ -61,6 +61,7 @@ import {
 } from '@stockpilot/core';
 
 import { isControlFlow } from '@/lib/control-flow';
+import { isActionOutOfDate } from '@/lib/request-failure';
 import {
   createOrderRequestAction,
   getOrderSubmissionAction,
@@ -195,13 +196,11 @@ function storedLiveKey(store: Storage, key: string, userId: string): string | nu
  * built by an older deploy: Next's UnrecognizedActionError, "Failed to find
  * Server Action") never ran, so it is a refusal before any key work, never
  * settled; core words it as "reload the page". Anything else is no answer.
+ * The test is the one every other page uses (lib/request-failure.ts), so the
+ * two never disagree about what an out-of-date page is.
  */
 export function orderCallResultFromThrown(error: unknown): OrderCallResult {
-  if (
-    error instanceof Error &&
-    (error.name === 'UnrecognizedActionError' ||
-      /was not found on the server|Failed to find Server Action/i.test(error.message))
-  ) {
+  if (isActionOutOfDate(error)) {
     return { ok: false, error: { status: 409, code: 'conflict', details: { reason: 'page_out_of_date' } } };
   }
   return { ok: false, error };

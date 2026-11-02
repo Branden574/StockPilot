@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 /**
  * Bins in the redesign (W-AD-04): the add form on the shared field and
@@ -110,5 +114,35 @@ describe('BinsManager', () => {
     expect(within(dialog).getByText('Archive bin "RCV"?')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
     expect(await within(dialog).findByRole('alert')).toHaveTextContent('Bin still holds stock.');
+  });
+});
+
+// B40: a request that got no answer (offline, a server error, a deploy) used
+// to leave the spinner on with nothing said.
+describe('BinsManager when the request gets no answer', () => {
+  it('Save bin stops its spinner, keeps what was typed and says the bin was not created', async () => {
+    actions.create.mockRejectedValueOnce(offline());
+    render(<BinsManager warehouses={WAREHOUSES} bins={BINS} />);
+    fireEvent.change(screen.getByLabelText('Code'), { target: { value: 'sto-1' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Shelf one' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save bin' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'create the bin')),
+    );
+    expect(screen.getByRole('button', { name: 'Save bin' })).toBeEnabled();
+    expect(screen.getByLabelText('Code')).toHaveValue('sto-1');
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('Archive stops its spinner and says why inside the confirm, which stays open', async () => {
+    actions.archive.mockRejectedValueOnce(offline());
+    render(<BinsManager warehouses={WAREHOUSES} bins={BINS} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Archive' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'archive the bin'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Archive' })).toBeEnabled();
   });
 });

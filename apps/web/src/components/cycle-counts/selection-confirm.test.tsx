@@ -6,6 +6,8 @@ import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 import { SelectionConfirm } from './selection-confirm';
 
@@ -22,7 +24,10 @@ vi.mock('next/link', () => ({
     href,
     children,
     ...rest
-  }: { href: string; children: React.ReactNode } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+  }: {
+    href: string;
+    children: React.ReactNode;
+  } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a href={href} {...rest}>
       {children}
     </a>
@@ -60,9 +65,7 @@ describe('SelectionConfirm (embedded picker flow)', () => {
     // The picker's surface is in-flow…
     expect(screen.getByRole('button', { name: 'Inventory' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Books' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('textbox', { name: /search items to count/i }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: /search items to count/i })).toBeInTheDocument();
     // …and the eject-to-Items instructions are gone.
     expect(screen.queryByText(/Open Inventory or Books/)).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Go to Inventory' })).not.toBeInTheDocument();
@@ -73,9 +76,7 @@ describe('SelectionConfirm (embedded picker flow)', () => {
     render(<SelectionConfirm members={NO_MEMBERS} canAssign={false} warehouses={WAREHOUSES} />);
 
     expect(screen.getByRole('button', { name: 'Start count' })).toBeDisabled();
-    expect(
-      screen.getByText('Pick at least one item above to start a count.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Pick at least one item above to start a count.')).toBeInTheDocument();
   });
 
   it('starts a scope=selection count with the picked itemIds (store-driven, both entry paths)', async () => {
@@ -204,5 +205,39 @@ describe('SelectionConfirm fields', () => {
     expect(startActionMock).toHaveBeenCalledWith(
       expect.objectContaining({ itemIds: ['a'], notes: 'Rack 3', assignedTo: null }),
     );
+  });
+});
+
+// B40: Start count set its busy flag, awaited the action with no catch and
+// cleared the flag only when it answered. A start that got no answer (offline,
+// a server error, a deploy) left Start count spinning with nothing said. It may
+// have started the count before the answer was lost, so the message says to
+// look before starting another.
+describe('SelectionConfirm when Start count gets no answer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCountSelection.getState().clear();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [], total: 0 }) }),
+    );
+  });
+
+  it('says to check Cycle counts before trying again and keeps the picks', async () => {
+    const user = userEvent.setup();
+    useCountSelection
+      .getState()
+      .add([{ id: 'a', sku: 'SP-A', name: 'Alpha Charger', itemType: 'product' }]);
+    startActionMock.mockRejectedValueOnce(offline());
+    render(<SelectionConfirm members={NO_MEMBERS} canAssign={false} warehouses={WAREHOUSES} />);
+    await user.click(screen.getByRole('button', { name: 'Start count' }));
+    await vi.waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        requestUnconfirmedMessage(offline(), 'the count was started', 'Cycle counts'),
+      );
+    });
+    expect(screen.getByRole('button', { name: 'Start count' })).toBeEnabled();
+    expect(Object.keys(useCountSelection.getState().picks)).toEqual(['a']);
+    expect(routerMock.push).not.toHaveBeenCalled();
   });
 });

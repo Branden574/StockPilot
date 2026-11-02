@@ -39,6 +39,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import {
   archiveLocationAction,
   createLocationAction,
@@ -169,8 +171,19 @@ export function LocationsManager({
     const acknowledgeStock = archiveRefusal?.holdsStock === true;
     setArchiveRefusal(null);
     setArchiveBusy(true);
-    const res = await archiveLocationAction(archiveTarget.id, { acknowledgeStock });
-    setArchiveBusy(false);
+    let res: Awaited<ReturnType<typeof archiveLocationAction>>;
+    try {
+      res = await archiveLocationAction(archiveTarget.id, { acknowledgeStock });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the location');
+      setArchiveRefusal({ message, holdsStock: false });
+      toast.error(message);
+      return;
+    } finally {
+      setArchiveBusy(false);
+    }
     if (!res.ok) {
       // The guard's own words, verbatim: they name the units and the items,
       // which is precisely what the decision turns on. Not a toast as well,
@@ -193,8 +206,19 @@ export function LocationsManager({
     if (!restoreTarget) return;
     setRestoreError(null);
     setRestoreBusy(true);
-    const res = await restoreLocationAction(restoreTarget.id);
-    setRestoreBusy(false);
+    let res: Awaited<ReturnType<typeof restoreLocationAction>>;
+    try {
+      res = await restoreLocationAction(restoreTarget.id);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the location');
+      setRestoreError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setRestoreBusy(false);
+    }
     if (!res.ok) {
       setRestoreError(res.error.message);
       toast.error(res.error.message);
@@ -436,9 +460,25 @@ function LocationDialog({
         'warehouse' | 'room' | 'shelf' | 'bin' | 'vehicle' | 'jobsite' | 'other' | undefined,
       notes: values.notes || undefined,
     };
-    const res = editing
-      ? await updateLocationAction(editing.id, payload)
-      : await createLocationAction(payload);
+    let res:
+      | Awaited<ReturnType<typeof updateLocationAction>>
+      | Awaited<ReturnType<typeof createLocationAction>>;
+    try {
+      res = editing
+        ? await updateLocationAction(editing.id, payload)
+        : await createLocationAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The dialog stays open with what was typed. A create that may have
+      // landed says to look first.
+      toast.error(
+        editing
+          ? requestFailedMessage(e, 'save the location')
+          : requestUnconfirmedMessage(e, 'the location was created', 'the locations list'),
+      );
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;

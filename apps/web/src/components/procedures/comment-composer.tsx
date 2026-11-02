@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createProcedureCommentAction } from '@/server/actions/procedures';
 
 interface CommentComposerProps {
@@ -53,6 +55,12 @@ export function CommentComposer({
       setBody('');
       router.refresh();
       onPosted?.();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The comment stays in the box. Sent again, a comment that was posted is
+      // posted twice.
+      toast.error(requestUnconfirmedMessage(e, 'your comment was posted', 'the comments'));
     } finally {
       setBusy(false);
     }

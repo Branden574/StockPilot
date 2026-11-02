@@ -16,16 +16,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
 import { compressImageVariants } from '@/lib/image-variants';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { createClient } from '@/lib/supabase/client';
 import {
   addOrderAttachmentAction,
   deleteOrderAttachmentAction,
 } from '@/server/actions/order-attachments';
-import type {
-  OrderAttachment,
-  OrderAttachmentKind,
-} from '@/server/services/order-attachments';
+import type { OrderAttachment, OrderAttachmentKind } from '@/server/services/order-attachments';
 
 const KIND_LABELS: Record<OrderAttachmentKind, string> = {
   signature: 'Wet signature',
@@ -76,9 +75,7 @@ export function OrderAttachmentsPanel({
   const lightboxImages = React.useMemo(
     () =>
       attachments
-        .filter(
-          (a) => (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id) && a.url,
-        )
+        .filter((a) => (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id) && a.url)
         .map((a) => ({ id: a.id, url: a.url! })),
     [attachments, failedIds],
   );
@@ -93,52 +90,75 @@ export function OrderAttachmentsPanel({
     setBusy(true);
     const supabase = createClient();
     let uploaded = 0;
-    for (const rawFile of Array.from(files)) {
-      if (rawFile.size > MAX_BYTES) {
-        toast.error(`${rawFile.name} is too large (max 15 MB).`);
-        continue;
-      }
-      // Compress image proofs before upload (2048px WebP, visually lossless)
-      // — same treatment item photos and the mobile app already get. This
-      // also transcodes iPhone HEIC to a browser-renderable format at the
-      // source. Owner-approved 2026-07-01: raw originals are not kept.
-      // Non-images (PDFs) and any compression failure upload the raw file.
-      let file = rawFile;
-      if (rawFile.type.startsWith('image/')) {
-        try {
-          const { master } = await compressImageVariants(rawFile);
-          file = master;
-        } catch {
-          /* compression failure — upload the original */
+    try {
+      for (const rawFile of Array.from(files)) {
+        if (rawFile.size > MAX_BYTES) {
+          toast.error(`${rawFile.name} is too large (max 15 MB).`);
+          continue;
         }
+        // Compress image proofs before upload (2048px WebP, visually lossless)
+        // — same treatment item photos and the mobile app already get. This
+        // also transcodes iPhone HEIC to a browser-renderable format at the
+        // source. Owner-approved 2026-07-01: raw originals are not kept.
+        // Non-images (PDFs) and any compression failure upload the raw file.
+        let file = rawFile;
+        if (rawFile.type.startsWith('image/')) {
+          try {
+            const { master } = await compressImageVariants(rawFile);
+            file = master;
+          } catch {
+            /* compression failure — upload the original */
+          }
+        }
+        const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const path = `${organizationId}/${orderId}/${crypto.randomUUID()}.${ext}`;
+        const { error: upErr } = await supabase.storage
+          .from(BUCKET)
+          .upload(path, file, { contentType: file.type || undefined, upsert: false });
+        if (upErr) {
+          toast.error(`Upload failed: ${upErr.message}`);
+          continue;
+        }
+        let r: Awaited<ReturnType<typeof addOrderAttachmentAction>>;
+        try {
+          r = await addOrderAttachmentAction({
+            orderRequestId: orderId,
+            storagePath: path,
+            fileName: file.name,
+            contentType: file.type || null,
+            sizeBytes: file.size,
+            kind,
+          });
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
+          // No answer (offline, a server error, a deploy): the file is stored,
+          // but whether it was attached is unknown, so it is left in place.
+          toast.error(
+            requestUnconfirmedMessage(
+              e,
+              `${file.name} was attached`,
+              "the order's proof of delivery",
+            ),
+          );
+          continue;
+        }
+        if (!r.ok) {
+          toast.error(r.error.message);
+          // Clean up the orphaned object if the metadata insert was rejected.
+          await supabase.storage.from(BUCKET).remove([path]);
+          continue;
+        }
+        uploaded += 1;
       }
-      const ext = (file.name.split('.').pop() || 'bin').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const path = `${organizationId}/${orderId}/${crypto.randomUUID()}.${ext}`;
-      const { error: upErr } = await supabase.storage
-        .from(BUCKET)
-        .upload(path, file, { contentType: file.type || undefined, upsert: false });
-      if (upErr) {
-        toast.error(`Upload failed: ${upErr.message}`);
-        continue;
-      }
-      const r = await addOrderAttachmentAction({
-        orderRequestId: orderId,
-        storagePath: path,
-        fileName: file.name,
-        contentType: file.type || null,
-        sizeBytes: file.size,
-        kind,
-      });
-      if (!r.ok) {
-        toast.error(r.error.message);
-        // Clean up the orphaned object if the metadata insert was rejected.
-        await supabase.storage.from(BUCKET).remove([path]);
-        continue;
-      }
-      uploaded += 1;
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
     if (inputRef.current) inputRef.current.value = '';
+    // Read the page again only after an attach that answered, as the PO
+    // attachments panel does. A file whose attach got no answer has its own
+    // sentence saying where to look: with no connection a refresh is a full
+    // page load (the browser's offline page), which would take it away.
     if (uploaded > 0) {
       toast.success(`Added ${uploaded} attachment${uploaded === 1 ? '' : 's'}.`);
       router.refresh();
@@ -147,8 +167,17 @@ export function OrderAttachmentsPanel({
 
   async function onDelete(id: string) {
     setDeletingId(id);
-    const r = await deleteOrderAttachmentAction({ attachmentId: id, orderRequestId: orderId });
-    setDeletingId(null);
+    let r: Awaited<ReturnType<typeof deleteOrderAttachmentAction>>;
+    try {
+      r = await deleteOrderAttachmentAction({ attachmentId: id, orderRequestId: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'delete the attachment'));
+      return;
+    } finally {
+      setDeletingId(null);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
@@ -228,8 +257,7 @@ export function OrderAttachmentsPanel({
             // browsers can't decode it — without onError those tiles render
             // as a broken-image glyph that reads like lost delivery proof.
             // Failed images fall back to the file tile below instead.
-            const isImage =
-              (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id);
+            const isImage = (a.contentType ?? '').startsWith('image/') && !failedIds.has(a.id);
             const tile =
               isImage && (a.thumbUrl ?? a.url) ? (
                 // ~400px cached grid variant (thumbUrl). Signed URL to a
@@ -254,16 +282,12 @@ export function OrderAttachmentsPanel({
             return (
               <div
                 key={a.id}
-                className="group bg-background border-border relative overflow-hidden rounded-lg border"
+                className="bg-background border-border group relative overflow-hidden rounded-lg border"
               >
                 {isImage ? (
                   // Images open in the shared lightbox (zoom + prev/next across
                   // the order's photos, with an Open-original link inside).
-                  <button
-                    type="button"
-                    onClick={() => openViewer(a.id)}
-                    className="block w-full"
-                  >
+                  <button type="button" onClick={() => openViewer(a.id)} className="block w-full">
                     {tile}
                   </button>
                 ) : (

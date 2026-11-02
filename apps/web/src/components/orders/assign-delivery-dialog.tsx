@@ -22,6 +22,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { assignDeliveryAction } from '@/server/actions/order-requests';
 
 export interface DriverOption {
@@ -37,12 +39,7 @@ interface Props {
   trigger: React.ReactNode;
 }
 
-export function AssignDeliveryDialog({
-  orderId,
-  drivers,
-  currentDriverId,
-  trigger,
-}: Props) {
+export function AssignDeliveryDialog({ orderId, drivers, currentDriverId, trigger }: Props) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<string>(currentDriverId ?? '');
@@ -54,8 +51,17 @@ export function AssignDeliveryDialog({
       return;
     }
     setPending(true);
-    const res = await assignDeliveryAction({ id: orderId, deliveryUserId: selected });
-    setPending(false);
+    let res: Awaited<ReturnType<typeof assignDeliveryAction>>;
+    try {
+      res = await assignDeliveryAction({ id: orderId, deliveryUserId: selected });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'assign the delivery'));
+      return;
+    } finally {
+      setPending(false);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -75,8 +81,8 @@ export function AssignDeliveryDialog({
           <DialogHeader>
             <DialogTitle>Assign delivery</DialogTitle>
             <DialogDescription>
-              Pick the staff member who&apos;ll drive this order. They&apos;ll be
-              able to mark it in-transit and collect the signature.
+              Pick the staff member who&apos;ll drive this order. They&apos;ll be able to mark it
+              in-transit and collect the signature.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2">

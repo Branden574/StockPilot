@@ -2,6 +2,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 /**
  * The item page's Adjust stock dialog (redesign P3.3). Pinned here:
  *   - every field is named by its label (before, the Quantity, Note and
@@ -76,5 +79,23 @@ describe('StockAdjustDialog', () => {
     expect(screen.getByText('-1')).toBeInTheDocument();
     expect(apply).toBeDisabled();
     expect(adjustStockAction).not.toHaveBeenCalled();
+  });
+});
+
+// B40: Apply set `submitting`, awaited the action with no catch and cleared it
+// only when it answered. An adjustment that got no answer (offline, a server
+// error, a deploy) left Apply spinning forever with no message.
+describe('StockAdjustDialog when the adjustment gets no answer', () => {
+  it("says to check the item's Movements tab before trying again, and Apply works again", async () => {
+    adjustStockAction.mockRejectedValueOnce(offline());
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestUnconfirmedMessage(offline(), 'the stock was adjusted', "the item's Movements tab"),
+      ),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
   });
 });

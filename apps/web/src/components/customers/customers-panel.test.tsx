@@ -9,7 +9,11 @@
 // the shared StatePanel with its words unchanged.
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 const h = vi.hoisted(() => ({ addCatalog: vi.fn(), removeUser: vi.fn() }));
 
@@ -26,6 +30,16 @@ vi.mock('@/server/actions/customers', () => ({
   setPriceAction: vi.fn(),
   updateCustomerAction: vi.fn(),
 }));
+
+import {
+  createCustomerAction,
+  createPriceListAction,
+  inviteCustomerUserAction,
+  removeCatalogItemAction,
+  removePriceAction,
+  setPriceAction,
+  updateCustomerAction,
+} from '@/server/actions/customers';
 
 import { CustomersPanel, ITEM_MATCH_ROW } from './customers-panel';
 
@@ -223,5 +237,152 @@ describe('CustomersPanel', () => {
     await user.click(screen.getByRole('button', { name: /Westfield Academy/ }));
     await user.type(screen.getByPlaceholderText('buyer@customer.com'), 'x@y.test');
     expect(screen.getByRole('button', { name: 'Invite' })).toBeDisabled();
+  });
+});
+
+// B40: every save here set the shared busy key, awaited the action with no
+// catch and cleared the key only when it answered. A call that got no answer
+// (offline, a server error, a deploy) left the control disabled with nothing
+// said. Creating a customer or a price list twice would make two, so a lost
+// create says to look before trying again.
+describe('CustomersPanel when a request gets no answer', () => {
+  function renderWithPrice() {
+    render(
+      <CustomersPanel
+        customers={[CUSTOMER]}
+        priceLists={[{ id: 'pl-1', name: 'Standard', item_count: 1 }]}
+        items={ITEMS}
+        usersByCustomer={{
+          'cust-1': [
+            {
+              user_id: 'pu-1',
+              email: 'buyer@westfield.test',
+              invited_at: '2026-09-01',
+              accepted_at: null,
+            },
+          ],
+        }}
+        catalogByCustomer={{ 'cust-1': [{ item_id: 'item-0', name: 'Notebook 0', sku: 'NB-0' }] }}
+        pricesByList={{
+          'pl-1': [{ item_id: 'item-3', name: 'Notebook 3', sku: 'NB-3', unit_price: 2 }],
+        }}
+        entitled
+      />,
+    );
+  }
+
+  it('New customer says to check the customer list, inside the dialog, and Create works again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(createCustomerAction).mockRejectedValueOnce(offline());
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /New customer/ }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText('Name'), 'Northside Prep');
+    await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+    expect(
+      await within(dialog).findByText(
+        requestUnconfirmedMessage(offline(), 'the customer was added', 'the customer list'),
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Create' })).toBeEnabled();
+  });
+
+  it('the Price list select says the list was not changed and can be used again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(updateCustomerAction).mockRejectedValueOnce(offline());
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /Westfield Academy/ }));
+    const select = screen.getByLabelText('Price list');
+    await user.selectOptions(select, 'pl-1');
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'change the price list'),
+      ),
+    );
+    expect(select).toBeEnabled();
+  });
+
+  it('Invite says the invite was not sent, under the field, and works again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(inviteCustomerUserAction).mockRejectedValueOnce(offline());
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /Westfield Academy/ }));
+    await user.type(screen.getByPlaceholderText('buyer@customer.com'), 'second@westfield.test');
+    await user.click(screen.getByRole('button', { name: 'Invite' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      requestFailedMessage(offline(), 'send the invite'),
+    );
+    expect(screen.getByRole('button', { name: 'Invite' })).toBeEnabled();
+  });
+
+  it('removing a portal user, and adding or removing a catalog item, say what did not happen', async () => {
+    const user = userEvent.setup();
+    h.removeUser.mockRejectedValueOnce(offline());
+    h.addCatalog.mockRejectedValueOnce(offline());
+    vi.mocked(removeCatalogItemAction).mockRejectedValueOnce(offline());
+    renderPanel();
+    await user.click(screen.getByRole('button', { name: /Westfield Academy/ }));
+
+    await user.click(screen.getByRole('button', { name: 'Remove buyer@westfield.test' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'remove the user')),
+    );
+    expect(screen.getByRole('button', { name: 'Remove buyer@westfield.test' })).toBeEnabled();
+
+    await user.type(
+      screen.getByPlaceholderText("Add an item to this customer's catalog…"),
+      'notebook',
+    );
+    const matches = screen.getAllByRole('button').filter((b) => b.className === ITEM_MATCH_ROW);
+    await user.click(matches[0]!);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'add the item to the catalog'),
+      ),
+    );
+
+    const removeItem = screen.getByRole('button', { name: 'Remove Notebook 0 from the catalog' });
+    await user.click(removeItem);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'remove the item from the catalog'),
+      ),
+    );
+    expect(removeItem).toBeEnabled();
+  });
+
+  it('Add price list says to check the price lists; Save and remove a price say what did not happen', async () => {
+    const user = userEvent.setup();
+    vi.mocked(createPriceListAction).mockRejectedValueOnce(offline());
+    vi.mocked(setPriceAction).mockRejectedValueOnce(offline());
+    vi.mocked(removePriceAction).mockRejectedValueOnce(offline());
+    renderWithPrice();
+
+    await user.type(screen.getByLabelText('New price list name'), 'Summer');
+    await user.click(screen.getByRole('button', { name: /Add/ }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(
+        requestUnconfirmedMessage(offline(), 'the price list was created', 'the price lists'),
+      ),
+    );
+    expect(screen.getByRole('button', { name: /Add/ })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: /Standard/ }));
+    const removePrice = screen.getByRole('button', { name: 'Remove the price for Notebook 3' });
+    await user.click(removePrice);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'remove the price')),
+    );
+    expect(removePrice).toBeEnabled();
+
+    await user.type(screen.getByPlaceholderText('Price an item…'), 'notebook');
+    const matches = screen.getAllByRole('button').filter((b) => b.className === ITEM_MATCH_ROW);
+    await user.click(matches[0]!);
+    await user.type(screen.getByLabelText(/^Price for /), '3.50');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(requestFailedMessage(offline(), 'save the price')),
+    );
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
   });
 });

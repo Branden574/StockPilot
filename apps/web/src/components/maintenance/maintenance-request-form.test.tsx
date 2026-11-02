@@ -1,6 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { toast } from 'sonner';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { outOfDate, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 // Typed with an explicit rest-parameter signature (`..._args: unknown[]`)
 // rather than a zero-arg lambda: TS would otherwise infer a strict 0-arity
@@ -20,6 +23,9 @@ vi.mock('@/server/actions/maintenance-requests', () => ({
 import { MaintenanceRequestForm } from './maintenance-request-form';
 
 const SITES = [{ id: '44444444-4444-4444-4444-444444444444', name: 'Fresno Learning Center' }];
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -346,5 +352,50 @@ describe('field errors are tied to their fields (P4.F3)', () => {
     expect(screen.getByLabelText('Describe the maintenance issue')).toHaveAccessibleDescription(
       'Explain what is happening, when it started, and anything the maintenance team should know before arriving.',
     );
+  });
+});
+
+/**
+ * B40: a call that throws already said the save was unconfirmed. Two throws
+ * are not that. A redirect (the session ended) is already taking the person
+ * to sign-in, so nothing is said; and a page older than the server never
+ * reached it, so nothing was saved and only a reload helps.
+ */
+describe('MaintenanceRequestForm when the call redirects or the page is out of date (B40)', () => {
+  async function fillAndSave() {
+    await userEvent.type(
+      screen.getByLabelText('What is the issue?'),
+      'Air conditioner is not working in Room 204',
+    );
+    await userEvent.type(
+      screen.getByLabelText('Describe the maintenance issue'),
+      'Blowing warm air since yesterday afternoon.',
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Save request' }));
+  }
+
+  it('says nothing on the way to sign-in', async () => {
+    const errorToast = vi.spyOn(toast, 'error');
+    createAction.mockRejectedValueOnce(signInRedirect());
+    const { onSaved } = renderForm();
+    await fillAndSave();
+    await waitFor(() => expect(createAction).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(errorToast).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    errorToast.mockRestore();
+  });
+
+  it('a page older than the server says nothing was saved and to reload first', async () => {
+    createAction.mockRejectedValueOnce(outOfDate());
+    const { onSaved } = renderForm();
+    await fillAndSave();
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'StockPilot was updated since this page was opened, so nothing was changed. Reload the page, then try again.',
+    );
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save request' })).toBeEnabled();
   });
 });

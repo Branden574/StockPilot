@@ -27,6 +27,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   deleteVendorItemMappingAction,
   upsertVendorItemMappingAction,
@@ -69,13 +71,22 @@ export function VendorMappingsManager({
       return;
     }
     setBusy(true);
-    const r = await upsertVendorItemMappingAction({
-      vendorId,
-      itemId,
-      vendorItemNumber: vendorItemNumber.trim(),
-      vendorDescription: vendorDescription.trim() || null,
-    });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof upsertVendorItemMappingAction>>;
+    try {
+      r = await upsertVendorItemMappingAction({
+        vendorId,
+        itemId,
+        vendorItemNumber: vendorItemNumber.trim(),
+        vendorDescription: vendorDescription.trim() || null,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the vendor mapping'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;
@@ -94,8 +105,19 @@ export function VendorMappingsManager({
     if (!deleteTargetId) return;
     setDeleteBusy(true);
     setDeleteError(null);
-    const r = await deleteVendorItemMappingAction(deleteTargetId);
-    setDeleteBusy(false);
+    let r: Awaited<ReturnType<typeof deleteVendorItemMappingAction>>;
+    try {
+      r = await deleteVendorItemMappingAction(deleteTargetId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the vendor mapping');
+      setDeleteError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setDeleteBusy(false);
+    }
     if (!r.ok) {
       setDeleteError(r.error.message);
       toast.error(r.error.message);

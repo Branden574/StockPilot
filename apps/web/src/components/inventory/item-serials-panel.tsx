@@ -46,6 +46,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   addItemSerialsAction,
   deleteItemSerialAction,
@@ -174,8 +176,17 @@ export function ItemSerialsPanel({
   const loadPage = React.useCallback(
     async (nextPage: number) => {
       setLoading(true);
-      const res = await listItemSerialsAction(itemId, nextPage);
-      setLoading(false);
+      let res: Awaited<ReturnType<typeof listItemSerialsAction>>;
+      try {
+        res = await listItemSerialsAction(itemId, nextPage);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        toast.error(requestFailedMessage(e, 'load the serial numbers'));
+        return;
+      } finally {
+        setLoading(false);
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         return;
@@ -210,8 +221,19 @@ export function ItemSerialsPanel({
     }
     setSavingId(row.id);
     setRowError(row.id, null);
-    const res = await updateItemSerialAction({ id: row.id, serialNumber: next });
-    setSavingId(null);
+    let res: Awaited<ReturnType<typeof updateItemSerialAction>>;
+    try {
+      res = await updateItemSerialAction({ id: row.id, serialNumber: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'save the serial number');
+      setRowError(row.id, message);
+      toast.error(message);
+      return;
+    } finally {
+      setSavingId(null);
+    }
     if (!res.ok) {
       setRowError(row.id, res.error.message);
       toast.error(res.error.message);
@@ -229,8 +251,19 @@ export function ItemSerialsPanel({
     if (status === row.currentStatus) return;
     setSavingId(row.id);
     setRowError(row.id, null);
-    const res = await updateItemSerialAction({ id: row.id, status });
-    setSavingId(null);
+    let res: Awaited<ReturnType<typeof updateItemSerialAction>>;
+    try {
+      res = await updateItemSerialAction({ id: row.id, status });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'change the status');
+      setRowError(row.id, message);
+      toast.error(message);
+      return;
+    } finally {
+      setSavingId(null);
+    }
     if (!res.ok) {
       setRowError(row.id, res.error.message);
       toast.error(res.error.message);
@@ -246,8 +279,20 @@ export function ItemSerialsPanel({
   async function confirmDelete() {
     if (!deleteTarget) return;
     setDeleting(true);
-    const res = await deleteItemSerialAction({ id: deleteTarget.id });
-    setDeleting(false);
+    let res: Awaited<ReturnType<typeof deleteItemSerialAction>>;
+    try {
+      res = await deleteItemSerialAction({ id: deleteTarget.id });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'delete the serial number');
+      setRowError(deleteTarget.id, message);
+      toast.error(message);
+      setDeleteTarget(null);
+      return;
+    } finally {
+      setDeleting(false);
+    }
     if (!res.ok) {
       setRowError(deleteTarget.id, res.error.message);
       toast.error(res.error.message);
@@ -276,12 +321,23 @@ export function ItemSerialsPanel({
     }
     setAddSubmitting(true);
     setAddError(null);
-    const res = await addItemSerialsAction({
-      itemId,
-      warehouseId: addWarehouseId,
-      serials: parsedAdd,
-    });
-    setAddSubmitting(false);
+    let res: Awaited<ReturnType<typeof addItemSerialsAction>>;
+    try {
+      res = await addItemSerialsAction({
+        itemId,
+        warehouseId: addWarehouseId,
+        serials: parsedAdd,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'add the serial numbers');
+      setAddError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setAddSubmitting(false);
+    }
     if (!res.ok) {
       // Persistent inline error INSIDE the dialog (repo pattern #20 — a toast
       // alone auto-dismisses and reads as "nothing happened").

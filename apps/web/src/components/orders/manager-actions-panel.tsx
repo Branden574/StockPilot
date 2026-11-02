@@ -45,6 +45,8 @@ import {
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   approveOrderRequestAction,
   claimPickingAction,
@@ -305,11 +307,24 @@ export function ManagerActionsPanel({
   async function releaseEarly(reason: string) {
     if (!replacement) return;
     setBusy('release-early');
+    setDialogError(null);
     // This order is the replacement the page shows (desk check F7: a stale
     // page never releases a newer replacement).
-    const res = await releaseReturnReplacementAction({ id: replacement.returnId, orderId, reason });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof releaseReturnReplacementAction>>;
+    try {
+      res = await releaseReturnReplacementAction({ id: replacement.returnId, orderId, reason });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'release the replacement');
+      setDialogError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       router.refresh();
       return;
@@ -434,6 +449,14 @@ export function ManagerActionsPanel({
   const [closePartialOpen, setClosePartialOpen] = React.useState(false);
   const [reopenOpen, setReopenOpen] = React.useState(false);
   const [reopenReason, setReopenReason] = React.useState('');
+  // Why the last Deny, Reopen picking, Physical signature, Close or Release
+  // before return failed, inside its dialog (pattern 20: a toast sits outside
+  // the dialog and goes in seconds). One at a time, as only one of them is
+  // open; cleared when any of them opens or closes and on each try.
+  const [dialogError, setDialogError] = React.useState<string | null>(null);
+  React.useEffect(() => {
+    setDialogError(null);
+  }, [denyOpen, reopenOpen, physicalSigOpen, closePartialOpen, releaseOpen]);
 
   // F2-2: the two confirms that catch a short order before it moves on. Both
   // are UI only (decision D17); the fixes live on the lines (D18), so their
@@ -496,8 +519,17 @@ export function ManagerActionsPanel({
 
   async function approve() {
     setBusy('approve');
-    const res = await approveOrderRequestAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof approveOrderRequestAction>>;
+    try {
+      res = await approveOrderRequestAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'approve the request'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -525,9 +557,22 @@ export function ManagerActionsPanel({
       return;
     }
     setBusy('deny');
-    const res = await denyOrderRequestAction({ id: orderId, reason });
-    setBusy(null);
+    setDialogError(null);
+    let res: Awaited<ReturnType<typeof denyOrderRequestAction>>;
+    try {
+      res = await denyOrderRequestAction({ id: orderId, reason });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'deny the request');
+      setDialogError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -538,8 +583,17 @@ export function ManagerActionsPanel({
 
   async function generatePickSlip() {
     setBusy('generate-pick-slip');
-    const res = await generatePickSlipAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof generatePickSlipAction>>;
+    try {
+      res = await generatePickSlipAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'generate the pick slip'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -550,8 +604,17 @@ export function ManagerActionsPanel({
 
   async function claimPicking() {
     setBusy('claim-picking');
-    const res = await claimPickingAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof claimPickingAction>>;
+    try {
+      res = await claimPickingAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'claim picking'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -562,8 +625,17 @@ export function ManagerActionsPanel({
 
   async function releasePicking() {
     setBusy('release-picking');
-    const res = await releasePickingAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof releasePickingAction>>;
+    try {
+      res = await releasePickingAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'release picking'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -574,8 +646,17 @@ export function ManagerActionsPanel({
 
   async function completePicking() {
     setBusy('complete-picking');
-    const res = await completePickingAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof completePickingAction>>;
+    try {
+      res = await completePickingAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'complete picking'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -600,8 +681,17 @@ export function ManagerActionsPanel({
 
   async function generatePackingSlips() {
     setBusy('generate-packing-slips');
-    const res = await generatePackingSlipsAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof generatePackingSlipsAction>>;
+    try {
+      res = await generatePackingSlipsAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'generate the packing slips'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -612,8 +702,17 @@ export function ManagerActionsPanel({
 
   async function stagePickup() {
     setBusy('stage-pickup');
-    const res = await stageOrderAction({ id: orderId, target: 'staged_for_pickup' });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof stageOrderAction>>;
+    try {
+      res = await stageOrderAction({ id: orderId, target: 'staged_for_pickup' });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'stage the order'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -624,8 +723,17 @@ export function ManagerActionsPanel({
 
   async function stageDelivery() {
     setBusy('stage-delivery');
-    const res = await stageOrderAction({ id: orderId, target: 'staged_for_delivery' });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof stageOrderAction>>;
+    try {
+      res = await stageOrderAction({ id: orderId, target: 'staged_for_delivery' });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'stage the order'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -636,8 +744,17 @@ export function ManagerActionsPanel({
 
   async function markInTransit() {
     setBusy('mark-in-transit');
-    const res = await markInTransitAction({ id: orderId });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof markInTransitAction>>;
+    try {
+      res = await markInTransitAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'mark the order on the way'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -663,9 +780,22 @@ export function ManagerActionsPanel({
       return;
     }
     setBusy('reopen-picking');
-    const res = await reopenPickingAction({ id: orderId, reason });
-    setBusy(null);
+    setDialogError(null);
+    let res: Awaited<ReturnType<typeof reopenPickingAction>>;
+    try {
+      res = await reopenPickingAction({ id: orderId, reason });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'reopen picking');
+      setDialogError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -676,9 +806,22 @@ export function ManagerActionsPanel({
 
   async function closePartial() {
     setBusy('close-partial');
-    const res = await closePartialAction({ id: orderId });
-    setBusy(null);
+    setDialogError(null);
+    let res: Awaited<ReturnType<typeof closePartialAction>>;
+    try {
+      res = await closePartialAction({ id: orderId });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'close the order');
+      setDialogError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -691,9 +834,22 @@ export function ManagerActionsPanel({
     const signer = physicalSignerName.trim();
     if (!signer) return;
     setBusy('physical-signature');
-    const res = await confirmPhysicalSignatureAction({ id: orderId, signerName: signer });
-    setBusy(null);
+    setDialogError(null);
+    let res: Awaited<ReturnType<typeof confirmPhysicalSignatureAction>>;
+    try {
+      res = await confirmPhysicalSignatureAction({ id: orderId, signerName: signer });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'record the signature');
+      setDialogError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
+      setDialogError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -735,11 +891,20 @@ export function ManagerActionsPanel({
 
   async function saveNotes() {
     setBusy('notes');
-    const res = await setOrderInternalNotesAction({
-      id: orderId,
-      notes: notes.trim() ? notes : null,
-    });
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof setOrderInternalNotesAction>>;
+    try {
+      res = await setOrderInternalNotesAction({
+        id: orderId,
+        notes: notes.trim() ? notes : null,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the internal notes'));
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       return;
@@ -1347,6 +1512,7 @@ export function ManagerActionsPanel({
           open={releaseOpen}
           onOpenChange={setReleaseOpen}
           busy={busy === 'release-early'}
+          error={dialogError}
           onConfirm={(reason) => void releaseEarly(reason)}
         />
       ) : null}
@@ -1372,6 +1538,11 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1423,6 +1594,11 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1477,6 +1653,11 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1517,6 +1698,11 @@ export function ManagerActionsPanel({
               backordered units will NOT be fulfilled. You can&apos;t reopen the order afterward.
             </DialogDescription>
           </DialogHeader>
+          {dialogError ? (
+            <p role="alert" className="text-destructive text-[13px]">
+              {dialogError}
+            </p>
+          ) : null}
           <DialogFooter>
             <Button
               variant="outline"
@@ -1611,7 +1797,17 @@ function NeededBySuggest({
 
   async function suggest() {
     setPhase('loading');
-    const res = await suggestNeededByAction(orderId);
+    let res: Awaited<ReturnType<typeof suggestNeededByAction>>;
+    try {
+      res = await suggestNeededByAction(orderId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy): the button comes back.
+      setPhase('idle');
+      toast.error(requestFailedMessage(e, 'suggest a deadline'));
+      return;
+    }
     if (!res.ok || !res.data.iso) {
       setPhase('none');
       if (res.ok) toast.info('No deadline found in the requester note.');
@@ -1624,7 +1820,16 @@ function NeededBySuggest({
   async function apply() {
     if (!iso) return;
     setPhase('applying');
-    const res = await setOrderNeededByAction({ id: orderId, neededBy: iso });
+    let res: Awaited<ReturnType<typeof setOrderNeededByAction>>;
+    try {
+      res = await setOrderNeededByAction({ id: orderId, neededBy: iso });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'set the needed-by date'));
+      setPhase('suggested');
+      return;
+    }
     if (!res.ok) {
       toast.error(res.error.message);
       setPhase('suggested');

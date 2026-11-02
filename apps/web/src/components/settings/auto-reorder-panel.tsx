@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   setAutoReorderSettingsAction,
   type AutoReorderSettingsInput,
@@ -78,8 +80,17 @@ export function AutoReorderPanel({ initial, entitled }: Props) {
       return;
     }
     setBusy(true);
-    const r = await setAutoReorderSettingsAction(payload);
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof setAutoReorderSettingsAction>>;
+    try {
+      r = await setAutoReorderSettingsAction(payload);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'save the auto-reorder settings'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +10,8 @@ import {
   readinessOk,
   visibleItemFacts,
 } from '@/test/order-readiness-facts';
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline, recordEscapedRejections, signInRedirect } from '@/test/rejected-request';
 
 import {
   putAwayTargets,
@@ -32,7 +34,9 @@ import {
 } from './readiness-view';
 
 const routerRefresh = vi.hoisted(() => vi.fn());
-vi.mock('next/navigation', () => ({
+// The real unstable_rethrow stays, so isControlFlow recognises a redirect.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
   usePathname: () => '/dashboard/orders/11111111-1111-1111-1111-111111111111',
   useRouter: () => ({ refresh: routerRefresh, push: vi.fn(), prefetch: vi.fn() }),
 }));
@@ -87,6 +91,9 @@ const facts = (status: string, items: Record<string, unknown>[], neededBy: strin
     items,
     { neededBy },
   );
+
+// A redirect handled by the page leaves nothing behind (see recordEscapedRejections).
+const escaped = recordEscapedRejections();
 
 beforeEach(() => {
   routerRefresh.mockReset();
@@ -397,6 +404,42 @@ describe('ReadinessStrip — Hold available stock (F2-2)', () => {
     await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
 
     expect(toastMock.error).toHaveBeenCalledWith('Holding stock for this order needs write access to its warehouse.');
+    expect(routerRefresh).not.toHaveBeenCalled();
+  });
+
+  // B40: a hold that got no answer kept the button spinning and said nothing.
+  // Sent again, the hold only tops up what the lines still owe (a second
+  // call adds 0), so the message says to try again.
+  it('a hold that gets no answer stops spinning, says so, and the page is not re-read', async () => {
+    holdOrderStock.mockRejectedValue(offline());
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    await waitFor(() =>
+      expect(toastMock.error).toHaveBeenCalledWith(
+        requestFailedMessage(offline(), 'hold the available stock'),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'Hold available stock' })).toBeEnabled();
+    expect(routerRefresh).not.toHaveBeenCalled();
+  });
+
+  it('says nothing on the way to sign-in', async () => {
+    holdOrderStock.mockRejectedValue(signInRedirect());
+    const user = userEvent.setup();
+    render(<ReadinessStrip view={view()} holdOrderId={ORDER} />);
+
+    await user.click(screen.getByRole('button', { name: 'Hold available stock' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Hold available stock' })).toBeEnabled(),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    expect(escaped, 'the redirect is handled, never left to escape').toEqual([]);
+    expect(holdOrderStock).toHaveBeenCalledTimes(1);
+    expect(toastMock.error).not.toHaveBeenCalled();
     expect(routerRefresh).not.toHaveBeenCalled();
   });
 });

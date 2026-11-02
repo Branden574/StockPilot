@@ -4,10 +4,15 @@ import { useRouter } from 'next/navigation';
 import * as React from 'react';
 import { toast } from 'sonner';
 
-import { MaintenancePhotosPanel, type PanelPhoto } from '@/components/maintenance/maintenance-photos-panel';
+import {
+  MaintenancePhotosPanel,
+  type PanelPhoto,
+} from '@/components/maintenance/maintenance-photos-panel';
 import { ResolveRequestDialog } from '@/components/maintenance/resolve-request-dialog';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import {
   archiveMaintenanceRequestAction,
   cancelMaintenanceRequestAction,
@@ -89,11 +94,27 @@ export function MaintenanceRequestActions({
   const [cancelOpen, setCancelOpen] = React.useState(false);
   const [resolveOpen, setResolveOpen] = React.useState(false);
   const [pending, setPending] = React.useState(false);
+  // Why the last Archive or Cancel request got no answer, inside its confirm
+  // (a toast sits behind it). The confirm stays open and Cancel closes it.
+  // Cleared on open and on each try.
+  const [confirmError, setConfirmError] = React.useState<string | null>(null);
 
   async function doArchive() {
     setPending(true);
-    const res = await archiveMaintenanceRequestAction(requestId);
-    setPending(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof archiveMaintenanceRequestAction>>;
+    try {
+      res = await archiveMaintenanceRequestAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'archive the request');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setPending(false);
+    }
     setArchiveOpen(false);
     if ('error' in res) {
       toast.error(res.error.message);
@@ -105,8 +126,20 @@ export function MaintenanceRequestActions({
 
   async function doCancel() {
     setPending(true);
-    const res = await cancelMaintenanceRequestAction(requestId);
-    setPending(false);
+    setConfirmError(null);
+    let res: Awaited<ReturnType<typeof cancelMaintenanceRequestAction>>;
+    try {
+      res = await cancelMaintenanceRequestAction(requestId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'cancel the request');
+      setConfirmError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setPending(false);
+    }
     setCancelOpen(false);
     if ('error' in res) {
       toast.error(res.error.message);
@@ -124,7 +157,14 @@ export function MaintenanceRequestActions({
     // ink), then Resolve as the one ink-filled commit on the right.
     <div className="flex flex-wrap items-center gap-2">
       {showCancel ? (
-        <Button type="button" variant="outline" onClick={() => setCancelOpen(true)}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            setConfirmError(null);
+            setCancelOpen(true);
+          }}
+        >
           Cancel request
         </Button>
       ) : null}
@@ -133,7 +173,10 @@ export function MaintenanceRequestActions({
           type="button"
           variant="outline"
           className="text-destructive hover:text-destructive"
-          onClick={() => setArchiveOpen(true)}
+          onClick={() => {
+            setConfirmError(null);
+            setArchiveOpen(true);
+          }}
         >
           Archive
         </Button>
@@ -160,6 +203,7 @@ export function MaintenanceRequestActions({
         description="The request is marked cancelled and can no longer be edited. Cancelling here does not notify anyone by email — if an Outlook draft was already sent, follow up separately."
         confirmLabel="Cancel request"
         pending={pending}
+        error={confirmError}
         onConfirm={doCancel}
       />
       <DestructiveConfirm
@@ -169,6 +213,7 @@ export function MaintenanceRequestActions({
         description="The request is marked archived and can no longer be edited. Use this to tidy up old resolved or cancelled requests, or duplicates."
         confirmLabel="Archive"
         pending={pending}
+        error={confirmError}
         onConfirm={doArchive}
       />
     </div>

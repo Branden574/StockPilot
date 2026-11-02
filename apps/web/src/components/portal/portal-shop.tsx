@@ -11,6 +11,8 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
 import { useHydrated } from '@/lib/use-hydrated';
 import { submitPortalOrderAction } from '@/server/actions/portal';
 import type { PortalCatalogItem, PortalOrder } from '@/server/services/portal';
@@ -145,11 +147,22 @@ export function PortalShop({
   async function submit() {
     setError(null);
     setBusy(true);
-    const res = await submitPortalOrderAction({
-      lines: cartLines.map(([itemId, quantity]) => ({ itemId, quantity })),
-      notes: notes.trim() || undefined,
-    });
-    setBusy(false);
+    let res: Awaited<ReturnType<typeof submitPortalOrderAction>>;
+    try {
+      res = await submitPortalOrderAction({
+        lines: cartLines.map(([itemId, quantity]) => ({ itemId, quantity })),
+        notes: notes.trim() || undefined,
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // The cart is kept. A portal order has no key, so one that was placed
+      // before the answer was lost is placed twice if sent again.
+      setError(requestUnconfirmedMessage(e, 'your order was submitted', 'Your orders'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
       setError(res.error.message);
       return;

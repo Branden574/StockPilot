@@ -9,6 +9,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { editMovementNoteAction } from '@/server/actions/movements';
 
 interface EditableMovementNoteProps {
@@ -88,8 +90,19 @@ export function EditableMovementNote({
     }
     setSaving(true);
     setError(null);
-    const res = await editMovementNoteAction({ movementId, note: next });
-    setSaving(false);
+    let res: Awaited<ReturnType<typeof editMovementNoteAction>>;
+    try {
+      res = await editMovementNoteAction({ movementId, note: next });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'save the note');
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setSaving(false);
+    }
     if (!res.ok) {
       setError(res.error.message);
       toast.error(res.error.message);
@@ -134,7 +147,11 @@ export function EditableMovementNote({
             disabled={saving}
             aria-label="Save note"
           >
-            {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+            {saving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Check className="h-3.5 w-3.5" />
+            )}
           </Button>
           <Button
             variant="ghost"
@@ -189,7 +206,11 @@ export function EditableMovementNote({
   if (displayText) {
     return (
       <span className="group inline-flex items-center gap-1">
-        {inline ? <span className="italic">&ldquo;{displayText}&rdquo;</span> : <span>{displayNode}</span>}
+        {inline ? (
+          <span className="italic">&ldquo;{displayText}&rdquo;</span>
+        ) : (
+          <span>{displayNode}</span>
+        )}
         <Button
           variant="ghost"
           size="sm"

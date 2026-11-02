@@ -60,6 +60,7 @@ import { CRATE_COLORS, GRADES } from '@/lib/book-storage';
 import { compressImageVariants } from '@/lib/image-variants';
 import { VARIANT_MIME } from '@/lib/image-variants.config';
 import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage, requestUnconfirmedMessage } from '@/lib/request-failure';
 import { resolveListReturnHref } from '@/lib/last-list-url';
 import { useUnsavedWork } from '@/lib/unsaved-work';
 import { generateSku, cn } from '@/lib/utils';
@@ -179,6 +180,26 @@ function humanizeVariantKey(key: string): string | null {
       return label === '#' ? `#${value}` : label ? `${label} ${value}` : value;
     })
     .join(' · ');
+}
+
+/**
+ * The reason in "Item saved, but tags couldn't be updated: ..." when that
+ * follow-up write got no answer (offline, a server error, a deploy) rather
+ * than a refusal with its own message (B40).
+ */
+const FOLLOW_UP_NO_ANSWER = 'check your connection and try again.';
+
+/**
+ * The end of the warning after a create whose photos did not all upload. A
+ * photo whose record step got no answer may be on the item already, so it is
+ * said apart from the ones that failed, with where to look before adding it
+ * again (B40). Empty when every photo got an answer.
+ */
+function unconfirmedPhotosSentence(unconfirmed: number, where: string): string {
+  if (unconfirmed === 0) return '';
+  return unconfirmed === 1
+    ? ` We couldn't confirm that 1 photo was saved. Check ${where} before adding it again.`
+    : ` We couldn't confirm that ${unconfirmed} photos were saved. Check ${where} before adding them again.`;
 }
 
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
@@ -1230,7 +1251,7 @@ export function ItemForm({
   }
 
   async function uploadStagedImages(itemId: string) {
-    if (staged.length === 0) return { uploaded: 0, failed: 0 };
+    if (staged.length === 0) return { uploaded: 0, failed: 0, unconfirmed: 0 };
     setUploadingImages(true);
     // Byte-weighted progress over the staged originals. The denominator is
     // fixed up front so the percentage cannot travel backwards as each file
@@ -1244,74 +1265,98 @@ export function ItemForm({
     const publishProgress = () => setUploadPercent(batch.percent);
     let uploaded = 0;
     let failed = 0;
+    // A photo whose record step got no answer: the file is up, but whether
+    // its row was written is unknown, and adding it again would make a
+    // second copy (each upload is its own row).
+    let unconfirmed = 0;
     try {
       for (let i = 0; i < staged.length; i++) {
         const item = staged[i];
         if (!item) continue;
         const progressKey = `${i}`;
-        // Generate master + thumb + LQIP from a single decode. Same
-        // helper the item-detail uploader uses so create-flow uploads
-        // populate the same thumb_path + lqip columns and get the
-        // same instant-thumb / blur-placeholder treatment in lists.
-        const { master, thumbBlob, lqip } = await compressImageVariants(item.file);
-        const ext = (master.name.split('.').pop() ?? 'jpg').toLowerCase();
-        const presign = await createImageUploadAction({ itemId, fileExt: ext });
-        if (!presign.ok) {
-          failed++;
-          continue;
-        }
-        // XHR, not fetch(): fetch() reports no upload progress whatsoever, so
-        // any percentage over it would be fabricated. Progress comes from the
-        // master only - the thumb is a rounding error beside it.
-        const [masterRes, thumbRes] = await Promise.all([
-          uploadWithProgress({
-            url: presign.data.signedUrl,
-            body: master,
-            contentType: master.type,
-            headers: { 'x-upsert': 'true' },
-            onProgress: ({ loaded, total }) => {
-              batch.set(progressKey, total > 0 ? loaded / total : 0);
-              publishProgress();
-            },
-          }),
-          thumbBlob
-            ? uploadWithProgress({
-                url: presign.data.thumbSignedUrl,
-                body: thumbBlob,
-                // The blob's OWN type: the canvas decides what these bytes are
-                // (WebP; JPEG or PNG on Safari). Labelling them by hand is how
-                // PNG thumbnails were stored as image/webp.
-                contentType: thumbBlob.type || VARIANT_MIME,
-                headers: { 'x-upsert': 'true' },
-              })
-            : Promise.resolve(null),
-        ]);
-        if (!masterRes.ok) {
-          // Settled as failed, so this file keeps the fraction it reached and
-          // the batch can never read 100% with a failure in it.
+        try {
+          // Generate master + thumb + LQIP from a single decode. Same
+          // helper the item-detail uploader uses so create-flow uploads
+          // populate the same thumb_path + lqip columns and get the
+          // same instant-thumb / blur-placeholder treatment in lists.
+          const { master, thumbBlob, lqip } = await compressImageVariants(item.file);
+          const ext = (master.name.split('.').pop() ?? 'jpg').toLowerCase();
+          const presign = await createImageUploadAction({ itemId, fileExt: ext });
+          if (!presign.ok) {
+            failed++;
+            continue;
+          }
+          // XHR, not fetch(): fetch() reports no upload progress whatsoever, so
+          // any percentage over it would be fabricated. Progress comes from the
+          // master only - the thumb is a rounding error beside it.
+          const [masterRes, thumbRes] = await Promise.all([
+            uploadWithProgress({
+              url: presign.data.signedUrl,
+              body: master,
+              contentType: master.type,
+              headers: { 'x-upsert': 'true' },
+              onProgress: ({ loaded, total }) => {
+                batch.set(progressKey, total > 0 ? loaded / total : 0);
+                publishProgress();
+              },
+            }),
+            thumbBlob
+              ? uploadWithProgress({
+                  url: presign.data.thumbSignedUrl,
+                  body: thumbBlob,
+                  // The blob's OWN type: the canvas decides what these bytes are
+                  // (WebP; JPEG or PNG on Safari). Labelling them by hand is how
+                  // PNG thumbnails were stored as image/webp.
+                  contentType: thumbBlob.type || VARIANT_MIME,
+                  headers: { 'x-upsert': 'true' },
+                })
+              : Promise.resolve(null),
+          ]);
+          if (!masterRes.ok) {
+            // Settled as failed, so this file keeps the fraction it reached and
+            // the batch can never read 100% with a failure in it.
+            batch.settle(progressKey, false);
+            publishProgress();
+            failed++;
+            continue;
+          }
+          batch.settle(progressKey, true);
+          publishProgress();
+          const thumbOk = thumbRes ? thumbRes.ok : false;
+          let record: Awaited<ReturnType<typeof recordImageAction>>;
+          try {
+            record = await recordImageAction({
+              itemId,
+              storagePath: presign.data.path,
+              thumbPath: thumbOk ? presign.data.thumbPath : null,
+              lqip,
+              isFirst: i === 0,
+            });
+          } catch (e) {
+            // A redirect (the session ended) goes up as it is: nothing is shown.
+            if (isControlFlow(e)) throw e;
+            unconfirmed++;
+            continue;
+          }
+          if (record.ok) uploaded++;
+          else failed++;
+        } catch (e) {
+          // A redirect (the session ended) goes up as it is: nothing is shown.
+          if (isControlFlow(e)) throw e;
+          // No answer for this photo (offline, a server error, a deploy): it
+          // counts as failed, like a refused one, and the next photo is tried.
+          // Thrown out of here it ended the save in silence after the item
+          // had been created.
           batch.settle(progressKey, false);
           publishProgress();
           failed++;
-          continue;
         }
-        batch.settle(progressKey, true);
-        publishProgress();
-        const thumbOk = thumbRes ? thumbRes.ok : false;
-        const record = await recordImageAction({
-          itemId,
-          storagePath: presign.data.path,
-          thumbPath: thumbOk ? presign.data.thumbPath : null,
-          lqip,
-          isFirst: i === 0,
-        });
-        if (record.ok) uploaded++;
-        else failed++;
       }
     } finally {
       setUploadingImages(false);
       setUploadPercent(null);
     }
-    return { uploaded, failed };
+    return { uploaded, failed, unconfirmed };
   }
 
   /**
@@ -1326,6 +1371,8 @@ export function ItemForm({
   }
 
   async function submitItem(values: CreateItemInput, answer: NewRackAnswer = {}) {
+    // Where a create that got no answer may have landed.
+    const listName = isBook ? 'the Books list' : 'the Items list';
     // SPORTS_SUBCATEGORY_REQUIRED — fast, kind failure. The server enforces
     // this too (resolveTrackingProfile throws on an unresolved subcategory
     // key, and CategoriesService never assigns items to a bare Sports root),
@@ -1402,50 +1449,60 @@ export function ItemForm({
       const num = sizedRack.number;
       const row = num ? (sizedRack.row ?? '').toUpperCase() : '';
       const composedBin = formatRackLabel({ number: num, row }) || null;
-      const res = await bulkCreateSizedVariantsAction({
-        baseName: values.name,
-        baseSku: values.sku?.trim() || null,
-        baseBarcode: values.barcode?.trim() || null,
-        description: values.description?.trim() || null,
-        categoryId: values.categoryId,
-        supplierId: values.supplierId ?? null,
-        warehouseId: values.warehouseId,
-        charterId: values.charterId ?? null,
-        primaryLocationId: values.primaryLocationId ?? null,
-        binLocation: composedBin,
-        rackNumber: num || null,
-        rackRow: row || null,
-        retailPrice: values.retailPrice,
-        unitCost: values.unitCost,
-        reorderPoint: values.reorderPoint,
-        reorderQuantity: values.reorderQuantity,
-        unitOfMeasure: values.unitOfMeasure?.trim() || undefined,
-        // Per-org custom fields entered in the "Additional fields" section apply
-        // to every variant. The service strips reserved keys + runs the
-        // authoritative required-field gate, so this path no longer silently
-        // drops them. Pass undefined when empty to keep the payload lean.
-        customFields: Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
-        variants: selectedSizes,
-        // Sports: the group the preview promised, plus the attributes that are
-        // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
-        // sent — the size is per-row (`variants[].size`) and the system is
-        // derived server-side from the category's size scale, so a client
-        // cannot choose which physical stock these rows merge with.
-        ...sportsGroupPayload,
-        ...sportsModeOverridePayload,
-        ...(sportsActive
-          ? {
-              // One jersey number across M and XL is the point (regression R3).
-              jerseyNumber: values.jerseyNumber || undefined,
-              playerName: values.playerName || undefined,
-              variantWidth: values.variantWidth || undefined,
-              variantFit: values.variantFit || undefined,
-              variantColor: values.variantColor || undefined,
-            }
-          : {}),
-        // Only after the person said yes to creating the run's new rack.
-        ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
-      });
+      let res: Awaited<ReturnType<typeof bulkCreateSizedVariantsAction>>;
+      try {
+        res = await bulkCreateSizedVariantsAction({
+          baseName: values.name,
+          baseSku: values.sku?.trim() || null,
+          baseBarcode: values.barcode?.trim() || null,
+          description: values.description?.trim() || null,
+          categoryId: values.categoryId,
+          supplierId: values.supplierId ?? null,
+          warehouseId: values.warehouseId,
+          charterId: values.charterId ?? null,
+          primaryLocationId: values.primaryLocationId ?? null,
+          binLocation: composedBin,
+          rackNumber: num || null,
+          rackRow: row || null,
+          retailPrice: values.retailPrice,
+          unitCost: values.unitCost,
+          reorderPoint: values.reorderPoint,
+          reorderQuantity: values.reorderQuantity,
+          unitOfMeasure: values.unitOfMeasure?.trim() || undefined,
+          // Per-org custom fields entered in the "Additional fields" section apply
+          // to every variant. The service strips reserved keys + runs the
+          // authoritative required-field gate, so this path no longer silently
+          // drops them. Pass undefined when empty to keep the payload lean.
+          customFields: Object.keys(customFieldValues).length > 0 ? customFieldValues : undefined,
+          variants: selectedSizes,
+          // Sports: the group the preview promised, plus the attributes that are
+          // shared by the whole run. `variantSize` / `variantSizeSystem` are NOT
+          // sent — the size is per-row (`variants[].size`) and the system is
+          // derived server-side from the category's size scale, so a client
+          // cannot choose which physical stock these rows merge with.
+          ...sportsGroupPayload,
+          ...sportsModeOverridePayload,
+          ...(sportsActive
+            ? {
+                // One jersey number across M and XL is the point (regression R3).
+                jerseyNumber: values.jerseyNumber || undefined,
+                playerName: values.playerName || undefined,
+                variantWidth: values.variantWidth || undefined,
+                variantFit: values.variantFit || undefined,
+                variantColor: values.variantColor || undefined,
+              }
+            : {}),
+          // Only after the person said yes to creating the run's new rack.
+          ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer (offline, a server error, a deploy). The run may have been
+        // created before the answer was lost, so look before saving it again.
+        toast.error(requestUnconfirmedMessage(e, 'the sizes were created', listName));
+        return;
+      }
       if (!res.ok) {
         if (askNewRack(res.error, 'rack')) return;
         reportSaveError(res.error);
@@ -1463,24 +1520,32 @@ export function ItemForm({
       const createdIds = res.data.ids ?? [];
       let totalUploaded = 0;
       let totalFailed = 0;
+      let totalUnconfirmed = 0;
       if (staged.length > 0 && createdIds.length > 0) {
-        for (const variantId of createdIds) {
-          const r = await uploadStagedImages(variantId);
-          totalUploaded += r.uploaded;
-          totalFailed += r.failed;
+        try {
+          for (const variantId of createdIds) {
+            const r = await uploadStagedImages(variantId);
+            totalUploaded += r.uploaded;
+            totalFailed += r.failed;
+            totalUnconfirmed += r.unconfirmed;
+          }
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
+          throw e;
         }
       }
 
       const expected = staged.length * createdIds.length;
       if (expected === 0) {
         toast.success(`Created ${res.data.created} variant${res.data.created === 1 ? '' : 's'}.`);
-      } else if (totalFailed === 0) {
+      } else if (totalFailed === 0 && totalUnconfirmed === 0) {
         toast.success(
           `Created ${res.data.created} variants with ${staged.length} photo${staged.length === 1 ? '' : 's'} each.`,
         );
       } else {
         toast.warning(
-          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded — ${totalFailed} failed.`,
+          `Created ${res.data.created} variants. ${totalUploaded} of ${expected} photo uploads succeeded${totalFailed > 0 ? ` — ${totalFailed} failed.` : '.'}${unconfirmedPhotosSentence(totalUnconfirmed, "each variant's photos")}`,
         );
       }
       // A SEPARATE toast rather than another branch of the tree above: photos
@@ -1613,7 +1678,25 @@ export function ItemForm({
             // Only after the person said yes to creating the item's new rack.
             ...(answer.confirmNewRack ? { confirmNewRack: true } : {}),
           });
-    const res = await action;
+    let res: Awaited<typeof action>;
+    try {
+      res = await action;
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // No answer (offline, a server error, a deploy). An edit is safe to send
+      // again; a create may have happened before the answer was lost.
+      toast.error(
+        isEdit
+          ? requestFailedMessage(e, isBook ? 'save this book' : 'save the item')
+          : requestUnconfirmedMessage(
+              e,
+              isBook ? 'this book was created' : 'the item was created',
+              listName,
+            ),
+      );
+      return;
+    }
     if (!res.ok) {
       if (askNewRack(res.error, isBook ? 'bin' : 'rack')) return;
       reportSaveError(res.error);
@@ -1628,6 +1711,9 @@ export function ItemForm({
     // the user retry from the tags row instead of rolling back the
     // whole submit.
     const itemId = res.data.id;
+    // Set when a write after the save (tags, public visibility, the public
+    // display fields) got no answer. An edit then stays as it is (below).
+    let followUpUnanswered = false;
 
     // Product analytics (no-op until PostHog is configured).
     if (!isEdit) {
@@ -1637,9 +1723,18 @@ export function ItemForm({
     const initialKey = [...initialTagIds].sort().join(',');
     const selectedKey = [...selectedTagIds].sort().join(',');
     if (tags.length > 0 && (!isEdit || initialKey !== selectedKey)) {
-      const tagRes = await setItemTagsAction(itemId, [...selectedTagIds]);
-      if (!tagRes.ok) {
-        toast.warning(`Item saved, but tags couldn't be updated: ${tagRes.error.message}`);
+      let tagRes: Awaited<ReturnType<typeof setItemTagsAction>> | null = null;
+      try {
+        tagRes = await setItemTagsAction(itemId, [...selectedTagIds]);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        followUpUnanswered = true;
+      }
+      if (!tagRes?.ok) {
+        toast.warning(
+          `Item saved, but tags couldn't be updated: ${tagRes ? tagRes.error.message : FOLLOW_UP_NO_ANSWER}`,
+        );
       }
     }
 
@@ -1647,13 +1742,20 @@ export function ItemForm({
     // the item row is already saved, so a failure here surfaces as a
     // warning + retry instead of rolling the whole submit back.
     if (showPublicVisibility && publicVisibility !== initialPublicVisibility) {
-      const visRes = await setItemPublicVisibilityAction({
-        itemId,
-        visibility: publicVisibility,
-      });
-      if (!visRes.ok) {
+      let visRes: Awaited<ReturnType<typeof setItemPublicVisibilityAction>> | null = null;
+      try {
+        visRes = await setItemPublicVisibilityAction({
+          itemId,
+          visibility: publicVisibility,
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        followUpUnanswered = true;
+      }
+      if (!visRes?.ok) {
         toast.warning(
-          `Item saved, but public visibility couldn't be updated: ${visRes.error.message}`,
+          `Item saved, but public visibility couldn't be updated: ${visRes ? visRes.error.message : FOLLOW_UP_NO_ANSWER}`,
         );
       }
     }
@@ -1667,14 +1769,21 @@ export function ItemForm({
       const prevDisplayName = (initialPublicDisplayName ?? '').trim() || null;
       const prevDescription = (initialPublicDescription ?? '').trim() || null;
       if (nextDisplayName !== prevDisplayName || nextDescription !== prevDescription) {
-        const displayRes = await setItemPublicDisplayAction({
-          itemId,
-          publicDisplayName: nextDisplayName,
-          publicDescription: nextDescription,
-        });
-        if (!displayRes.ok) {
+        let displayRes: Awaited<ReturnType<typeof setItemPublicDisplayAction>> | null = null;
+        try {
+          displayRes = await setItemPublicDisplayAction({
+            itemId,
+            publicDisplayName: nextDisplayName,
+            publicDescription: nextDescription,
+          });
+        } catch (e) {
+          // A redirect (the session ended): the router is already navigating.
+          if (isControlFlow(e)) return;
+          followUpUnanswered = true;
+        }
+        if (!displayRes?.ok) {
           toast.warning(
-            `Item saved, but the public display fields couldn't be updated: ${displayRes.error.message}`,
+            `Item saved, but the public display fields couldn't be updated: ${displayRes ? displayRes.error.message : FOLLOW_UP_NO_ANSWER}`,
           );
         }
       }
@@ -1683,10 +1792,18 @@ export function ItemForm({
     // Photo uploads are only staged in the create flow; edit flow uses the
     // ImageUploader on the item detail page directly against an existing id.
     if (!isEdit && staged.length > 0) {
-      const { uploaded, failed } = await uploadStagedImages(res.data.id);
-      if (failed > 0) {
+      let photos: Awaited<ReturnType<typeof uploadStagedImages>>;
+      try {
+        photos = await uploadStagedImages(res.data.id);
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        throw e;
+      }
+      const { uploaded, failed, unconfirmed } = photos;
+      if (failed > 0 || unconfirmed > 0) {
         toast.warning(
-          `Item created. ${uploaded} of ${staged.length} photos uploaded — ${failed} failed.`,
+          `Item created. ${uploaded} of ${staged.length} photos uploaded${failed > 0 ? ` — ${failed} failed.` : '.'}${unconfirmedPhotosSentence(unconfirmed, "the item's photos")}`,
         );
       } else {
         savedRef.current = true;
@@ -1717,6 +1834,19 @@ export function ItemForm({
         }),
         { duration: 10000 },
       );
+    }
+
+    // An edit whose later write got no answer stays as it is. Its warning
+    // says what was not saved, the form keeps what was typed, and Save changes
+    // sends the whole edit again (an edit is safe to repeat). A refresh or a
+    // push with no connection is a full page load (the browser's offline
+    // page), which would take the warning and the typed values with it. A
+    // create still opens what it created: the item exists, and staying on the
+    // form would invite creating it a second time.
+    if (isEdit && followUpUnanswered) {
+      // Not saved in full, so leaving the page still asks first.
+      savedRef.current = false;
+      return;
     }
 
     onDone?.();

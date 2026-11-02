@@ -1,6 +1,9 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { requestUnconfirmedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
 
 // The Add more sizes dialog from an edit page (P4.A1, matrix W-IT-03): its
 // size chips are the form's chips, 44 px on a phone and with the shared chip's
@@ -16,6 +19,10 @@ vi.mock('sonner', () => ({
 vi.mock('@/server/actions/inventory', () => ({
   bulkCreateSizedVariantsAction: vi.fn(),
 }));
+
+import { toast } from 'sonner';
+
+import { bulkCreateSizedVariantsAction } from '@/server/actions/inventory';
 
 import { AddSizedVariantsButton } from './add-sized-variants-button';
 
@@ -62,5 +69,42 @@ describe('AddSizedVariantsButton: the size chips on a touch screen', () => {
     expect(
       within(dialog).getByRole('spinbutton', { name: 'On hand for size L' }),
     ).toBeInTheDocument();
+  });
+});
+
+// B40: Create variants awaited the action inside a try/finally with no catch.
+// A save that got no answer (offline, a server error, a deploy) stopped the
+// spinner and said nothing, so nobody knew whether the sizes now existed.
+describe('AddSizedVariantsButton when the save gets no answer', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  async function createSizeL(source: Parameters<typeof AddSizedVariantsButton>[0]['source']) {
+    const user = userEvent.setup();
+    render(<AddSizedVariantsButton source={source} />);
+    await user.click(screen.getByRole('button', { name: 'Add more sizes' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.click(within(dialog).getByRole('button', { name: 'L' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Create variants' }));
+    return dialog;
+  }
+
+  it('says to check the Items list before trying again, and keeps the dialog open', async () => {
+    vi.mocked(bulkCreateSizedVariantsAction).mockRejectedValueOnce(offline());
+    const dialog = await createSizeL(SOURCE);
+    expect(toast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(offline(), 'the sizes were created', 'the Items list'),
+    );
+    expect(within(dialog).getByRole('button', { name: 'Create variants' })).toBeEnabled();
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('names the Books list for a book', async () => {
+    vi.mocked(bulkCreateSizedVariantsAction).mockRejectedValueOnce(offline());
+    await createSizeL({ ...SOURCE, itemType: 'book' });
+    expect(toast.error).toHaveBeenCalledWith(
+      requestUnconfirmedMessage(offline(), 'the sizes were created', 'the Books list'),
+    );
   });
 });

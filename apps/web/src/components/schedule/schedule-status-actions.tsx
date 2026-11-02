@@ -6,6 +6,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { updateScheduleEventAction } from '@/server/actions/schedule';
 
 type Status = 'scheduled' | 'in_progress' | 'completed' | 'cancelled';
@@ -49,6 +51,10 @@ export function ScheduleStatusActions({ eventId, currentStatus }: Props) {
       }
       toast.success(label);
       router.refresh();
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'change the event status'));
     } finally {
       setBusy(null);
     }

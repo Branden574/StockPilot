@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { renameOrganizationAction } from '@/server/actions/organization';
 
 export function OrgNameEditor({ current }: { current: string }) {
@@ -19,8 +21,17 @@ export function OrgNameEditor({ current }: { current: string }) {
   async function save() {
     if (!dirty) return;
     setBusy(true);
-    const r = await renameOrganizationAction({ name: name.trim() });
-    setBusy(false);
+    let r: Awaited<ReturnType<typeof renameOrganizationAction>>;
+    try {
+      r = await renameOrganizationAction({ name: name.trim() });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      toast.error(requestFailedMessage(e, 'rename the organization'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

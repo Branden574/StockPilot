@@ -7,6 +7,8 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { restoreBundleAction } from '@/server/actions/bundles';
 
 /**
@@ -25,12 +27,28 @@ export function RestoreBundleButton({
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
   const [open, setOpen] = React.useState(false);
+  // Why the last try failed, inside the confirm (a toast sits behind it).
+  // Cleared on open and on each try.
+  const [error, setError] = React.useState<string | null>(null);
 
   async function confirmRestore() {
     setBusy(true);
-    const res = await restoreBundleAction(bundleId);
-    setBusy(false);
+    setError(null);
+    let res: Awaited<ReturnType<typeof restoreBundleAction>>;
+    try {
+      res = await restoreBundleAction(bundleId);
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      const message = requestFailedMessage(e, 'restore the bundle');
+      setError(message);
+      toast.error(message);
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!res.ok) {
+      setError(res.error.message);
       toast.error(res.error.message);
       return;
     }
@@ -41,7 +59,15 @@ export function RestoreBundleButton({
 
   return (
     <>
-      <Button variant="outline" size="sm" onClick={() => setOpen(true)} disabled={busy}>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setError(null);
+          setOpen(true);
+        }}
+        disabled={busy}
+      >
         {busy ? (
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : (
@@ -57,6 +83,7 @@ export function RestoreBundleButton({
         confirmLabel="Restore"
         tone="primary"
         pending={busy}
+        error={error}
         onConfirm={confirmRestore}
       />
     </>

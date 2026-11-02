@@ -32,6 +32,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cn, formatCurrency, formatNumber } from '@/lib/utils';
 import {
   createItemsFromPoLinesAction,
@@ -252,6 +254,13 @@ export function CreateItemsModal({
         }
         setDuplicates(r.data.matches);
       })
+      .catch((e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer (offline, a server error, a deploy): the same as a failed
+        // scan above, proceed without dedup hints.
+        console.warn('duplicate scan got no answer');
+      })
       .finally(() => setScanning(false));
   }, [open, lines, poImportId]);
 
@@ -279,6 +288,13 @@ export function CreateItemsModal({
           return;
         }
         setLiveResolutions(r.data);
+      })
+      .catch((e: unknown) => {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // No answer: the same as a failed resolve above, the server-rendered
+        // verdicts stand and the create call re-resolves server-side.
+        console.warn('line verdict resolve got no answer');
       })
       .finally(() => {
         if (!cancelled) setResolving(false);
@@ -340,44 +356,55 @@ export function CreateItemsModal({
       return;
     }
     setBusy(true);
-    const r = await createItemsFromPoLinesAction({
-      poImportId,
-      lineIds: lines.map((l) => l.id),
-      vendorId,
-      warehouseId,
-      charterId: charterId ?? null,
-      locationId: locationId ?? null,
-      itemType: itemType ?? 'product',
-      categoryId: categoryId || null,
-      groupDecisions: Object.keys(groupChoices).length > 0 ? groupChoices : undefined,
-      variantOverrides: Object.fromEntries(
-        Object.entries(variants)
-          .map(([id, v]) => [
+    let r: Awaited<ReturnType<typeof createItemsFromPoLinesAction>>;
+    try {
+      r = await createItemsFromPoLinesAction({
+        poImportId,
+        lineIds: lines.map((l) => l.id),
+        vendorId,
+        warehouseId,
+        charterId: charterId ?? null,
+        locationId: locationId ?? null,
+        itemType: itemType ?? 'product',
+        categoryId: categoryId || null,
+        groupDecisions: Object.keys(groupChoices).length > 0 ? groupChoices : undefined,
+        variantOverrides: Object.fromEntries(
+          Object.entries(variants)
+            .map(([id, v]) => [
+              id,
+              {
+                size: v.size?.trim() || null,
+                sizeSystem: v.sizeSystem || null,
+                jerseyNumber: v.jerseyNumber?.trim() || null,
+              },
+            ])
+            // Only send lines the reviewer actually touched, so an untouched
+            // line keeps whatever the document said.
+            .filter(([, v]) => {
+              const o = v as Record<string, string | null>;
+              return o.size != null || o.sizeSystem != null || o.jerseyNumber != null;
+            }),
+        ),
+        nameOverrides: Object.fromEntries(Object.entries(names).map(([id, n]) => [id, n.trim()])),
+        decisions: Object.fromEntries(
+          Object.entries(decisions).map(([id, d]) => [
             id,
-            {
-              size: v.size?.trim() || null,
-              sizeSystem: v.sizeSystem || null,
-              jerseyNumber: v.jerseyNumber?.trim() || null,
-            },
-          ])
-          // Only send lines the reviewer actually touched, so an untouched
-          // line keeps whatever the document said.
-          .filter(([, v]) => {
-            const o = v as Record<string, string | null>;
-            return o.size != null || o.sizeSystem != null || o.jerseyNumber != null;
-          }),
-      ),
-      nameOverrides: Object.fromEntries(Object.entries(names).map(([id, n]) => [id, n.trim()])),
-      decisions: Object.fromEntries(
-        Object.entries(decisions).map(([id, d]) => [
-          id,
-          d.mode === 'use_existing'
-            ? { mode: 'use_existing' as const, itemId: d.itemId }
-            : { mode: d.mode },
-        ]),
-      ),
-    });
-    setBusy(false);
+            d.mode === 'use_existing'
+              ? { mode: 'use_existing' as const, itemId: d.itemId }
+              : { mode: d.mode },
+          ]),
+        ),
+      });
+    } catch (e) {
+      // A redirect (the session ended): the router is already navigating.
+      if (isControlFlow(e)) return;
+      // Sent again, a line that already got its item is skipped, so a retry
+      // never creates a second one.
+      toast.error(requestFailedMessage(e, 'create the items'));
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (!r.ok) {
       toast.error(r.error.message);
       return;

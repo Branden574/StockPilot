@@ -2,6 +2,9 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { requestFailedMessage } from '@/lib/request-failure';
+import { offline } from '@/test/rejected-request';
+
 const refreshMock = vi.fn();
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: refreshMock, back: vi.fn() }),
@@ -61,13 +64,34 @@ describe('AssignOwnerSelect', () => {
   });
 
   it('reverts to the previous value and toasts on a failed assignment', async () => {
-    assignOwner.mockResolvedValueOnce({ error: { message: 'That user is not an active member of this organization.' } });
+    assignOwner.mockResolvedValueOnce({
+      error: { message: 'That user is not an active member of this organization.' },
+    });
     const user = userEvent.setup();
     render(<AssignOwnerSelect requestId="r1" currentOwnerUserId={null} members={MEMBERS} />);
     await user.click(screen.getByRole('combobox'));
     const listbox = await screen.findByRole('listbox');
     await user.click(within(listbox).getByRole('option', { name: 'Jane Smith' }));
-    expect(toastError).toHaveBeenCalledWith('That user is not an active member of this organization.');
+    expect(toastError).toHaveBeenCalledWith(
+      'That user is not an active member of this organization.',
+    );
     expect(screen.getByRole('combobox')).toHaveTextContent('Unassigned');
+  });
+});
+
+// B40: an assignment that got no answer (offline, a server error, a deploy)
+// left the picker disabled on the new name, with nothing said.
+describe('AssignOwnerSelect when the request gets no answer', () => {
+  it('goes back to the previous owner, says the owner was not assigned and can be used again', async () => {
+    assignOwner.mockRejectedValueOnce(offline());
+    const user = userEvent.setup();
+    render(<AssignOwnerSelect requestId="r1" currentOwnerUserId={null} members={MEMBERS} />);
+    await user.click(screen.getByRole('combobox'));
+    const listbox = await screen.findByRole('listbox');
+    await user.click(within(listbox).getByRole('option', { name: 'Jane Smith' }));
+    expect(toastError).toHaveBeenCalledWith(requestFailedMessage(offline(), 'assign the owner'));
+    expect(screen.getByRole('combobox')).toHaveTextContent('Unassigned');
+    expect(screen.getByRole('combobox')).toBeEnabled();
+    expect(refreshMock).not.toHaveBeenCalled();
   });
 });

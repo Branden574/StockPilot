@@ -15,6 +15,8 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { cn } from '@/lib/utils';
 
 import {
@@ -179,8 +181,23 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     toast.loading('Saving…', { id: SAVE_TOAST });
 
     startTransition(async () => {
-      const res = await setRolePermissionOverrideAction({ role, permission: perm, granted });
-      markBusy(key, false);
+      let res: Awaited<ReturnType<typeof setRolePermissionOverrideAction>>;
+      try {
+        res = await setRolePermissionOverrideAction({ role, permission: perm, granted });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        // The loading toast goes: the toaster lives in the root layout, so it
+        // would keep spinning on the sign-in page.
+        if (isControlFlow(e)) return void toast.dismiss(SAVE_TOAST);
+        // No answer: the box goes back, and the error replaces the 'Saving…'
+        // toast (a loading toast never times out). Thrown out of this
+        // transition, it replaced the settings page with its error page.
+        setRoleMap((prev) => revertKey(prev, key, hadOverride, previous));
+        toast.error(requestFailedMessage(e, 'save the permission'), { id: SAVE_TOAST });
+        return;
+      } finally {
+        markBusy(key, false);
+      }
       if (!res.ok) {
         setRoleMap((prev) => revertKey(prev, key, hadOverride, previous)); // revert
         toast.error(res.error.message, { id: SAVE_TOAST });
@@ -212,12 +229,25 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     toast.loading('Saving…', { id: SAVE_TOAST });
 
     startTransition(async () => {
-      const res = await setUserPermissionOverrideAction({
-        userId: member.userId,
-        permission: perm,
-        granted,
-      });
-      markBusy(key, false);
+      let res: Awaited<ReturnType<typeof setUserPermissionOverrideAction>>;
+      try {
+        res = await setUserPermissionOverrideAction({
+          userId: member.userId,
+          permission: perm,
+          granted,
+        });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        // The loading toast goes: the toaster lives in the root layout, so it
+        // would keep spinning on the sign-in page.
+        if (isControlFlow(e)) return void toast.dismiss(SAVE_TOAST);
+        // As toggleRole: the box goes back and the error replaces 'Saving…'.
+        setUserMap((prev) => revertKey(prev, key, hadOverride, previous));
+        toast.error(requestFailedMessage(e, 'save the permission'), { id: SAVE_TOAST });
+        return;
+      } finally {
+        markBusy(key, false);
+      }
       if (!res.ok) {
         setUserMap((prev) => revertKey(prev, key, hadOverride, previous));
         toast.error(res.error.message, { id: SAVE_TOAST });
@@ -240,8 +270,20 @@ export function RolePermissionMatrix({ roleOverrides, userOverrides, members }: 
     setPresetBusy(true);
     toast.loading('Applying Auditor preset…', { id: SAVE_TOAST });
     startTransition(async () => {
-      const res = await applyAuditorPresetAction();
-      setPresetBusy(false);
+      let res: Awaited<ReturnType<typeof applyAuditorPresetAction>>;
+      try {
+        res = await applyAuditorPresetAction();
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        // The loading toast goes: the toaster lives in the root layout, so it
+        // would keep spinning on the sign-in page.
+        if (isControlFlow(e)) return void toast.dismiss(SAVE_TOAST);
+        // Sent again, the preset grants the same permissions (set to granted).
+        toast.error(requestFailedMessage(e, 'apply the Auditor preset'), { id: SAVE_TOAST });
+        return;
+      } finally {
+        setPresetBusy(false);
+      }
       if (!res.ok) {
         toast.error(res.error.message, { id: SAVE_TOAST });
       } else {

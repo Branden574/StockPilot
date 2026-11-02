@@ -5,6 +5,8 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
+import { isControlFlow } from '@/lib/control-flow';
+import { requestFailedMessage } from '@/lib/request-failure';
 import { formatNumber } from '@/lib/utils';
 import { backfillItemEmbeddingsAction } from '@/server/actions/embeddings';
 
@@ -47,7 +49,17 @@ export function EmbeddingsBackfillPanel({ initialRemaining, initialTotal }: Pane
     let safety = 0;
     while (!stopRef.current && safety < 500) {
       safety += 1;
-      const res = await backfillItemEmbeddingsAction({ limit: BATCH_SIZE });
+      let res: Awaited<ReturnType<typeof backfillItemEmbeddingsAction>>;
+      try {
+        res = await backfillItemEmbeddingsAction({ limit: BATCH_SIZE });
+      } catch (e) {
+        // A redirect (the session ended): the router is already navigating.
+        if (isControlFlow(e)) return;
+        // Sent again, a batch embeds only what is still missing.
+        toast.error(requestFailedMessage(e, 'continue the backfill'));
+        setState('stopped');
+        return;
+      }
       if (!res.ok) {
         toast.error(res.error.message);
         setState('stopped');
