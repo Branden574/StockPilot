@@ -793,6 +793,13 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Permission override updates (0431, docket S62): the database asks for the
+  # same permission the app asks before a restriction changes. The UPDATE
+  # rules of user_permission_overrides and role_permission_overrides ask of
+  # the row being changed what their DELETE rules ask (0322); WITH CHECK
+  # stays 0215's. The lock footprint is
+  # scripts/db-concurrency/0431_migration_lock_footprint.sh.
+  supabase/tests/0431_permission_override_updates_follow_0322.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -936,6 +943,7 @@ WEB_TESTS=(
 
   # Permissions and escalation.
   src/server/actions/permissions.override-clear.test.ts
+  src/server/actions/permissions.restriction-rewrite.test.ts
   src/server/actions/permissions.auditor-preset.test.ts
   'src/app/(dashboard)/dashboard/auditor-read-gates.test.tsx'
 
