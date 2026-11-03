@@ -1,0 +1,92 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]" id="orders-title">
+              "Order requests"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            "Review incoming requests and move them through approval, packaging, and delivery."
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <span data-tour="orders-page">
+        <button aria-expanded="false" aria-haspopup="menu" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3 [&_svg:last-child]:size-3" data-state="closed" id="radix-«id1»" type="button">
+          <svg aria-hidden="true" class="lucide lucide-download" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 15V3">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+            <path d="m7 10 5 5 5-5">
+          "Export"
+          <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="m6 9 6 6 6-6">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/dashboard/orders/manage-items">
+          "Manage order items"
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-accent text-accent-ink hover:bg-accent/90 h-8 px-3.5 text-[13px]" href="/dashboard/orders/new">
+          "+ Place order"
+  <nav aria-label="Status" class="border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip @container" data-slot="stat-strip" data-variant="stages">
+    <div class="[&>*]:border-border -mb-px -mr-px grid [&>*:last-child]:border-r-0 [&>*]:border-b [&>*]:border-r grid-cols-[repeat(auto-fit,minmax(min(100%,130px),1fr))] @min-[880px]:flex @min-[880px]:flex-wrap @min-[880px]:[&>*]:flex-[1_0_auto]">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=all_active">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "All active"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a aria-current="page" class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 bg-muted" data-slot="stat-strip-link" data-state="active" href="/dashboard/orders?status=needs_approval">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span class="text-foreground font-medium">
+            "Needs approval"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-accent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=picking">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Picking"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=packing">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Packing"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=staged">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Staged"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=in_transit">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "In transit"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=backordered">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Backordered"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=completed">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Completed"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=denied_cancelled">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Denied/Cancelled"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+  <div class="flex w-full min-w-0 flex-col items-center justify-center text-center border-border bg-card rounded-lg border min-h-[320px] gap-3 px-6 py-14" data-slot="state-panel" data-state-kind="failed">
+    <div aria-hidden="true" class="flex items-center justify-center rounded-full size-11 bg-destructive-wash text-destructive" data-slot="state-panel-icon">
+      <svg aria-hidden="true" class="lucide lucide-triangle-alert lucide-alert-triangle h-5 w-5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+        <path d="M12 9v4">
+        <path d="M12 17h.01">
+    <h2 class="max-w-md text-foreground font-medium text-[14px] leading-5">
+      "We couldn't load orders"
+    <div class="text-muted-foreground max-w-md text-[13.5px] leading-[20.25px]">
+      "Something went wrong loading this list. This is usually temporary — try again in a moment, and switch tabs above to view other stages."
+    <div class="flex flex-wrap items-center justify-center gap-2 mt-2">
+      <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/dashboard/orders?status=needs_approval">
+        "Try again"
+  <div class="text-muted-foreground flex items-center justify-end gap-2 text-[12.5px]">
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-ink-4" disabled="">
+      "← Newer"
+    <p class="px-2 tabular-nums">
+      "Page "
+      "1"
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-ink-4" disabled="">
+      "Older →"
