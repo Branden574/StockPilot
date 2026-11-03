@@ -10,10 +10,12 @@
    backdrop-filter becomes a Backdrop Root, and dialogs and menus inside it
    would then blur nothing.
 
-   Stage 2 builds the frame and its materials. The rail under 1180 px, the
-   top-bar capsule, the phone nav sheet's bottom-sheet form and the 761-767 px
-   band where glass is already desktop are stage 3 ("glass shell finished");
-   until then the classic breakpoints (Tailwind md, 768 px) hold. */
+   Stage 2 builds the frame and its materials. Stage 3 ("glass shell
+   finished", the second @layer block below) adds the rail under 1180 px, the
+   top bar's capsule, search and crumbs, the phone nav sheet's bottom-sheet
+   form, the focus ring and the 761-767 px band where glass is already desktop
+   (components/theme/glass-viewport.ts keeps the shell's own idea of
+   "desktop" in step with it). */
 @layer lg {
   @media screen {
     /* The frame lets the scene through. */
@@ -181,6 +183,564 @@
     /* ── Top-bar buttons (AppTopbar .tb-btn): glass pills ────────────── */
     :root[data-appearance='liquid-glass'] [data-glass='tb-btn'] {
       border-radius: 999px;
+    }
+  }
+}
+
+/* ── Stage 3: the shell finished (AppSidebar.dc.html, AppTopbar.dc.html,
+   Overview, Overview-Tablet and Overview-Mobile at their sizes; sp.css
+   396-484). Hooks: [data-glass=sb-ws|sb-sec|sb-sec-h|sb-sec-label|nav-label|
+   nav-ct|sb-foot|sb-foot-text|avatar|ws-name|ws-mark|ws-chev|crumbs|
+   crumb-sep|tb-tools|tb-search|kbd|tb-cap|tb-icon|badge-dot|navsheet-close|
+   edge-swipe]. Every one is an inert attribute on today's markup
+   (components/dashboard/shell.classic-parity.test.tsx), so these rules only
+   restyle; no element exists in glass that classic lacks.
+
+   Deviations from the boards, on purpose (stockpilot-work/liquid-glass/
+   stage3/items-rows.md): the top bar's controls float as three glass pieces
+   (warehouse, search, the icon capsule) because classic keeps them as
+   siblings; the rail keeps each section heading as a small chevron button so
+   a folded section can still be opened; the rail labels are visually hidden,
+   never removed, so every link keeps its name; there is no tinted Place an
+   order button (classic has no New order entry on these routes to duplicate). */
+@layer lg {
+  @media screen {
+    /* ── Desktop from 761 px (the boards' phone layout ends at 760) ───── */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass'] [data-glass='shell'] > [data-glass='sidebar'] {
+        display: flex;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='edge-swipe'] {
+        display: none;
+      }
+    }
+
+    /* ── Sidebar: 12/10/10 padding, 10 px between its parts ──────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='shell'] > [data-glass='sidebar'] {
+      gap: 10px;
+      padding: 12px 10px 10px;
+      overflow: hidden;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet'] [data-glass='sidebar'] {
+      gap: 10px;
+      padding: 8px 12px 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] {
+      height: 32px;
+      padding: 0 2px 0 6px;
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] svg {
+      width: 26px;
+      height: 26px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-ws'] {
+      padding: 0;
+    }
+    /* The workspace switcher (.ws): a 30 px tile, the name in 600. */
+    :root[data-appearance='liquid-glass'] [data-glass='workspace'] {
+      height: auto;
+      min-height: 44px;
+      gap: 10px;
+      padding: 7px 8px;
+      font-size: 13.5px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] button[data-glass='workspace']:hover {
+      background-color: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='ws-name'] {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='ws-mark'] {
+      width: 30px;
+      height: 30px;
+      border-radius: 9px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='ws-mark'][data-glass-variant='dot'] {
+      background: linear-gradient(140deg, #3a7f9e, #21506a);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='ws-chev'] {
+      width: 14px;
+      height: 14px;
+      color: var(--lg-ink-3);
+      opacity: 1;
+    }
+    /* Sections (.sb-nav, .sb-sec, .sb-sec-h): 26 px headings in 12 / 600. */
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-nav'] {
+      gap: 10px;
+      margin: 0 -6px;
+      padding: 0 6px 6px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-sec-h'] {
+      min-height: 26px;
+      padding: 0 8px;
+      border-radius: 7px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-sec-h']:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-sec-h'] svg {
+      width: 14px;
+      height: 14px;
+      color: var(--lg-ink-4);
+    }
+    /* Navigation rows (.nav-item): 34 px, 14 / 500, 18 px icons. */
+    :root[data-appearance='liquid-glass'] [data-glass='nav-item'] {
+      min-height: 34px;
+      gap: 10px;
+      padding: 0 9px;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='nav-item'] > svg {
+      width: 18px;
+      height: 18px;
+      color: var(--lg-ink-3);
+    }
+    /* Counts (.nav-ct): 12 / 650 ink 3. An alert count keeps the danger tone
+       classic gives it, as a 20 px pill (the board's .hot shape). */
+    :root[data-appearance='liquid-glass'] [data-glass='nav-ct'] {
+      margin-left: auto;
+      padding: 0;
+      background-color: transparent;
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 16px;
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='nav-ct'][data-glass-tone='alert'] {
+      display: inline-grid;
+      place-items: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 10px;
+      background-color: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    /* Identity foot (.sb-foot). */
+    :root[data-appearance='liquid-glass'] [data-glass='sb-foot'] {
+      gap: 10px;
+      padding: 8px;
+      border-top-width: 0;
+      border-radius: 13px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='avatar'] {
+      border-color: var(--lg-line-2);
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-foot-text'] > :first-child {
+      color: var(--lg-ink);
+      font-size: 13.5px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-foot-text'] > :last-child {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+    }
+    /* A finger keeps its 44 px targets, as in classic. */
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='sb-sec-h'],
+      :root[data-appearance='liquid-glass'] [data-glass='nav-item'] {
+        min-height: 44px;
+      }
+    }
+    /* Increase Contrast: the current row is outlined in ink (sp.css:439). */
+    @media (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass='nav-item'][aria-current='page'] {
+        box-shadow: inset 0 0 0 1.5px var(--lg-ink);
+      }
+    }
+
+    /* ── The rail, 761-1179 px (.sidebar.is-rail): 84 px, icons only ── */
+    @media (min-width: 761px) and (max-width: 1179px) {
+      :root[data-appearance='liquid-glass'] [data-glass='shell'] > [data-glass='sidebar'] {
+        width: 84px;
+        align-items: center;
+        padding: 12px 8px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        > [data-glass='sidebar-brand'] {
+        justify-content: center;
+        padding: 0;
+      }
+      /* Visually hidden, never removed: the link, heading and switcher keep
+         their names for assistive technology. */
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        :is(
+          [data-glass='nav-label'],
+          [data-glass='nav-ct'],
+          [data-glass='sb-sec-label'],
+          [data-glass='sb-foot-text'],
+          [data-glass='ws-name']
+        ) {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='ws-chev'] {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='workspace'] {
+        width: auto;
+        min-height: 0;
+        justify-content: center;
+        padding: 6px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='sidebar-nav'] {
+        width: 100%;
+        align-items: center;
+        margin: 0;
+        padding: 0 0 6px;
+        gap: 6px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='sb-sec'] {
+        width: 100%;
+        align-items: center;
+        padding-top: 6px;
+        border-top: 1px solid color-mix(in srgb, var(--lg-line-2) 60%, transparent);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='sb-sec-h'] {
+        width: 46px;
+        min-height: 22px;
+        justify-content: center;
+        padding: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='nav-item'] {
+        position: relative;
+        width: 46px;
+        min-height: 40px;
+        justify-content: center;
+        margin-inline: auto;
+        padding: 0;
+      }
+      /* An alert count shows as a dot on its icon. */
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='nav-item']:has([data-glass-tone='alert'])::after {
+        content: '';
+        position: absolute;
+        top: 6px;
+        right: 8px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background-color: var(--lg-danger-fill);
+        box-shadow: 0 0 0 2px var(--lg-chrome);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='sb-foot'] {
+        justify-content: center;
+        padding: 6px;
+      }
+    }
+    @media (min-width: 761px) and (max-width: 1179px) and (pointer: coarse) {
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='nav-item'],
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        [data-glass='sb-sec-h'] {
+        min-height: 44px;
+      }
+    }
+
+    /* ── Top bar (.topbar): 68 px, 12 24 8 20; 62 px on a phone ───────── */
+    :root[data-appearance='liquid-glass'] [data-glass='topbar'] {
+      /* !important: the bar's height is an inline style (56 px), which no
+         normal declaration can beat. */
+      height: 68px !important;
+      gap: 12px;
+      padding: 12px 24px 8px 20px;
+    }
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass='topbar'] {
+        height: 62px !important;
+        gap: 8px;
+        padding: 10px 12px 8px;
+      }
+    }
+    /* Crumbs (.crumbs): 13 px ink 3, a 13 px chevron between them. */
+    :root[data-appearance='liquid-glass'] [data-glass='crumbs'],
+    :root[data-appearance='liquid-glass'] [data-glass='crumbs'] > li {
+      gap: 6px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='crumbs'] {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='crumbs'] a:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='crumbs'] [aria-current='page'] {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='crumb-sep'] {
+      width: 13px;
+      height: 13px;
+      font-size: 0;
+      line-height: 0;
+      background-color: var(--lg-ink-4);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
+        center / 13px 13px no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
+        center / 13px 13px no-repeat;
+    }
+    /* Floating glass pieces: the warehouse button (stage 2's tb-btn), the
+       search field, the icon capsule and the lone icon buttons. */
+    :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
+    :root[data-appearance='liquid-glass'] [data-glass='tb-cap'],
+    :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+      border-color: transparent;
+      background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tb-btn'][data-glass-variant='warehouse'] {
+      height: 34px;
+      gap: 7px;
+      padding: 0 12px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    /* Search (.tb-search): a 300 px pill (200 px under 1180), ⌘K in a key. */
+    :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
+      flex: 0 1 300px;
+      width: 300px;
+      min-width: 200px;
+      max-width: 300px;
+      height: 34px;
+      gap: 8px;
+      padding: 0 6px 0 12px;
+      border-radius: 999px;
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+    @media (max-width: 1179px) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
+        flex-basis: 200px;
+        width: 200px;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tb-search'] > svg {
+      width: 16px;
+      height: 16px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='kbd'] {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 6px;
+      border: 1px solid var(--lg-line-2);
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      background-color: var(--lg-surface);
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    /* The icon capsule (.tb-cap): 4 px around 34 px round buttons. */
+    :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+      gap: 2px;
+      padding: 4px;
+      border-radius: 999px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] :is(a, button) {
+      width: 34px;
+      height: 34px;
+      border-color: transparent;
+      border-radius: 999px;
+      background-color: transparent;
+      color: var(--lg-ink-2);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] :is(a, button):hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      color: var(--lg-ink-2);
+    }
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+        width: 36px;
+        height: 36px;
+      }
+    }
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] :is(a, button),
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-btn'][data-glass-variant='warehouse'] {
+        min-width: 44px;
+        min-height: 44px;
+      }
+    }
+    /* The unread count (.badge-dot): 16 px on the danger fill, ringed in
+       the chrome colour. White on #C8321F is 5.3:1. */
+    :root[data-appearance='liquid-glass'] [data-glass='badge-dot'] {
+      top: 3px;
+      right: 3px;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 8px;
+      background-color: var(--lg-danger-fill);
+      color: #fff;
+      font-family: inherit;
+      font-size: 10px;
+      font-weight: 700;
+      box-shadow: 0 0 0 2px var(--lg-chrome);
+    }
+
+    /* ── Phone navigation sheet: a bottom sheet, 88% tall, radius 28 ─── */
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet'] {
+      top: auto;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      width: auto;
+      max-width: none;
+      height: 88%;
+      height: 88dvh;
+      padding-top: 17px;
+      border-radius: 28px 28px 0 0;
+      --tw-enter-translate-x: 0;
+      --tw-enter-translate-y: 100%;
+      --tw-exit-translate-x: 0;
+      --tw-exit-translate-y: 100%;
+    }
+    /* The grabber (.grabber): 38 x 5, line 3. */
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet']::before {
+      content: '';
+      position: absolute;
+      top: 8px;
+      left: 50%;
+      width: 38px;
+      height: 5px;
+      margin-left: -19px;
+      border-radius: 3px;
+      background-color: var(--lg-line-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet-close'] {
+      top: 12px;
+      right: 10px;
+      border-radius: 999px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet-close']:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+
+    /* ── Focus (R11): the glass ring, an outline in --lg-focus ─────────
+       The classic ring is a box-shadow that the glass materials replace, so
+       the shell draws the board's outline instead (sp.css:88) and clears the
+       ring variables so the two never double. Fields keep their halo
+       (primitives.css). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='sidebar'], [data-glass='topbar'], [data-glass='navsheet'])
+      :focus-visible:not([data-glass='input'], [data-glass='select']) {
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+
+    /* Reduce Transparency, Increase Contrast: nothing in the bar blurs; the
+       glass token is already opaque there (tokens.generated.css). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='tb-search'],
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='tb-cap'],
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='tb-icon'] {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='crumb-sep'] {
+        width: auto;
+        height: auto;
+        font-size: inherit;
+        line-height: inherit;
+        background: none;
+        -webkit-mask: none;
+        mask: none;
+      }
     }
   }
 }

@@ -23,9 +23,26 @@
   }
 
   /* Toasts: the artifact's 14 px radius (sonner sets its own radius from its
-     --border-radius variable in an unlayered rule). The ink fill already
-     follows the glass --primary. */
+     --border-radius variable in an unlayered rule) and its 14 / 500 type. The
+     ink fill already follows the glass --primary. */
   :root[data-appearance='liquid-glass'] ol[data-sonner-toaster] li[data-sonner-toast] {
     border-radius: 14px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  /* The toast dock (DS-Components "Feedback", sp.css .toast-dock and .toast;
+     stage 3, the shell): bottom centre, 84 px up, so the one-time intro
+     notice (plans/REVISION-DEFAULT.md R13) and every other toast land where
+     the eye already is, clear of the pane's corner. Above sonner's 600 px
+     phone layout only, where its stack is full width. It still lifts over the
+     product-update card (app/globals.css), whose height UpdateCenter puts in
+     --sp-update-card-offset while the card is up. */
+  @media (min-width: 601px) {
+    :root[data-appearance='liquid-glass'] ol[data-sonner-toaster][data-y-position='bottom'] {
+      right: auto;
+      bottom: calc(84px + var(--sp-update-card-offset, 0px));
+      left: 50%;
+      transform: translateX(-50%);
+    }
   }
 }
