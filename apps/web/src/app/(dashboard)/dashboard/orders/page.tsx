@@ -151,7 +151,7 @@ export default async function OrdersPage({
   const pager = canApprove ? <OrdersPager tab={tab} page={page} hasNext={hasNext} /> : null;
 
   return (
-    <div className={PAGE_BOX} data-glass="orders-page">
+    <div className={PAGE_BOX} data-glass-page="orders">
       {/* Performance marker. This page has no Suspense split: by the time any
           of it renders, the order rows above have been awaited, so the page
           itself IS the real data (its skeleton is drawn elsewhere and never

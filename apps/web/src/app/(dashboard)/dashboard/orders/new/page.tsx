@@ -130,7 +130,8 @@ export default async function NewOrderPage({
     // state, with the words this state has always had.
     return (
       <div
-        data-glass="order-new-page"
+        data-glass-page="order-new"
+        data-glass="order-new-frame"
         className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
       >
         <PageHeader

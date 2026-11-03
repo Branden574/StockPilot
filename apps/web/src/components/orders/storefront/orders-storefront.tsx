@@ -429,7 +429,9 @@ function StorefrontShell({
           : 'browse';
 
   return (
-    <div className="sp-storefront">
+    // data-glass-page: the inert page hook Liquid Glass scopes this route's
+    // composition to (styles/liquid-glass/pages/order-new.css).
+    <div className="sp-storefront" data-glass-page="order-new">
       <div className="sf-page">
         {/* ---------- Page head (the shared page header, DESIGN-SPEC 6.1) ---------- */}
         <PageHeader

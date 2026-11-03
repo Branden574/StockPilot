@@ -4,13 +4,16 @@
    page.tsx), never globally (plan 4.1).
 
    Same DOM as Classic (plan M1): every rule restyles the classic markup
-   through the inert hooks the pages carry (data-glass="orders-page",
-   "manage-items-page", ...; data-glass-role="order-status"), and every rule is
-   scoped to :root[data-appearance="liquid-glass"] inside @media screen, so
-   Classic Dark and Light never match one and printing never gets one
+   through the inert hooks the pages carry (the page roots
+   data-glass-page="orders" and "manage-items"; data-glass="card", ...;
+   data-glass-role="order-status"), and every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen, so Classic Dark
+   and Light never match one and printing never gets one
    (glass-scope.guard.test.ts reads this folder too). App Router keeps a
    route's stylesheet after a client navigation, so every selector also names
-   its page's hook: nothing here reaches another page.
+   its page root: nothing here reaches another page. The Export menu is
+   portalled out of the page, so its rules name the page root through
+   :root:has([data-glass-page="orders"]) and the menu's own role hook.
 
    The layer order statement is insurance: it is the order globals.css already
    declares (Tailwind's four layers, then lg from styles/liquid-glass/index.css),
@@ -21,19 +24,19 @@
 @layer lg {
   @media screen {
     /* ── The page box (.page: max 1480, 6 / 28 / 48 padding, 20 between) ── */
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] {
       max-width: 1480px;
       gap: 20px;
       padding: 6px 28px 48px;
     }
 
     /* ── The page head (.page-h: Large title 26/32, the subline in ink-2) ── */
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-glass='page-header'] h1 {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='page-header'] h1 {
       font-size: 26px;
       line-height: 32px;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='page-header']
       div:has(> h1)
       + div {
@@ -44,7 +47,7 @@
     }
     /* Header buttons are the board's 36 px buttons (.btn: 14 px / 600). */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='page-header-actions']
       [data-glass='button']:not([data-glass-variant='ghost']) {
       height: 36px;
@@ -56,7 +59,7 @@
 
     /* ── The status stages as the board's underlined tabs (.tabs / .tab) ── */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='stat-strip'][data-variant='stages'] {
       overflow-x: auto;
       overflow-y: hidden;
@@ -68,7 +71,7 @@
       scrollbar-width: none;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='stat-strip'][data-variant='stages']
       > div {
       display: flex;
@@ -77,14 +80,14 @@
       margin: 0;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='stat-strip'][data-variant='stages']
       > div
       > * {
       flex: none;
       border-width: 0;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-slot='stat-strip-link'] {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-slot='stat-strip-link'] {
       flex-direction: row;
       align-items: center;
       gap: 7px;
@@ -94,11 +97,11 @@
       white-space: nowrap;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link']
       > span:first-child,
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link']
       > span:first-child
       span {
@@ -109,22 +112,22 @@
       transition: color var(--lg-d-1) var(--lg-ease);
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link']:hover
       > span:first-child,
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link'][aria-current='page']
       > span:first-child,
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link'][aria-current='page']
       > span:first-child
       span {
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link'][aria-current='page']
       > span:first-child
       span {
@@ -132,7 +135,7 @@
     }
     /* The stage bar becomes the tab underline (.tab.on::after). */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link']
       > span[aria-hidden] {
       left: 10px;
@@ -143,7 +146,10 @@
     }
 
     /* A filter that is not a tab ("Waiting for signature"): the scope chip. */
-    :root[data-appearance='liquid-glass'] [data-glass='orders-filter-note'] > span:first-child {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-filter-note']
+      > span:first-child {
       height: 32px;
       padding: 0 12px;
       border-color: transparent;
@@ -155,14 +161,14 @@
     }
 
     /* ── The table card (.card + .dt): 38 px header, 52 px rows ──────────── */
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-glass='table'] {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] {
       font-size: 14px;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-glass='table'] thead tr {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] thead tr {
       border-bottom: 1px solid var(--lg-line);
       background: var(--lg-card-fill-2);
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-glass='table'] th {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] th {
       height: 38px;
       padding: 0 12px;
       color: var(--lg-ink-3);
@@ -173,23 +179,23 @@
       text-transform: none;
       white-space: nowrap;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-glass='table'] tbody tr {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] tbody tr {
       height: var(--lg-row-h);
       border-bottom: 1px solid var(--lg-line);
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       tr:last-child {
       border-bottom: 0;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-page'] [data-glass='table'] td {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] td {
       padding: var(--lg-row-pad) 12px;
     }
     /* Order # (mono sm strong, the link in the accent text, underlined). */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:first-child
@@ -203,7 +209,7 @@
     }
     /* Requester: the name (sm strong) over the organisation (xs muted). */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:nth-child(2)
@@ -214,7 +220,7 @@
       line-height: 18px;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:nth-child(2)
@@ -227,7 +233,7 @@
     }
     /* Warehouse, type, picker, driver, requested: sm in ink-2. */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:is(:nth-child(3), :nth-child(7), :nth-child(8), :nth-child(9), :nth-child(10)) {
@@ -235,7 +241,7 @@
       font-size: 13px;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:nth-child(7)
@@ -246,7 +252,7 @@
     }
     /* Lines and Total qty: the body face with tabular figures (.num). */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:is(:nth-child(4), :nth-child(5)) {
@@ -256,7 +262,7 @@
     }
     /* Last update: xs muted. */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass='table']
       tbody
       td:nth-child(11) {
@@ -266,7 +272,7 @@
 
     /* ── Badges (.badge 22 px, 12 / 600, radius 6; status with its dot) ─── */
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-glass='badge'] {
       height: 22px;
       gap: 5px;
@@ -275,7 +281,7 @@
       line-height: 1;
     }
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-glass='badge'][data-glass-variant='outline'] {
       border-color: transparent;
       background: transparent;
@@ -283,12 +289,12 @@
       color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass-role='order-status'] {
       border-color: transparent;
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass-role='order-status']::before {
       content: '';
       display: inline-block;
@@ -302,31 +308,33 @@
        org's `default`) in the accent wash, the work stages (`secondary`) on
        the neutral wash; warning, success and destructive keep their washes. */
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass-role='order-status'][data-glass-variant='default'] {
       background: var(--lg-accent-wash);
       color: var(--lg-accent-text);
     }
     :root[data-appearance='liquid-glass']
-      [data-glass='orders-page']
+      [data-glass-page='orders']
       [data-glass-role='order-status'][data-glass-variant='secondary'] {
       background: var(--lg-neutral-wash);
       color: var(--lg-ink-2);
     }
 
     /* ── The pager (.pager: 13 px ink-3 on a hairline) ──────────────────── */
-    :root[data-appearance='liquid-glass'] [data-glass='orders-pager'] {
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='orders-pager'] {
       padding: 10px 12px 10px 16px;
       border-color: var(--lg-line);
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-pager-row'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-pager-row'] {
       color: var(--lg-ink-3);
       font-size: 13px;
     }
 
     /* ── Empty and failed states (.card.empty: the 56 px wash tile) ─────── */
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-glass='state-panel'] {
       gap: 10px;
       padding: 56px 24px;
@@ -335,7 +343,7 @@
       box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
     }
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-slot='state-panel-icon'] {
       width: 56px;
       height: 56px;
@@ -344,21 +352,21 @@
       color: var(--lg-accent-text);
     }
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-state-kind='failed']
       [data-slot='state-panel-icon'] {
       background: var(--lg-danger-wash);
       color: var(--lg-danger);
     }
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-slot='state-panel-icon']
       svg {
       width: 26px;
       height: 26px;
     }
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-glass='state-panel']
       > :is(h1, h2, h3, p):not([data-slot]) {
       font-size: 14px;
@@ -366,7 +374,7 @@
       line-height: 20px;
     }
     :root[data-appearance='liquid-glass']
-      :is([data-glass='orders-page'], [data-glass='manage-items-page'])
+      :is([data-glass-page='orders'], [data-glass-page='manage-items'])
       [data-glass='state-panel']
       > :is(h1, h2, h3, p)
       + div {
@@ -377,11 +385,12 @@
     }
 
     /* ── The Export menu (portalled: named by its role hook) ───────────── */
-    :root[data-appearance='liquid-glass'] [data-glass-role='orders-export-menu'] {
+    :root[data-appearance='liquid-glass']:has([data-glass-page='orders'])
+      [data-glass-role='orders-export-menu'] {
       width: 260px;
       padding: 6px;
     }
-    :root[data-appearance='liquid-glass']
+    :root[data-appearance='liquid-glass']:has([data-glass-page='orders'])
       [data-glass-role='orders-export-menu']
       [data-glass='menu-item'] {
       display: grid;
@@ -393,7 +402,7 @@
       font-size: 14px;
       line-height: 20px;
     }
-    :root[data-appearance='liquid-glass']
+    :root[data-appearance='liquid-glass']:has([data-glass-page='orders'])
       [data-glass-role='orders-export-menu']
       [data-glass='menu-item']
       > svg {
@@ -404,13 +413,13 @@
     }
     /* " · Needs approval": the tab's name after the format, its leading
        space kept (a grid item would drop it). */
-    :root[data-appearance='liquid-glass']
+    :root[data-appearance='liquid-glass']:has([data-glass-page='orders'])
       [data-glass-role='orders-export-menu']
       [data-glass='menu-item']
       > span:not([data-glass]) {
       white-space: pre;
     }
-    :root[data-appearance='liquid-glass']
+    :root[data-appearance='liquid-glass']:has([data-glass-page='orders'])
       [data-glass-role='orders-export-menu']
       [data-glass='export-item-sub'] {
       grid-column: 2 / -1;
@@ -420,22 +429,24 @@
     }
 
     /* ── Phone (760 px and under): the rows as cards (.mob-f) ─────────── */
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-cards'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-cards'] {
       display: none;
     }
     @media (max-width: 760px) {
-      :root[data-appearance='liquid-glass'] [data-glass='orders-page'] {
+      :root[data-appearance='liquid-glass'] [data-glass-page='orders'] {
         gap: 16px;
         padding: 4px 16px 96px;
       }
       :root[data-appearance='liquid-glass']
-        [data-glass='orders-page']
+        [data-glass-page='orders']
         [data-glass='page-header']
         h1 {
         font-size: 24px;
         line-height: 30px;
       }
-      :root[data-appearance='liquid-glass'] [data-glass='orders-page'] > [data-glass='card'] {
+      :root[data-appearance='liquid-glass'] [data-glass-page='orders'] > [data-glass='card'] {
         overflow: visible;
         border-color: transparent;
         border-radius: 0;
@@ -443,12 +454,14 @@
         box-shadow: none;
       }
       :root[data-appearance='liquid-glass']
-        [data-glass='orders-page']
+        [data-glass-page='orders']
         > [data-glass='card']
         > [data-glass='table-scroll'] {
         display: none;
       }
-      :root[data-appearance='liquid-glass'] [data-glass='orders-phone-cards'] {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='orders']
+        [data-glass='orders-phone-cards'] {
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -456,13 +469,15 @@
         padding: 0;
         list-style: none;
       }
-      :root[data-appearance='liquid-glass'] [data-glass='orders-pager'] {
+      :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='orders-pager'] {
         margin-top: 10px;
         padding: 0;
         border-top-width: 0;
       }
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card'] {
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -475,12 +490,15 @@
       font-size: 14px;
       transition: box-shadow var(--lg-d-1) var(--lg-ease);
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card']:hover {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card']:hover {
       box-shadow:
         inset 0 0 0 1.5px var(--lg-accent),
         var(--lg-sh-1);
     }
     :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
       :is(
         [data-glass='orders-phone-card-top'],
         [data-glass='orders-phone-card-status'],
@@ -493,25 +511,34 @@
       gap: 8px;
       min-width: 0;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-status'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-status'] {
       margin-left: auto;
       gap: 4px;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-ref'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-ref'] {
       font-family: var(--font-mono);
       font-size: 12.6px;
       font-weight: 600;
       letter-spacing: -0.01em;
       font-variant-numeric: tabular-nums;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-who'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-who'] {
       display: flex;
       flex-direction: column;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-name'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-name'] {
       font-weight: 600;
     }
     :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
       :is(
         [data-glass='orders-phone-card-org'],
         [data-glass='orders-phone-card-people'],
@@ -521,25 +548,35 @@
       font-size: 12px;
       line-height: 16px;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-facts'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-facts'] {
       flex-wrap: wrap;
       color: var(--lg-ink-2);
       font-size: 12px;
       line-height: 16px;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-type'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-type'] {
       gap: 4px;
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-type'] svg {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-type']
+      svg {
       width: 16px;
       height: 16px;
       color: var(--lg-ink-3);
     }
-    :root[data-appearance='liquid-glass'] [data-glass='orders-phone-card-updated'] {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card-updated'] {
       margin-left: auto;
       color: var(--lg-ink-3);
     }
     :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
       [data-glass='orders-phone-cards']
       [data-glass-role='order-status']::before {
       content: '';
@@ -551,6 +588,7 @@
       background: currentColor;
     }
     :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
       [data-glass='orders-phone-cards']
       :is([data-glass='badge'], [data-glass-role='order-status']) {
       height: 22px;
