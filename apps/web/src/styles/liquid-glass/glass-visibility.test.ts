@@ -52,10 +52,12 @@ describe('glass-only and classic-only elements', () => {
   // shell's corner (no data action; tests/e2e/appearance/glass-only-allowlist.json).
   // Stage 3, orders lane: the Orders list's phone cards (one list of links
   // to the rows' own orders) and the Export menu's icons, tab name and
-  // sub-lines (three per item, words only).
+  // sub-lines (three per item, words only); the order page's fulfilment
+  // badge beside the status (words and an icon).
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
       'components/auth/external-shell.tsx',
+      'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
       ...Array<string>(6).fill('components/orders/orders-export-menu.tsx'),
     ]);

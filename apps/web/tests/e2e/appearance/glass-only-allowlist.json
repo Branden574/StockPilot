@@ -76,6 +76,16 @@
       "$comment": "Orders.dc.html's Export menu: a list or printer icon, the open tab's name after the format (\" · Needs approval\") and a sub-line (\"Matches the tab you are on\", \"Printable order history\") inside each of the two existing items. The items keep their links, downloads and accessible names (\"Export orders to CSV\", \"Export orders to PDF\").",
       "classicTwin": null,
       "gate": null
+    },
+    {
+      "id": "order-fulfilment-badge",
+      "source": "apps/web/src/components/orders/order-fulfilment-badge.tsx",
+      "selector": "[data-glass=\"order-fulfilment\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard/orders/[id]"],
+      "$comment": "Order-Detail.dc.html's outline badge beside the status in the page head: a truck and \"Delivery\", or a box and \"Pickup\", from the order's own fulfillment_type, which the page already loads. Words and a decorative icon on the head's title line, which Classic already has; no link, button or field. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
     }
   ]
 }

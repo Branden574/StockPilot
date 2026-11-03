@@ -1,0 +1,662 @@
+/* Liquid Glass, the order page (Order-Detail.dc.html and
+   Order-Detail-Mobile.dc.html), stage 3 orders lane. Imported only by its
+   route (app/(dashboard)/dashboard/orders/[id]/page.tsx), never globally
+   (plan 4.1).
+
+   Same DOM as Classic (plan M1): every rule restyles the classic markup
+   through the inert hooks the page carries (the page root
+   data-glass-page="order-detail"; data-glass="panel" on every card;
+   data-glass-role="order-lines", "order-manager-actions", ...), and every
+   rule is scoped to :root[data-appearance="liquid-glass"] inside @media
+   screen, so Classic Dark and Light never match one and printing never gets
+   one (glass-scope.guard.test.ts reads this folder too). App Router keeps a
+   route's stylesheet after a client navigation, so every selector also names
+   its page root: nothing here reaches another page. The dialogs the page
+   opens are portalled out of it, so their rules name the page root through
+   :root:has([data-glass-page="order-detail"]) and the dialog's own part
+   hooks (data-glass="dialog-header", "dialog-body", "dialog-footer").
+
+   What the board draws that this page cannot (recorded in
+   stage3/orders-rows.md): Review by category and its Override dialog
+   ([Proposed], not built), line photos (the page does not load them), the
+   phone's bottom next-step bar, and Manager actions and the requester's note
+   in the side column (moving them needs a different DOM; Classic keeps
+   today's order, so glass keeps it too).
+
+   The layer order statement is insurance: it is the order globals.css already
+   declares (Tailwind's four layers, then lg from styles/liquid-glass/index.css),
+   so it changes nothing when this file loads after globals.css, and keeps lg
+   last if a route stylesheet were ever inserted first. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The page box (.page: max 1480, 6 / 28 / 48 padding, 20 between) ── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='order-detail'] {
+      max-width: 1480px;
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+
+    /* ── The page head (.page-h: back link, Large title, badges, subline) ── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      > div:first-child:has(> a) {
+      margin-bottom: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    /* The SO number: mono, muted, 500 at .86 em. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      h1
+      > span {
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      div:has(> h1) {
+      column-gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      h1
+      + span {
+      column-gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div {
+      margin-top: 4px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div
+      > span {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+
+    /* ── Badges (.badge 22 px, 12 / 600, radius 6; the status with its dot) ── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='order-detail'] [data-glass='badge'] {
+      height: 22px;
+      gap: 5px;
+      padding: 0 8px;
+      font-size: 12px;
+      line-height: 1;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='badge'][data-glass-variant='outline'] {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-status'] {
+      border-color: transparent;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-status']::before {
+      content: '';
+      display: inline-block;
+      flex: none;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    /* The order status tones as the boards map them: Approved (the org's
+       `default`) in the accent wash, the work stages (`secondary`) on the
+       neutral wash; warning, success and destructive keep their washes. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-status'][data-glass-variant='default'] {
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-status'][data-glass-variant='secondary'] {
+      background: var(--lg-neutral-wash);
+      color: var(--lg-ink-2);
+    }
+    /* The fulfilment beside the status (glass-only words, .badge.b-outline
+       with the 13 px icon). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-fulfilment'] {
+      display: inline-flex;
+      flex: none;
+      align-items: center;
+      gap: 5px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 6px;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-fulfilment']
+      svg {
+      flex: none;
+      width: 13px;
+      height: 13px;
+    }
+
+    /* ── Buttons on the page (.btn 36 px 14 / 600; .btn-sm 30 px 13 / 600) ── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='button'][data-glass-size='default'] {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='button'][data-glass-size='default']
+      svg {
+      width: 16px;
+      height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='button'][data-glass-size='sm'] {
+      height: 30px;
+      gap: 6px;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    /* ── The two columns (.cols-side: the main column beside a 300-360 px
+          side column, 16 between; one column below the classic width) ──── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-columns'] {
+      gap: 16px;
+    }
+    @container (min-width: 856px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-detail']
+        [data-glass='order-detail-columns'] {
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+      }
+    }
+
+    /* ── Cards (.card radius 20; .card-h 52 px, 12 / 16; .card-b 16) ────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='order-detail'] [data-glass='panel'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-slot='detail-section-header'] {
+      min-height: 52px;
+      gap: 4px 10px;
+      padding: 12px 16px;
+      border-bottom-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-slot='detail-section-header']
+      > :is(h2, h3, h4) {
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-slot='detail-section-body'][class~='p-[18px]'] {
+      padding: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-slot='detail-section-footer'] {
+      padding: 12px 16px;
+      border-top-color: var(--lg-line);
+    }
+    /* A denied order keeps its danger hairline (the panel material would
+       otherwise take it). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='panel'][data-glass-role='order-denied'] {
+      border-color: var(--lg-danger-line);
+    }
+    /* The requester's note (.card-b sm ink2). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-requester-note']
+      [data-slot='detail-section-body']
+      > p {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    /* The exchange note under the head and the requester's own return
+       requests: content glass, as the cards around them. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-replacement-banner'] {
+      border-color: var(--lg-card-line);
+      border-left-color: var(--lg-accent);
+      border-radius: 12px;
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='order-detail'] #your-requests {
+      padding: 16px;
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+
+    /* ── The lines card (.card-h with Total qty and Add items; .dt) ─────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-slot='detail-section-header']
+      p {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-slot='detail-section-header']
+      p
+      > span {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+    /* The bands above the table keep the card's 16 px gutter. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-slot='detail-section-body']
+      > div:not([data-glass='table-scroll']) {
+      padding-right: 16px;
+      padding-left: 16px;
+      border-bottom-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table'] {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      thead
+      tr {
+      border-bottom: 1px solid var(--lg-line);
+      background: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      th {
+      height: 38px;
+      padding-top: 0;
+      padding-bottom: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      tbody
+      tr {
+      height: var(--lg-row-h);
+      border-bottom: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      tbody
+      tr:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      :is(th, td):first-child {
+      padding-left: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      :is(th, td):last-child {
+      padding-right: 16px;
+    }
+    /* Item: the name in the body face, the SKU mono xs muted under it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      tbody
+      td:first-child
+      a
+      > div:first-child {
+      color: var(--lg-ink);
+      font-size: 14px;
+      line-height: 20px;
+    }
+    /* The numbers: the body face with tabular figures (.num); Requested
+       strong, as the board draws it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      tbody
+      td:is(:nth-child(2), :nth-child(3), :nth-child(4), :nth-child(5)) {
+      font-family: inherit;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      tbody
+      td:nth-child(2) {
+      font-weight: 600;
+    }
+
+    /* ── Manager actions (.card-h col: the title over its line; the step
+          that moves the order on as the 44 px full-width button) ───────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-slot='detail-section-header'] {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-slot='detail-section-header']
+      > span {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-glass-role='order-primary'] {
+      flex: 1 1 100%;
+      width: 100%;
+      height: 44px;
+      padding: 0 18px;
+      border-radius: 12px;
+      font-size: 15px;
+    }
+    /* Deny keeps the danger words on the secondary button (the outline
+       button's glass ink would otherwise take them). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-glass='button'][data-glass-role='order-deny'] {
+      color: var(--lg-danger);
+    }
+    /* The notes under the actions (why a step is held) as the board's
+       alert: the inset tile on the card, the words keep their warning ink. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-glass='order-notice'] {
+      padding: 10px 12px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 12px;
+      background-color: var(--lg-card-fill-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* ── Dates and Details (.kv: the label column, the value in ink 500) ── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-aside']
+      [data-slot='key-value-list'] {
+      display: grid;
+      grid-template-columns: minmax(110px, auto) minmax(0, 1fr);
+      gap: 8px 16px;
+      padding: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-aside']
+      [data-slot='key-value-row'] {
+      display: grid;
+      grid-column: 1 / -1;
+      grid-template-columns: subgrid;
+      column-gap: 16px;
+      align-items: baseline;
+      padding: 0;
+      border-width: 0;
+      font-size: 14px;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-aside']
+      [data-slot='key-value-row']
+      > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-aside']
+      [data-slot='key-value-row']
+      > dd {
+      color: var(--lg-ink);
+      font-weight: 500;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-aside']
+      [data-slot='key-value-row']
+      > dd
+      > span {
+      justify-content: flex-start;
+    }
+
+    /* ── Timeline (.tl: a 26 px marker on a 2 px rail, 12 between) ──────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-entry'] {
+      padding-bottom: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-entry']:last-child {
+      padding-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-rail'] {
+      left: 12px;
+      width: 2px;
+      border-radius: 1px;
+      background-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-marker'] {
+      width: 26px;
+      height: 26px;
+      background-color: var(--lg-surface-3);
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.7);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-marker'] {
+      box-shadow: 0 0 0 3px rgba(30, 35, 33, 0.9);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-entry']
+      > div:not([data-slot])
+      > div:first-child {
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-slot='timeline-entry']
+      > div:not([data-slot])
+      > div:first-child
+      > span:first-child {
+      font-weight: 600;
+    }
+
+    /* ── The phone (≤ 760: 4 / 16 / 96 padding, 16 between, title 24 / 30) ── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='order-detail'] {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-detail']
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
+
+    /* ── The dialogs the page opens (.dialog: the head, the 62% reading
+          area inset 8 px, the foot) ──────────────────────────────────────
+       Portalled to body: named by the page root on :root and by the parts
+       each dialog marks (on the dialog itself or on the form that holds
+       them). A dialog that marks its head lays out its own spacing: its
+       parts take the board's insets, and anything it does not mark keeps the
+       head's 24 px inset. */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      [data-glass='dialog']:has(
+        > [data-glass='dialog-header'],
+        > form > [data-glass='dialog-header']
+      ) {
+      gap: 0;
+      padding: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      [data-glass='dialog']
+      > form:has(> [data-glass='dialog-header']) {
+      gap: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      [data-glass='dialog'][data-glass-role='order-deny-dialog'] {
+      max-width: 480px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-header'] {
+      gap: 4px;
+      padding: 20px 48px 14px 24px;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-header']
+      > h2 {
+      font-family: var(--lg-font-display);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-header']
+      > :not(h2) {
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-body'] {
+      margin: 0 8px;
+      padding: 18px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-field-fill);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form):has(> [data-glass='dialog-header'])
+      > :not(
+        [data-glass='dialog-header'],
+        [data-glass='dialog-body'],
+        [data-glass='dialog-footer'],
+        button
+      ) {
+      margin: 0 24px 14px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-footer'] {
+      gap: 10px;
+      padding: 14px 16px 16px 24px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-footer']
+      > [data-glass='button']:is([data-glass-size='default'], [data-glass-size='sm']) {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+  }
+}

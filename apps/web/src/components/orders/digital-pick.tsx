@@ -323,7 +323,7 @@ export function DigitalPick({
             input.focus({ preventScroll: true });
           }}
         >
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{completionConfirm?.title}</DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-2">
@@ -333,7 +333,7 @@ export function DigitalPick({
               </div>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => {

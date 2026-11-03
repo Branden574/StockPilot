@@ -168,12 +168,11 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>Send delivery request</DialogTitle>
           <DialogDescription>
-            The same email assistant offered when this order was placed. It opens a
-            prefilled draft in your mail client — nothing is sent until you press Send
-            yourself.
+            The same email assistant offered when this order was placed. It opens a prefilled draft
+            in your mail client — nothing is sent until you press Send yourself.
           </DialogDescription>
         </DialogHeader>
         {/* sp-storefront scopes the assistant's sf-* classes (sf-embedded drops
