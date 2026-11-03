@@ -768,15 +768,21 @@
           margin-left: -12px;
         }
       }
-      /* A finger's 44 px buttons make the cluster 52 px: every piece follows. */
+      /* A finger's 44 px buttons make the cluster 52 px: every piece follows.
+         The picker's rule stays on its own, away from the list with the same
+         height: the minifier would otherwise fold a list holding :has() into
+         one :is(), which starts outside the glass root and changes the
+         rule's specificity (compiled-css.guard.test.ts). */
       @media (pointer: coarse) {
-        :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']),
         :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
         :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
           height: 52px;
         }
         :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
           width: 52px;
+          height: 52px;
+        }
+        :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']) {
           height: 52px;
         }
       }
