@@ -47,6 +47,9 @@ describe('components/ui and Liquid Glass (stage 2: inert hooks only)', () => {
     'input',
     'menu',
     'menu-item',
+    // Stage 3 (the shell's menus, DS-Components .menu-label and .menu-sep).
+    'menu-label',
+    'menu-sep',
     'pager',
     'password',
     'popover',

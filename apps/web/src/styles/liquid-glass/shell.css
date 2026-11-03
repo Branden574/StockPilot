@@ -853,6 +853,147 @@
       color: var(--lg-ink);
     }
 
+    /* ── Menus the shell opens, and every other (DS-Components .menu):
+       6 px inside, 36 px rows in 14 px with ink 3 icons, the 12 / 600
+       label in sentence case, a hairline between groups, the selected
+       check in the accent. The account menu's header label (an avatar
+       block, not an eyebrow) keeps its own type. ───────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='menu'] {
+      padding: 6px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu'] [data-glass='menu-item'] {
+      min-height: 36px;
+      gap: 10px;
+      color: var(--lg-ink);
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu'] [data-glass='menu-item'] > svg {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='menu']
+      [data-glass='menu-item']
+      > svg.lucide-check {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu-label'][class~='uppercase'] {
+      padding: 8px 10px 4px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu-sep'] {
+      margin: 5px 6px;
+      background-color: var(--lg-line);
+    }
+
+    /* ── The command palette (inferred: AppTopbar's search field in a
+       DS-Components overlay dialog, .menu rows and labels) ───────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      div:has(> [cmdk-input]) {
+      gap: 10px;
+      padding-left: 18px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      div:has(> [cmdk-input]):focus-within {
+      box-shadow: inset 0 -2px 0 var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      div:has(> [cmdk-input])
+      > svg {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-input] {
+      height: 54px;
+      color: var(--lg-ink);
+      font-size: 15px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-input]::placeholder {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-list] {
+      padding: 6px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-group-heading] {
+      padding: 8px 10px 4px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-item] {
+      min-height: 36px;
+      gap: 10px;
+      padding-inline: 10px;
+      border-radius: 9px;
+      color: var(--lg-ink);
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-item]
+      > svg {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-item][data-selected='true'] {
+      background-color: color-mix(in srgb, var(--lg-accent) 12%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-empty] {
+      color: var(--lg-ink-3);
+    }
+    /* The key legend: a hairline above, no sunk band, the board's keys. */
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-root]
+      > div:last-child {
+      border-color: var(--lg-line);
+      background-color: transparent;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='dialog'][data-glass-variant='command']
+      [cmdk-root]
+      > div:last-child
+      kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 6px;
+      border: 1px solid var(--lg-line-2);
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      background-color: var(--lg-surface);
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+    }
+
     /* ── Focus (R11): the glass ring, an outline in --lg-focus ─────────
        The classic ring is a box-shadow that the glass materials replace, so
        the shell draws the board's outline instead (sp.css:88) and clears the

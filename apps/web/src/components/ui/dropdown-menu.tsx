@@ -147,6 +147,7 @@ export const DropdownMenuLabel = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Label> & { inset?: boolean }
 >(({ className, inset, ...props }, ref) => (
   <DropdownMenuPrimitive.Label
+    data-glass="menu-label"
     ref={ref}
     className={cn(
       'text-muted-foreground px-2 py-1.5 text-[11px] font-medium uppercase tracking-[0.06em]',
@@ -163,6 +164,7 @@ export const DropdownMenuSeparator = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DropdownMenuPrimitive.Separator>
 >(({ className, ...props }, ref) => (
   <DropdownMenuPrimitive.Separator
+    data-glass="menu-sep"
     ref={ref}
     className={cn('bg-border -mx-1 my-1 h-px', className)}
     {...props}
