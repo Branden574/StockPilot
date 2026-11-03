@@ -781,11 +781,12 @@ export class CycleCountsService {
    *
    * One read, with the caller's own client in the active organization, as
    * every read here: row level security decides what it sees (cycle_counts
-   * is readable by the members of its organization), so someone it shows
-   * nothing, outside the count's organization, keeps the generic refusal and
-   * learns nothing new. A failed read keeps the generic refusal too (the
-   * refusal stands either way) and is reported. Asks no permission and
-   * writes nothing.
+   * is readable by the members of its organization). Someone outside the
+   * count's organization never gets here: release() read the count in the
+   * active organization before the function (S39) and answered not found. A
+   * count this read no longer finds keeps the generic refusal, and so does a
+   * failed read (the refusal stands either way), which is reported. Asks no
+   * permission and writes nothing.
    */
   private async countIsAlreadyReleased(id: string): Promise<boolean> {
     const { data, error } = await this.ctx.supabase

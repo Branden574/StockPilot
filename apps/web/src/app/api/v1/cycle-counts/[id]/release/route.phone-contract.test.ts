@@ -35,6 +35,11 @@ vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 // manager released the count while their screen was open. They are told the
 // count was already released (409), not that only the assignee may release
 // it (403); nothing is written and no second audit row is made.
+//
+// S39: before the function, release() reads the count in the active
+// organization (its id only). A count that read does not find (outside the
+// caller's organizations, or in another organization the caller belongs to)
+// answers 404 'Cycle count not found.' with no function call.
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CC = '11111111-1111-4111-8111-111111111111';
@@ -45,7 +50,10 @@ const GENERIC = {
   error: 'forbidden',
   message: 'Only the assigned employee or a manager can release this count.',
 };
+const NOT_FOUND = { error: 'not_found', message: 'Cycle count not found.' };
 const REFUSED: QueryResult = { data: null, error: { message: 'forbidden', code: '42501' } };
+/** The read in the active organization before the function (S39). */
+const IN_ORG_READ = [['id'], ['organization_id', ORG], ['id', CC]];
 
 type CountRow = {
   id: string;
@@ -141,17 +149,18 @@ describe('POST /api/v1/cycle-counts/[id]/release, as the phone release sheet rea
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it("someone outside the count's organization (row level security shows them nothing): 403 with the same words as before", async () => {
+  it("someone outside the count's organization (row level security shows them nothing): 404 not found, before the function", async () => {
     const stub = makeSupabaseStub({
       'rpc:release_cycle_count': REFUSED,
       'cycle_counts.select': servedLikePostgrest([]),
     });
     signedInAs(stub, 'outsider');
-    expect(await release()).toEqual({ status: 403, body: GENERIC });
+    expect(await release()).toEqual({ status: 404, body: NOT_FOUND });
+    expect(stub.rpcCalls).toHaveLength(0);
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('a closed count: 409 with its own words, and no read of the count', async () => {
+  it("a closed count: 409 with its own words, and no refusal's read of the count", async () => {
     const stub = makeSupabaseStub({
       'rpc:release_cycle_count': {
         data: null,
@@ -164,7 +173,8 @@ describe('POST /api/v1/cycle-counts/[id]/release, as the phone release sheet rea
       status: 409,
       body: { error: 'conflict', message: "This cycle count is closed — it can't be released." },
     });
-    expect(stub.fromCalls).toEqual([]);
+    // Only the read in the organization before the function.
+    expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([IN_ORG_READ]);
     expect(audit).not.toHaveBeenCalled();
   });
 });

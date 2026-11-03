@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { reportError } from '@/lib/error-reporter';
 import {
+  callArgs,
   makeServiceContext,
   makeSupabaseStub,
   servedLikePostgrest,
@@ -99,11 +100,15 @@ describe('CycleCountsService.release', () => {
 // the assignee that only the assignee may release. So after a 'forbidden',
 // the service reads the count with the caller's own client, in the active
 // organization: in progress with no assignee answers 'This count was already
-// released.' (conflict), with no write and no second audit row. Row level
-// security decides what the read sees; someone it shows nothing (outside the
-// count's organization) keeps the generic refusal, and so does every other
-// case. The stub serves the caller's view of cycle_counts and applies the
-// read's own filters (servedLikePostgrest).
+// released.' (conflict), with no write and no second audit row. Every other
+// refused case keeps the generic refusal. The stub serves the caller's view of
+// cycle_counts and applies the read's own filters (servedLikePostgrest).
+//
+// Before the function, release() reads the count in the active organization
+// (S39, its id only): a miss is 'Cycle count not found.' with no function call,
+// so someone row level security shows nothing (outside the count's
+// organization), or a page of another organization the caller belongs to,
+// never reaches the function or the refusal's read.
 // ═══════════════════════════════════════════════════════════════════════════
 
 describe('CycleCountsService.release after the database refused it (S42b)', () => {
@@ -111,7 +116,12 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
   const COUNT = 'cc-1';
   const ALREADY_RELEASED = 'This count was already released.';
   const GENERIC = 'Only the assigned employee or a manager can release this count.';
+  const NOT_FOUND = 'Cycle count not found.';
   const REFUSED: QueryResult = { data: null, error: { message: 'forbidden', code: '42501' } };
+  /** The read in the active organization before the function (S39). */
+  const IN_ORG_READ = [['id'], ['organization_id', ORG], ['id', COUNT]];
+  /** The refusal's read (S42b). */
+  const REFUSAL_READ = [['status, assigned_to'], ['organization_id', ORG], ['id', COUNT]];
 
   type CountRow = {
     id: string;
@@ -160,14 +170,20 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
       'release_cycle_count',
       'release_cycle_count',
     ]);
-    // One read, through the caller's own client, keyed by the count and the
-    // active organization; nothing written.
+    // Reads only, through the caller's own client, each keyed by the count
+    // and the active organization; nothing written. Each release reads the
+    // count in the organization first (S39); the refused one then makes the
+    // refusal's one read.
     expect(tableOps(stub)).toEqual(['cycle_counts.select']);
-    expect(stub.chainsAll.get('cycle_counts.select')).toEqual([['select', 'eq', 'eq']]);
-    expect(stub.chainArgsAll.get('cycle_counts.select')?.[0]).toEqual([
-      ['status, assigned_to'],
-      ['organization_id', ORG],
-      ['id', COUNT],
+    expect(stub.chainsAll.get('cycle_counts.select')).toEqual([
+      ['select', 'eq', 'eq'],
+      ['select', 'eq', 'eq'],
+      ['select', 'eq', 'eq'],
+    ]);
+    expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([
+      IN_ORG_READ,
+      IN_ORG_READ,
+      REFUSAL_READ,
     ]);
   });
 
@@ -196,27 +212,31 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it("someone outside the count's organization reads nothing (row level security) and keeps the generic refusal", async () => {
+  it("someone outside the count's organization reads nothing (row level security): not found, before the function", async () => {
     const stub = makeSupabaseStub({
       'rpc:release_cycle_count': REFUSED,
       'cycle_counts.select': servedLikePostgrest([]),
     });
     await expect(asStaff(stub, 'outsider').release(COUNT, 'Shift ending')).rejects.toMatchObject({
-      code: 'forbidden',
-      message: GENERIC,
+      code: 'not_found',
+      message: NOT_FOUND,
     });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([IN_ORG_READ]);
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('a count of another organization the caller belongs to is not read from the active one: the generic refusal', async () => {
+  it('a count of another organization the caller belongs to is not found from the active one, before the function', async () => {
     const stub = makeSupabaseStub({
       'rpc:release_cycle_count': REFUSED,
       'cycle_counts.select': servedLikePostgrest([count({ organization_id: 'org-other' })]),
     });
     await expect(asStaff(stub).release(COUNT, 'Shift ending')).rejects.toMatchObject({
-      code: 'forbidden',
-      message: GENERIC,
+      code: 'not_found',
+      message: NOT_FOUND,
     });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(audit).not.toHaveBeenCalled();
   });
 
   it("a closed count keeps its own sentence, and the refusal's read is not made", async () => {
@@ -231,7 +251,8 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
       code: 'conflict',
       message: "This cycle count is closed — it can't be released.",
     });
-    expect(stub.fromCalls).toEqual([]);
+    // Only the read in the organization before the function.
+    expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([IN_ORG_READ]);
     expect(audit).not.toHaveBeenCalled();
   });
 
@@ -251,10 +272,14 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
   it('a read that fails keeps the generic refusal and is reported, never thrown as its own error', async () => {
     const stub = makeSupabaseStub({
       'rpc:release_cycle_count': REFUSED,
-      'cycle_counts.select': {
-        data: null,
-        error: { message: 'canceling statement due to statement timeout', code: '57014' },
-      },
+      // The read in the organization finds the count; the refusal's read fails.
+      'cycle_counts.select': (call) =>
+        callArgs(call, 'select')?.[0] === 'status, assigned_to'
+          ? {
+              data: null,
+              error: { message: 'canceling statement due to statement timeout', code: '57014' },
+            }
+          : servedLikePostgrest([count()])(call),
     });
     await expect(asStaff(stub).release(COUNT, 'Shift ending')).rejects.toMatchObject({
       code: 'forbidden',
@@ -269,7 +294,7 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
     expect(audit).not.toHaveBeenCalled();
   });
 
-  it('any other refusal is answered as before, with no read', async () => {
+  it("any other refusal is answered as before, with no refusal's read", async () => {
     const stub = makeSupabaseStub({
       'rpc:release_cycle_count': {
         data: null,
@@ -281,7 +306,8 @@ describe('CycleCountsService.release after the database refused it (S42b)', () =
       code: 'not_found',
       message: 'Cycle count not found.',
     });
-    expect(stub.fromCalls).toEqual([]);
+    expect(stub.rpcCalls).toHaveLength(1);
+    expect(stub.chainArgsAll.get('cycle_counts.select')).toEqual([IN_ORG_READ]);
   });
 });
 
