@@ -1,0 +1,244 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div>
+  <div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div aria-hidden="true" class="flex min-w-0 flex-col" data-aria-hidden="true" data-slot="page-header">
+      <div class="mb-2">
+        <a class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px] transition-colors" href="/dashboard/orders">
+          "← Back to orders"
+      <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+        <div class="min-w-0 max-w-full">
+          <div class="min-w-0">
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]" id="manage-order-items-title">
+                "Manage order items"
+            <div class="text-muted-foreground text-[13.5px] mt-0.5">
+              "Choose which items and books appear in Place an Order. Hidden items stay in Inventory, existing orders and reports."
+    <div class="flex min-w-0 flex-col gap-4">
+      <div aria-hidden="true" aria-label="Filter order items" class="flex min-w-0 flex-wrap items-center justify-between gap-3" data-aria-hidden="true" data-slot="filter-bar" role="group">
+        <div class="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+          <div aria-label="Ordering visibility" class="border-border bg-sunk inline-flex w-fit max-w-full items-center overflow-x-auto border [scrollbar-width:thin] gap-0.5 rounded-lg p-[3px]" data-slot="segmented-tabs" role="tablist">
+            <a aria-selected="true" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]" data-state="active" href="/dashboard/orders/manage-items" role="tab">
+              <span>
+                "All"
+            <a aria-selected="false" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" data-state="inactive" href="/dashboard/orders/manage-items?visibility=shown" role="tab">
+              <span>
+                "Shown in Orders"
+            <a aria-selected="false" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" data-state="inactive" href="/dashboard/orders/manage-items?visibility=hidden" role="tab">
+              <span>
+                "Hidden from Orders"
+        <div class="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+          <div class="relative w-full min-w-0 sm:w-72">
+            <svg aria-hidden="true" class="lucide lucide-search text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m21 21-4.34-4.34">
+              <circle cx="11" cy="11" r="8">
+            <input aria-label="Search name, SKU, barcode or ISBN" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base pl-8" placeholder="Search name, SKU, barcode or ISBN" type="search" value="">
+          <button aria-autocomplete="none" aria-expanded="false" aria-label="Type" class="bg-card flex h-8 items-center justify-between gap-2 rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-left text-[13px] transition-colors data-[placeholder]:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 max-sm:h-11 max-sm:text-base w-full sm:w-36" data-state="closed" dir="ltr" role="combobox" type="button">
+            <span style="pointer-events: none;">
+              "All types"
+            <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground h-4 w-4 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m6 9 6 6 6-6">
+          <button aria-autocomplete="none" aria-expanded="false" aria-label="Warehouse" class="bg-card flex h-8 items-center justify-between gap-2 rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-left text-[13px] transition-colors data-[placeholder]:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 max-sm:h-11 max-sm:text-base w-full sm:w-44" data-state="closed" dir="ltr" role="combobox" type="button">
+            <span style="pointer-events: none;">
+              "All warehouses"
+            <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground h-4 w-4 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m6 9 6 6 6-6">
+          <button aria-autocomplete="none" aria-expanded="false" aria-label="Category" class="bg-card flex h-8 items-center justify-between gap-2 rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-left text-[13px] transition-colors data-[placeholder]:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 max-sm:h-11 max-sm:text-base w-full sm:w-44" data-state="closed" dir="ltr" role="combobox" type="button">
+            <span style="pointer-events: none;">
+              "All categories"
+            <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground h-4 w-4 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m6 9 6 6 6-6">
+      <p aria-hidden="true" class="text-muted-foreground text-[12.5px]" data-aria-hidden="true">
+        "Kits appear in Place an Order only while every part can be ordered. If an item has other shown records with the same SKU, a kit can still use them."
+      <div aria-live="polite" class="text-[13.5px]" role="status">
+      <div aria-hidden="true" class="border-border bg-card overflow-hidden rounded-lg border" data-aria-hidden="true">
+        <div aria-label="Order items" class="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0" role="region">
+          <table class="w-full caption-bottom text-[13.5px] min-w-[820px]">
+            <thead class="[&_tr]:border-b">
+              <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+                <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 w-10">
+                  <button aria-checked="mixed" aria-label="Select every item on this page" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" data-state="indeterminate" role="checkbox" type="button">
+                    <span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-foreground bg-foreground">
+                      <span aria-hidden="true" class="bg-background h-[2px] w-[10px] rounded-full forced-colors:bg-[CanvasText] forced-colors:forced-color-adjust-none">
+                <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  "Item"
+                <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  "Identifier"
+                <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  "Warehouse"
+                <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  "Ordering visibility"
+                <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                  <span class="sr-only">
+                    "Actions"
+            <tbody class="[&_tr:last-child]:border-0">
+              <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors" data-row-id="0a000000-0000-4000-8000-000000000001">
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <button aria-checked="true" aria-label="Select New Hire Shirt" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" data-state="checked" role="checkbox" type="button">
+                    <span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-foreground bg-foreground">
+                      <span aria-hidden="true" class="border-background h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2">
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <div class="flex min-w-0 items-center gap-3">
+                    <span class="border-border relative block shrink-0 overflow-hidden border bg-white size-[34px] rounded-md" data-slot="thumb">
+                      <span aria-hidden="true" class="block h-full w-full absolute inset-0" data-slot="missing-photo" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+                    <div class="min-w-0">
+                      <div class="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                        "New Hire Shirt"
+                      <div class="text-muted-foreground text-[12px] leading-[18px]">
+                        "New Hire Shirt · XS"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground font-mono text-[12px] [overflow-wrap:anywhere]">
+                  "SKU-1"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+                  "North"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <div class="flex min-w-0 flex-col items-start gap-1">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <div class="inline-flex gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)] items-baseline">
+                        <span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+                        "Hidden from Orders"
+                    <span class="text-muted-foreground text-[12px]">
+                      "Hidden since Oct 25, 2026"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                  <div class="flex flex-wrap items-center justify-end gap-2">
+                    <button aria-label="Select family: New Hire Shirt" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2.5 text-[12.5px]">
+                      "Select family"
+                    <button aria-label="Show New Hire Shirt in Orders" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]">
+                      "Show in Orders"
+              <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors" data-row-id="0a000000-0000-4000-8000-000000000002">
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <button aria-checked="false" aria-label="Select New Hire Shirt" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" data-state="unchecked" role="checkbox" type="button">
+                    <span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-[var(--ed-ink-4)] bg-card group-hover:border-[var(--ed-ink-3)]">
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <div class="flex min-w-0 items-center gap-3">
+                    <span class="border-border relative block shrink-0 overflow-hidden border bg-white size-[34px] rounded-md" data-slot="thumb">
+                      <span aria-hidden="true" class="block h-full w-full absolute inset-0" data-slot="missing-photo" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+                    <div class="min-w-0">
+                      <div class="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                        "New Hire Shirt"
+                      <div class="text-muted-foreground text-[12px] leading-[18px]">
+                        "New Hire Shirt · S"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground font-mono text-[12px] [overflow-wrap:anywhere]">
+                  "SKU-2"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+                  "North"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <div class="flex min-w-0 flex-col items-start gap-1">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <div class="inline-flex gap-1.5 whitespace-nowrap rounded-full px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success border-0 items-baseline">
+                        <span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+                        "Shown in Orders"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                  <div class="flex flex-wrap items-center justify-end gap-2">
+                    <button aria-label="Select family: New Hire Shirt" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2.5 text-[12.5px]">
+                      "Select family"
+                    <button aria-label="Hide New Hire Shirt from Orders" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]">
+                      "Hide from Orders"
+              <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors" data-row-id="0a000000-0000-4000-8000-000000000003">
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <button aria-checked="true" aria-label="Select Field Guide to Ponds" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50" data-state="checked" role="checkbox" type="button">
+                    <span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-foreground bg-foreground">
+                      <span aria-hidden="true" class="border-background h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2">
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <div class="flex min-w-0 items-center gap-3">
+                    <span class="border-border relative block shrink-0 overflow-hidden border bg-white size-[34px] rounded-md" data-slot="thumb">
+                      <span aria-hidden="true" class="block h-full w-full absolute inset-0" data-slot="missing-photo" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+                    <div class="min-w-0">
+                      <div class="text-foreground text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                        "Field Guide to Ponds"
+                      <div class="text-muted-foreground text-[12px] leading-[18px]">
+                        "A. Example"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground font-mono text-[12px] [overflow-wrap:anywhere]">
+                  "SKU-3 · 9780000000002"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+                  "North"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                  <div class="flex min-w-0 flex-col items-start gap-1">
+                    <div class="flex flex-wrap items-center gap-1.5">
+                      <div class="inline-flex gap-1.5 whitespace-nowrap rounded-full px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success border-0 items-baseline">
+                        <span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+                        "Shown in Orders"
+                      <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+                        "Expected"
+                <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                  <div class="flex flex-wrap items-center justify-end gap-2">
+                    <button aria-label="Hide Field Guide to Ponds from Orders" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]">
+                      "Hide from Orders"
+        <div class="border-border border-t px-4 py-2.5">
+          <div class="text-muted-foreground flex items-center gap-3 text-[12.5px] justify-end">
+            <span>
+              "Showing"
+              ␣
+              <span class="text-foreground">
+                "1"
+              "–"
+              <span class="text-foreground">
+                "25"
+              ␣
+              "of "
+              <span class="text-foreground">
+                "60"
+            <div class="flex items-center gap-2">
+              <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] font-normal disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-[var(--ed-ink-4)]" disabled="">
+                "← Prev"
+              <button aria-expanded="false" aria-haspopup="dialog" aria-label="Jump to page" class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2" data-state="closed" type="button">
+                "Page "
+                "1"
+                " of "
+                "3"
+              <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] font-normal" href="/dashboard/orders/manage-items?page=2">
+                "Next →"
+      <div aria-hidden="true" aria-label="Selection" class="border-border bg-card sticky bottom-4 z-10 flex flex-wrap items-center gap-2 rounded-lg border px-4 py-2.5 shadow-sm" data-aria-hidden="true" role="region">
+        <span class="text-foreground mr-auto text-[13.5px] font-medium tabular-nums">
+          "2 selected"
+        <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2.5 text-[12.5px]">
+          "Review selection"
+        <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]">
+          "Show selected"
+        <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-7 px-2.5 text-[12.5px]">
+          "Hide selected"
+        <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2.5 text-[12.5px]">
+          "Clear"
+<div aria-hidden="true" class="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" data-aria-hidden="true" data-state="open" style="pointer-events: auto;">
+<div aria-describedby="radix-«id3»" aria-labelledby="radix-«id2»" class="fixed z-50 gap-4 border-[var(--ed-line-strong)] bg-card text-card-foreground shadow-[0_10px_30px_rgba(0,0,0,0.25)] transition ease-out data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:duration-500 inset-y-0 right-0 h-full w-full border-l max-sm:border-l-0 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:rounded-l-lg md:max-w-lg lg:max-w-xl flex flex-col p-0 sm:max-w-md" data-state="open" id="radix-«id1»" role="dialog" style="pointer-events: auto;" tabindex="-1">
+  <div class="flex flex-col space-y-1 border-b p-6 text-left">
+    <h2 class="font-display text-lg font-medium tracking-[-0.02em]" id="radix-«id2»">
+      "Review selection"
+    <p class="text-muted-foreground text-[13px]" id="radix-«id3»">
+      "2 selected"
+  <div class="flex-1 overflow-y-auto p-6">
+    <ul aria-label="Selected items" class="flex flex-col gap-2">
+      <li class="border-border flex items-start justify-between gap-3 border-b pb-2 last:border-b-0">
+        <div class="min-w-0">
+          <div class="text-foreground text-[13.5px] font-medium [overflow-wrap:anywhere]">
+            "New Hire Shirt"
+          <div class="text-muted-foreground font-mono text-[11.5px]">
+            "SKU-1"
+          <div class="mt-1">
+            <div class="inline-flex gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)] items-baseline">
+              <span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+              "Hidden from Orders"
+        <button aria-label="Remove New Hire Shirt from the selection" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2.5 text-[12.5px]">
+          "Remove"
+      <li class="border-border flex items-start justify-between gap-3 border-b pb-2 last:border-b-0">
+        <div class="min-w-0">
+          <div class="text-foreground text-[13.5px] font-medium [overflow-wrap:anywhere]">
+            "Field Guide to Ponds"
+          <div class="text-muted-foreground font-mono text-[11.5px]">
+            "SKU-3 · 9780000000002"
+          <div class="mt-1">
+            <div class="inline-flex gap-1.5 whitespace-nowrap rounded-full px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success border-0 items-baseline">
+              <span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+              "Shown in Orders"
+        <button aria-label="Remove Field Guide to Ponds from the selection" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2.5 text-[12.5px]">
+          "Remove"
+  <div class="flex flex-col-reverse gap-2 border-t p-6 sm:flex-row sm:justify-end">
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3">
+      "Show selected"
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3.5 text-[13px]">
+      "Hide selected"
+  <button class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" type="button">
+    <svg aria-hidden="true" class="lucide lucide-x h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M18 6 6 18">
+      <path d="m6 6 12 12">
+    <span class="sr-only">
+      "Close"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
