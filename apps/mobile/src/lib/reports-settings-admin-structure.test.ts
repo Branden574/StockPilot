@@ -771,7 +771,9 @@ describe('Settings: the account screen', () => {
       "Linking.openURL('https://stockpilotusa.com/dashboard/settings/security')",
       'title="Customize tab bar" detail="Home + up to 5"',
       "router.push('/settings/customize-tabs' as never)",
-      'title="Theme" detail="Auto"',
+      // The Theme row ("Auto", an alert) became Appearance (Liquid Glass stage 2).
+      'title="Appearance" detail={appearanceLabel(appearance.choice, appearance.glassEnabled)}',
+      "router.push('/settings/appearance' as never)",
       'title="Sync" detail="Wi-Fi + cellular"',
       "router.push('/settings/rejected-work' as never)",
       'title="Offline cache" detail="Tap to clear"',

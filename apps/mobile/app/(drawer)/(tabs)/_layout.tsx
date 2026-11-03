@@ -1,8 +1,12 @@
 import { Tabs, useRouter, useSegments } from 'expo-router';
+import type { BottomTabBarProps } from 'expo-router/js-tabs';
 import { type LucideIcon } from 'lucide-react-native';
 import * as React from 'react';
 import { Platform, StyleSheet, Text, type ColorValue } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GlassTabBar } from '@/components/ui/glass/glass-tab-bar';
+import { tabBarFootprint, tabBarKind } from '@/lib/appearance/tab-bar';
 import { useAuth } from '@/lib/auth-context';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
@@ -60,9 +64,34 @@ const LABEL_FACE_TIERS: TabLabelPlatform = 'android';
  * height and its bottom padding, so the inset contract every screen relies on
  * is unchanged: lists pad by useBottomTabBarHeight() + 24, DataListScreen by
  * BottomTabBarHeightContext, the select bar sits at tabBarHeight + 12.
+ *
+ * Liquid Glass (the opt-in third appearance) draws its own bar instead
+ * (components/ui/glass/glass-tab-bar.tsx: the IosTabBar capsule and Scan
+ * circle on iOS, the Material 3 AndroidNav bar on Android), handed to the
+ * navigator as `tabBar`, over the SAME screens, slots, gates and guard. It
+ * reports its own drawn footprint (lib/appearance/tab-bar.ts), and the
+ * initial height below is that footprint too, so the inset contract holds in
+ * every appearance. In classic nothing here changes: no `tabBar`, the same
+ * solid bar and options.
  */
+const renderGlassTabBar = (props: BottomTabBarProps) => <GlassTabBar {...props} />;
+
 export default function TabsLayout() {
-  const { c } = useTheme();
+  const { c, style } = useTheme();
+  const insets = useSafeAreaInsets();
+  const glassBar = tabBarKind(style, Platform.OS) !== 'classic';
+  const glassFootprint = glassBar
+    ? tabBarFootprint({ style, os: Platform.OS, bottomInset: insets.bottom })
+    : null;
+  // The navigator measures its first height from tabBarStyle; the glass bar
+  // then reports its footprint itself.
+  const glassOptions = React.useMemo(
+    () =>
+      glassFootprint === null
+        ? null
+        : { tabBarStyle: { position: 'absolute' as const, height: glassFootprint } },
+    [glassFootprint],
+  );
   // Same sources drawer-content gates with: enabledModules defaults to
   // DEFAULT_MODULE_IDS until a snapshot persists (no flicker for the
   // grandfathered all-modules org), role falls back to 'staff' while loading,
@@ -118,6 +147,7 @@ export default function TabsLayout() {
 
   return (
     <Tabs
+      tabBar={glassBar ? renderGlassTabBar : undefined}
       screenOptions={{
         headerShown: false,
         // Solid, in the page colour of the device's mode, with the hairline
@@ -155,6 +185,7 @@ export default function TabsLayout() {
           paddingTop: 6,
         },
         sceneStyle: { backgroundColor: c.paper },
+        ...glassOptions,
       }}
     >
       {/* Home is pinned: always first, never a configurable slot. */}

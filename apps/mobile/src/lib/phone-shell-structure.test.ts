@@ -563,6 +563,8 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
   it.each([
     ['settings/integrations', 'Integrations'],
     ['settings/customize-tabs', 'Customize tab bar'],
+    // Settings > Appearance (Liquid Glass stage 2).
+    ['settings/appearance', 'Appearance'],
     ['settings/rejected-work', 'Unsent work'],
     ['settings/change-email', 'Change email'],
     ['admin/index', 'Admin overview'],
@@ -583,7 +585,7 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
 
   it('registers no other screen', () => {
     expect(elements(DRAWER_LAYOUT, (el, s) => tagOf(el, s) === 'Drawer.Screen').els).toHaveLength(
-      37,
+      38,
     );
   });
 

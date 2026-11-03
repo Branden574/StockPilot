@@ -633,6 +633,52 @@ describe('the account store is missing', () => {
     expect(state).toMatchObject({ status: 'unavailable', mode: 'light' });
   });
 
+  it('Try again after a read that found no table reads the row again (nothing to resend)', () => {
+    const signedIn = run([{ type: 'authenticated', userId: A, now: T0 }], syncedAsA());
+    const missing = run(
+      [{ type: 'fetch-failed', userId: A, gen: signedIn.state.gen, reason: 'missing-table' }],
+      signedIn.state,
+    );
+    expect(missing.state).toMatchObject({ status: 'unavailable', dirty: false });
+
+    const retried = run([{ type: 'retry', userId: A }], missing.state);
+    expect(fetches(retried.effects)).toEqual([
+      { type: 'fetch', userId: A, gen: missing.state.gen },
+    ]);
+    expect(saves(retried.effects)).toEqual([]);
+    // Still only on this phone until the account answers.
+    expect(retried.state.status).toBe('unavailable');
+
+    // The table exists now: the answer is taken as any first read is.
+    const answered = run(
+      [
+        {
+          type: 'fetch-succeeded',
+          userId: A,
+          gen: missing.state.gen,
+          row: { appearance: 'dark', updated_at: ROW_NEW },
+        },
+      ],
+      retried.state,
+    );
+    expect(answered.state).toMatchObject({ mode: 'dark', status: 'synced' });
+
+    // Another person, or signed out, still does nothing.
+    expect(run([{ type: 'retry', userId: B }], missing.state).effects).toEqual([]);
+    expect(run([{ type: 'retry', userId: null }], missing.state).effects).toEqual([]);
+  });
+
+  it('Try again after a save that found no table resends the choice, not a read', () => {
+    const chose = run([{ type: 'choose', mode: 'liquid-glass', userId: A, now: T0 }], syncedAsA());
+    const missing = run(
+      [{ type: 'save-failed', userId: A, gen: chose.state.gen, reason: 'missing-table' }],
+      chose.state,
+    );
+    const retried = run([{ type: 'retry', userId: A }], missing.state);
+    expect(saves(retried.effects)).toHaveLength(1);
+    expect(fetches(retried.effects)).toEqual([]);
+  });
+
   it('any other fetch failure changes nothing and claims nothing', () => {
     const signedIn = run([{ type: 'authenticated', userId: A, now: T0 }], syncedAsA());
     const { state } = run(
