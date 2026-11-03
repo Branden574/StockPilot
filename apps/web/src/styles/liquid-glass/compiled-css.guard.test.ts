@@ -7,10 +7,10 @@ import postcss, { type Rule } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 import {
-  CLASSIC_HIDE_RULE,
   GLASS_ROOT,
   inKeyframes,
   inMedia,
+  isClassicHideRule,
   normaliseQuotes,
   splitSelectors,
 } from './glass-css';
@@ -21,8 +21,9 @@ import {
  * gets, so glass styling that reached the output by any other route fails too:
  *   - globals.css compiled through Tailwind exactly as the app builds it, plus
  *     the unlayered companion globals.glass.css (always);
- *   - every stylesheet `next build` emitted under .next/static/css (when a
- *     build is present: run it after `pnpm --filter web build`).
+ *   - every stylesheet `next build` emitted under .next/static (webpack writes
+ *     them to css/, Turbopack to chunks/; when a build is present: run it
+ *     after `pnpm --filter web build`).
  * It fails when a rule that selects data-appearance or data-glass is outside
  * @media screen (the print rule: @media print; the classic hide rule: by
  * text), or when a rule selects [data-glass...] without the glass root.
@@ -31,7 +32,8 @@ import {
 const WEB = join(__dirname, '..', '..', '..');
 const GLOBALS = join(WEB, 'src', 'app', 'globals.css');
 const COMPANION = join(__dirname, 'globals.glass.css');
-const NEXT_CSS = join(WEB, '.next', 'static', 'css');
+const NEXT_STATIC = join(WEB, '.next', 'static');
+const NEXT_CSS_DIRS = ['css', 'chunks'].map((d) => join(NEXT_STATIC, d));
 
 /** Every offending selector in a compiled stylesheet, with why. */
 function glassLeaks(css: string): string[] {
@@ -41,7 +43,7 @@ function glassLeaks(css: string): string[] {
     for (const raw of splitSelectors(rule.selector)) {
       const selector = normaliseQuotes(raw);
       if (!/data-appearance|data-glass|data-classic-only/.test(selector)) continue;
-      if (selector === CLASSIC_HIDE_RULE) continue;
+      if (isClassicHideRule(selector)) continue;
       if (selector === '[data-glass-only]') {
         if (!inMedia(rule, 'print')) out.push(`${selector}: outside @media print`);
         continue;
@@ -70,7 +72,9 @@ describe('compiled CSS guard', () => {
       glassLeaks(
         '[data-glass=card]{color:red}' +
           '@media print{:root[data-appearance=liquid-glass] .x{color:red}}' +
-          '[data-glass-only]{display:none}',
+          '[data-glass-only]{display:none}' +
+          // The classic hide rule as a minifier writes it (no quotes) is allowed.
+          ':root:not([data-appearance=liquid-glass]) [data-glass-only]{display:none}',
       ),
     ).toEqual([
       '[data-glass=card]: not scoped to the glass root',
@@ -93,19 +97,22 @@ describe('compiled CSS guard', () => {
     expect(lg).toBeGreaterThan(order);
   });
 
-  const built = existsSync(NEXT_CSS)
-    ? readdirSync(NEXT_CSS, { recursive: true })
-        .map(String)
-        .filter((f) => f.endsWith('.css'))
-    : [];
+  const built = NEXT_CSS_DIRS.flatMap((dir) =>
+    existsSync(dir)
+      ? readdirSync(dir, { recursive: true })
+          .map(String)
+          .filter((f) => f.endsWith('.css'))
+          .map((f) => join(dir, f))
+      : [],
+  );
   it.runIf(built.length > 0)(
-    `every stylesheet next build emitted (.next/static/css, ${built.length} files) has no glass leak`,
+    `every stylesheet next build emitted (.next/static, ${built.length} files) has no glass leak`,
     () => {
       const leaks = built.flatMap((f) =>
-        glassLeaks(readFileSync(join(NEXT_CSS, f), 'utf8')).map((l) => `${f}: ${l}`),
+        glassLeaks(readFileSync(f, 'utf8')).map((l) => `${f}: ${l}`),
       );
       expect(leaks).toEqual([]);
-      const all = built.map((f) => readFileSync(join(NEXT_CSS, f), 'utf8')).join('\n');
+      const all = built.map((f) => readFileSync(f, 'utf8')).join('\n');
       expect(all).toMatch(/data-appearance=["']?liquid-glass/);
     },
   );

@@ -21,6 +21,10 @@ export const normaliseQuotes = (selector: string) => selector.replace(/"/g, "'")
 /** The classic hide rule of visibility.css (plan 4.4), the one glass rule outside @media screen. */
 export const CLASSIC_HIDE_RULE = ":root:not([data-appearance='liquid-glass']) [data-glass-only]";
 
+/** The classic hide rule however it was written: quoted (source) or unquoted (minified build). */
+export const isClassicHideRule = (selector: string) =>
+  selector.replace(/["']/g, '') === CLASSIC_HIDE_RULE.replace(/'/g, '');
+
 /** The only selectors that may not start with the glass root (visibility.css, print.css). */
 export const UNSCOPED_ALLOWED = new Set([CLASSIC_HIDE_RULE, '[data-glass-only]']);
 
