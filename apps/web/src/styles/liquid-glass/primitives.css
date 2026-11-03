@@ -1,0 +1,270 @@
+/* Glass primitives (spec/design-system.md 12: DS-Components), on the inert
+   data-glass hooks of components/ui and components/patterns. Colours that the
+   remapped semantic tokens already give (an ink default button, accent fills,
+   status washes) are left to the components' own utilities; these rules add
+   what the tokens cannot: the radii, the field and secondary fills, the press
+   scale, the menu and segment states. A rule here that sets a colour for a
+   state also sets its :hover, because layer `lg` beats every Tailwind state
+   utility for the same property. Sizes and layout stay the components' own. */
+@layer lg {
+  @media screen {
+    /* Lucide at the artifact's 1.8 stroke (its own icons differ slightly in
+       geometry; recorded, Q9). */
+    :root[data-appearance='liquid-glass'] svg.lucide {
+      stroke-width: 1.8;
+    }
+
+    /* ── Buttons (12.1) ───────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='button'] {
+      border-radius: var(--lg-r-md);
+      transition:
+        background-color var(--lg-d-1) var(--lg-ease),
+        border-color var(--lg-d-1) var(--lg-ease),
+        color var(--lg-d-1) var(--lg-ease),
+        transform var(--lg-d-1) var(--lg-ease),
+        box-shadow var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-size='sm'] {
+      border-radius: var(--lg-r-sm);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-size='lg'] {
+      border-radius: 12px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-size='xl'] {
+      border-radius: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button']:not([data-glass-variant='link']):not(:disabled):active {
+      transform: scale(0.97);
+    }
+    /* Primary (the flat accent, `gradient` by its old name). */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='gradient'] {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='gradient']:hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='gradient']:active {
+      background-color: var(--lg-accent-press);
+    }
+    /* Secondary (the outline button): the 62% field frost. */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='outline'] {
+      background-color: var(--lg-field-fill);
+      border-color: var(--lg-field-line);
+      color: var(--lg-ink);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 1px 2px rgba(60, 44, 26, 0.08);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass='button'][data-glass-variant='outline'] {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='outline']:hover {
+      background-color: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass='button'][data-glass-variant='outline']:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+    /* Ghost. */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='ghost'] {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='ghost']:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+    /* Danger: the solid danger fill with white words. */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='destructive'] {
+      background-color: var(--lg-danger-fill);
+      color: #fff;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='destructive']:hover {
+      background-color: color-mix(in srgb, var(--lg-danger-fill) 88%, #000);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button']:disabled {
+      box-shadow: none;
+    }
+
+    /* ── Fields (12.2): the 62% field frost, the input line, the focus halo ── */
+    :root[data-appearance='liquid-glass'] :is([data-glass='input'], [data-glass='select']) {
+      background-color: var(--lg-field-fill);
+      border-color: var(--lg-input-line);
+      border-radius: var(--lg-r-md);
+      color: var(--lg-ink);
+      transition:
+        border-color var(--lg-d-1) var(--lg-ease),
+        box-shadow var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select']):hover:not(:disabled) {
+      border-color: var(--lg-input-line-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select']):focus-visible {
+      border-color: var(--lg-accent);
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+      outline: none;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select'])[aria-invalid='true'] {
+      border-color: var(--lg-danger);
+      box-shadow: 0 0 0 3px var(--lg-danger-wash);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select']):disabled {
+      background-color: var(--lg-surface-2);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='input']::placeholder {
+      color: var(--lg-ink-3);
+      opacity: 0.85;
+    }
+
+    /* ── Selection controls (12.2-12.3) ───────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox'] {
+      border-radius: 5px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='checkbox'], [data-glass='switch']):is(
+        [aria-checked='true'],
+        [aria-checked='mixed']
+      ) {
+      background-color: var(--lg-accent);
+      border-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='switch'] {
+      border-radius: 13px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='switch'][aria-checked='false'] {
+      background-color: var(--lg-surface-4);
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='radio'] {
+      accent-color: var(--lg-accent);
+    }
+    /* Segmented control: the 3 px track; the selected segment lifts. */
+    :root[data-appearance='liquid-glass'] [data-glass='seg'] {
+      background-color: var(--lg-surface-3);
+      border-color: var(--lg-field-line);
+      border-radius: 11px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
+      background-color: rgba(255, 255, 255, 0.9);
+      border-radius: 8px;
+      font-weight: 650;
+      box-shadow:
+        0 1px 2px rgba(16, 20, 18, 0.12),
+        0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
+      background-color: rgba(255, 255, 255, 0.16);
+    }
+    /* Filter chips: round, on the field frost. */
+    :root[data-appearance='liquid-glass'] [data-glass='chip'] {
+      border-radius: 999px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='meta-chip'] {
+      border-radius: 7px;
+    }
+
+    /* ── Badges (12.6) ────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='badge'] {
+      border-radius: 6px;
+      font-weight: 600;
+    }
+
+    /* ── Tables (12.5): hairlines, quiet header, row hover on the card frost ── */
+    :root[data-appearance='liquid-glass'] [data-glass='table'] th {
+      color: var(--lg-ink-3);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='table'] tbody tr:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='table'] tbody tr[data-state='selected'] {
+      background-color: var(--lg-sel-fill);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='pager'] {
+      color: var(--lg-ink-3);
+    }
+
+    /* ── Menus and list options (10): highlight is a 12% accent tint ─── */
+    :root[data-appearance='liquid-glass'] [data-glass='menu'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu-item'] {
+      border-radius: 9px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu-item']:is([data-highlighted], :focus) {
+      background-color: color-mix(in srgb, var(--lg-accent) 12%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='menu-item']:is([data-state='checked'], [aria-checked='true']) {
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='popover'] {
+      border-radius: var(--lg-r-lg);
+    }
+
+    /* ── Dialog, sheet (10, 12.9) ─────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='dialog'] {
+      border-radius: 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sheet'][data-glass-side='right'] {
+      border-radius: 24px 0 0 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sheet'][data-glass-side='left'] {
+      border-radius: 0 24px 24px 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sheet'][data-glass-side='bottom'] {
+      border-radius: 30px 30px 0 0;
+    }
+
+    /* ── Calendar days (12.4) ─────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='calendar'] button {
+      border-radius: 10px;
+    }
+
+    /* ── Loading (12.10): the shine, never a blur ─────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='skeleton'] {
+      background: linear-gradient(
+          90deg,
+          var(--lg-surface-3) 25%,
+          var(--lg-surface-2) 40%,
+          var(--lg-surface-3) 60%
+        )
+        0 0 / 400% 100%;
+      animation: lg-shine 1.4s ease infinite;
+    }
+
+    /* ── Page header (6): the large title ─────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='page-header'] h1 {
+      font-weight: 650;
+      letter-spacing: -0.022em;
+    }
+  }
+
+  @keyframes lg-shine {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0 50%;
+    }
+  }
+}
