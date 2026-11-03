@@ -16,12 +16,19 @@
    this file were to load before app/globals.css (it never should: the root
    layout's stylesheet comes first).
 
-   Deviations from the boards, on purpose (stage3/items-rows.md): the
-   selection bar is glass in the toolbar's place, where classic swaps it in,
-   not floating at the bottom of the pane (floating it would leave the hidden
-   toolbar's empty row or show the toolbar while rows are selected, which
-   classic hides); every classic column stays (no Available column is added);
-   the location and rack cells stay text, not chips. */
+   The selection bar floats at the foot of the frosted pane, centred, as the
+   board draws it (position: absolute against the pane, [data-glass=
+   main-column], the nearest positioned box, so it neither scrolls with the
+   list nor is clipped by it), and the toolbar and the count stay on screen
+   under it while rows are ticked, as on the board; classic swaps the bar into
+   the toolbar's place instead. The DOM order is unchanged, so the keyboard
+   still reaches the bar after the toolbar and before the table.
+
+   Deviations from the boards, on purpose (stage3/items-rows.md): every
+   classic column, filter and bulk action stays (no Available column is
+   added; the bar carries all of classic's actions, wrapping when they do not
+   fit); the location column stays the site's name and the rack column
+   becomes the board's rack chip. */
 @layer theme, base, components, utilities, lg;
 
 @layer lg {
@@ -104,13 +111,39 @@
       }
     }
 
-    /* ── Selection bar (.selbar.glass): radius 18, 8 8 8 14, floating
-       glass, in the toolbar's place. It rises in when rows are ticked. ── */
+    /* ── Selection bar (.selbar.glass, Items.dc.html): floating glass at
+       the foot of the pane, 20 px up, centred, as wide as its actions and
+       never wider than the pane less 16 px a side; radius 18, 8 8 8 14.
+       It rises in when rows are ticked. ──────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='selbar-layer'] {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      z-index: 45;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      transform: translateX(-50%);
+    }
+    /* The toolbar and the count stay on screen while rows are ticked. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      :is([data-glass='items-toolbar'], [data-glass='items-count'] > p) {
+      visibility: visible;
+    }
+    /* Room under the last row for the bar (.page.has-selbar). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books']):has(
+        [data-glass='selbar-layer'][data-glass-state='open']
+      ) {
+      padding-bottom: 128px;
+    }
     :root[data-appearance='liquid-glass']
       :is([data-glass-page='items'], [data-glass-page='books'])
       [data-glass='selbar'] {
-      gap: 6px;
-      padding: 6px 8px 6px 14px;
+      gap: 10px;
+      padding: 8px 8px 8px 14px;
       border-color: transparent;
       border-radius: 18px;
       background-color: var(--lg-glass);
@@ -277,6 +310,33 @@
       width: 28px;
       height: 28px;
     }
+    /* The rack (.loc): a 24 px chip on the third surface, 12.5 / 600; a
+       row still in Staging or unplaced takes the warn wash (.loc.stg). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      td[data-glass='rack']
+      > span.font-mono {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 7px;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink-2);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      td[data-glass='rack']
+      > span.font-mono.text-warning {
+      background-color: var(--lg-warn-wash);
+      color: var(--lg-warn);
+    }
     :root[data-appearance='liquid-glass']
       :is([data-glass-page='items'], [data-glass-page='books'])
       [data-glass='items-table']
@@ -329,6 +389,12 @@
       backdrop-filter: none;
     }
     @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        td[data-glass='rack']
+        > span.font-mono {
+        border: 1px solid CanvasText;
+      }
       :root[data-appearance='liquid-glass']
         :is([data-glass-page='items'], [data-glass-page='books'])
         :is([data-glass='selbar'], [data-glass='items-card']) {

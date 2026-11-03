@@ -3578,7 +3578,7 @@ export function InventoryTable({
                       </td>
                       <td className={locationTd(showBookFields)}>{facts.location?.name ?? '—'}</td>
                       {!showBookFields && (
-                        <td className={cn(td('Rack'), RACK_TD)}>
+                        <td className={cn(td('Rack'), RACK_TD)} data-glass="rack">
                           <ItemsRackContent item={item} />
                         </td>
                       )}
@@ -3595,7 +3595,7 @@ export function InventoryTable({
                               >
                                 <BookGradeLabel grade={storage.grade} />
                               </td>
-                              <td className={cn(td('Rack'), RACK_TD)}>
+                              <td className={cn(td('Rack'), RACK_TD)} data-glass="rack">
                                 <BookRackContent item={item} />
                               </td>
                               <td

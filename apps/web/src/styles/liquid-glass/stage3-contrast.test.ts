@@ -103,7 +103,12 @@ const contrast = (a: Rgba, b: Rgba) => {
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 };
 
-const colour = (t: Tokens, name: string) => parse(name.startsWith('--') ? t[name]! : name);
+/** A token, a plain colour, or a token at an alpha ("--lg-accent@0.12", a color-mix with transparent). */
+const colour = (t: Tokens, name: string): Rgba => {
+  const [base, alpha] = name.split('@');
+  const c = parse(base!.startsWith('--') ? t[base!]! : base!);
+  return alpha === undefined ? c : [c[0], c[1], c[2], c[3] * Number(alpha)];
+};
 
 /** The ground (--lg-bg) with each layer composited on it, bottom first. */
 const stack = (t: Tokens, layers: string[]) =>
@@ -124,6 +129,26 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['key (ink 3) on its surface', '--lg-ink-3', ['--lg-pane', '--lg-glass', '--lg-surface'], 4.5],
   ['capsule icon (ink 2) on the capsule', '--lg-ink-2', ['--lg-pane', '--lg-glass'], 3],
   ['unread count (white) on the danger fill', '#FFFFFF', ['--lg-danger-fill'], 4.5],
+  [
+    'Place an order (accent text) on its wash',
+    '--lg-accent-text',
+    ['--lg-glass', '--lg-accent-wash'],
+    4.5,
+  ],
+  // Menus and the command palette (overlay glass over the pane)
+  ['menu row (ink) on the overlay glass', '--lg-ink', ['--lg-pane', '--lg-glass-strong'], 4.5],
+  [
+    'menu label (ink 3) on the overlay glass',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-glass-strong'],
+    4.5,
+  ],
+  [
+    'highlighted row (ink) on the accent tint',
+    '--lg-ink',
+    ['--lg-pane', '--lg-glass-strong', '--lg-accent@0.12'],
+    4.5,
+  ],
   // Items (cards on the pane)
   [
     'table header (ink 3) on the header band',
@@ -145,6 +170,18 @@ const PAIRS: Array<[string, string, string[], number]> = [
     4.5,
   ],
   ['pager and count (ink 3) on the card', '--lg-ink-3', ['--lg-pane', '--lg-card-fill'], 4.5],
+  [
+    'rack chip (ink 2) on surface 3',
+    '--lg-ink-2',
+    ['--lg-pane', '--lg-card-fill', '--lg-surface-3'],
+    4.5,
+  ],
+  [
+    'Staging rack chip (warn) on its wash',
+    '--lg-warn',
+    ['--lg-pane', '--lg-card-fill', '--lg-warn-wash'],
+    4.5,
+  ],
   ['selection bar (ink) on its glass', '--lg-ink', ['--lg-pane', '--lg-glass'], 4.5],
   ['filter chip (ink 2) on the field frost', '--lg-ink-2', ['--lg-pane', '--lg-field-fill'], 4.5],
   ['item header (ink) on the overlay glass', '--lg-ink', ['--lg-pane', '--lg-glass-strong'], 4.5],
