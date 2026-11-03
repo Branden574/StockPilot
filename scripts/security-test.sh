@@ -165,8 +165,9 @@ PGTAP_TESTS=(
   # SECURITY INVOKER precisely so it has no power beyond those policies.
   supabase/tests/0353_user_release_state.test.sql
   # A person's chosen appearance (Liquid Glass, 0432 placeholder number):
-  # own-row RLS on the same shape, no delete, anon has nothing, only the four
-  # words are stored, and the row goes with the account.
+  # own-row RLS on the same shape, no delete, anon has nothing, only the known
+  # Design and Theme words are stored and a row with neither is refused, a
+  # save of one column keeps the other, and the row goes with the account.
   supabase/tests/0432_user_appearance.test.sql
   supabase/tests/0354_module_enabled_honours_comp.test.sql
 
@@ -1915,9 +1916,12 @@ CORE_TESTS=(
   # address the screen shows.
   src/email/mailto-link.test.ts
   # Appearance sync (Liquid Glass): one person's unsaved or synced choice is
-  # never written under, or adopted by, another account on the same device; a
-  # choice made signed out reaches only an account that signs in within 30
-  # minutes; a malformed stored or account value never turns Liquid Glass on.
+  # never written under, or adopted by, another account on the same device; an
+  # unsaved choice not known to be in step with the account is checked against
+  # the account's row first; a choice made signed out reaches only an account
+  # that signs in in the same flow within 30 minutes, and only where its row
+  # holds nothing; a malformed stored or account value is dropped and counts
+  # as never chosen.
   src/appearance/reconcile.test.ts
 )
 
