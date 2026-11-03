@@ -107,6 +107,7 @@ export function AppearancePanel({ labelledBy }: { labelledBy: string }) {
       >
         {options.map((option) => {
           const checked = value === option.mode;
+          const labelId = `${name}-${option.mode}-label`;
           const descriptionId = `${name}-${option.mode}-description`;
           return (
             <label
@@ -125,6 +126,9 @@ export function AppearancePanel({ labelledBy }: { labelledBy: string }) {
                 value={option.mode}
                 checked={checked}
                 onChange={() => choose(option.mode)}
+                // The word alone is the name; the one line is the description
+                // (the whole label would read both as the name).
+                aria-labelledby={labelId}
                 aria-describedby={descriptionId}
                 className="sr-only"
               />
@@ -139,7 +143,9 @@ export function AppearancePanel({ labelledBy }: { labelledBy: string }) {
                 >
                   {checked ? <span className="bg-foreground size-2 rounded-full" /> : null}
                 </span>
-                <span className="text-foreground text-[13.5px] font-medium">{option.label}</span>
+                <span id={labelId} className="text-foreground text-[13.5px] font-medium">
+                  {option.label}
+                </span>
               </span>
               <span
                 id={descriptionId}
