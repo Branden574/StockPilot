@@ -1,4 +1,9 @@
-import type { AppearanceMode, AppearanceSyncStatus, ClassicAppearanceMode } from '@stockpilot/core';
+import type {
+  AppearanceStyle,
+  AppearanceSyncStatus,
+  GlassRollout,
+  ThemeSetting,
+} from '@stockpilot/core';
 import * as React from 'react';
 
 import type { GlassMaterial } from './material';
@@ -10,23 +15,37 @@ import type { GlassMaterial } from './material';
  */
 
 export interface AppearanceThemeContextValue {
-  /** The appearance to draw (after the kill switch and the crash fallback). */
-  appearance: AppearanceMode;
+  /** The Design drawn (after the rollout, the crash fallback and a held adoption). */
+  style: AppearanceStyle;
+  /** The Theme drawn; null follows the device. */
+  theme: ThemeSetting | null;
   material: GlassMaterial;
+  /** The pre-blurred scene photo is drawn behind the content. */
+  scene: boolean;
 }
 
 export interface AppearanceControl {
-  /** The person's stored choice (may be Liquid Glass while the fallback shows classic). */
-  choice: AppearanceMode;
-  /** What is drawn right now. */
-  effective: AppearanceMode;
-  lastClassic: ClassicAppearanceMode;
+  /** The person's own Design choice; null = never chose (the rollout's default shows). */
+  chosenStyle: AppearanceStyle | null;
+  /** The person's own Theme choice; null = never chose (System). */
+  chosenTheme: ThemeSetting | null;
+  /** The Design drawn right now. */
+  style: AppearanceStyle;
+  /** The Theme drawn right now; null follows the device. */
+  theme: ThemeSetting | null;
+  rollout: GlassRollout;
   status: AppearanceSyncStatus;
   ready: boolean;
+  /** rollout !== 'off': the Design choice is offered. */
   glassEnabled: boolean;
   fallbackActive: boolean;
+  /** The one-time "new look" card on Home (R13). */
+  introVisible: boolean;
   material: GlassMaterial;
-  choose(mode: AppearanceMode): void;
+  chooseStyle(style: AppearanceStyle): void;
+  chooseTheme(theme: ThemeSetting): void;
+  keepGlass(): void;
+  dismissIntro(): void;
   retry(): void;
   endFallback(choice: 'glass' | 'classic'): void;
 }
@@ -36,7 +55,7 @@ export const ControlContext = React.createContext<AppearanceControl | null>(null
 /** The stored choice was read (or the first-paint wait gave up). True outside the provider. */
 export const ReadyContext = React.createContext<boolean>(true);
 
-/** For useTheme() only: the appearance and material, or null outside the provider. */
+/** For useTheme() only: the Design, Theme, material and scene, or null outside the provider. */
 export function useAppearanceTheme(): AppearanceThemeContextValue | null {
   return React.useContext(ThemeContext);
 }
@@ -51,10 +70,10 @@ export function useAppearanceReady(): boolean {
 }
 
 /**
- * The Appearance screen's control and the crash-fallback notice. It changes
- * with every sync status, so the root never reads it (useAppearanceReady).
- * Outside the provider (never in the app) it reports a ready classic System
- * that cannot be changed.
+ * The Appearance screen's control, the Settings row, the crash-fallback
+ * notice and the intro card. It changes with every sync status, so the root
+ * never reads it (useAppearanceReady). Outside the provider (never in the
+ * app) it reports a ready classic System that cannot be changed.
  */
 export function useAppearance(): AppearanceControl {
   return React.useContext(ControlContext) ?? OUTSIDE_PROVIDER;
@@ -62,15 +81,21 @@ export function useAppearance(): AppearanceControl {
 
 const noop = () => undefined;
 const OUTSIDE_PROVIDER: AppearanceControl = {
-  choice: 'system',
-  effective: 'system',
-  lastClassic: 'system',
+  chosenStyle: null,
+  chosenTheme: null,
+  style: 'classic',
+  theme: null,
+  rollout: 'off',
   status: 'signed-out',
   ready: true,
   glassEnabled: false,
   fallbackActive: false,
+  introVisible: false,
   material: 'opaque',
-  choose: noop,
+  chooseStyle: noop,
+  chooseTheme: noop,
+  keepGlass: noop,
+  dismissIntro: noop,
   retry: noop,
   endFallback: noop,
 };

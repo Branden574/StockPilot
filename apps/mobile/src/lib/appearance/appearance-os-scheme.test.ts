@@ -1,14 +1,16 @@
-import type { AppearanceMode } from '@stockpilot/core';
+import type { ThemeSetting } from '@stockpilot/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const setColorScheme = vi.fn();
 vi.mock('react-native', () => ({ Appearance: { setColorScheme } }));
 
 /**
- * Fixed Dark and Light tell the OS the app's scheme, so what the OS draws for
- * the app (Alert.alert dialogs, the keyboard, pickers, menus) matches the
- * screens; System and Liquid Glass leave the OS following the device, which
- * is what useColorScheme() then reports.
+ * A fixed Light or Dark Theme tells the OS the app's scheme in BOTH Designs
+ * (item 34: osSchemeFor(theme), no longer by appearance), so what the OS draws
+ * for the app (Alert.alert dialogs, the keyboard, pickers, menus) matches the
+ * screens: Night glass gets dark alerts and keyboards. System, or no Theme,
+ * leaves the OS following the device, which is what useColorScheme() then
+ * reports.
  */
 async function fresh() {
   vi.resetModules();
@@ -18,33 +20,33 @@ async function fresh() {
 beforeEach(() => setColorScheme.mockClear());
 
 describe('the OS colour scheme', () => {
-  it('Dark and Light are fixed; System and Liquid Glass follow the device', async () => {
+  it('Light and Dark are fixed; System and no Theme follow the device', async () => {
     const { osSchemeFor } = await fresh();
-    const cases: [AppearanceMode, string][] = [
+    const cases: [ThemeSetting | null, string][] = [
       ['dark', 'dark'],
       ['light', 'light'],
       ['system', 'unspecified'],
-      ['liquid-glass', 'unspecified'],
+      [null, 'unspecified'],
     ];
-    for (const [mode, scheme] of cases) expect(osSchemeFor(mode), mode).toBe(scheme);
+    for (const [theme, scheme] of cases) expect(osSchemeFor(theme), String(theme)).toBe(scheme);
   });
 
-  it('classic System and Liquid Glass on a launch never call the OS at all', async () => {
+  it('System and no Theme on a launch never call the OS at all (the off rollout: today’s phone)', async () => {
     const { applyOsScheme } = await fresh();
+    applyOsScheme(null);
     applyOsScheme('system');
-    applyOsScheme('liquid-glass');
-    applyOsScheme('system');
+    applyOsScheme(null);
     expect(setColorScheme).not.toHaveBeenCalled();
   });
 
-  it('a fixed choice overrides the OS once, and leaving it hands the OS back to the device', async () => {
+  it('a fixed Theme overrides the OS once, and leaving it hands the OS back to the device', async () => {
     const { applyOsScheme } = await fresh();
     applyOsScheme('dark');
     applyOsScheme('dark');
     expect(setColorScheme.mock.calls).toEqual([['dark']]);
     applyOsScheme('light');
-    applyOsScheme('liquid-glass');
     applyOsScheme('system');
+    applyOsScheme(null);
     expect(setColorScheme.mock.calls).toEqual([['dark'], ['light'], ['unspecified']]);
   });
 

@@ -13,7 +13,8 @@ import { describe, expect, it } from 'vitest';
  * 2. The appearance is presentation only (plan 2.3): no data layer, cache,
  *    query, signed URL, realtime channel or outbox reads it, so changing it
  *    can never refetch, re-sign, resubscribe or touch queued work.
- * 3. Only the screens that change the appearance and the crash notice read
+ * 3. Only the screens that change the appearance, the crash notice and the
+ *    intro card read
  *    the appearance control (it changes with every sync status); the root
  *    gate reads the ready flag alone; every other component reads the look
  *    through useTheme() alone.
@@ -71,7 +72,7 @@ describe('appearance guards', () => {
     expect(readers).toEqual([]);
   });
 
-  it('only the appearance screen, the Settings row and the crash notice read the control; the root reads ready alone', () => {
+  it('only the appearance screen, the Settings row, the crash notice and the intro card read the control; the root reads ready alone', () => {
     const readers = SOURCES.filter((f) => /\buseAppearance\(\)/.test(code(f)))
       .map(rel)
       .filter((f) => !f.startsWith('src/lib/appearance/'))
@@ -80,6 +81,7 @@ describe('appearance guards', () => {
       'app/(drawer)/settings.tsx',
       'app/(drawer)/settings/appearance.tsx',
       'src/components/appearance-fallback-notice.tsx',
+      'src/components/appearance-intro-notice.tsx',
     ]);
     const ready = SOURCES.filter((f) => /\buseAppearanceReady\(\)/.test(code(f)))
       .map(rel)

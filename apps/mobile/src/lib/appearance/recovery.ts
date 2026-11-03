@@ -1,4 +1,11 @@
-import type { ClassicAppearanceMode } from '@stockpilot/core';
+import {
+  APPEARANCE_AXES,
+  recoveryAppearance,
+  shownStyle,
+  type AppearanceStyle,
+  type DeviceAppearanceRecord,
+  type GlassRollout,
+} from '@stockpilot/core';
 
 import {
   clearFallbackFlag,
@@ -11,53 +18,71 @@ import {
 } from './store';
 
 /**
- * Always able to switch back (plan 5.6). These run from the error boundary,
- * which must keep working when the appearance layer is what threw, so they
- * talk to storage directly and depend on nothing in the provider.
+ * Always able to switch back (plan 5.6, revision R13, item 39). These run
+ * from the error boundary, which must keep working when the appearance layer
+ * is what threw, so they talk to storage directly and depend on nothing in
+ * the provider.
  */
 
-/** Liquid Glass is the stored choice (and this build can show it). */
-export async function isGlassStored(
+/**
+ * Liquid Glass is shown, so the way back is offered. `drawnNow` is the live
+ * controller's answer when it still has one (it knows about this launch's
+ * crash fallback and a held adoption); otherwise the stored Design is read
+ * through the rollout, exactly as the controller would draw it: under
+ * 'default' a phone that never chose a Design is in Liquid Glass too.
+ */
+export async function isGlassShown(
   storage: AppearanceStorage,
-  glassEnabled: boolean,
+  rollout: GlassRollout,
+  now: number,
+  drawnNow: AppearanceStyle | null = null,
 ): Promise<boolean> {
-  if (!glassEnabled) return false;
-  const device = await readDeviceRecord(storage);
-  return device?.mode === 'liquid-glass';
+  if (drawnNow !== null) return drawnNow === 'liquid-glass';
+  if (rollout === 'off') return false;
+  const device = await readDeviceRecord(storage, now);
+  return shownStyle(device?.style ?? null, rollout, false) === 'liquid-glass';
 }
 
 /**
- * A render crash was caught while Liquid Glass is the stored choice: owe the
- * next launch one classic start (the provider reads and clears the flag before
- * its first paint and shows the notice). The stored choice is NOT changed, so a
- * passing fault never switches anyone's appearance for good. Returns whether
- * the flag was set.
+ * A render crash was caught while Liquid Glass is shown: owe the next launch
+ * one classic start (the controller reads and clears the flag before its
+ * first paint and the notice says so). Nothing the person chose is changed,
+ * so a passing fault never switches anyone's appearance for good. Returns
+ * whether the flag was set.
  */
 export async function markCrashFallback(
   storage: AppearanceStorage,
-  glassEnabled: boolean,
+  rollout: GlassRollout,
+  now: number,
+  drawnNow: AppearanceStyle | null = null,
 ): Promise<boolean> {
-  if (!(await isGlassStored(storage, glassEnabled))) return false;
+  if (!(await isGlassShown(storage, rollout, now, drawnNow))) return false;
   await setFallbackFlag(storage);
   return true;
 }
 
 /**
- * "Use classic appearance": the device goes back to the person's previous
- * classic choice (the record's lastClassic; System when there is none), the
- * account sync record (if this device has one for the signed-in person) is
- * marked dirty so the choice is saved to the account after the reload, and the
- * crash-fallback flag is cleared (the person has answered it). Only the three
- * appearance keys are written. Returns the classic mode now stored.
+ * "Use classic design": the Design becomes Classic and the Theme is left as
+ * it is (core recoveryAppearance; there is no "previous classic look" any
+ * more). The account sync record, if this phone has one for a signed-in
+ * person, gets the Design marked unsaved so it is saved to the account after
+ * the reload, and the crash-fallback flag is cleared (the person has answered
+ * it). Only the three appearance keys involved are written.
  */
 export async function recoverToClassicInStorage(
   storage: AppearanceStorage,
-): Promise<ClassicAppearanceMode> {
-  const device = await readDeviceRecord(storage);
-  const target: ClassicAppearanceMode = device?.lastClassic ?? 'system';
-  await writeDeviceRecord(storage, { v: 1, mode: target, lastClassic: target });
+  now: number,
+): Promise<void> {
+  const device = await readDeviceRecord(storage, now);
+  const record: DeviceAppearanceRecord = { v: 2, ...recoveryAppearance() };
+  if (device?.theme !== undefined) record.theme = device.theme;
+  await writeDeviceRecord(storage, record);
   const sync = await readSyncRecord(storage);
-  if (sync) await writeSyncRecord(storage, { ...sync, dirty: true });
+  if (sync) {
+    const dirtyAxes = APPEARANCE_AXES.filter(
+      (axis) => axis === 'style' || sync.dirtyAxes.includes(axis),
+    );
+    await writeSyncRecord(storage, { ...sync, dirtyAxes });
+  }
   await clearFallbackFlag(storage);
-  return target;
 }

@@ -1,6 +1,7 @@
-import { supabaseAppearanceAccount } from './account';
+import { peekSignedInUser, supabaseAppearanceAccount } from './account';
 import { createAppearanceController, type AppearanceController } from './controller';
-import { isLiquidGlassEnabled } from './flag';
+import { glassRollout } from './flag';
+import { appearanceAdoptionHolds } from './holds';
 import { asyncStorageAppearance } from './store';
 
 /**
@@ -17,7 +18,9 @@ export function getAppearanceController(): AppearanceController {
       storage: asyncStorageAppearance,
       account: supabaseAppearanceAccount,
       now: () => Date.now(),
-      glassEnabled: isLiquidGlassEnabled(),
+      rollout: glassRollout(),
+      holds: appearanceAdoptionHolds(),
+      peekSignedInUser,
     });
   }
   return controller;

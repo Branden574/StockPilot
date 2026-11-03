@@ -118,10 +118,12 @@ function RootLayout() {
 
   const fontsReady = useFontGate();
   // The person's appearance is read from this phone before the first paint
-  // (one AsyncStorage read, capped like the fonts at 4 s, then System), so a
-  // Liquid Glass or a fixed Dark/Light choice never shows a frame of the
-  // device's look first. Only the ready flag: the sync status never
-  // re-renders RootLayout.
+  // (one AsyncStorage read; on the first start of the new JS with no record
+  // of its own, also the signed-in person's row), all inside the same 4 s as
+  // the fonts, then the rollout's default Design (Liquid Glass under
+  // 'default'), so a Classic chooser or a fixed Dark/Light Theme never shows
+  // a frame of another look first. Only the ready flag: the sync status
+  // never re-renders RootLayout.
   const appearanceReady = useAppearanceReady();
   const { mode, c } = useTheme();
 
@@ -167,8 +169,8 @@ function RootLayout() {
       </AuthProvider>
 
       {/* After a crash in Liquid Glass this launch opened classic once
-          (plan 5.6): say so, and offer Liquid Glass back or classic for good.
-          Renders nothing otherwise. */}
+          (plan 5.6): say so, and offer Liquid Glass back or the classic
+          design for good. Renders nothing otherwise. */}
       <AppearanceFallbackNotice />
 
       {/* Stacked ON TOP for a blank-frame-free crossfade: the splash fades its
@@ -185,8 +187,9 @@ function RootLayout() {
 }
 
 /**
- * The appearance (Dark, Light, Liquid Glass, System) sits above everything
- * RootLayout draws, so useTheme() answers from the first render. It renders
+ * The appearance (the Design, Liquid Glass or Classic, and the Theme, Light,
+ * Dark or System) sits above everything RootLayout draws, so useTheme()
+ * answers from the first render. It renders
  * RootLayout once and never keys it: changing the appearance re-renders the
  * tree like a device Light/Dark change, and RootLayout's mount-only effect
  * (initDb, pruneRejected, the cycle-count sync engine) and RootGate's hooks

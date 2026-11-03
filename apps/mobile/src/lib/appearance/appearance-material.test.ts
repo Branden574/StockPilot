@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { resolveGlassModule, type GlassModuleLoader } from './glass-module';
-import { selectMaterial, type MaterialInputs } from './material';
+import {
+  LOW_END_MEMORY_BYTES,
+  LOW_END_YEAR_CLASS,
+  isLowEndDevice,
+  selectMaterial,
+  selectScene,
+  type MaterialInputs,
+} from './material';
 import {
   CLASSIC_TAB_BAR,
   GLASS_ANDROID_TAB_BAR,
@@ -24,6 +31,7 @@ const base: MaterialInputs = {
   version: '26.1',
   glassModuleAvailable: true,
   reduceTransparency: false,
+  lowEnd: false,
 };
 
 describe('material selection matrix', () => {
@@ -41,8 +49,46 @@ describe('material selection matrix', () => {
     ['Android', { os: 'android', version: 35 }, 'opaque'],
     ['an unreadable iOS version', { version: 'beta' }, 'blur'],
     ['classic, anywhere', { style: 'classic' as const }, 'opaque'],
+    // Revision R9: a low-end phone draws its chrome opaque (no live blur).
+    ['a low-end iPhone on iOS 18', { version: '18.6', lowEnd: true }, 'opaque'],
+    ['a low-end iPhone on iOS 26 with the module', { lowEnd: true }, 'opaque'],
   ])('%s -> %s', (_name, over, expected) => {
     expect(selectMaterial({ ...base, ...over })).toBe(expected);
+  });
+});
+
+describe('the scene photo behind the content (plan 5.2, revision R9)', () => {
+  it.each([
+    ['iOS 26 glass', {}, true],
+    ['iOS 18 blur', { version: '18.6' }, true],
+    // Low-end: opaque chrome, same layout, the pre-blurred photo kept.
+    ['a low-end phone', { lowEnd: true }, true],
+    ['Reduce Transparency', { reduceTransparency: true }, false],
+    ['a low-end phone with Reduce Transparency', { lowEnd: true, reduceTransparency: true }, false],
+    ['Android (opaque Material 3)', { os: 'android', version: 35 }, false],
+    ['classic', { style: 'classic' as const }, false],
+  ])('%s -> %s', (_name, over, expected) => {
+    expect(selectScene({ ...base, ...over })).toBe(expected);
+  });
+});
+
+describe('a low-end device (revision R9: deviceYearClass < 2019 or totalMemory < 3 GB)', () => {
+  it.each([
+    ['iPhone 8 class: 2017, 2 GB', 2017, 2_076_000_000, true],
+    ['iPhone XR class: 2018, 3 GB', 2018, 3_100_000_000, true],
+    ['iPhone 11 class: 2019, 4 GB', 2019, 4_000_000_000, false],
+    ['a 2020 device with 2 GB', 2020, 2_000_000_000, true],
+    ['a 2021 device with 3 GB', 2021, 3_100_000_000, false],
+    ['unknown year, 6 GB', null, 6_000_000_000, false],
+    ['2022, unknown memory', 2022, null, false],
+    ['nothing known', null, null, false],
+  ])('%s -> %s', (_name, yearClass, totalMemory, expected) => {
+    expect(isLowEndDevice({ yearClass, totalMemory })).toBe(expected);
+  });
+
+  it('the thresholds are the plan’s', () => {
+    expect(LOW_END_YEAR_CLASS).toBe(2019);
+    expect(LOW_END_MEMORY_BYTES).toBe(3_000_000_000);
   });
 });
 

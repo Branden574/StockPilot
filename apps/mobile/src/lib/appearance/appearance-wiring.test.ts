@@ -3,7 +3,16 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { appearanceFootnote, appearanceLabel, appearanceOptions, syncLine } from './labels';
+import {
+  DESIGN_OPTIONS,
+  FALLBACK_NOTICE,
+  INTRO_NOTICE,
+  RECOVERY_ACTION_LABEL,
+  THEME_OPTIONS,
+  appearanceFootnote,
+  appearanceLabel,
+  syncLine,
+} from './labels';
 
 /**
  * How the appearance is wired into the shell, read as source (the suite has
@@ -46,9 +55,35 @@ describe('root layout', () => {
     expect(provider).toContain('<ReadyContext.Provider value={snapshot.ready}>');
   });
 
-  it('the provider tells the OS a fixed Dark or Light, so alerts and the keyboard match', () => {
+  it('the provider tells the OS a fixed Light or Dark Theme in both Designs, so alerts and the keyboard match (item 34)', () => {
     const provider = flat('src/lib/appearance/provider.tsx');
-    expect(provider).toContain('applyOsScheme(snapshot.effective);');
+    expect(provider).toContain('applyOsScheme(snapshot.theme);');
+    expect(provider).not.toContain('applyOsScheme(snapshot.style');
+  });
+
+  it('a held adoption is drawn at the next return to the app (item 32)', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain(
+      "const sub = AppState.addEventListener('change', (next) => { if (next === 'active') controller.resumed(); });",
+    );
+  });
+
+  it('the first-start account read waits inside the font gate’s 4 s, never after it (item 31)', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('export const APPEARANCE_READ_TIMEOUT_MS = 4000;');
+    expect(src).toContain('const FONT_GATE_TIMEOUT_MS = 4000;');
+    // Both timers start at mount: the provider's with the read, not after the fonts.
+    expect(provider).toContain(
+      'void controller.hydrate(); const timer = setTimeout(() => controller.giveUpWaiting(), APPEARANCE_READ_TIMEOUT_MS);',
+    );
+  });
+
+  it('the low-end class and the scene photo are decided with the material', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('const lowEnd = glass && isThisDeviceLowEnd();');
+    expect(provider).toContain(
+      'return { material: selectMaterial(inputs), scene: selectScene(inputs) };',
+    );
   });
 
   it('the session bridge is inside AuthProvider; the notice outside the error boundary', () => {
@@ -122,24 +157,52 @@ describe('drawer', () => {
 });
 
 describe('Settings', () => {
-  it('the Theme row is now Appearance, showing the choice in words and opening the screen', () => {
+  it('opt-in and default: the row is Appearance, showing "Design · Theme" in words and opening the screen', () => {
     const src = flat('app/(drawer)/settings.tsx');
     expect(src).toContain(
-      'title="Appearance" detail={appearanceLabel(appearance.choice, appearance.glassEnabled)} chevron onPress={() => router.push(\'/settings/appearance\' as never)}',
+      'title="Appearance" detail={appearanceLabel( appearance.chosenStyle, appearance.chosenTheme, appearance.rollout, )} chevron onPress={() => router.push(\'/settings/appearance\' as never)}',
     );
-    expect(src).not.toContain('Mobile follows your device appearance');
   });
 
-  it('the Appearance screen is a radio group of labelled choices, with no permission gate', () => {
-    const src = flat('app/(drawer)/settings/appearance.tsx');
-    expect(src).toContain('accessibilityRole="radiogroup" accessibilityLabel="Appearance"');
+  it('off: origin/main’s "Theme / Auto" row and its alert, verbatim (item 37)', () => {
+    const src = flat('app/(drawer)/settings.tsx');
     expect(src).toContain(
-      'accessibilityRole="radio" accessibilityState={{ checked }} accessibilityLabel={option.label} accessibilityHint={option.detail}',
+      '{appearance.glassEnabled ? ( <SettingRow icon={Moon} title="Appearance"',
     );
-    expect(src).toContain('onPress={() => appearance.choose(option.mode)}');
+    expect(src).toContain(
+      ') : ( <SettingRow icon={Moon} title="Theme" detail="Auto" chevron onPress={() => Alert.alert( \'Theme\', \'Mobile follows your device appearance (Light or Dark) automatically.\', ) } /> )}',
+    );
+  });
+
+  it('the Appearance screen: DESIGN first, then THEME, each a radio group of labelled choices, with no permission gate (item 38)', () => {
+    const src = flat('app/(drawer)/settings/appearance.tsx');
+    const design = src.indexOf('accessibilityRole="radiogroup" accessibilityLabel="Design"');
+    const theme = src.indexOf('accessibilityRole="radiogroup" accessibilityLabel="Theme"');
+    expect(design).toBeGreaterThan(-1);
+    expect(theme).toBeGreaterThan(design);
+    expect(src).toContain('<Eyebrow>DESIGN</Eyebrow>');
+    expect(src).toContain('<Eyebrow>THEME</Eyebrow>');
+    expect(src).toContain(
+      'accessibilityRole="radio" accessibilityState={{ checked }} accessibilityLabel={label} accessibilityHint={detail}',
+    );
+    expect(src).toContain('onPress={() => appearance.chooseStyle(option.style)}');
+    expect(src).toContain('onPress={() => appearance.chooseTheme(option.theme)}');
+    // A Design never chosen is drawn as the rollout's default and checked as it.
+    expect(src).toContain(
+      'const checkedStyle = appearance.chosenStyle ?? defaultStyle(appearance.rollout);',
+    );
+    expect(src).toContain("const checkedTheme = appearance.chosenTheme ?? 'system';");
+    // 44 pt targets at least.
+    expect(src).toMatch(/minHeight: (4[4-9]|5\d)/);
     for (const gate of ['useRole', 'usePermission', 'useEffectivePermissions', 'isAdmin']) {
       expect(src, gate).not.toContain(gate);
     }
+  });
+
+  it('under off the screen offers no choice (the row does not open it)', () => {
+    const src = flat('app/(drawer)/settings/appearance.tsx');
+    expect(src).toContain('{appearance.glassEnabled ? (');
+    expect(src).toContain('Mobile follows your device appearance (Light or Dark) automatically.');
   });
 
   it('the footnote about Liquid Glass shows only in a build that offers Liquid Glass', () => {
@@ -150,29 +213,87 @@ describe('Settings', () => {
   });
 });
 
-describe('the words', () => {
-  it('offers Dark, Light, Liquid Glass and System, Liquid Glass only with the kill switch on', () => {
-    expect(appearanceOptions(true).map((o) => o.label)).toEqual([
-      'Dark',
-      'Light',
-      'Liquid Glass',
-      'System',
-    ]);
-    expect(appearanceOptions(false).map((o) => o.label)).toEqual(['Dark', 'Light', 'System']);
-    expect(appearanceLabel('liquid-glass', true)).toBe('Liquid Glass');
-    expect(appearanceLabel('liquid-glass', false)).toBe('System');
-    expect(appearanceLabel('system', true)).toBe('System');
+describe('the one-time "new look" card on Home (R13, item 39)', () => {
+  it('sits at the top of Home’s content and draws nothing unless the controller says so', () => {
+    const home = flat('app/(drawer)/(tabs)/index.tsx');
+    expect(home).toContain(
+      "import { AppearanceIntroNotice } from '@/components/appearance-intro-notice';",
+    );
+    expect(home).toContain('refreshControl={ <RefreshControl');
+    const scroll = home.indexOf(
+      '<ScrollView contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}',
+    );
+    const card = home.indexOf('<AppearanceIntroNotice />');
+    const firstContent = home.indexOf('{loading && !noWorkspace ? (');
+    expect(scroll).toBeGreaterThan(-1);
+    expect(card).toBeGreaterThan(scroll);
+    expect(card).toBeLessThan(firstContent);
   });
 
-  it('never names Liquid Glass with the kill switch off (plan D12, 5.5)', () => {
+  it('both buttons make the Design the person’s own; Close chooses nothing', () => {
+    const src = flat('src/components/appearance-intro-notice.tsx');
+    expect(src).toContain(
+      'const { introVisible, chooseStyle, keepGlass, dismissIntro } = useAppearance();',
+    );
+    expect(src).toContain('if (!introVisible) return null;');
+    expect(src).toContain("onPress={() => chooseStyle('classic')}");
+    expect(src).toContain('{INTRO_NOTICE.useClassic}');
+    expect(src).toContain('onPress={keepGlass}');
+    expect(src).toContain('{INTRO_NOTICE.keepGlass}');
+    expect(src).toContain('onPress={dismissIntro}');
+    expect(src).toContain('accessibilityLabel={INTRO_NOTICE.close}');
+    // The same card as the crash notice (stage 2's banner), inline, not floating.
+    expect(src).toContain('<AppearanceNoticeCard');
+  });
+
+  it('the crash notice keeps its two actions; only its Classic label changed', () => {
+    const src = flat('src/components/appearance-fallback-notice.tsx');
+    expect(src).toContain("onPress={() => endFallback('glass')}");
+    expect(src).toContain("onPress={() => endFallback('classic')}");
+    expect(src).toContain('{FALLBACK_NOTICE.useClassic}');
+    expect(src).toContain('export function AppearanceNoticeCard(');
+  });
+});
+
+describe('the words (item 36)', () => {
+  it('two groups: Design (Liquid Glass, Classic) and Theme (Light, Dark, System)', () => {
+    expect(DESIGN_OPTIONS.map((o) => [o.style, o.label])).toEqual([
+      ['liquid-glass', 'Liquid Glass'],
+      ['classic', 'Classic'],
+    ]);
+    expect(DESIGN_OPTIONS.map((o) => o.detail)).toEqual([
+      'The standard StockPilot look. Day or Night follows your Theme.',
+      'The previous StockPilot design, unchanged.',
+    ]);
+    expect(THEME_OPTIONS.map((o) => [o.theme, o.label])).toEqual([
+      ['light', 'Light'],
+      ['dark', 'Dark'],
+      ['system', 'System'],
+    ]);
+  });
+
+  it('the Settings row reads "Design · Theme", a choice never made read as the default', () => {
+    expect(appearanceLabel(null, null, 'default')).toBe('Liquid Glass · System');
+    expect(appearanceLabel(null, null, 'opt-in')).toBe('Classic · System');
+    expect(appearanceLabel('classic', 'dark', 'default')).toBe('Classic · Dark');
+    expect(appearanceLabel('liquid-glass', 'light', 'opt-in')).toBe('Liquid Glass · Light');
+  });
+
+  it('the way back reads "Use classic design" everywhere (R1, R13)', () => {
+    expect(RECOVERY_ACTION_LABEL).toBe('Use classic design');
+    expect(FALLBACK_NOTICE.useClassic).toBe('Use classic design');
+    expect(INTRO_NOTICE).toEqual({
+      title: 'StockPilot has a new look',
+      body: 'You can switch back to the classic design at any time.',
+      useClassic: 'Use classic design',
+      keepGlass: 'Keep Liquid Glass',
+      close: 'Close',
+    });
+  });
+
+  it('the footnote about Liquid Glass only where Liquid Glass is offered (plan D12, 5.5)', () => {
     expect(appearanceFootnote(true)).toContain('Liquid Glass follows your device');
     expect(appearanceFootnote(false)).toBeNull();
-    const offered = [
-      ...appearanceOptions(false).flatMap((o) => [o.label, o.detail]),
-      appearanceFootnote(false) ?? '',
-    ].join(' ');
-    expect(offered).not.toContain('Liquid Glass');
-    expect(offered).not.toContain('glass');
   });
 
   it('claims the account only when the server answered', () => {

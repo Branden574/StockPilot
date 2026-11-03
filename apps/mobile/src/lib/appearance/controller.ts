@@ -1,16 +1,20 @@
 import {
-  effectiveAppearance,
   INITIAL_APPEARANCE_STATE,
+  parseDeviceRecord,
   reduceAppearance,
+  shownStyle,
   type AppearanceEffect,
   type AppearanceEvent,
-  type AppearanceMode,
   type AppearanceState,
+  type AppearanceStyle,
+  type GlassRollout,
+  type ThemeSetting,
 } from '@stockpilot/core';
 
 import type { AppearanceAccount } from './account';
 import {
   clearFallbackFlag,
+  markIntroSeen,
   readStoredAppearance,
   writeDeviceRecord,
   writeSyncRecord,
@@ -20,34 +24,79 @@ import {
 
 /**
  * The phone's appearance controller: it drives the shared core reducer
- * (packages/core/src/appearance/reconcile.ts, plan 3.4) and performs its
- * effects against AsyncStorage and the person's own account row. No React
- * here, so every flow is unit-tested (appearance-controller.test.ts); the
- * provider (provider.tsx) only subscribes to it.
+ * (packages/core/src/appearance/reconcile.ts, plan 3.4 as revised by
+ * REVISION-DEFAULT R4) and performs its effects against AsyncStorage and the
+ * person's own account row. No React here, so every flow is unit-tested
+ * (appearance-controller.test.ts); the provider (provider.tsx) only
+ * subscribes to it.
+ *
+ * Two choices, each on its own: the Design (Liquid Glass or Classic) and the
+ * Theme (Light, Dark or System). The reducer stores what the person chose;
+ * what is DRAWN is decided here:
+ *   - the Design through core `shownStyle`: the rollout (off: classic; a
+ *     Design never chosen: the rollout's default, Liquid Glass under
+ *     'default') and the one-time crash fallback;
+ *   - the Theme as chosen (null: follow the device), except under 'off',
+ *     where the phone is exactly today's: classic, following the device.
+ *
+ * Under 'off' the layer is inert (R5): it reads the stored records (so they
+ * are kept, never rewritten) but writes nothing, reads and saves nothing on
+ * the account, and ignores every choice.
  *
  * Writes to storage run one after another in the order the reducer asked for
  * them, so a later record can never be overwritten by an earlier one. Saves
  * and fetches answer back into the reducer with the `gen` they started with,
  * and the reducer drops any answer that a newer choice has overtaken.
+ *
+ * Two phone-only rules (round 2, finding 10):
+ *   - First start of the new JS (item 31): a phone with no v2 record whose
+ *     stored session names a person (who owes no authenticator code) keeps
+ *     the first paint held until that person's row is read, inside the same
+ *     4 s cap as the font gate (the provider's giveUpWaiting), so a Classic
+ *     chooser opens in Classic.
+ *   - Deferred adoption (item 32): a Design adopted from the account after
+ *     the first paint that changes what is drawn is stored at once but drawn
+ *     only when nothing holds it (the B44 update holds: open sheets, alerts,
+ *     photo picks, drafts, writes in flight; and the Scan tab or a count entry
+ *     screen in focus), or at the next return to the app. The person's own
+ *     choices apply at once.
  */
+
+/** What holds a Design adopted from the account back from being drawn. */
+export interface AdoptionHolds {
+  isHeld(): boolean;
+  /** Called when isHeld() may have changed. Returns the unsubscribe. */
+  subscribe(listener: () => void): () => void;
+}
 
 export interface AppearanceSnapshot {
   readonly state: AppearanceState;
   /** The stored records were read (or the first-paint wait gave up on them). */
   readonly ready: boolean;
-  /** What to render: the choice after the kill switch and the crash fallback. */
-  readonly effective: AppearanceMode;
+  /** The Design drawn: after the rollout, the crash fallback and a held adoption. */
+  readonly style: AppearanceStyle;
+  /** The Theme drawn; null follows the device. Always null under 'off'. */
+  readonly theme: ThemeSetting | null;
   /** This launch shows classic once because Liquid Glass crashed last time (plan 5.6). */
   readonly fallbackActive: boolean;
   /** EXPO_PUBLIC_LIQUID_GLASS for this bundle. */
+  readonly rollout: GlassRollout;
+  /** rollout !== 'off': the Design choice is offered. */
   readonly glassEnabled: boolean;
+  /** The one-time "new look" card on Home (R13). */
+  readonly introVisible: boolean;
+  /** A Design adopted from the account is stored and waits for the holds (item 32). */
+  readonly adoptionPending: boolean;
 }
 
 export interface AppearanceControllerDeps {
   storage: AppearanceStorage;
   account: AppearanceAccount;
   now: () => number;
-  glassEnabled: boolean;
+  rollout: GlassRollout;
+  holds: AdoptionHolds;
+  /** The stored session's person for the first start (account.ts peekSignedInUser). */
+  peekSignedInUser: () => Promise<string | null>;
 }
 
 export interface AppearanceController {
@@ -55,44 +104,75 @@ export interface AppearanceController {
   subscribe(listener: () => void): () => void;
   /** Read the stored records once, before the first paint. */
   hydrate(): Promise<void>;
-  /** The first-paint wait ran out: go on with System; a late read still applies if nothing was chosen. */
+  /** The first-paint wait ran out: go on with the rollout default; a late read still applies if nothing was chosen. */
   giveUpWaiting(): void;
   /** The signed-in person (null: signed out). Same id twice is a no-op. */
   setSession(userId: string | null): void;
-  /** An explicit choice from the Appearance screen. */
-  choose(mode: AppearanceMode): void;
+  /** An explicit Design choice (Settings, the intro card, the crash notice). */
+  chooseStyle(style: AppearanceStyle): void;
+  /** An explicit Theme choice (Settings). */
+  chooseTheme(theme: ThemeSetting): void;
+  /** "Keep Liquid Glass" on the intro card: the default becomes the person's own choice. */
+  keepGlass(): void;
+  /** Close the intro card without choosing. */
+  dismissIntro(): void;
   /** Try again: the button, the app coming to the foreground, the network coming back. */
   retry(): void;
-  /** The crash-fallback notice was answered: show Liquid Glass again, or keep classic for good. */
+  /** The app came back to the foreground: a held adoption is drawn now. */
+  resumed(): void;
+  /** The crash-fallback notice was answered: show Liquid Glass again, or choose Classic. */
   endFallback(choice: 'glass' | 'classic'): void;
   /** Resolves when every storage write asked for so far has finished (tests, recovery). */
   flush(): Promise<void>;
 }
 
 export function createAppearanceController(deps: AppearanceControllerDeps): AppearanceController {
-  const { storage, account, now, glassEnabled } = deps;
+  const { storage, account, now, rollout, holds, peekSignedInUser } = deps;
+  const inert = rollout === 'off';
   let state: AppearanceState = INITIAL_APPEARANCE_STATE;
   let ready = false;
   let hydrated = false;
   let fallbackActive = false;
-  /** undefined until the auth layer reports; then the person's id or null. */
+  /** Unknown until the stored flag is read: never shown before. */
+  let introSeen = true;
+  /** undefined until the auth layer (or the first-start peek) reports; then the person's id or null. */
   let session: string | null | undefined;
+  /** The session last handed to the reducer, so the same one is never reported twice. */
+  let reported: string | null | undefined;
+  /** The person's Design value being drawn; lags state.style only while an adoption is held. */
+  let displayed: AppearanceStyle | null = null;
+  let pending = false;
+  let unsubscribeHolds: (() => void) | null = null;
+  /** The first paint waits for the account row (item 31). */
+  let waitingForAccount = false;
+  let fetchesInFlight = 0;
   let writes: Promise<void> = Promise.resolve();
   let reading: Promise<void> | null = null;
   const listeners = new Set<() => void>();
 
-  const effectiveOf = (): AppearanceMode =>
-    fallbackActive && state.mode === 'liquid-glass'
-      ? state.lastClassic
-      : effectiveAppearance(state.mode, glassEnabled);
+  const drawn = (style: AppearanceStyle | null): AppearanceStyle =>
+    shownStyle(style, rollout, fallbackActive);
 
-  const build = (): AppearanceSnapshot => ({
-    state,
-    ready,
-    effective: effectiveOf(),
-    fallbackActive,
-    glassEnabled,
-  });
+  const build = (): AppearanceSnapshot => {
+    const style = drawn(displayed);
+    return {
+      state,
+      ready,
+      style,
+      theme: inert ? null : state.theme,
+      fallbackActive,
+      rollout,
+      glassEnabled: !inert,
+      introVisible:
+        rollout === 'default' &&
+        ready &&
+        !introSeen &&
+        !fallbackActive &&
+        state.style === null &&
+        style === 'liquid-glass',
+      adoptionPending: pending,
+    };
+  };
   let snapshot = build();
 
   const emit = () => {
@@ -100,8 +180,11 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
     if (
       next.state === snapshot.state &&
       next.ready === snapshot.ready &&
-      next.effective === snapshot.effective &&
-      next.fallbackActive === snapshot.fallbackActive
+      next.style === snapshot.style &&
+      next.theme === snapshot.theme &&
+      next.fallbackActive === snapshot.fallbackActive &&
+      next.introVisible === snapshot.introVisible &&
+      next.adoptionPending === snapshot.adoptionPending
     ) {
       return;
     }
@@ -115,11 +198,60 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
     writes = writes.then(write).catch(() => undefined);
   };
 
+  const stopWatchingHolds = () => {
+    unsubscribeHolds?.();
+    unsubscribeHolds = null;
+  };
+
+  /** Draw the stored Design now (a held adoption ends). */
+  const drawStored = () => {
+    if (!pending) return;
+    pending = false;
+    displayed = state.style;
+    stopWatchingHolds();
+    emit();
+  };
+
+  const holdAdoption = () => {
+    pending = true;
+    if (unsubscribeHolds === null) {
+      unsubscribeHolds = holds.subscribe(() => {
+        if (!holds.isHeld()) drawStored();
+      });
+    }
+  };
+
+  const show = (effect: Extract<AppearanceEffect, { type: 'apply' }>) => {
+    // Item 32: only a Design adopted from the account after the first paint,
+    // that changes what is drawn, waits; everything else is drawn at once.
+    if (
+      effect.source === 'adopted' &&
+      ready &&
+      drawn(effect.style) !== drawn(displayed) &&
+      holds.isHeld()
+    ) {
+      holdAdoption();
+      return;
+    }
+    displayed = effect.style;
+    if (pending) {
+      pending = false;
+      stopWatchingHolds();
+    }
+  };
+
+  const endFirstStartWait = () => {
+    if (!waitingForAccount) return;
+    waitingForAccount = false;
+    ready = true;
+    emit();
+  };
+
   const run = (effects: AppearanceEffect[]) => {
     for (const effect of effects) {
       switch (effect.type) {
         case 'apply':
-          // The state's mode is what renders; nothing else to do.
+          show(effect);
           break;
         case 'persist-device': {
           const record = effect.record;
@@ -131,10 +263,14 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
           enqueue(() => writeSyncRecord(storage, record));
           break;
         }
+        case 'persist-anon-flow':
+          // The phone keeps the sign-in flow in memory for this run (SR4):
+          // the reducer's state is that memory; nothing is stored.
+          break;
         case 'save': {
-          const { userId, mode, gen } = effect;
+          const { userId, axes, gen } = effect;
           void account
-            .save(userId, mode)
+            .save(userId, axes)
             .catch(() => ({ ok: false as const, reason: 'error' as const }))
             .then((answer) =>
               dispatch(
@@ -147,16 +283,19 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
         }
         case 'fetch': {
           const { userId, gen } = effect;
+          fetchesInFlight += 1;
           void account
             .fetch(userId)
             .catch(() => ({ ok: false as const, reason: 'error' as const }))
-            .then((answer) =>
+            .then((answer) => {
+              fetchesInFlight -= 1;
               dispatch(
                 answer.ok
                   ? { type: 'fetch-succeeded', userId, gen, row: answer.row }
                   : { type: 'fetch-failed', userId, gen, reason: answer.reason },
-              ),
-            );
+              );
+              endFirstStartWait();
+            });
           break;
         }
       }
@@ -171,28 +310,40 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
   }
 
   const applySession = () => {
-    if (session === undefined) return;
+    if (inert || session === undefined || session === reported) return;
+    reported = session;
     if (session === null) dispatch({ type: 'signed-out' });
     else dispatch({ type: 'authenticated', userId: session, now: now() });
   };
 
   const applyStored = (stored: StoredAppearance) => {
-    if (stored.fallback) enqueue(() => clearFallbackFlag(storage));
-    dispatch({ type: 'hydrate', device: stored.device, sync: stored.sync });
+    // The phone has no sign-in flow from an earlier run (SR4): no stamp.
+    dispatch({ type: 'hydrate', device: stored.device, sync: stored.sync, now: now() });
+    // The reducer's account fields came from storage: the session is told again.
+    reported = undefined;
+    introSeen = stored.introSeen;
     // Exactly one classic launch after a crash in Liquid Glass; the flag is
     // gone from storage now, so the launch after this one is glass again
-    // unless the person keeps classic.
-    fallbackActive = stored.fallback && glassEnabled && state.mode === 'liquid-glass';
+    // unless the person chooses Classic. Under 'off' nothing is written.
+    if (!inert) {
+      if (stored.fallback) enqueue(() => clearFallbackFlag(storage));
+      fallbackActive = stored.fallback && drawn(state.style) === 'liquid-glass';
+    }
     hydrated = true;
-    ready = true;
-    emit();
-    applySession();
   };
 
-  const choose = (mode: AppearanceMode) => {
-    if (mode === 'liquid-glass' && !glassEnabled) return;
+  const chooseStyle = (style: AppearanceStyle) => {
+    if (inert) return;
     fallbackActive = false;
-    dispatch({ type: 'choose', mode, userId: session ?? null, now: now() });
+    seeIntro();
+    dispatch({ type: 'choose', axis: 'style', value: style, userId: session ?? null, now: now() });
+  };
+
+  /** Any Design choice answers the one-time card too. */
+  const seeIntro = () => {
+    if (introSeen) return;
+    introSeen = true;
+    enqueue(() => markIntroSeen(storage));
   };
 
   return {
@@ -207,21 +358,37 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
       // One read per runtime, however often it is asked for (a re-mounted
       // provider, React's development double effects).
       if (reading === null) {
-        reading = readStoredAppearance(storage).then((stored) => {
+        reading = (async () => {
+          const stored = await readStoredAppearance(storage);
           if (hydrated && state.gen !== 0) {
             // The wait gave up first and a choice was made since: that choice
             // is newer (and was saved), so the late read is dropped.
             return;
           }
           applyStored(stored);
-        });
+          if (!inert && !ready && parseDeviceRecord(stored.device, now()) === null) {
+            // Item 31: nothing of this phone's own, so the person's row decides
+            // the first look. Only this start waits; never a signed-out phone.
+            if (session === undefined) {
+              const peeked = await peekSignedInUser().catch(() => null);
+              if (session === undefined && peeked !== null) session = peeked;
+            }
+            waitingForAccount = typeof session === 'string' && !ready;
+          }
+          if (!waitingForAccount) ready = true;
+          emit();
+          applySession();
+          // No read went out (a save in flight answers instead): do not hold the screen.
+          if (waitingForAccount && fetchesInFlight === 0) endFirstStartWait();
+        })();
       }
       return reading;
     },
 
     giveUpWaiting() {
-      if (hydrated) return;
+      if (ready) return;
       hydrated = true;
+      waitingForAccount = false;
       ready = true;
       emit();
       applySession();
@@ -233,16 +400,46 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
       if (hydrated) applySession();
     },
 
-    choose,
+    chooseStyle,
+
+    chooseTheme(theme) {
+      if (inert) return;
+      dispatch({
+        type: 'choose',
+        axis: 'theme',
+        value: theme,
+        userId: session ?? null,
+        now: now(),
+      });
+    },
+
+    keepGlass() {
+      if (inert) return;
+      fallbackActive = false;
+      seeIntro();
+      dispatch({ type: 'keep-glass', userId: session ?? null, now: now() });
+      emit();
+    },
+
+    dismissIntro() {
+      if (inert) return;
+      seeIntro();
+      emit();
+    },
 
     retry() {
+      if (inert) return;
       dispatch({ type: 'retry', userId: session ?? null });
+    },
+
+    resumed() {
+      drawStored();
     },
 
     endFallback(choice) {
       if (!fallbackActive) return;
       if (choice === 'classic') {
-        choose(state.lastClassic);
+        chooseStyle('classic');
         return;
       }
       fallbackActive = false;

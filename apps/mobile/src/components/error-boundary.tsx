@@ -1,9 +1,9 @@
-import { styleOf } from '@stockpilot/core';
+import type { AppearanceStyle } from '@stockpilot/core';
 import * as Updates from 'expo-updates';
 import * as React from 'react';
 import { Pressable, Text, View } from 'react-native';
 
-import { isLiquidGlassEnabled } from '@/lib/appearance/flag';
+import { glassRollout } from '@/lib/appearance/flag';
 import { RECOVERY_ACTION_LABEL } from '@/lib/appearance/labels';
 import { markCrashFallback, recoverToClassicInStorage } from '@/lib/appearance/recovery';
 import { peekAppearanceController } from '@/lib/appearance/singleton';
@@ -13,17 +13,20 @@ import { palette } from '@/lib/theme';
 
 interface State {
   error: Error | null;
-  /** Liquid Glass is the stored choice: offer "Use classic appearance" (plan 5.6). */
+  /** Liquid Glass is shown: offer "Use classic design" (plan 5.6, revision R13). */
   glass: boolean;
 }
 
-/** The style being drawn when the error happened, for Sentry's tag (never data). */
-function appearanceTag(): string {
+/**
+ * The Design being drawn when the error happened, from the live controller if
+ * one exists (null otherwise, or if it cannot answer): Sentry's tag (never
+ * data), and the first answer to "is Liquid Glass shown".
+ */
+function drawnStyle(): AppearanceStyle | null {
   try {
-    const snapshot = peekAppearanceController()?.getSnapshot();
-    return snapshot ? styleOf(snapshot.effective) : 'unknown';
+    return peekAppearanceController()?.getSnapshot().style ?? null;
   } catch {
-    return 'unknown';
+    return null;
   }
 }
 
@@ -48,14 +51,15 @@ const SCREEN = palette('dark');
  * the dark palette's tokens (SCREEN above), with the system font, and Reload
  * is the reference's ink button at the shared 52pt height and radius 14.
  *
- * Liquid Glass (plan 5.6): a Reload alone would come straight back into a
- * glass layer that throws, so when Liquid Glass is the stored choice this
- * screen also offers "Use classic appearance" (the person's previous classic
- * choice, saved to their account after the reload), and the crash owes the
- * next launch one classic start with a notice (markCrashFallback). Both talk
- * to AsyncStorage directly, never through the appearance provider, which may
- * be what threw. In classic nothing here changes: the action is not shown and
- * the look is the same fixed dark screen.
+ * Liquid Glass (plan 5.6, revision R13): a Reload alone would come straight
+ * back into a glass layer that throws, so whenever Liquid Glass is shown
+ * (under the 'default' rollout that includes a phone that never chose) this
+ * screen also offers "Use classic design" (the Design becomes Classic, the
+ * Theme stays, saved to their account after the reload), and the crash owes
+ * the next launch one classic start with a notice (markCrashFallback). Both
+ * talk to AsyncStorage directly, never through the appearance provider, which
+ * may be what threw. In classic nothing here changes: the action is not shown
+ * and the look is the same fixed dark screen.
  *
  * Scope note: this catches RENDER-phase throws only. A MODULE-INIT throw (e.g.
  * a build shipped without EXPO_PUBLIC_SUPABASE_* inlined) happens before React
@@ -68,7 +72,7 @@ export class AppErrorBoundary extends React.Component<
   state: State = { error: null, glass: false };
 
   static getDerivedStateFromError(error: Error): Partial<State> {
-    // The way back is offered only once storage says Liquid Glass is stored
+    // The way back is offered only once Liquid Glass is known to be shown
     // (componentDidCatch below), never from an earlier error's answer.
     return { error, glass: false };
   }
@@ -79,11 +83,11 @@ export class AppErrorBoundary extends React.Component<
     // — report here. No-op until Sentry has a DSN.
     Sentry.captureException(error, {
       contexts: { react: { componentStack: info?.componentStack ?? undefined } },
-      tags: { appearance: appearanceTag() },
+      tags: { appearance: drawnStyle() ?? 'unknown' },
     });
-    // Owe the next launch one classic start when Liquid Glass is stored, and
+    // Owe the next launch one classic start when Liquid Glass is shown, and
     // offer the way back now. Never throws: a failed read shows Reload alone.
-    void markCrashFallback(asyncStorageAppearance, isLiquidGlassEnabled())
+    void markCrashFallback(asyncStorageAppearance, glassRollout(), Date.now(), drawnStyle())
       .then((glass) => {
         if (glass) this.setState({ glass: true });
       })
@@ -92,11 +96,11 @@ export class AppErrorBoundary extends React.Component<
 
   private handleUseClassic = async () => {
     try {
-      const classic = await recoverToClassicInStorage(asyncStorageAppearance);
+      await recoverToClassicInStorage(asyncStorageAppearance, Date.now());
       // The live controller, if it still answers, shows classic at once (and
       // saves it) in case the reload below cannot run.
       try {
-        peekAppearanceController()?.choose(classic);
+        peekAppearanceController()?.chooseStyle('classic');
       } catch {
         // The stored choice is classic already; the reload reads it.
       }
