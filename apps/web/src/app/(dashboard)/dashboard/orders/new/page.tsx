@@ -11,10 +11,7 @@ import { getModulesForRequest, getWarehousesForRequest } from '@/lib/dashboard/r
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
 import { loadOrderKits } from '@/server/loaders/orders-kits';
-import {
-  loadCatalogBundle,
-  loadChartersForWarehouse,
-} from '@/server/loaders/orders-new-catalog';
+import { loadCatalogBundle, loadChartersForWarehouse } from '@/server/loaders/orders-new-catalog';
 import { canManageOrderItems } from '@/server/services/order-catalog-visibility';
 // Liquid Glass page composition (layered half; the storefront's unlayered
 // half is imported by the storefront itself): scoped, inert in Classic.
@@ -155,8 +152,7 @@ export default async function NewOrderPage({
     // above, but the type system doesn't know that.
     throw new Error('No warehouses available');
   }
-  const warehouseId =
-    warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
+  const warehouseId = warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
   // STREAMING: the catalog bundle is deliberately NOT awaited. The
   // shell (head + setup bar) only needs warehouses/charters/viewer, so
