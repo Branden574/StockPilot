@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 
 import type { NextConfig } from 'next';
 
+import { glassSiteRedirects, isLiquidGlassEnabled } from './src/components/theme/appearance-flag';
+
 // ── Build identity (update detection) ────────────────────────────────────────
 // "Which build is THIS bundle?" has to be answered at BUILD time and baked into
 // the bundle, because every runtime source of it lies to an old tab:
@@ -222,7 +224,16 @@ const nextConfig: NextConfig = {
 
   // No rewrites. /ingest (PostHog) is proxied by a route handler that copies
   // no cookie, never by a rewrite: see the skipTrailingSlashRedirect note
-  // above.
+  // above. (The Liquid Glass marketing twins' cookie rewrites arrive with
+  // stage 3 of that plan; this note is about /ingest.)
+
+  // The Liquid Glass kill switch (components/theme/appearance-flag.ts): with
+  // NEXT_PUBLIC_LIQUID_GLASS off, every /glass-site/* path redirects to its
+  // classic path; with it on, only a visitor without the glass cookie is
+  // redirected. No other redirect exists.
+  async redirects() {
+    return glassSiteRedirects(isLiquidGlassEnabled());
+  },
 
   async headers() {
     // CSP — see SECURITY.md for the full rationale. Notable choices:
