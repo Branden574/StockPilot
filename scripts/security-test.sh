@@ -793,6 +793,25 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Approver warehouse scope (0416, security slice E): approve_order_request,
+  # approve_partial, close_partial, resume_fulfillment and reopen_picking
+  # refuse a caller without write access to the order's warehouse
+  # (user_can_access_warehouse 'write', the order update policy's term;
+  # 42501 forbidden, hint warehouse_write), so a staff member granted
+  # orders:approve acts only where they work and a viewer granted it
+  # nowhere; owners, admins and managers are unaffected. cancel_order_request
+  # asks it on the approver's path only, decided on the row it locks (the
+  # requester's own pending cancel asks no warehouse), and an order with no
+  # requester account (a public link, a deleted account) is nobody's own
+  # order, so only an approver cancels it; the person who placed an order
+  # cancels it as its requester only while they hold orders:request there
+  # (has_permission: a member removed from the organization, a disabled
+  # account, a revoked member and a portal customer are refused). Every
+  # restated body is production's with its added blocks removed, and taking
+  # each block out lets the refused call through. The two-session proofs are
+  # scripts/db-concurrency/0416_cancel_scope_race.sh; the lock footprint is
+  # scripts/db-concurrency/0416_migration_lock_footprint.sh.
+  supabase/tests/0416_order_functions_warehouse_scope.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
