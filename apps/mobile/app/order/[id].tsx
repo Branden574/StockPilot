@@ -194,10 +194,12 @@ import { reloadAfterFailedOrderAction } from '@/lib/order-action-refusal';
 import { keepReasonDialogOpen } from '@/lib/order-reason-dialog';
 import {
   needsOrderWarehouseScope,
-  orderWarehouseAccess,
+  orderWarehouseAccessAsShown,
   readOrderWarehouseScope,
   type OrderWarehouseScope,
 } from '@/lib/order-warehouse-scope';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
+import { createNewestLoads } from '@/lib/newest-load';
 import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
@@ -268,7 +270,7 @@ import {
   type Role,
 } from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
-import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { permissionsOnceRead, useEffectivePermissionsState } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { linkToOpen, signerFor, STORED_FILE_LINK_SECONDS } from '@/lib/stored-file-link';
 import { supabase } from '@/lib/supabase';
@@ -682,22 +684,39 @@ export default function OrderDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
 
-  // Effective permission set (org role/user overrides applied; static role
-  // defaults while loading). Feeds `viewerCanPick` below.
-  const permissions = useEffectivePermissions();
+  // Effective permission set (org role/user overrides applied), as saved on
+  // the phone. Until the saved set is read this screen gates with nothing,
+  // never the static role defaults: a staff member granted orders:approve by
+  // a per-user exception holds it only in the saved set, and an order read
+  // with the defaults skipped the warehouse read that decides where their
+  // approver controls apply (S2 follow-up, lab walk of #378). The read takes
+  // milliseconds and always ends (a store that has not answered after two
+  // seconds counts as nothing saved); `load` waits for it. Once read: the
+  // saved set, or the static defaults when nothing is saved, as before
+  // (offline too: the saved set is on the phone).
+  const savedPermissions = useEffectivePermissionsState();
+  const permissionsRead = savedPermissions.read === true;
+  // Memoized, so the React Compiler sees a value that never changes in place
+  // (as the hook's own value was): everything derived from it below, and
+  // `load`, keep their memoization.
+  const permissions = React.useMemo(
+    () => permissionsOnceRead(savedPermissions),
+    [savedPermissions],
+  );
   // Whether THIS viewer can pick — manager+ OR holds items:update. This keeps
   // a `viewer` role from being offered Claim/Pick; the order's warehouse is
   // added once the order is read (viewerCanPickHere, security slice E: the
-  // scope is read with the order at a picking status). `can` falls back to
-  // the static role default when `permissions` hasn't loaded, so a staffer
-  // sees pick affordances immediately and a viewer never does.
+  // scope is read with the order at a picking status). With nothing saved,
+  // `can` falls back to the static role default, so a staffer sees pick
+  // affordances and a viewer never does.
   const viewerCanPick =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
 
-  // The viewer's readiness permissions, as three booleans `load` depends on:
-  // they change only when an override changes what this viewer sees (the
-  // effective set loads after the first render, and with the static
-  // defaults it normally agrees), and then the order is read again.
+  // The viewer's readiness permissions, as three booleans `load` depends on.
+  // They change when the saved set is read and when an override changes what
+  // this viewer sees, and then the order is read again; until that read
+  // lands, the order on screen is gated as its own load read it
+  // (orderWarehouseAccessAsShown below).
   const {
     canApproveOrders: rpApprove,
     canUpdateItems: rpItems,
@@ -918,10 +937,19 @@ export default function OrderDetail() {
   // line edits and Add items, and in picking Claim and Release (the web order
   // page's approverWritesHere and viewerCanPick). A read that failed decides
   // nothing: offered as before, and the server answers in its one sentence.
-  const orderAccess = orderWarehouseAccess({
+  // An order whose load did not read the scope although the permissions this
+  // render gates with ask for it (they changed after that load started) is
+  // offered none of these until the load they started lands. (The two are
+  // passed as plain booleans for the React Compiler, as writesHere below:
+  // passed as they are, they may alias the object they were read off, and
+  // the compiler gave up memoizing `load`.)
+  const orderAccess = orderWarehouseAccessAsShown({
     role,
     warehouseId: order?.warehouseId ?? null,
     scope: order?.warehouseScope ?? null,
+    status: order?.status ?? null,
+    canApproveOrders: rpApprove === true,
+    canPick: rpItems === true,
   });
   // `=== true` makes each a plain boolean the React Compiler can see: read
   // off the object as it is, it may alias that object, which then passes to
@@ -1016,7 +1044,7 @@ export default function OrderDetail() {
     // F2-2: what the automatic hold did for the added items, core's words; a
     // failed hold says so and points to Hold available stock (never dropped).
     Alert.alert('Items added', withHoldNotice(addedSummary(res), holdTopUpNotice(res.hold, 'added')));
-    await load();
+    await reload();
   }
 
   // The line the edit sheet is working on, resolved from the CURRENT order on
@@ -1055,7 +1083,7 @@ export default function OrderDetail() {
     // so the banner clears when THAT slip is reprinted, not one second later.
     if (pickSlipStale) setStaleReportedForSlipAt(order?.pickSlipGeneratedAt ?? null);
     Alert.alert(title, message);
-    await load();
+    await reload();
   }
 
   function handleLineChanged(line: EditableOrderLine, res: LineQuantityResult) {
@@ -1121,7 +1149,7 @@ export default function OrderDetail() {
     } finally {
       setActing(null);
     }
-    await load();
+    await reload();
   }
 
   /**
@@ -1150,7 +1178,7 @@ export default function OrderDetail() {
         {
           commit: commitPartialFulfilment,
           reread: (orderId) => readOrderReadiness(supabase, orderId),
-          reload: load,
+          reload,
         },
         id,
         action,
@@ -1246,7 +1274,7 @@ export default function OrderDetail() {
         supplierNames,
         timeZone: order.orgTimezone,
       });
-      if (opening.changed) void load();
+      if (opening.changed) void reload();
     } finally {
       setActing(null);
     }
@@ -1262,7 +1290,7 @@ export default function OrderDetail() {
   async function handleNeededBySaved(title: string, message: string) {
     setNeededBySheet(null);
     Alert.alert(title, message);
-    await load();
+    await reload();
   }
 
   function handleLineRemoved(line: EditableOrderLine, res: LineRemovedResult) {
@@ -1279,13 +1307,13 @@ export default function OrderDetail() {
       const res = await releaseReturnReplacement(order.replacement.returnId, order.id, reason);
       setReleaseOpen(false);
       Alert.alert(RETURNS_COPY.releaseBeforeReturn, releaseOutcomeLine(res.answer));
-      await load();
+      await reload();
     } catch (e) {
       setReleaseError(extractApiErrorMessage(e, 'Could not release the replacement. Please try again.'));
       // The sheet says why; behind it, the order is read again when the
       // server answered (409 return_changed: the replacement was substituted,
       // re-issued, picked or sent elsewhere), still busy, as runAction does.
-      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
+      if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);
     } finally {
       setReleaseBusy(false);
     }
@@ -1380,7 +1408,7 @@ export default function OrderDetail() {
       } else {
         Alert.alert('Return created', 'Return created — pending approval.');
       }
-      await load();
+      await reload();
     } catch (e) {
       // 4xx (over-budget, module off, permission revoked mid-session…) —
       // surface the server's message inline in the sheet, not a dead toast.
@@ -1391,15 +1419,39 @@ export default function OrderDetail() {
       // over-budget refusal means the returnable budget on screen is stale
       // (another device returned those units), and the sheet's caps and its
       // own check (buildReturnPayload) follow the order that is read.
-      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
+      if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);
     } finally {
       setReturnSubmitting(false);
     }
   }
 
 
-  // Returns what it set, so `load` can remember the whole view for offline.
-  const loadAttachments = React.useCallback(async (): Promise<{
+  // Every load of the order is numbered (lib/newest-load: the sequence guard
+  // the returns workbench uses, and a way to wait for the newest load): only
+  // the newest one started may put what it read on screen, whichever
+  // finishes last. Loads overlap when the permissions, the role or the
+  // connection change under an open order, and on a pull to refresh or an
+  // action's reload beside the focus load. The older one finishing last used
+  // to win: on a fresh open, the one read with the static role defaults,
+  // without the viewer's warehouses, offered a staff approver from another
+  // warehouse every approver control until a refresh (S2 follow-up, lab walk
+  // of #378). Every load goes through loads.run: the focus effect's, and
+  // every other through `reload` below.
+  const [loads] = React.useState(() => createNewestLoads());
+  // The attachments are read by the order's load and by the upload, delete
+  // and Try again paths. Each read is numbered too, and only the newest read
+  // started shows what it read: a load whose read began before an upload's
+  // row was saved, landing after the upload's own read, put the older list
+  // back and the new photo disappeared until the next load (review of the S2
+  // follow-up, F4).
+  const [attachmentReads] = React.useState(() => createSequenceGuard());
+
+  // The order's attachments with their links signed. Sets nothing: `load`
+  // puts them on screen only while it is the newest load, and keeps them
+  // with the view it remembers for offline; loadAttachments below sets them
+  // for the upload, delete and Try again paths. Each shows a read only while
+  // it is the newest read of them (attachmentReads).
+  const readAttachments = React.useCallback(async (): Promise<{
     attachments: Attachment[];
     error: string | null;
   } | null> => {
@@ -1410,10 +1462,6 @@ export default function OrderDetail() {
       .eq('organization_id', orgId)
       .eq('order_request_id', id)
       .order('created_at', { ascending: false });
-    // A failed read must NOT masquerade as "No attachments yet." — surface it
-    // as an error state so a member seeing an empty gallery is distinguishable
-    // from a member whose read actually failed (offline / RLS denial).
-    setAttachmentsError(error ? error.message : null);
     const rows = (data ?? []) as Record<string, unknown>[];
     const paths = rows.map((r) => r.storage_path as string);
     const signed = new Map<string, string>();
@@ -1441,17 +1489,32 @@ export default function OrderDetail() {
         createdAt: r.created_at as string,
       };
     });
-    setAttachments(next);
+    // A failed read must NOT masquerade as "No attachments yet." — it comes
+    // back as an error state so a member seeing an empty gallery is
+    // distinguishable from a member whose read actually failed (offline / RLS
+    // denial).
     return { attachments: next, error: error ? error.message : null };
   }, [orgId, id]);
+
+  // Reads the attachments and shows them, unless a newer read of them
+  // started meanwhile (F4 above).
+  const loadAttachments = React.useCallback(async () => {
+    const seq = attachmentReads.next();
+    const read = await readAttachments();
+    if (!read || !attachmentReads.isCurrent(seq)) return;
+    setAttachmentsError(read.error);
+    setAttachments(read.attachments);
+  }, [attachmentReads, readAttachments]);
 
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
     // A link id that is not a uuid (mistyped or cut off; B65) names no order.
     // It is "Order not found." at once, online or offline: Postgres refuses
     // it, so the read could only fail, and its raw text with Try again was
-    // all the screen could say.
+    // all the screen could say. It takes a number too, so no earlier load
+    // still on its way can show an order over it.
     if (!isUuid(id)) {
+      loads.next();
       setOrder(null);
       setLoadError(null);
       setLoading(false);
@@ -1465,9 +1528,19 @@ export default function OrderDetail() {
       // is left as it is: a screen opened offline stays "loading" underneath
       // (the render shows the remembered order or the offline sentence), so
       // on reconnect it shows the spinner until the order arrives, never a
-      // flash of "Order not found.".
+      // flash of "Order not found.". It takes no number: a load already on
+      // its way may still show what it read.
       return;
     }
+    // Nothing is read with permissions not yet read (S2 follow-up): which
+    // reads this load makes (the viewer's warehouses, readiness) follow the
+    // saved permissions, and the static role defaults leave out a per-user
+    // exception's orders:approve. The spinner stays meanwhile; reading the
+    // saved set takes milliseconds and always ends (within two seconds), and
+    // `permissionsRead` is a dependency, so the focus effect runs this again
+    // then.
+    if (!permissionsRead) return;
+    const seq = loads.next();
     const { data, error: headerError, status: headerStatus } = await supabase
       .from('order_requests')
       .select(
@@ -1563,6 +1636,10 @@ export default function OrderDetail() {
       .eq('order_request_id', id)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true });
+    // A newer load started while these were read: it decides what shows, and
+    // this one stops here, reading nothing more. The same check follows every
+    // later read that is followed by a change to the screen.
+    if (!loads.isCurrent(seq)) return;
     // FAIL CLOSED on either read. The header used to fall through to "Order
     // not found." and the lines to an order with no items; both are claims
     // about the order made from an error. Nothing below runs on a failure:
@@ -1780,6 +1857,8 @@ export default function OrderDetail() {
     orgTimezone =
       orgTimezone ?? readinessAnswer?.[1] ?? (neededByZoneRead ? await neededByZoneRead : null);
     const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;
+    // Only the newest load shows its order, with the warehouses it read.
+    if (!loads.isCurrent(seq)) return;
 
     let shown: OrderHeader | null = null;
     setLoadError(null);
@@ -1870,16 +1949,25 @@ export default function OrderDetail() {
       };
       setOrder(shown);
     }
-    const attachmentsRead = await loadAttachments();
+    const attachmentsSeq = attachmentReads.next();
+    const attachmentsRead = await readAttachments();
+    if (!loads.isCurrent(seq)) return;
+    // Shown only if no newer read of them started meanwhile (an upload that
+    // finished during this load read them after its row was saved).
+    if (attachmentsRead && attachmentReads.isCurrent(attachmentsSeq)) {
+      setAttachmentsError(attachmentsRead.error);
+      setAttachments(attachmentsRead.attachments);
+    }
     // Read-only carrier tracking. The wrapper soft-gates: with the shipping
     // module off it does not ask at all (the server answered every order view
     // with a 403, docket B10); if the member lacks access or there is simply
     // no shipment, it returns null and the section below stays hidden.
     const shipmentRead = await getOrderShipment(id);
+    if (!loads.isCurrent(seq)) return;
     setShipment(shipmentRead);
     // Kept in memory for this app session only (never written to the
     // device), so the screen can show how the order looked if the phone goes
-    // offline and the order is opened again.
+    // offline and the order is opened again: the newest load's view only.
     if (shown) {
       rememberOrderView<RememberedOrder>(userId, orgId, id, {
         order: shown,
@@ -1889,12 +1977,44 @@ export default function OrderDetail() {
       });
     }
     setLoading(false);
-  }, [orgId, id, loadAttachments, offline, userId, role, rpApprove, rpItems, rpBuy]);
+  }, [
+    orgId,
+    id,
+    loads,
+    attachmentReads,
+    readAttachments,
+    offline,
+    permissionsRead,
+    userId,
+    role,
+    rpApprove,
+    rpItems,
+    rpBuy,
+  ]);
+
+  // The newest `load`, kept in the runner after every render that makes one.
+  // A handler holds the `load` of the render it was made in; one that
+  // reloads after an await (an action's server call, a sheet's save,
+  // Complete picking) could then read the order with permissions, a role or
+  // a connection that have since changed. A per-user grant of orders:approve
+  // landing during Complete picking left the order read without the viewer's
+  // warehouses, and their own warehouse's controls hidden until a refresh
+  // (review of the S2 follow-up, F1).
+  React.useLayoutEffect(() => {
+    loads.keep(load);
+  }, [loads, load]);
+  // Every reload after the screen opened: the newest `load`, through the
+  // runner, so it resolves once the newest load's order is on screen. A
+  // reload a newer load overtook (the connection came back, the permissions
+  // changed) stops at a check and shows nothing; returning then let an
+  // action clear its busy key, and a refused Deny or Reopen picking keep its
+  // reason, over the order from before the action (F2).
+  const reload = React.useCallback(() => loads.reload(), [loads]);
 
   useFocusEffect(
     React.useCallback(() => {
-      void load();
-    }, [load]),
+      void loads.run(load);
+    }, [loads, load]),
   );
 
   // Fetch the signature blob only when the viewer opens the dialog — it's an
@@ -1925,7 +2045,7 @@ export default function OrderDetail() {
 
   async function refresh() {
     setRefreshing(true);
-    await load();
+    await reload();
     setRefreshing(false);
   }
 
@@ -1935,7 +2055,7 @@ export default function OrderDetail() {
     if (retrying) return;
     setRetrying(true);
     try {
-      await load();
+      await reload();
     } finally {
       setRetrying(false);
     }
@@ -1951,7 +2071,7 @@ export default function OrderDetail() {
     setActing(busyKey);
     try {
       await fn();
-      await load();
+      await reload();
       return true;
     } catch (e) {
       Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
@@ -1959,7 +2079,7 @@ export default function OrderDetail() {
       // (someone else moved it on): read it again so the status and the
       // buttons are current, still under the busy key. No answer (a timeout)
       // leaves it as shown. The read never turns the refusal into a throw.
-      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
+      if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);
       return false;
     } finally {
       setActing(null);
@@ -3255,7 +3375,7 @@ export default function OrderDetail() {
                   // entered against this order's readiness; its "Review short
                   // lines" focuses that line's quantity in the pick.
                   readiness={order.readiness}
-                  onCompleted={() => void load()}
+                  onCompleted={() => void reload()}
                 />
               ) : !canClaimPick &&
                 order.assignedPickerId !== null &&
@@ -4686,7 +4806,7 @@ export default function OrderDetail() {
           onSent={(sent) => {
             setRequesterOpen(false);
             Alert.alert(requesterSentTitle(sent.exchange), requesterSentMessage(sent.returnNumber));
-            void load();
+            void reload();
           }}
         />
       ) : null}
@@ -4703,7 +4823,7 @@ export default function OrderDetail() {
           warehouseId={order.warehouseId}
           existingItemIds={existingItemIds}
           onAdded={(res) => void handleItemsAdded(res)}
-          onRequestReload={() => void load()}
+          onRequestReload={() => void reload()}
         />
       ) : null}
 
@@ -4724,7 +4844,7 @@ export default function OrderDetail() {
           shortFix={editLineShortFix}
           onChanged={handleLineChanged}
           onRemoved={handleLineRemoved}
-          onRequestReload={() => void load()}
+          onRequestReload={() => void reload()}
         />
       ) : null}
 
@@ -4762,7 +4882,7 @@ export default function OrderDetail() {
           offline={offline}
           onClose={() => setNeededBySheet(null)}
           onSaved={(_outcome, title, message) => void handleNeededBySaved(title, message)}
-          onRefresh={() => void load()}
+          onRefresh={() => void reload()}
         />
       ) : null}
 
@@ -4780,9 +4900,9 @@ export default function OrderDetail() {
           timeZone={shortfallSheet.timeZone}
           offline={offline}
           onClose={() => setShortfallSheet(null)}
-          onDrafted={() => void load()}
+          onDrafted={() => void reload()}
           onOpenDraft={openShortfallDraft}
-          onRefresh={() => void load()}
+          onRefresh={() => void reload()}
         />
       ) : null}
 
@@ -4790,7 +4910,7 @@ export default function OrderDetail() {
         <SignaturePadModal
           visible={signatureModalVisible}
           onClose={() => setSignatureModalVisible(false)}
-          onSuccess={() => void load()}
+          onSuccess={() => void reload()}
           signatureToken={order.signatureToken}
           defaultName={order.requesterName ?? ''}
           defaultEmail={signerEmailDefault(order)}

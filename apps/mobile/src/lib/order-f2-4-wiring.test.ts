@@ -177,13 +177,13 @@ describe('the order screen: the needed-by card and Change', () => {
   // delivery draft opened (or its handler run) after a save.
   it('after a save: core’s confirmation, the order read again, and nothing else (no email, no draft)', () => {
     const saved = bodyOf(screen, SCREEN_FILE, 'handleNeededBySaved');
-    expect(saved).toBe('{ setNeededBySheet(null); Alert.alert(title, message); await load(); }');
+    expect(saved).toBe('{ setNeededBySheet(null); Alert.alert(title, message); await reload(); }');
     expect(saved).not.toMatch(/Delivery|delivery|Linking|mail/i);
   });
 
   it('the sheet is mounted per open with what it opened on, knows when the phone is offline, and reloads behind itself', () => {
     expect(screen).toMatch(
-      /\{neededBySheet && orgId \? \(\s*<ReviseNeededBySheet\s+visible\s+orderId=\{neededBySheet\.orderId\}\s+organizationId=\{orgId\}\s+orderLabel=\{neededBySheet\.orderLabel\}\s+timeZone=\{neededBySheet\.timeZone\}\s+startNeededBy=\{neededBySheet\.startNeededBy\}\s+orderStatus=\{order\?\.status \?\? neededBySheet\.orderStatus\}\s+offline=\{offline\}\s+onClose=\{\(\) => setNeededBySheet\(null\)\}\s+onSaved=\{\(_outcome, title, message\) => void handleNeededBySaved\(title, message\)\}\s+onRefresh=\{\(\) => void load\(\)\}\s*\/>\s*\) : null\}/,
+      /\{neededBySheet && orgId \? \(\s*<ReviseNeededBySheet\s+visible\s+orderId=\{neededBySheet\.orderId\}\s+organizationId=\{orgId\}\s+orderLabel=\{neededBySheet\.orderLabel\}\s+timeZone=\{neededBySheet\.timeZone\}\s+startNeededBy=\{neededBySheet\.startNeededBy\}\s+orderStatus=\{order\?\.status \?\? neededBySheet\.orderStatus\}\s+offline=\{offline\}\s+onClose=\{\(\) => setNeededBySheet\(null\)\}\s+onSaved=\{\(_outcome, title, message\) => void handleNeededBySaved\(title, message\)\}\s+onRefresh=\{\(\) => void reload\(\)\}\s*\/>\s*\) : null\}/,
     );
   });
 

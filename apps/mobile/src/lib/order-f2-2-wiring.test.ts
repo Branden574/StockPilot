@@ -273,7 +273,7 @@ describe('Hold available stock, and the hold after an add or a raise', () => {
 
   it('pressing it holds, says what was held (or why not), then reads the order again', () => {
     expect(functionBody(screen, SCREEN_FILE, 'holdStock')).toBe(
-      "{ if (!id || acting !== null) return; setActing('hold'); try { const result = await holdOrderStock(id); Alert.alert(HOLD_AVAILABLE_STOCK_LABEL, describeHoldResult(result)); } catch (e) { Alert.alert(HOLD_REFUSED_TITLE, describeHoldError(e)); } finally { setActing(null); } await load(); }",
+      "{ if (!id || acting !== null) return; setActing('hold'); try { const result = await holdOrderStock(id); Alert.alert(HOLD_AVAILABLE_STOCK_LABEL, describeHoldResult(result)); } catch (e) { Alert.alert(HOLD_REFUSED_TITLE, describeHoldError(e)); } finally { setActing(null); } await reload(); }",
     );
   });
 

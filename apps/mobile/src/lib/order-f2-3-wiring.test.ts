@@ -142,7 +142,7 @@ describe('Approve partial and Resume open the preview first', () => {
   // commit, or dropping the re-read.
   it('confirm: the existing transition, readiness read again beside the reload, and the message from that read', () => {
     expect(functionBody(screen, SCREEN_FILE, 'confirmPartial')).toBe(
-      "{ if (!id || !partial) return; const { action, preview } = partial; setActing(action === 'approve_partial' ? 'approve-partial' : 'resume'); try { const result = await runPartialFulfilment({ commit: commitPartialFulfilment, reread: (orderId) => readOrderReadiness(supabase, orderId), reload: load }, id, action, preview); setPartial(null); Alert.alert(PARTIAL_ACTION_TITLE[action], result.text); } finally { setActing(null); } }",
+      "{ if (!id || !partial) return; const { action, preview } = partial; setActing(action === 'approve_partial' ? 'approve-partial' : 'resume'); try { const result = await runPartialFulfilment({ commit: commitPartialFulfilment, reread: (orderId) => readOrderReadiness(supabase, orderId), reload }, id, action, preview); setPartial(null); Alert.alert(PARTIAL_ACTION_TITLE[action], result.text); } finally { setActing(null); } }",
     );
   });
 
@@ -196,7 +196,11 @@ describe('Put away from the order', () => {
   // readiness would still show the stock in Staging).
   it('the order screen reads the order, and its readiness, again whenever it is back in focus', () => {
     const code = codeOnly(screen);
-    expect(code).toMatch(/useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*void load\(\);\s*\}, \[load\]\),\s*\);/);
+    // Re-pinned by the review of the S2 follow-up: every focus load goes
+    // through the screen's runner (order-load-race.test.ts runs it).
+    expect(code).toMatch(
+      /useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*void loads\.run\(load\);\s*\}, \[loads, load\]\),\s*\);/,
+    );
     const loadStart = code.indexOf('const load = React.useCallback(async () => {');
     expect(code.indexOf('readOrderReadiness(supabase, id)', loadStart)).toBeGreaterThan(loadStart);
   });

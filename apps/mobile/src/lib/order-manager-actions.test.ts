@@ -274,9 +274,14 @@ describe('the order screen reads these gates (wiring pins)', () => {
 
   // Security slice E: the order's warehouse comes from the scope read with
   // the order, through the tested helper (mutation: the helper bypassed, or
-  // the pick gate left without the warehouse).
+  // the pick gate left without the warehouse). S2 follow-up: asked with the
+  // permissions the render gates with, the ones `load` asks the scope read
+  // with, so an order read under other permissions decides nothing.
   it("the warehouse gates come from the scope read with the order (security slice E)", () => {
-    expect(SCREEN).toMatch(/const orderAccess = orderWarehouseAccess\(\{\s*role,\s*warehouseId: order\?\.warehouseId \?\? null,\s*scope: order\?\.warehouseScope \?\? null,\s*\}\);/);
+    expect(SCREEN).toMatch(
+      /const orderAccess = orderWarehouseAccessAsShown\(\{\s*role,\s*warehouseId: order\?\.warehouseId \?\? null,\s*scope: order\?\.warehouseScope \?\? null,\s*status: order\?\.status \?\? null,\s*canApproveOrders: rpApprove === true,\s*canPick: rpItems === true,\s*\}\);/,
+    );
+    expect(SCREEN).not.toMatch(/\borderWarehouseAccess\(/);
     expect(SCREEN).toContain('const writesHere = orderAccess.writes === true;');
     expect(SCREEN).toContain('const viewerCanPickHere = viewerCanPick && writesHere;');
     // Slice E review: the line edits ask read access of the requester too

@@ -122,6 +122,11 @@ export default function ReturnsListScreen() {
 
   const load = React.useCallback(async () => {
     if (!enabled || !canRead) {
+      // A page read before the module or the permission went shows nothing
+      // now: the refusal outranks every read on its way (review of the S2
+      // follow-up).
+      guard.next();
+      moreGuard.next();
       setLoading(false);
       setRefreshing(false);
       return;
