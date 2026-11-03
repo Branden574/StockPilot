@@ -1,0 +1,59 @@
+<div class="mx-auto max-w-2xl px-4 py-16 sm:px-8">
+<h1 class="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">Support</h1>
+<p class="text-muted-foreground mt-3 max-w-xl text-[15px] leading-relaxed">Something not working, or have a question? Send us a ticket below and we&#x27;ll get back to you — usually within 1–2 business days. You can also email<!-- --> <a href="mailto:hello@stockpilotusa.com" class="text-foreground underline-offset-4 hover:underline">hello@stockpilotusa.com</a>.</p>
+<div class="mt-10">
+<form class="space-y-4">
+<div class="grid gap-4 sm:grid-cols-2">
+<div class="space-y-2">
+<label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="sup-name">Name</label>
+<input data-glass="input" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base sm:h-10" id="sup-name" maxLength="120" autoComplete="name" value=""/>
+</div>
+<div class="space-y-2">
+<label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="sup-email">Email <span class="text-destructive">*</span>
+</label>
+<input type="email" data-glass="input" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base sm:h-10" id="sup-email" required="" maxLength="254" autoComplete="email" placeholder="you@company.com" value=""/>
+</div>
+</div>
+<div class="grid gap-4 sm:grid-cols-2">
+<div class="space-y-2">
+<label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="sup-category">What&#x27;s this about?</label>
+<select id="sup-category" class="bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-line-strong px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base">
+<option value="bug" selected="">Something&#x27;s broken</option>
+<option value="account">Account / sign-in</option>
+<option value="billing">Billing</option>
+<option value="feature">Feature request</option>
+<option value="other">Other</option>
+</select>
+</div>
+<div class="space-y-2">
+<label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="sup-priority">Priority</label>
+<select id="sup-priority" class="bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-line-strong px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base">
+<option value="low">Low</option>
+<option value="normal" selected="">Normal</option>
+<option value="high">High</option>
+<option value="urgent">Urgent — blocking my team</option>
+</select>
+</div>
+</div>
+<div class="space-y-2">
+<label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="sup-subject">Subject <span class="text-destructive">*</span>
+</label>
+<input data-glass="input" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base sm:h-10" id="sup-subject" required="" maxLength="200" placeholder="Short summary" value=""/>
+</div>
+<div class="space-y-2">
+<label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="sup-message">Details <span class="text-destructive">*</span>
+</label>
+<textarea data-glass="input" class="bg-card flex min-h-[80px] w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-2 text-[13px] transition-colors placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:text-base" id="sup-message" required="" rows="6" maxLength="8000" placeholder="What happened? What did you expect? If it&#x27;s broken, what were you doing when it broke?">
+</textarea>
+</div>
+<div aria-hidden="true" class="pointer-events-none absolute -left-[9999px] h-0 w-0 overflow-hidden">
+<label for="sup-company">Company</label>
+<input id="sup-company" tabindex="-1" autoComplete="off" value=""/>
+</div>
+<div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+<p class="text-muted-foreground text-xs">We&#x27;ll only use your email to reply.</p>
+<button data-glass="button" data-glass-variant="default" data-glass-size="default" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[&#x27;&#x27;] pointer-coarse:before:content-[&#x27;&#x27;] bg-primary text-primary-foreground hover:bg-primary/90 text-[13px] h-10 px-5 max-sm:h-11 max-sm:w-full" type="submit">Send ticket</button>
+</div>
+</form>
+</div>
+</div>
