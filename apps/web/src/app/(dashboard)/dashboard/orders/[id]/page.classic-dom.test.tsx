@@ -143,11 +143,6 @@ vi.mock('@/components/orders/draft-shortfall-po-dialog', () => ({
     return null;
   },
 }));
-/** The views the page handed its dialog (null: no Change offered). */
-const handedViews = () =>
-  reviseDialogProps.mock.calls
-    .map(([p]) => (p as { change: unknown }).change)
-    .filter((c) => c !== null);
 // L50b: whether the shipping panel mounts, recorded.
 const shippingPanelProps = vi.fn();
 vi.mock('@/components/orders/shipping-panel', () => ({
