@@ -79,19 +79,43 @@ export interface EffectivePermissionsState {
   /** The saved effective set. Undefined until it is read, and when nothing is
    *  saved (core `can` then answers from the role's static defaults). */
   permissions: Set<Permission> | undefined;
-  /** The saved set has been read once: found, absent or unreadable. Until
-   *  then an undefined `permissions` means "not read yet", not "nothing
-   *  saved". Never goes back to false. */
+  /** The saved set has been read once: found, absent or unreadable, or not
+   *  answered within SAVED_PERMISSIONS_READ_WAIT_MS. Until then an undefined
+   *  `permissions` means "not read yet", not "nothing saved". Never goes
+   *  back to false. */
   read: boolean;
 }
 
 const UNREAD: EffectivePermissionsState = { permissions: undefined, read: false };
+
+/**
+ * How long a screen waits for the first read of the saved set. Reading the
+ * device store takes milliseconds; one that has not answered by then (its
+ * open or a migration stalled) counts as read with nothing saved, so the
+ * static defaults decide, as before, and the set still replaces them when it
+ * lands. Without it the order screen, which waits for the read, kept its
+ * spinner up for good with no Try again (review of the S2 follow-up, F5).
+ */
+export const SAVED_PERMISSIONS_READ_WAIT_MS = 2000;
+
+/** Read with nothing saved: the static defaults decide. */
+const READ_NOTHING_SAVED: EffectivePermissionsState = { permissions: undefined, read: true };
 
 export function useEffectivePermissionsState(): EffectivePermissionsState {
   const [state, setState] = React.useState<EffectivePermissionsState>(UNREAD);
 
   React.useEffect(() => {
     let cancelled = false;
+    // The first read counts as done after the wait, whatever it is doing; a
+    // read that settles first clears it.
+    let wait: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      wait = null;
+      if (!cancelled) setState((prev) => (prev.read ? prev : READ_NOTHING_SAVED));
+    }, SAVED_PERMISSIONS_READ_WAIT_MS);
+    const stopWaiting = (): void => {
+      if (wait !== null) clearTimeout(wait);
+      wait = null;
+    };
     const reread = async (): Promise<void> => {
       if (cancelled) return;
       let persisted: Set<Permission> | null;
@@ -101,11 +125,11 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
         // The device store could not be read. The last set read stays; a
         // first read still counts as read, with nothing saved, so a screen
         // that waits for it is never held and decides as before.
-        if (!cancelled) {
-          setState((prev) => (prev.read ? prev : { permissions: undefined, read: true }));
-        }
+        stopWaiting();
+        if (!cancelled) setState((prev) => (prev.read ? prev : READ_NOTHING_SAVED));
         return;
       }
+      stopWaiting();
       if (cancelled) return;
       setState({
         permissions: persisted && persisted.size > 0 ? persisted : undefined,
@@ -116,6 +140,7 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
     void reread();
     return () => {
       cancelled = true;
+      stopWaiting();
       listeners.delete(reread);
     };
   }, []);
@@ -136,7 +161,8 @@ export const NO_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>();
  * is read, then the saved set, or undefined when nothing is saved (core `can`
  * then answers from the static defaults, as on every screen). Reading a
  * device store takes milliseconds and always ends (a failed read counts as
- * read), so nothing waits on it for long.
+ * read, and so does one still not answered after
+ * SAVED_PERMISSIONS_READ_WAIT_MS), so nothing waits on it for long.
  */
 export function permissionsOnceRead(
   state: EffectivePermissionsState,

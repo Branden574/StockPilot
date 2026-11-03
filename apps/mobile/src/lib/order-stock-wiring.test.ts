@@ -40,7 +40,7 @@ function codeOnly(src: string): string {
 
 /** The end of `load` with its dependencies: what makes it run again. */
 const LOAD_END =
-  /\}, \[\s*orgId,\s*id,\s*loads,\s*readAttachments,\s*offline,\s*permissionsRead,\s*userId,\s*role,\s*rpApprove,\s*rpItems,\s*rpBuy,?\s*\]\);/;
+  /\}, \[\s*orgId,\s*id,\s*loads,\s*attachmentReads,\s*readAttachments,\s*offline,\s*permissionsRead,\s*userId,\s*role,\s*rpApprove,\s*rpItems,\s*rpBuy,?\s*\]\);/;
 
 /** The body of the screen's `load` callback. */
 function loadBody(): string {

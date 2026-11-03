@@ -6,6 +6,7 @@ import {
   NO_PERMISSIONS,
   permissionsOnceRead,
   refreshEffectivePermissions,
+  SAVED_PERMISSIONS_READ_WAIT_MS,
   useEffectivePermissions,
   useEffectivePermissionsState,
   type EffectivePermissionsState,
@@ -75,6 +76,15 @@ afterEach(() => {
 
 const saved = (...p: Permission[]) => JSON.stringify(p);
 
+/** A device-store read the test answers when it chooses. */
+function deferredRead() {
+  let resolve!: (value: string | null) => void;
+  const promise = new Promise<string | null>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 describe('useEffectivePermissionsState', () => {
   it('before the saved set is read: not read, no set, and a gate on it offers nothing (mutation: start as read)', () => {
     db.getMeta.mockReturnValue(new Promise(() => undefined));
@@ -125,6 +135,63 @@ describe('useEffectivePermissionsState', () => {
     refreshEffectivePermissions();
     await settle();
     expect(useEffectivePermissionsState()).toBe(before);
+  });
+
+  // Review of the S2 follow-up, F5: the order screen's load waits for
+  // `read`, so a device store that never answers (an open or a migration
+  // that stalls) held its spinner up for good, with no Try again; before,
+  // the order showed. After the wait it counts as read with nothing saved
+  // (the static defaults decide, as before), and a set that lands later
+  // still replaces it.
+  it('a store that never answers counts as read, with nothing saved, after the wait (mutation: no wait, or a wait that sets nothing)', async () => {
+    vi.useFakeTimers();
+    try {
+      const late = deferredRead();
+      db.getMeta.mockReturnValue(late.promise);
+      expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: false });
+      await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS - 1);
+      expect(useEffectivePermissionsState().read).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: true });
+      // The set lands late: it replaces the static defaults, still read.
+      late.resolve(saved('orders:approve'));
+      await vi.advanceTimersByTimeAsync(0);
+      const now = useEffectivePermissionsState();
+      expect(now.read).toBe(true);
+      expect([...(now.permissions ?? [])]).toEqual(['orders:approve']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a read that answers in time leaves nothing waiting: the wait never sets the state after it', async () => {
+    vi.useFakeTimers();
+    try {
+      db.getMeta.mockResolvedValue(saved('orders:approve'));
+      useEffectivePermissionsState();
+      await vi.advanceTimersByTimeAsync(0);
+      const published = react.published.length;
+      await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS * 2);
+      expect(react.published).toHaveLength(published);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('unmounted before the wait is over: nothing is set, and no timer is left', async () => {
+    vi.useFakeTimers();
+    try {
+      db.getMeta.mockReturnValue(new Promise(() => undefined));
+      useEffectivePermissionsState();
+      react.cleanup?.();
+      react.cleanup = () => undefined;
+      await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS * 2);
+      expect(react.published).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('a change that is saved is read again and stays read', async () => {

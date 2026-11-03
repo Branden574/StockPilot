@@ -17,19 +17,40 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { canAddOrderItems } from '../components/add-order-items';
 import { parseTsx } from './__fixtures__/jsx-touch-audit';
-import { createSequenceGuard } from './debounced-list-load';
-import type { AssignmentReadClient } from './holdings-elsewhere';
+import {
+  awaitsIn,
+  callbackStatements,
+  commitsIn,
+  unguardedCommits,
+  walk,
+} from './__fixtures__/load-commit-audit';
+import {
+  deferred,
+  fakeOrderClient,
+  flush,
+  headerAnswer,
+  linesAnswer,
+  ORDER_ID,
+  orderScreen,
+  SCREEN as SCREEN_FILE,
+  workIn,
+  type Answer,
+  type AttachmentsRead,
+  type OrderRow,
+  type Render,
+  type ShownOrder,
+} from './__fixtures__/order-screen-loads';
+import { screenFunction } from './__fixtures__/screen-functions';
+import { reloadAfterFailedOrderAction } from './order-action-refusal';
 import { phoneOrderCancel } from './order-cancel-action';
-import { orderManagerActions } from './order-manager-actions';
+import { orderManagerActions, type OrderManagerActions } from './order-manager-actions';
 import { canOfferNeededByChange } from './order-needed-by';
 import { readinessPermissionsFor } from './order-readiness';
+import { keepReasonDialogOpen } from './order-reason-dialog';
 import {
-  needsOrderWarehouseScope,
   orderWarehouseAccess,
   orderWarehouseAccessAsShown,
-  readOrderWarehouseScope,
   type OrderWarehouseAccess,
-  type OrderWarehouseScope,
 } from './order-warehouse-scope';
 import { NO_PERMISSIONS, permissionsOnceRead } from './use-effective-permissions';
 
@@ -37,11 +58,17 @@ import { NO_PERMISSIONS, permissionsOnceRead } from './use-effective-permissions
 // pure permissionsOnceRead is used here.
 vi.mock('./db', () => ({ getMeta: vi.fn(), setMeta: vi.fn() }));
 vi.mock('./api', () => ({ api: vi.fn() }));
+// The screen's load reads delivery-request-actions' predicates, and that
+// module imports expo-linking.
+vi.mock('expo-linking', () => ({
+  openURL: vi.fn(async () => undefined),
+  canOpenURL: vi.fn(async () => true),
+}));
 
 /**
  * S2 FOLLOW-UP: THE PHONE'S ORDER SCREEN SHOWS ONLY ITS NEWEST LOAD, AND
  * NEVER GATES ON PERMISSIONS IT HAS NOT READ (lab walk of #378's release step
- * 6, walk-s2-phone-1103 finding F1).
+ * 6, walk-s2-phone-1103 finding F1, and the review of that fix, F1 to F4).
  *
  * A staff approver of warehouse A, granted orders:approve by a per-user
  * exception, opened warehouse B's order and was offered every approver
@@ -55,25 +82,40 @@ vi.mock('./api', () => ({ api: vi.fn() }));
  * orderWarehouseAccess answers "offered as before". The server refused every
  * tap; the screen was wrong.
  *
- * Fixed three ways, each pinned here:
- *   1. every load takes a number (createSequenceGuard, the returns
- *      workbench's guard) and only the newest one started changes the screen
- *      (order, error, spinner, attachments, tracking, the view kept for
- *      offline);
+ * Fixed, each pinned here:
+ *   1. every load takes a number and only the newest one started changes the
+ *      screen (order, error, spinner, tracking, the view kept for offline);
  *   2. the screen gates with nothing until the saved set is read
  *      (permissionsOnceRead), and `load` waits for it, so no load runs with
- *      the static defaults;
+ *      the static defaults while the saved set is still being read;
  *   3. an order on screen whose load did not read the warehouses that the
  *      permissions the render gates with now ask for is offered nothing that
- *      needs them (orderWarehouseAccessAsShown), until the load those
- *      permissions started lands.
+ *      needs them (orderWarehouseAccessAsShown), until the newer load lands;
+ *   4. (review F1) every reload after the screen opened (an action's, a
+ *      sheet's, the pick's) runs the newest `load`, which the screen keeps
+ *      in the runner after every render (`reload`), never the `load` its
+ *      handler's render built;
+ *   5. (review F2) a reload waits for the newest load (lib/newest-load), so
+ *      an action clears its busy key, and a refused Deny or Reopen picking
+ *      settles its dialog, on the order read again;
+ *   6. (review F4) only the newest read of the attachments shows them,
+ *      whether the order's load or an upload, a delete or Try again made it.
  *
- * The screen imports native modules, so vitest cannot render it: the model
- * below runs the screen's load decisions with the same helpers, in the order
- * the wiring pins at the end of this file hold the screen to.
+ * WHAT RUNS (review F3). The behaviour sections run the screen's own code,
+ * compiled from app/order/[id].tsx (__fixtures__/order-screen-loads): its
+ * `load`, `loadAttachments`, `reload`, layout and focus effects and state
+ * initializers,
+ * and its `runAction`, `act`, `submitDeny` and `settleFailedReasonDialog`,
+ * over a fake transport whose reads the tests hold and release. A check taken
+ * out of `load`, a reload pointed back at an older `load`, or a runAction
+ * that stops waiting fails them, not only the wiring pins. Two things are
+ * played by hand: React (which render's `load` a focus effect or a handler
+ * holds, as the screen's hooks decide; the wiring section pins those hooks),
+ * and the render's gating chain (`offered` below calls the helpers the
+ * screen's render calls, with the values it derives; the wiring pins and
+ * order-manager-actions hold the screen to them).
  */
 
-const ORG = '0c000000-0000-0000-0000-0000000000c1';
 const WH_A = '0a000000-0000-0000-0000-0000000000a1';
 const WH_B = '0a000000-0000-0000-0000-0000000000b1';
 const APPROVER = '0d000000-0000-0000-0000-0000000000d1';
@@ -85,25 +127,14 @@ const SAVED_APPROVER: ReadonlySet<Permission> = new Set<Permission>([
   'orders:approve',
 ]);
 const SAVED_MANAGER: ReadonlySet<Permission> = new Set<Permission>(ROLE_PERMISSIONS.manager);
+/** A picker's saved set, and the approver's before the grant lands: the staff defaults. */
 const SAVED_PICKER: ReadonlySet<Permission> = new Set<Permission>(ROLE_PERMISSIONS.staff);
 
-/** The order row as the header read answers it (what the gates read). */
-interface OrderRow {
-  status: OrderStatus;
-  warehouseId: string;
-  fulfillmentType: FulfillmentType;
-  requesterUserId: string | null;
-  assignedPickerId: string | null;
-  assignedDeliveryUserId: string | null;
-  inTransitAt: string | null;
-}
+/** What the screen gates with once the saved set `saved` is read. */
+const savedSet = (saved: ReadonlySet<Permission>) =>
+  permissionsOnceRead({ permissions: new Set(saved), read: true });
 
-/** What a load put on screen: the row and the warehouses it read with it. */
-interface Shown extends OrderRow {
-  warehouseScope: OrderWarehouseScope | null;
-  /** Which load it came from. */
-  from: string;
-}
+const SCOPE_A = { writableIds: [WH_A], readableIds: [WH_A], unreadable: false };
 
 const row = (over: Partial<OrderRow> = {}): OrderRow => ({
   status: 'pending_approval',
@@ -116,93 +147,47 @@ const row = (over: Partial<OrderRow> = {}): OrderRow => ({
   ...over,
 });
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+/** The order as the server holds it now, and the warehouses the viewer works in. */
+interface Server {
+  row: OrderRow;
+  workingIn: string[];
+}
+
+/** Reads queued to wait, by table: each read of a table waits for the next one queued for it. */
+type Holds = Partial<Record<string, Promise<void>[]>>;
+
+/** A client that answers from `server` at the time it answers, after any hold queued for the read. */
+function serverClient(server: Server, holds: Holds = {}) {
+  const held = (table: string, answer: () => Answer) => async (): Promise<Answer> => {
+    await holds[table]?.shift();
+    return answer();
+  };
+  return fakeOrderClient({
+    order_requests: held('order_requests', () => headerAnswer(server.row)),
+    order_request_lines: held('order_request_lines', () => linesAnswer()),
+    user_warehouse_assignments: held('user_warehouse_assignments', () =>
+      workIn(...server.workingIn),
+    ),
+    organizations: held('organizations', () => ({
+      data: { timezone: 'America/Los_Angeles', email_routing: null },
+      error: null,
+    })),
   });
-  return { promise, resolve };
 }
 
-/** user_warehouse_assignments as the viewer reads it, answered when the test says. */
-function assignments(answer: Promise<unknown>) {
-  const reads: string[] = [];
-  const client: AssignmentReadClient & { reads: string[] } = {
-    reads,
-    from(table: string) {
-      reads.push(table);
-      const chain = {
-        select: () => chain,
-        eq: () => chain,
-        then(onOk: (v: unknown) => unknown, onErr?: (e: unknown) => unknown) {
-          return answer.then(onOk, onErr);
-        },
-      };
-      return chain;
-    },
-  };
-  return client;
-}
-const workIn = (...ids: string[]) => ({
-  data: ids.map((warehouse_id) => ({ warehouse_id })),
-  error: null,
+/** One render of the staff approver's screen once the saved set is read. */
+const approverRender = (client: Render['client']): Render => ({
+  role: 'staff',
+  permissions: savedSet(SAVED_APPROVER),
+  permissionsRead: true,
+  client,
 });
-
-/**
- * The screen's order and its loads. `load` is the screen's: a number first,
- * the header, the warehouses read beside the lines when the permissions it
- * runs with ask for them (the screen's needsOrderWarehouseScope call), and
- * the newest-load check after every read that is followed by a change to
- * the screen.
- */
-function orderScreen(role: Role, viewerUserId = APPROVER) {
-  const loads = createSequenceGuard();
-  const screen = {
-    shown: null as Shown | null,
-    /** What the screen keeps in memory for an offline open (rememberOrderView). */
-    remembered: null as Shown | null,
-    loading: true,
-  };
-  async function load(input: {
-    from: string;
-    permissions: ReadonlySet<Permission> | undefined;
-    header: Promise<OrderRow>;
-    lines: Promise<void>;
-    client: AssignmentReadClient;
-  }): Promise<void> {
-    const seq = loads.next();
-    const order = await input.header;
-    const { canApproveOrders: rpApprove, canUpdateItems: rpItems } = readinessPermissionsFor(
-      role,
-      input.permissions,
-    );
-    const warehouseScopeRead = needsOrderWarehouseScope({
-      role,
-      canApproveOrders: rpApprove,
-      canPick: rpItems,
-      status: order.status,
-    })
-      ? readOrderWarehouseScope(input.client, { role, organizationId: ORG, userId: viewerUserId })
-      : null;
-    await input.lines;
-    if (!loads.isCurrent(seq)) return;
-    const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;
-    if (!loads.isCurrent(seq)) return;
-    screen.shown = { ...order, warehouseScope, from: input.from };
-    // The attachments and tracking reads, each followed by the same check.
-    await Promise.resolve();
-    if (!loads.isCurrent(seq)) return;
-    screen.remembered = screen.shown;
-    screen.loading = false;
-  }
-  return { screen, load };
-}
 
 /** What the screen offers for `order`, gated with `permissions`, through the
  *  screen's own chain of helpers; `access` is the warehouse decision (the
  *  screen's orderWarehouseAccessAsShown, or the one it used before). */
 function offered(
-  order: Shown,
+  order: ShownOrder,
   viewer: { role: Role; permissions: ReadonlySet<Permission> | undefined; userId?: string },
   access: (
     input: Parameters<typeof orderWarehouseAccessAsShown>[0],
@@ -238,7 +223,7 @@ function offered(
     canApproveOrders: rpApprove && writesHere,
     isReplacement: false,
   });
-  const manager = orderManagerActions({
+  const manager: OrderManagerActions = orderManagerActions({
     status: order.status,
     fulfillmentType: order.fulfillmentType,
     canApproveOrders: rpApprove,
@@ -284,8 +269,18 @@ function offered(
     claim: machine.includes('claim_picking'),
     release: machine.includes('release_picking'),
     pick: machine.includes('open_digital_pick'),
+    /** The section itself, for the reason dialogs' check. */
+    manager,
   };
 }
+
+/** `offered` without the section object, for comparisons. */
+function offeredButtons(...args: Parameters<typeof offered>) {
+  const { manager: _section, ...buttons } = offered(...args);
+  return buttons;
+}
+
+const APPROVER_VIEW = { role: 'staff' as const, permissions: SAVED_APPROVER };
 
 const NOTHING = {
   actions: [],
@@ -310,104 +305,118 @@ const APPROVER_STATUSES: { status: OrderStatus; fulfillmentType: FulfillmentType
   { status: 'backordered', fulfillmentType: 'delivery' },
 ];
 
-/**
- * The race the walk found: the first load (284fd40e7: run with the static
- * staff defaults, so no orders:approve and no warehouse read) starts, then
- * the second (the saved set: orders:approve, the warehouses read); the
- * second finishes first and the first finishes last.
- */
-async function race(order: OrderRow) {
-  const s = orderScreen('staff');
-  const first = {
-    header: deferred<OrderRow>(),
-    lines: deferred<void>(),
-    assigned: deferred<unknown>(),
-  };
-  const second = {
-    header: deferred<OrderRow>(),
-    lines: deferred<void>(),
-    assigned: deferred<unknown>(),
-  };
-  const firstClient = assignments(first.assigned.promise);
-  const secondClient = assignments(second.assigned.promise);
-  const older = s.load({
-    from: 'static defaults',
-    permissions: undefined,
-    header: first.header.promise,
-    lines: first.lines.promise,
-    client: firstClient,
-  });
-  const newer = s.load({
-    from: 'saved set',
-    permissions: SAVED_APPROVER,
-    header: second.header.promise,
-    lines: second.lines.promise,
-    client: secondClient,
-  });
-  second.header.resolve(order);
-  second.lines.resolve();
-  second.assigned.resolve(workIn(WH_A));
-  await newer;
-  const afterNewer = s.screen.shown;
-  first.header.resolve(order);
-  first.lines.resolve();
-  await older;
-  return { s, afterNewer, firstReads: firstClient.reads, secondReads: secondClient.reads };
+/** One load of the order, run to the end, by a fresh screen with `saved`. */
+async function singleLoad(
+  role: Role,
+  saved: ReadonlySet<Permission>,
+  order: OrderRow,
+  workingIn: string[],
+) {
+  const s = orderScreen(APPROVER);
+  const client = serverClient({ row: order, workingIn });
+  s.render({ role, permissions: savedSet(saved), permissionsRead: true, client }).focus();
+  await s.settled();
+  return { s, reads: client.reads };
 }
 
-describe('(1) two loads, the older unscoped one finishing last: the newer shows, and a warehouse-B order offers no approver control', () => {
-  it.each(APPROVER_STATUSES)('$status', async ({ status, fulfillmentType }) => {
-    const order = row({
-      status,
-      fulfillmentType,
-      assignedDeliveryUserId: status === 'in_transit' ? SOMEONE_ELSE : null,
-    });
-    const { s, afterNewer, firstReads, secondReads } = await race(order);
-    // The older load read no warehouses (the static defaults hold no
-    // orders:approve), the newer one did.
-    expect(firstReads).toEqual([]);
-    expect(secondReads).toEqual(['user_warehouse_assignments']);
-    // The newer load is on screen, and stays there when the older one lands
-    // (mutation: drop a newest-load check, or take the number after a read).
-    expect(afterNewer?.from).toBe('saved set');
-    expect(s.screen.shown?.from).toBe('saved set');
-    expect(s.screen.shown?.warehouseScope).toEqual({
-      writableIds: [WH_A],
-      readableIds: [WH_A],
-      unreadable: false,
-    });
-    expect(s.screen.remembered?.from).toBe('saved set');
-    expect(s.screen.loading).toBe(false);
-    expect(offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER })).toEqual(
-      NOTHING,
-    );
-  });
+/** Where the older load is held when the newer one starts: each is followed by its own check. */
+type HeldAt = 'header' | 'org row' | 'attachments' | 'tracking';
 
-  it("the older load's order, gated with the saved set before the newer one lands, offers nothing either (mutation: orderWarehouseAccess in place of orderWarehouseAccessAsShown)", () => {
-    for (const { status, fulfillmentType } of APPROVER_STATUSES) {
-      const unscoped: Shown = {
-        ...row({ status, fulfillmentType }),
-        warehouseScope: null,
-        from: 'static defaults',
-      };
-      expect(offered(unscoped, { role: 'staff', permissions: SAVED_APPROVER }), status).toEqual(
-        NOTHING,
-      );
-    }
-  });
+/**
+ * Two loads of the screen, the older one finishing last: the render before a
+ * per-user grant of orders:approve lands (`before`: the staff defaults saved,
+ * or nothing saved yet, so the static defaults decide: no warehouse read
+ * outside picking) and the render after it. The older load is held at
+ * `heldAt` (by default its header read, so the newer one starts before it has
+ * read anything); held later, it has already passed the checks before that
+ * read, and only the check after it can stop it. The newer one is held at
+ * its header and released first.
+ */
+async function race(
+  order: OrderRow,
+  before: ReadonlySet<Permission> | undefined = SAVED_PICKER,
+  heldAt: HeldAt = 'header',
+) {
+  const s = orderScreen(APPROVER);
+  const server: Server = { row: order, workingIn: [WH_A] };
+  const older = deferred();
+  const newer = deferred();
+  const olderReads = { tracking: 0 };
+  const olderClient = serverClient(
+    server,
+    heldAt === 'header'
+      ? { order_requests: [older.promise] }
+      : heldAt === 'org row'
+        ? { organizations: [older.promise] }
+        : {},
+  );
+  const newerClient = serverClient(server, { order_requests: [newer.promise] });
+  s.render({
+    role: 'staff',
+    permissions: before === undefined ? undefined : savedSet(before),
+    permissionsRead: true,
+    client: olderClient,
+    readAttachments:
+      heldAt === 'attachments'
+        ? async () => {
+            await older.promise;
+            return { attachments: [], error: null };
+          }
+        : undefined,
+    getOrderShipment: async () => {
+      olderReads.tracking += 1;
+      if (heldAt === 'tracking') await older.promise;
+      return null;
+    },
+  }).focus();
+  // Held past its first reads, the older load is the newest until the newer starts.
+  if (heldAt !== 'header') await flush();
+  s.render(approverRender(newerClient)).focus();
+  newer.resolve();
+  await flush();
+  const afterNewer = s.state.order;
+  older.resolve();
+  await s.settled();
+  return {
+    s,
+    afterNewer,
+    olderReads: olderClient.reads,
+    newerReads: newerClient.reads,
+    olderTrackingReads: olderReads.tracking,
+  };
+}
 
-  it("the same race on warehouse A's order offers the approver controls, from the newer load's warehouses", async () => {
-    const { s } = await race(row({ warehouseId: WH_A }));
-    const a = offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER });
-    expect(a.actions).toEqual(expect.arrayContaining(['approve', 'approvePartial', 'deny']));
-    expect(a).toMatchObject({ cancel: 'Cancel order', lineChanges: true, neededBy: true });
+describe('(1) a fresh open: nothing is read before the saved set is, then one load, with the warehouses', () => {
+  it('the render before the saved set is read reads nothing and shows nothing; the next loads once (mutation: the wait removed)', async () => {
+    const s = orderScreen(APPROVER);
+    const server: Server = { row: row(), workingIn: [WH_A] };
+    const unreadClient = serverClient(server);
+    const unread = permissionsOnceRead({ permissions: undefined, read: false });
+    expect(unread).toBe(NO_PERMISSIONS);
+    s.render({
+      role: 'staff',
+      permissions: unread,
+      permissionsRead: false,
+      client: unreadClient,
+    }).focus();
+    await s.settled();
+    expect(unreadClient.reads).toEqual([]);
+    expect(s.state.order).toBeUndefined();
+    expect(s.state.loading).toBe(true);
+    const readClient = serverClient(server);
+    s.render(approverRender(readClient)).focus();
+    await s.settled();
+    // One header read in all (the walk saw two), with the warehouses beside it.
+    expect(readClient.reads.filter((t) => t === 'order_requests')).toHaveLength(1);
+    expect(readClient.reads).toContain('user_warehouse_assignments');
+    expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+    expect(s.state.loading).toBe(false);
+    expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual(NOTHING);
   });
 
   it('until the saved set is read the screen gates with nothing, never the static defaults (mutation: gate with the hook value)', () => {
     const unread = permissionsOnceRead({ permissions: undefined, read: false });
-    expect(unread).toBe(NO_PERMISSIONS);
-    expect(unread?.size).toBe(0);
-    const onA: Shown = { ...row({ warehouseId: WH_A }), warehouseScope: null, from: 'none' };
+    const onA: ShownOrder = { ...row({ warehouseId: WH_A }), warehouseScope: null };
     // A manager whose orders:approve the saved set revokes: the static
     // defaults would offer them everything until the set was read.
     expect(offered(onA, { role: 'manager', permissions: unread }).actions).toEqual([]);
@@ -415,21 +424,91 @@ describe('(1) two loads, the older unscoped one finishing last: the newer shows,
   });
 });
 
-describe("(2) the approver's own pending request in warehouse B: Cancel request only", () => {
+describe('(2) two loads, the older one finishing last: the newer stays on screen, and a warehouse-B order offers no approver control', () => {
+  it.each(APPROVER_STATUSES)(
+    '$status (mutation: a newest-load check taken out of load)',
+    async ({ status, fulfillmentType }) => {
+      const order = row({
+        status,
+        fulfillmentType,
+        assignedDeliveryUserId: status === 'in_transit' ? SOMEONE_ELSE : null,
+      });
+      const { s, afterNewer, olderReads, newerReads } = await race(order);
+      // The older load read no warehouses (no orders:approve yet), the newer
+      // did; overtaken, the older read nothing after its lines.
+      expect(olderReads).toEqual(['order_requests', 'order_request_lines']);
+      expect(newerReads).toContain('user_warehouse_assignments');
+      expect(afterNewer?.warehouseScope).toEqual(SCOPE_A);
+      // The older one landed last and changed nothing.
+      expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+      expect(s.state.remembered).toHaveLength(1);
+      expect(s.state.remembered[0]!.order.warehouseScope).toEqual(SCOPE_A);
+      expect(s.state.loading).toBe(false);
+      expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual(NOTHING);
+    },
+  );
+
+  // Each check in `load` run for real: the older load held at the read
+  // before it, so that check alone stands between it and the screen.
+  it.each([
+    { heldAt: 'org row', check: 'the check before the order is shown' },
+    { heldAt: 'attachments', check: 'the check after the attachments read' },
+    { heldAt: 'tracking', check: 'the check after the tracking read' },
+  ] as const)(
+    'the older load held at its $heldAt read when the newer starts: $check stops it (mutation: that check taken out)',
+    async ({ heldAt }) => {
+      const { s, olderTrackingReads } = await race(
+        row({ status: 'approved' }),
+        SAVED_PICKER,
+        heldAt,
+      );
+      expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+      expect(s.state.remembered).toHaveLength(1);
+      expect(s.state.remembered[0]!.order.warehouseScope).toEqual(SCOPE_A);
+      expect(s.state.loading).toBe(false);
+      // Overtaken, it reads nothing more: no tracking read after the attachments.
+      expect(olderTrackingReads).toBe(heldAt === 'tracking' ? 1 : 0);
+      expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual(NOTHING);
+    },
+  );
+
+  it("the walk's own race, the older load run with nothing saved (the static defaults): the same", async () => {
+    const { s, olderReads } = await race(row(), undefined);
+    expect(olderReads).not.toContain('user_warehouse_assignments');
+    expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+    expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual(NOTHING);
+  });
+
+  it("the same race on warehouse A's order offers the approver controls, from the newer load's warehouses (the older one landing last would leave nothing offered)", async () => {
+    const { s } = await race(row({ warehouseId: WH_A }));
+    const a = offered(s.state.order!, APPROVER_VIEW);
+    expect(a.actions).toEqual(expect.arrayContaining(['approve', 'approvePartial', 'deny']));
+    expect(a).toMatchObject({ cancel: 'Cancel order', lineChanges: true, neededBy: true });
+  });
+
+  it("the older load's order, gated with the saved set before the newer one lands, offers nothing either (mutation: orderWarehouseAccess in place of orderWarehouseAccessAsShown)", () => {
+    for (const { status, fulfillmentType } of APPROVER_STATUSES) {
+      const unscoped: ShownOrder = { ...row({ status, fulfillmentType }), warehouseScope: null };
+      expect(offeredButtons(unscoped, APPROVER_VIEW), status).toEqual(NOTHING);
+    }
+  });
+});
+
+describe("(3) the approver's own pending request in warehouse B, and B23", () => {
   const own = row({ requesterUserId: APPROVER });
 
-  it('after the race: Cancel request, no approver control, no line change', async () => {
+  it('their own request after the race: Cancel request, no approver control, no line change', async () => {
     const { s } = await race(own);
-    expect(s.screen.shown?.from).toBe('saved set');
-    expect(offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER })).toEqual({
+    expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+    expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual({
       ...NOTHING,
       cancel: 'Cancel request',
     });
   });
 
   it("the older load's order before the newer one lands: the same", () => {
-    const unscoped: Shown = { ...own, warehouseScope: null, from: 'static defaults' };
-    expect(offered(unscoped, { role: 'staff', permissions: SAVED_APPROVER })).toEqual({
+    const unscoped: ShownOrder = { ...own, warehouseScope: null };
+    expect(offeredButtons(unscoped, APPROVER_VIEW)).toEqual({
       ...NOTHING,
       cancel: 'Cancel request',
     });
@@ -437,15 +516,13 @@ describe("(2) the approver's own pending request in warehouse B: Cancel request 
 
   it('in warehouse A, their own request keeps every approver control', async () => {
     const { s } = await race({ ...own, warehouseId: WH_A });
-    expect(offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER })).toMatchObject({
+    expect(offered(s.state.order!, APPROVER_VIEW)).toMatchObject({
       cancel: 'Cancel order',
       lineChanges: true,
       neededBy: true,
     });
   });
-});
 
-describe('(3) B23: an in-transit delivery of warehouse B whose driver deleted their account', () => {
   const gone = row({
     status: 'in_transit',
     fulfillmentType: 'delivery',
@@ -453,47 +530,25 @@ describe('(3) B23: an in-transit delivery of warehouse B whose driver deleted th
     assignedDeliveryUserId: null,
   });
 
-  it('after the race the approver reads no deleted-driver line and is offered no Collect signature', async () => {
+  it('B23, an in-transit delivery of warehouse B whose driver deleted their account: no deleted-driver line, no Collect signature, nothing offered', async () => {
     const { s } = await race(gone);
-    const b = offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER });
+    const b = offered(s.state.order!, APPROVER_VIEW);
     expect(b.deletedDriverLine).toBeNull();
     expect(b.actions).not.toContain('digitalSignature');
-    expect(b).toEqual(NOTHING);
+    expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual(NOTHING);
+    const unscoped: ShownOrder = { ...gone, warehouseScope: null };
+    expect(offeredButtons(unscoped, APPROVER_VIEW)).toEqual(NOTHING);
   });
 
-  it("nor from the older load's order before the newer one lands", () => {
-    const unscoped: Shown = { ...gone, warehouseScope: null, from: 'static defaults' };
-    expect(offered(unscoped, { role: 'staff', permissions: SAVED_APPROVER })).toEqual(NOTHING);
-  });
-
-  it('in warehouse A the approver reads the line and is offered Collect signature', async () => {
+  it('B23 in warehouse A: the line, and Collect signature', async () => {
     const { s } = await race({ ...gone, warehouseId: WH_A });
-    const a = offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER });
+    const a = offered(s.state.order!, APPROVER_VIEW);
     expect(a.deletedDriverLine).toBe(deletedDriverHandOverLine({ offersPhysicalSignature: false }));
     expect(a.actions).toContain('digitalSignature');
   });
 });
 
-/** One load with the saved set, run to the end. */
-async function singleLoad(
-  role: Role,
-  permissions: ReadonlySet<Permission>,
-  order: OrderRow,
-  workingIn: string[],
-) {
-  const s = orderScreen(role);
-  const client = assignments(Promise.resolve(workIn(...workingIn)));
-  await s.load({
-    from: 'saved set',
-    permissions,
-    header: Promise.resolve(order),
-    lines: Promise.resolve(),
-    client,
-  });
-  return { s, reads: client.reads };
-}
-
-describe('(4) a single load is unchanged: a manager and a picker', () => {
+describe('(4) a single load is unchanged: managers, pickers and a failed read', () => {
   const before = (input: Parameters<typeof orderWarehouseAccessAsShown>[0]) =>
     orderWarehouseAccess(input);
 
@@ -505,39 +560,41 @@ describe('(4) a single load is unchanged: a manager and a picker', () => {
         row({ status, fulfillmentType }),
         [],
       );
-      expect(reads, status).toEqual([]);
-      expect(s.screen.shown?.warehouseScope, status).toBeNull();
-      const now = offered(s.screen.shown!, { role: 'manager', permissions: SAVED_MANAGER });
-      expect(now, status).toEqual(
-        offered(s.screen.shown!, { role: 'manager', permissions: SAVED_MANAGER }, before),
-      );
+      expect(reads, status).not.toContain('user_warehouse_assignments');
+      expect(s.state.order?.warehouseScope, status).toBeNull();
+      const view = { role: 'manager' as const, permissions: SAVED_MANAGER };
+      const now = offeredButtons(s.state.order!, view);
+      expect(now, status).toEqual(offeredButtons(s.state.order!, view, before));
       expect(now.actions.length + (now.cancel ? 1 : 0), status).toBeGreaterThan(0);
     }
   });
 
   it('a picker (staff, no orders:approve): Claim and the pick in their own warehouse only, read at a picking status, as before', async () => {
-    const unclaimed = { status: 'pick_slip_generated' as const };
-    const mine = { status: 'picking_in_progress' as const, assignedPickerId: APPROVER };
+    const view = { role: 'staff' as const, permissions: SAVED_PICKER };
     for (const [warehouseId, expected] of [
       [WH_A, { claim: true, release: true, pick: true }],
       [WH_B, { claim: false, release: false, pick: false }],
     ] as const) {
-      const one = await singleLoad('staff', SAVED_PICKER, row({ ...unclaimed, warehouseId }), [
-        WH_A,
-      ]);
-      expect(one.reads).toEqual(['user_warehouse_assignments']);
-      const claim = offered(one.s.screen.shown!, { role: 'staff', permissions: SAVED_PICKER });
-      expect(claim.claim, warehouseId).toBe(expected.claim);
-      expect(claim).toEqual(
-        offered(one.s.screen.shown!, { role: 'staff', permissions: SAVED_PICKER }, before),
+      const one = await singleLoad(
+        'staff',
+        SAVED_PICKER,
+        row({ status: 'pick_slip_generated', warehouseId }),
+        [WH_A],
       );
-      const two = await singleLoad('staff', SAVED_PICKER, row({ ...mine, warehouseId }), [WH_A]);
-      const picking = offered(two.s.screen.shown!, { role: 'staff', permissions: SAVED_PICKER });
+      expect(one.reads).toContain('user_warehouse_assignments');
+      const claim = offeredButtons(one.s.state.order!, view);
+      expect(claim.claim, warehouseId).toBe(expected.claim);
+      expect(claim).toEqual(offeredButtons(one.s.state.order!, view, before));
+      const two = await singleLoad(
+        'staff',
+        SAVED_PICKER,
+        row({ status: 'picking_in_progress', assignedPickerId: APPROVER, warehouseId }),
+        [WH_A],
+      );
+      const picking = offeredButtons(two.s.state.order!, view);
       expect(picking.release, warehouseId).toBe(expected.release);
       expect(picking.pick, warehouseId).toBe(expected.pick);
-      expect(picking).toEqual(
-        offered(two.s.screen.shown!, { role: 'staff', permissions: SAVED_PICKER }, before),
-      );
+      expect(picking).toEqual(offeredButtons(two.s.state.order!, view, before));
     }
   });
 
@@ -548,49 +605,69 @@ describe('(4) a single load is unchanged: a manager and a picker', () => {
       row({ requesterUserId: APPROVER }),
       [WH_A],
     );
-    expect(reads).toEqual([]);
-    const now = offered(s.screen.shown!, { role: 'staff', permissions: SAVED_PICKER });
-    expect(now).toEqual(
-      offered(s.screen.shown!, { role: 'staff', permissions: SAVED_PICKER }, before),
-    );
+    expect(reads).not.toContain('user_warehouse_assignments');
+    const view = { role: 'staff' as const, permissions: SAVED_PICKER };
+    const now = offeredButtons(s.state.order!, view);
+    expect(now).toEqual(offeredButtons(s.state.order!, view, before));
     expect(now).toEqual({ ...NOTHING, cancel: 'Cancel request', lineChanges: true });
   });
 
   it("a staff approver's single load: exactly what the warehouses it read decide, as before", async () => {
     for (const warehouseId of [WH_A, WH_B]) {
       const { s } = await singleLoad('staff', SAVED_APPROVER, row({ warehouseId }), [WH_A]);
-      expect(offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER })).toEqual(
-        offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER }, before),
+      expect(offeredButtons(s.state.order!, APPROVER_VIEW)).toEqual(
+        offeredButtons(s.state.order!, APPROVER_VIEW, before),
       );
     }
   });
 
-  it('a read that failed still decides nothing: offered as before, the server answers', () => {
-    const unreadable: Shown = {
-      ...row(),
-      warehouseScope: { writableIds: [], readableIds: [], unreadable: true },
-      from: 'saved set',
-    };
-    const now = offered(unreadable, { role: 'staff', permissions: SAVED_APPROVER });
-    expect(now).toEqual(
-      offered(unreadable, { role: 'staff', permissions: SAVED_APPROVER }, before),
-    );
+  it('a warehouse read that failed still decides nothing: offered as before, the server answers', async () => {
+    const s = orderScreen(APPROVER);
+    const client = fakeOrderClient({
+      order_requests: () => headerAnswer(row()),
+      order_request_lines: () => linesAnswer(),
+      user_warehouse_assignments: () => ({ data: null, error: { message: 'timeout' } }),
+    });
+    s.render(approverRender(client)).focus();
+    await s.settled();
+    expect(s.state.order?.warehouseScope).toEqual({
+      writableIds: [],
+      readableIds: [],
+      unreadable: true,
+    });
+    const now = offeredButtons(s.state.order!, APPROVER_VIEW);
+    expect(now).toEqual(offeredButtons(s.state.order!, APPROVER_VIEW, before));
     expect(now.actions).toContain('approve');
   });
 });
 
 describe('(5) an offline open is unchanged: the view kept in memory, gated with the saved set on the phone', () => {
+  it('an offline load reads nothing and takes no number: a load already on its way still shows what it read (mutation: offline takes a number)', async () => {
+    const s = orderScreen(APPROVER);
+    const server: Server = { row: row({ warehouseId: WH_A }), workingIn: [WH_A] };
+    const held = deferred();
+    s.render(approverRender(serverClient(server, { order_requests: [held.promise] }))).focus();
+    const offlineClient = serverClient(server);
+    s.render({ ...approverRender(offlineClient), offline: true }).focus();
+    held.resolve();
+    await s.settled();
+    expect(offlineClient.reads).toEqual([]);
+    expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+    expect(s.state.remembered).toHaveLength(1);
+  });
+
   it("the view kept for offline is the newest load's, and offers offline what it offered online", async () => {
     for (const warehouseId of [WH_A, WH_B]) {
       const { s } = await race(row({ warehouseId }));
-      const recalled = s.screen.remembered!;
-      expect(recalled.from).toBe('saved set');
-      const cached = permissionsOnceRead({ permissions: new Set(SAVED_APPROVER), read: true });
-      expect(offered(recalled, { role: 'staff', permissions: cached })).toEqual(
-        offered(s.screen.shown!, { role: 'staff', permissions: SAVED_APPROVER }),
+      expect(s.state.remembered).toHaveLength(1);
+      const recalled = s.state.remembered[0]!.order;
+      expect(recalled.warehouseScope).toEqual(SCOPE_A);
+      const cached = savedSet(SAVED_APPROVER);
+      expect(offeredButtons(recalled, { role: 'staff', permissions: cached })).toEqual(
+        offeredButtons(s.state.order!, APPROVER_VIEW),
       );
-      expect(offered(recalled, { role: 'staff', permissions: cached })).toEqual(
-        offered(recalled, { role: 'staff', permissions: cached }, (input) =>
+      expect(offeredButtons(recalled, { role: 'staff', permissions: cached })).toEqual(
+        offeredButtons(recalled, { role: 'staff', permissions: cached }, (input) =>
           orderWarehouseAccess(input),
         ),
       );
@@ -602,30 +679,277 @@ describe('(5) an offline open is unchanged: the view kept in memory, gated with 
     expect(permissionsOnceRead({ permissions: saved, read: true })).toBe(saved);
     expect(permissionsOnceRead({ permissions: undefined, read: true })).toBeUndefined();
   });
+});
 
-  it('a picker and a manager offline: what a single load kept, as before', async () => {
-    const picker = await singleLoad(
-      'staff',
-      SAVED_PICKER,
-      row({ status: 'pick_slip_generated', warehouseId: WH_A }),
-      [WH_A],
-    );
-    const manager = await singleLoad('manager', SAVED_MANAGER, row(), []);
-    for (const [role, permissions, kept] of [
-      ['staff', SAVED_PICKER, picker.s.screen.remembered!],
-      ['manager', SAVED_MANAGER, manager.s.screen.remembered!],
-    ] as const) {
-      const cached = permissionsOnceRead({ permissions: new Set(permissions), read: true });
-      expect(offered(kept, { role, permissions: cached })).toEqual(
-        offered(kept, { role, permissions: cached }, (input) => orderWarehouseAccess(input)),
-      );
-    }
+/** The screen's runAction as the render that built it holds it. */
+function runActionOf(
+  s: ReturnType<typeof orderScreen>,
+  rendered: { load: () => Promise<void> },
+  log: string[],
+) {
+  return screenFunction<(key: string, fn: () => Promise<void>) => Promise<boolean>>(
+    SCREEN_FILE,
+    'runAction',
+    {
+      // Each change of the busy key, with the order on screen at that moment.
+      setActing: (key: string | null) => log.push(`acting ${key} on ${s.state.order?.status}`),
+      Alert: { alert: () => log.push('alert') },
+      reloadAfterFailedOrderAction,
+      load: rendered.load,
+      reload: s.reload,
+    },
+  );
+}
+
+describe("(6) review F1: an action's reload runs the newest load, never the one its render built", () => {
+  // The reviewer's case: a picker of warehouse A taps an action (Complete
+  // picking's reload is the same, through DigitalPick's onCompleted) and a
+  // per-user grant of orders:approve lands while it is on its way. The grant
+  // rebuilt `load` and the focus effect read the order with it; then the
+  // action's reload ran the `load` from the tap, without orders:approve, so
+  // at picking_complete it read no warehouses, and the order it left on
+  // screen was offered nothing until a refresh.
+  it('a grant that lands while the action is on its way: the reload reads the warehouses and warehouse A offers the approver controls (mutation: the reload runs the load from the tap)', async () => {
+    const s = orderScreen(APPROVER);
+    const server: Server = {
+      row: row({
+        status: 'picking_in_progress',
+        fulfillmentType: 'pickup',
+        warehouseId: WH_A,
+        assignedPickerId: APPROVER,
+      }),
+      workingIn: [WH_A],
+    };
+    const atTap = s.render({
+      role: 'staff',
+      permissions: savedSet(SAVED_PICKER),
+      permissionsRead: true,
+      client: serverClient(server),
+    });
+    atTap.focus();
+    await s.settled();
+    expect(s.state.order?.status).toBe('picking_in_progress');
+    const log: string[] = [];
+    const sent = deferred();
+    const tap = runActionOf(
+      s,
+      atTap,
+      log,
+    )('complete-picking', async () => {
+      await sent.promise;
+      server.row = { ...server.row, status: 'picking_complete' };
+    });
+    // The grant lands: the screen renders again and its focus effect reads
+    // the order with the new `load` (held, so the action's reload is newer).
+    const focusRead = deferred();
+    s.render(approverRender(serverClient(server, { order_requests: [focusRead.promise] }))).focus();
+    sent.resolve();
+    await expect(tap).resolves.toBe(true);
+    focusRead.resolve();
+    await s.settled();
+    expect(s.state.order?.status).toBe('picking_complete');
+    expect(s.state.order?.warehouseScope).toEqual(SCOPE_A);
+    // What a fresh open offers the approver on this order, nothing less.
+    const fresh = await singleLoad('staff', SAVED_APPROVER, server.row, [WH_A]);
+    const now = offeredButtons(s.state.order!, APPROVER_VIEW);
+    expect(now).toEqual(offeredButtons(fresh.s.state.order!, APPROVER_VIEW));
+    expect(now.actions).toContain('generatePackingSlips');
   });
 });
 
-// ── Wiring: the screen runs these decisions, in this order ──────────────────
+describe('(7) review F2: after an action, the busy key and the reason dialog wait for the newest load', () => {
+  // Docket B60's flow with a newer load on its way: a Deny refused because
+  // another phone approved the order, while the connection dropped and came
+  // back (the focus effect started a newer load). The reload stopped at its
+  // check, runAction returned over the order from before the tap, and the
+  // dialog kept its reason for a Deny the order no longer offered.
+  it('a refused Deny: the busy key clears and the dialog settles on the order read again (mutation: runAction returns when its own reload stops)', async () => {
+    const s = orderScreen(APPROVER);
+    const holds: Holds = {};
+    const server: Server = { row: row({ warehouseId: WH_A }), workingIn: [WH_A] };
+    const shown = s.render(approverRender(serverClient(server, holds)));
+    shown.focus();
+    await s.settled();
+    expect(offered(s.state.order!, APPROVER_VIEW).manager.deny).toBe(true);
 
-const SCREEN_FILE = 'app/order/[id].tsx';
+    const log: string[] = [];
+    const runAction = runActionOf(s, shown, log);
+    const act = screenFunction<(body: unknown, key: string) => Promise<boolean>>(
+      SCREEN_FILE,
+      'act',
+      {
+        id: ORDER_ID,
+        runAction,
+        transitionOrder: async () => {
+          throw Object.assign(new Error('Request not found or no longer pending approval.'), {
+            status: 409,
+          });
+        },
+      },
+    );
+    const dialog = {
+      open: true,
+      reason: 'Duplicate of another request.',
+      check: null as string | null,
+    };
+    const setDenyOpen = (v: boolean) => {
+      dialog.open = v;
+    };
+    const setDenyReason = (v: string) => {
+      dialog.reason = v;
+    };
+    const setFailedReasonDialog = (v: string | null) => {
+      dialog.check = v;
+    };
+    const submitDeny = screenFunction<() => Promise<void>>(SCREEN_FILE, 'submitDeny', {
+      acting: null,
+      denyReason: dialog.reason,
+      Alert: { alert: () => log.push('alert') },
+      act,
+      setDenyOpen,
+      setDenyReason,
+      setFailedReasonDialog,
+    });
+    // The screen's effect, in the render after the tap is over: the check
+    // runs on the order on screen then.
+    const settleNow = () => {
+      const order = s.state.order ?? null;
+      const settle = screenFunction<(dialog: 'deny' | 'reopen') => void>(
+        SCREEN_FILE,
+        'settleFailedReasonDialog',
+        {
+          managerActions: order
+            ? offered(order, APPROVER_VIEW).manager
+            : { deny: false, reopenPicking: false },
+          order,
+          loadError: s.state.loadError ?? null,
+          keepReasonDialogOpen,
+          setFailedReasonDialog,
+          dismissDenyModal: screenFunction(SCREEN_FILE, 'dismissDenyModal', {
+            setDenyOpen,
+            setDenyReason,
+          }),
+          dismissReopenModal: screenFunction(SCREEN_FILE, 'dismissReopenModal', {
+            setReopenOpen: () => undefined,
+            setReopenReason: () => undefined,
+          }),
+        },
+      );
+      log.push(`settled on ${order?.status}`);
+      if (dialog.check === 'deny') settle('deny');
+    };
+
+    // Another phone approves it; this phone's reload after the refusal is held.
+    server.row = { ...server.row, status: 'approved' };
+    const reloadRead = deferred();
+    holds.order_requests = [reloadRead.promise];
+    const tap = submitDeny().then(settleNow);
+    await flush();
+    // The connection drops and comes back: two renders, the second's focus
+    // load newer than the reload.
+    s.render({ ...approverRender(serverClient(server)), offline: true }).focus();
+    const newerRead = deferred();
+    s.render(approverRender(serverClient(server, { order_requests: [newerRead.promise] }))).focus();
+    reloadRead.resolve();
+    await flush();
+    newerRead.resolve();
+    await tap;
+    await s.settled();
+
+    expect(log).toEqual([
+      'acting deny on pending_approval',
+      'alert',
+      'acting null on approved',
+      'settled on approved',
+    ]);
+    // Deny is no longer offered: the dialog closed and its reason is gone.
+    expect(dialog).toEqual({ open: false, reason: '', check: null });
+  });
+
+  it('a successful action clears its busy key only once the newest load is on screen', async () => {
+    const s = orderScreen(APPROVER);
+    const holds: Holds = {};
+    const server: Server = { row: row({ warehouseId: WH_A }), workingIn: [WH_A] };
+    const shown = s.render(approverRender(serverClient(server, holds)));
+    shown.focus();
+    await s.settled();
+    const log: string[] = [];
+    const reloadRead = deferred();
+    holds.order_requests = [reloadRead.promise];
+    const tap = runActionOf(
+      s,
+      shown,
+      log,
+    )('approve', async () => {
+      server.row = { ...server.row, status: 'approved' };
+    });
+    await flush();
+    s.render({ ...approverRender(serverClient(server)), offline: true }).focus();
+    const newerRead = deferred();
+    s.render(approverRender(serverClient(server, { order_requests: [newerRead.promise] }))).focus();
+    reloadRead.resolve();
+    await flush();
+    expect(log).toEqual(['acting approve on pending_approval']);
+    newerRead.resolve();
+    await expect(tap).resolves.toBe(true);
+    expect(log).toEqual(['acting approve on pending_approval', 'acting null on approved']);
+  });
+});
+
+describe('(8) review F4: only the newest read of the attachments shows them', () => {
+  const OLD: AttachmentsRead = { attachments: ['proof 1'], error: null };
+  const NEW: AttachmentsRead = { attachments: ['proof 1', 'proof 2'], error: null };
+
+  /** A screen whose attachment reads answer in turn from `answers`. */
+  function withAttachments(answers: Promise<AttachmentsRead | null>[]) {
+    const s = orderScreen(APPROVER);
+    const server: Server = {
+      row: row({ warehouseId: WH_A, status: 'approved' }),
+      workingIn: [WH_A],
+    };
+    const rendered = s.render({
+      ...approverRender(serverClient(server)),
+      readAttachments: () => answers.shift() ?? Promise.resolve(NEW),
+    });
+    return { s, rendered };
+  }
+
+  it("the order's load read before an upload's row was saved, and lands after the upload's read: the upload's list stays (mutation: the load shows any attachments it read)", async () => {
+    const loadsRead = deferred<AttachmentsRead | null>();
+    const { s, rendered } = withAttachments([loadsRead.promise, Promise.resolve(NEW)]);
+    rendered.focus();
+    await flush();
+    // The load is reading the attachments; the upload finishes and reads them.
+    await rendered.loadAttachments();
+    expect(s.state.attachments).toEqual(NEW.attachments);
+    loadsRead.resolve(OLD);
+    await s.settled();
+    expect(s.state.order?.status).toBe('approved');
+    expect(s.state.attachments).toEqual(NEW.attachments);
+  });
+
+  it("an upload's read that a pull to refresh overtook: the refresh's list stays (mutation: loadAttachments shows any list it read)", async () => {
+    const uploadRead = deferred<AttachmentsRead | null>();
+    const { s, rendered } = withAttachments([
+      Promise.resolve(OLD),
+      uploadRead.promise,
+      Promise.resolve(NEW),
+    ]);
+    rendered.focus();
+    await s.settled();
+    expect(s.state.attachments).toEqual(OLD.attachments);
+    const upload = rendered.loadAttachments();
+    rendered.focus();
+    await s.settled();
+    expect(s.state.attachments).toEqual(NEW.attachments);
+    uploadRead.resolve(OLD);
+    await upload;
+    expect(s.state.attachments).toEqual(NEW.attachments);
+  });
+});
+
+// ── Wiring: the screen's hooks call these, in this order ────────────────────
+
 const SCREEN = readFileSync(path.resolve(__dirname, '../..', SCREEN_FILE), 'utf8');
 
 /** Source with comments stripped, so a comment can never satisfy a pin. */
@@ -635,25 +959,9 @@ function codeOnly(src: string): string {
 
 /** The statements of the screen's `load` callback body, found by the parser. */
 function loadStatements(): { sf: ts.SourceFile; statements: readonly ts.Statement[] } {
-  const sf = parseTsx(SCREEN, SCREEN_FILE);
-  let body: ts.Block | null = null;
-  const visit = (n: ts.Node) => {
-    if (
-      ts.isVariableDeclaration(n) &&
-      ts.isIdentifier(n.name) &&
-      n.name.text === 'load' &&
-      n.initializer &&
-      ts.isCallExpression(n.initializer) &&
-      n.initializer.expression.getText(sf) === 'React.useCallback'
-    ) {
-      const fn = n.initializer.arguments[0];
-      if (fn && ts.isArrowFunction(fn) && ts.isBlock(fn.body)) body = fn.body;
-    }
-    if (body === null) ts.forEachChild(n, visit);
-  };
-  visit(sf);
-  expect(body, 'load in the order screen').not.toBeNull();
-  return { sf, statements: (body as unknown as ts.Block).statements };
+  const found = callbackStatements(SCREEN, SCREEN_FILE, 'load');
+  expect(found, 'load in the order screen').not.toBeNull();
+  return found!;
 }
 
 /** Everything the load changes on screen (or keeps for offline). */
@@ -667,40 +975,35 @@ const COMMITS = new Set([
   'rememberOrderView',
 ]);
 
-function walk(node: ts.Node, visit: (n: ts.Node) => void): void {
-  visit(node);
-  ts.forEachChild(node, (child) => walk(child, visit));
-}
-
-function commitsIn(st: ts.Node): string[] {
+/**
+ * Every use of the name `load` in the screen that is the order screen's own
+ * `load` (not a property, a JSX attribute or a declaration), with the text
+ * of the expression it sits in.
+ */
+function usesOfLoad(): string[] {
+  const sf = parseTsx(SCREEN, SCREEN_FILE);
   const out: string[] = [];
-  walk(st, (n) => {
-    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && COMMITS.has(n.expression.text)) {
-      out.push(n.expression.text);
-    }
+  walk(sf, (n) => {
+    if (!ts.isIdentifier(n) || n.text !== 'load') return;
+    const p = n.parent;
+    if (ts.isPropertyAccessExpression(p) && p.name === n) return;
+    if ((ts.isPropertyAssignment(p) || ts.isJsxAttribute(p)) && p.name === n) return;
+    if (ts.isVariableDeclaration(p) && p.name === n) return;
+    if (ts.isBindingElement(p)) return;
+    out.push(p.getText(sf).replace(/\s+/g, ' '));
   });
   return out;
 }
 
-function awaitsIn(st: ts.Node): boolean {
-  let found = false;
-  walk(st, (n) => {
-    if (ts.isAwaitExpression(n)) found = true;
-  });
-  return found;
-}
-
-const isGuard = (st: ts.Statement, sf: ts.SourceFile) =>
-  ts.isIfStatement(st) &&
-  st.expression.getText(sf) === '!loads.isCurrent(seq)' &&
-  ts.isReturnStatement(st.thenStatement) &&
-  st.elseStatement === undefined;
-
 describe('wiring: the order screen', () => {
-  it('numbers its loads with the tested sequence guard', () => {
+  it('numbers its loads with the tested runner, and its attachment reads with their own guard', () => {
     const code = codeOnly(SCREEN);
+    expect(code).toContain("import { createNewestLoads } from '@/lib/newest-load';");
+    expect(code).toContain('const [loads] = React.useState(() => createNewestLoads());');
     expect(code).toContain("import { createSequenceGuard } from '@/lib/debounced-list-load';");
-    expect(code).toContain('const [loads] = React.useState(() => createSequenceGuard());');
+    expect(code).toContain(
+      'const [attachmentReads] = React.useState(() => createSequenceGuard());',
+    );
   });
 
   // Mutation caught: any newest-load check deleted, or a change to the
@@ -708,32 +1011,24 @@ describe('wiring: the order screen', () => {
   // after a read went on screen whichever load it belonged to).
   it('changes nothing after a read unless it is still the newest load', () => {
     const { sf, statements } = loadStatements();
-    const unguarded: string[] = [];
-    let readSinceCheck = false;
-    let guards = 0;
-    for (const st of statements) {
-      if (isGuard(st, sf)) {
-        readSinceCheck = false;
-        guards += 1;
-        continue;
-      }
-      const commits = commitsIn(st);
-      const awaits = awaitsIn(st);
-      if (commits.length > 0 && (readSinceCheck || awaits)) {
-        unguarded.push(`${commits.join(', ')}: ${st.getText(sf).slice(0, 60)}`);
-      }
-      if (awaits) readSinceCheck = true;
-    }
+    const { unguarded, guards } = unguardedCommits(
+      sf,
+      statements,
+      COMMITS,
+      '!loads.isCurrent(seq)',
+    );
     expect(unguarded).toEqual([]);
     expect(guards).toBeGreaterThanOrEqual(4);
     // The commits the check covers are all still in `load`.
-    const all = statements.flatMap((st) => commitsIn(st));
+    const all = statements.flatMap((st) => commitsIn(st, COMMITS));
     for (const name of COMMITS) expect(all, name).toContain(name);
   });
 
   // Mutation caught: the number taken after the header read (an older load
   // would then count as newer), the offline return taking one (a load on its
   // way would be dropped offline), or the wait for the saved set removed.
+  // The runner reads the number a load took before its first await
+  // (lib/newest-load), so nothing may be awaited before it.
   it('waits for the saved set, then takes its number before its first read; offline it takes none', () => {
     const { sf, statements } = loadStatements();
     const at = (pred: (st: ts.Statement) => boolean, label: string) => {
@@ -756,12 +1051,43 @@ describe('wiring: the order screen', () => {
     expect(statements.slice(0, header).filter((st) => awaitsIn(st))).toEqual([]);
   });
 
-  it('runs again when the saved set is read, with the guard and the attachments read among its dependencies', () => {
+  it('runs again when the saved set is read, every focus load through the runner', () => {
     expect(SCREEN).toMatch(
-      /\}, \[\s*orgId,\s*id,\s*loads,\s*readAttachments,\s*offline,\s*permissionsRead,\s*userId,\s*role,\s*rpApprove,\s*rpItems,\s*rpBuy,?\s*\]\);/,
+      /\}, \[\s*orgId,\s*id,\s*loads,\s*attachmentReads,\s*readAttachments,\s*offline,\s*permissionsRead,\s*userId,\s*role,\s*rpApprove,\s*rpItems,\s*rpBuy,?\s*\]\);/,
     );
     expect(SCREEN).toMatch(
-      /useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*void load\(\);\s*\}, \[load\]\),\s*\);/,
+      /useFocusEffect\(\s*React\.useCallback\(\(\) => \{\s*void loads\.run\(load\);\s*\}, \[loads, load\]\),\s*\);/,
+    );
+  });
+
+  // Review F1. Mutation caught: any reload calling `load` (the one its
+  // handler's render built), or the newest load no longer kept for reload.
+  it('every reload after the screen opened runs the newest load, kept in the runner after every render', () => {
+    const code = codeOnly(SCREEN);
+    expect(code).toMatch(
+      /React\.useLayoutEffect\(\(\) => \{\s*loads\.keep\(load\);\s*\}, \[loads, load\]\);/,
+    );
+    expect(code).toContain('const reload = React.useCallback(() => loads.reload(), [loads]);');
+    // `load` itself is only ever handed to the runner (kept for reload, and
+    // run by the focus effect); nothing calls it.
+    expect(usesOfLoad().sort()).toEqual(
+      ['loads.keep(load)', '[loads, load]', 'loads.run(load)', '[loads, load]'].sort(),
+    );
+    // So every caller reloads through `reload`: the actions, the sheets, the
+    // pick, the signature pad, pull to refresh and Try again.
+    expect(code).toContain('onCompleted={() => void reload()}');
+    expect(code).toMatch(
+      /reread: \(orderId\) => readOrderReadiness\(supabase, orderId\),\s*reload,\s*\}/,
+    );
+  });
+
+  // Review F2: runAction keeps its busy key until the newest load is on
+  // screen (also run above, (7)).
+  it('runAction reloads through reload, under its busy key', () => {
+    const code = codeOnly(SCREEN).replace(/\s+/g, ' ');
+    expect(code).toContain('await fn(); await reload(); return true;');
+    expect(code).toContain(
+      'if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);',
     );
   });
 
@@ -790,9 +1116,10 @@ describe('wiring: the order screen', () => {
     );
   });
 
-  // The attachments a load read go on screen only through its own check;
-  // the upload, delete and Try again paths read and show them directly.
-  it('reads the attachments without showing them, and shows them from the load only behind its check', () => {
+  // Review F4: each read of the attachments takes a number from their own
+  // guard and shows what it read only while it is the newest read of them;
+  // the load's also only while it is the newest load (run above, (8)).
+  it('reads the attachments without showing them, and shows a read only while it is the newest', () => {
     const code = codeOnly(SCREEN);
     const read = code.slice(
       code.indexOf('const readAttachments = React.useCallback('),
@@ -801,21 +1128,21 @@ describe('wiring: the order screen', () => {
     expect(read).toContain("from('order_request_attachments')");
     expect(read).not.toMatch(/setAttachments(Error)?\(/);
     expect(code).toMatch(
-      /const loadAttachments = React\.useCallback\(async \(\) => \{\s*const read = await readAttachments\(\);\s*if \(!read\) return;\s*setAttachmentsError\(read\.error\);\s*setAttachments\(read\.attachments\);\s*\}, \[readAttachments\]\);/,
+      /const loadAttachments = React\.useCallback\(async \(\) => \{\s*const seq = attachmentReads\.next\(\);\s*const read = await readAttachments\(\);\s*if \(!read \|\| !attachmentReads\.isCurrent\(seq\)\) return;\s*setAttachmentsError\(read\.error\);\s*setAttachments\(read\.attachments\);\s*\}, \[attachmentReads, readAttachments\]\);/,
     );
     expect(code).toMatch(
-      /const attachmentsRead = await readAttachments\(\);\s*if \(!loads\.isCurrent\(seq\)\) return;\s*if \(attachmentsRead\) \{\s*setAttachmentsError\(attachmentsRead\.error\);\s*setAttachments\(attachmentsRead\.attachments\);\s*\}/,
+      /const attachmentsSeq = attachmentReads\.next\(\);\s*const attachmentsRead = await readAttachments\(\);\s*if \(!loads\.isCurrent\(seq\)\) return;\s*if \(attachmentsRead && attachmentReads\.isCurrent\(attachmentsSeq\)\) \{\s*setAttachmentsError\(attachmentsRead\.error\);\s*setAttachments\(attachmentsRead\.attachments\);\s*\}/,
     );
-    // loadAttachments shows what it read at once: `load` never calls it
-    // (mutation: the load's own read put back as loadAttachments()).
-    const { sf, statements } = loadStatements();
+    // readAttachments is read only by these two.
+    expect(code.match(/await readAttachments\(\)/g)).toHaveLength(2);
+    // loadAttachments shows what it read: `load` never calls it.
+    const { statements } = loadStatements();
     const calls: string[] = [];
     for (const st of statements) {
       walk(st, (n) => {
         if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)) calls.push(n.expression.text);
       });
     }
-    expect(sf.fileName).toBe(SCREEN_FILE);
     expect(calls).toContain('readAttachments');
     expect(calls).not.toContain('loadAttachments');
   });
