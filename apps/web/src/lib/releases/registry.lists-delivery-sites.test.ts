@@ -84,17 +84,34 @@ function readerText(r: Release): string[] {
  */
 const AUTH_CODE_ID = 'authenticator-code-requests-2026-11';
 const RETRIES_ID = 'integration-retries-2026-11';
+/**
+ * Added by docs/whats-new-2026-11-02d (2026-11-02): the Export items, phone
+ * update, clearer web messages and QW1 releases, published later still, at
+ * the top. All four reach every member (each has an entry with no
+ * audience), so they are read or seen with the releases below them.
+ */
+const NIGHT_IDS = [
+  'export-items-permission-2026-11',
+  'mobile-app-fixes-2026-11-02',
+  'clearer-web-messages-2026-11',
+  'invites-calendar-record-pages-2026-11',
+];
 // Added by docs/whats-new-2026-11-02c (2026-11-02): the web fixes and archived charters releases, published later, at the top; read and seen with the newer releases below.
 const WEB_FIXES_ID = 'web-fixes-2026-11-02';
 const CHARTERS_ID = 'archived-charters-2026-11';
-const newerReads = [WEB_FIXES_ID, CHARTERS_ID, AUTH_CODE_ID, RETRIES_ID].map((id) => ({
-  release_id: id,
-  revision: 1,
-  dismissed_at: null,
-  opened_at: '2026-11-02T15:50:00Z',
-  read_at: '2026-11-02T15:50:00Z',
-}));
+// Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without NIGHT_IDS): the releases in NIGHT_IDS are published later, at the top.
+const newerReads = [...NIGHT_IDS, WEB_FIXES_ID, CHARTERS_ID, AUTH_CODE_ID, RETRIES_ID].map(
+  (id) => ({
+    release_id: id,
+    revision: 1,
+    dismissed_at: null,
+    opened_at: '2026-11-02T15:50:00Z',
+    read_at: '2026-11-02T15:50:00Z',
+  }),
+);
 const newerSeen: Record<string, boolean> = {
+  // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without NIGHT_IDS): the releases in NIGHT_IDS are published later, at the top.
+  ...Object.fromEntries(NIGHT_IDS.map((id) => [id, true])),
   [WEB_FIXES_ID]: true,
   [CHARTERS_ID]: true,
   [AUTH_CODE_ID]: true,
@@ -109,18 +126,20 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft at 0, a draft, the two newer releases at 1 and 2, ID at 3 and the export fixes release at 4): the two newer releases and ID each move up one place, the update-ready-and-fixes release takes 3, and the export fixes release stays at 4.
-    expect(RELEASES[2]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[3]?.status).toBe('published');
-    expect(RELEASES[4]?.id).toBe(ID);
-    expect(RELEASES[4]?.status).toBe('published');
-    expect(RELEASES[5]?.id).toBe('update-ready-and-fixes-2026-11');
-    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
+    expect(RELEASES[6]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[6]?.status).toBe('published');
+    expect(RELEASES[7]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[7]?.status).toBe('published');
+    expect(RELEASES[8]?.id).toBe(ID);
+    expect(RELEASES[8]?.status).toBe('published');
+    expect(RELEASES[9]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[10]?.id).toBe('export-fixes-2026-10');
     expect(
       // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: slice(0, 3)): the web fixes and archived charters releases are published later, at the top.
+      // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: slice(2, 5)): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
       RELEASES.filter((r) => r.status === 'published')
-        .slice(2, 5)
+        .slice(6, 9)
         .map((r) => r.id),
     ).toEqual([AUTH_CODE_ID, RETRIES_ID, ID]);
   });

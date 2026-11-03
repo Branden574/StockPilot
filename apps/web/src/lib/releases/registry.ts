@@ -28,6 +28,508 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'export-items-permission-2026-11',
+    revision: 1,
+    // B68, #446 (squash 22e52f1ea, live 2026-11-02 23:45:39Z, web build
+    // ea10ffc12e7f; web only, no migration, no phone code), from the draft in
+    // #446's description. The newest release, at the top. Its production check
+    // (postdeploy-1102/b68) was running when this was written: as the Demo Co
+    // admin, Items and Books show Export in the toolbar and the selection bar,
+    // and Rentals items shows it in neither. The integrator merges this only
+    // after that check passes.
+    // Claims checked against the code at 22e52f1ea:
+    // - export-items-permission-name: packages/core/src/constants/
+    //   permissions.ts:595-596 (label Export items, description "Download
+    //   Items and Books as PDF, Excel or CSV files."); who holds it is
+    //   unchanged (ROLE_PERMISSIONS untouched by #446). Export shows only with
+    //   items:export: apps/web/src/app/(dashboard)/dashboard/inventory/
+    //   page.tsx:496 and books/page.tsx:369 compute canExport, passed at
+    //   inventory/page.tsx:671 and :1030 and books/page.tsx:484 and :758; the
+    //   toolbar draws Export only with it (components/inventory/
+    //   inventory-table.tsx:3096), and so does the selection bar
+    //   (bulk-actions.tsx:617, its dialog :868). Before, both were drawn for
+    //   everyone and the server refused the export (api/inventory/export/
+    //   route.tsx, can(ctx, 'items:export')). The phone shows no permission
+    //   names (no PERMISSION_META in apps/mobile) and has no Items export.
+    // - rentals-export-removed: rentals/items/page.tsx:260 passes no
+    //   canExport, so the toolbar and the bar draw no Export. Before, Export
+    //   filtered and Export all saved Items rows (the toolbar sent no rentals
+    //   flag; list() keeps is_rental = false, server/services/inventory.ts),
+    //   and Export selected read listByIdsForExport, which keeps
+    //   is_rental = false, so a selection of rental items gave no rows.
+    // Who is told: export-items-permission-name has no audience (every member
+    // can read the permission names in Settings, Roles & permissions, as the
+    // draft says); rentals-export-removed reaches who can export where Rentals
+    // is on. Left out (the draft's reasons): the refusal and ended-session
+    // words in the export dialog and the AI assistant's answer.
+    status: 'published',
+    title: 'The export permission is now called Export items',
+    summary:
+      'On the web, the permission that lets a member export Items and Books is now called Export items, and Export shows only to members who hold it. Rentals no longer shows Export.',
+    publishedAt: '2026-11-02T23:46:00Z',
+    entries: [
+      {
+        id: 'export-items-permission-name',
+        category: 'improved',
+        area: 'Settings',
+        title: 'The permission to export Items and Books is now called Export items',
+        whatChanged:
+          'In Settings, Roles & permissions, the permission that lets a member export Items and Books is now called Export items instead of Export CSV, and its description says it covers PDF, Excel and CSV files. On the web, Export on Items and Books, in the toolbar and in the bar for selected rows, now shows only to members who hold it.',
+        whyItMatters:
+          'The old name said CSV, but the same permission also covers PDF and Excel exports. Members without it were shown Export, and their export was then refused.',
+        howItAffectsYou:
+          'Who holds the permission has not changed: owners, admins and managers by default, and anyone an admin gave it to. If you need to export and do not see Export, ask an admin for the Export items permission.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'rentals-export-removed',
+        category: 'fixed',
+        area: 'Rentals',
+        title: 'Rentals no longer shows Export',
+        whatChanged:
+          'On the web, the Rentals items list no longer shows Export, in its toolbar or when rental items are selected.',
+        whyItMatters:
+          'Export on Rentals saved items from your Items list instead of your rental items, and exporting selected rental items saved a file with no rows.',
+        howItAffectsYou:
+          'There is no export of rental items for now. Export on Items and Books works as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:export'], modules: ['rentals'] },
+      },
+    ],
+  },
+  {
+    id: 'mobile-app-fixes-2026-11-02',
+    revision: 1,
+    // The phone halves of five changes, in one over-the-air update for
+    // runtime 1.4.0: EAS update group 9cf9ecf7-6715-4f35-82fb-99a83427c9c1,
+    // published 2026-11-02 about 23:05Z from main a34543b81
+    // (docket-2026-10-24/ota-1102b/release.log). iOS phones launched it at
+    // 23:09Z (update:insights: 1 install, 0 failed), so this is dated 23:10Z.
+    // No apps/mobile file changed between a34543b81 and 22e52f1ea, so each
+    // phone line below was read at 22e52f1ea. This release needs a web deploy
+    // only. If the phone update is rolled back (to group c5b4d663) while the
+    // web stays, these lines are no longer true: withdraw this release.
+    // Web halves already told, so not told again here:
+    // - B42 #423 and B23 #406 in lists-delivery-sites-and-fixes-2026-11
+    //   (count-start-managers-only, delivery-sites-by-name-and-deleted-driver);
+    // - B75 #435's route part (E) in phone-ai-long-chats-keep-answering: long
+    //   chats keep answering and each chat is one conversation on the web.
+    // B65 #476 (squash f0d44b53d) and S5a #450 (squash b5c94df42) are phone
+    // changes first told here.
+    // Walks:
+    // - simwalk-1102b w1, 2026-11-02 20:33Z to 21:10Z, EAS simulator build
+    //   7a500b4e of f0d44b53d, Demo Co, iPhone 17 Pro and Pro Max: B65 W1-W9
+    //   (each malformed link says not found, no Try again; real records and
+    //   upper-case ids open), B42 as an admin (the + button, Review, New count
+    //   with no sentence), B75 W1-W7 (23 messages answered in one chat, New
+    //   chat, a 2,001-character message refused with the plain sentence, the
+    //   web lists the chat once), and the S5a smoke (sign-in, no alert).
+    // - simwalk-1102b/ipad, 22:40Z to 22:52Z, iPad Pro 13-inch: B75 New chat
+    //   at default and AX5 text sizes, portrait and landscape.
+    // - walk-lpw-1102 (lab, synthetic users, 21:20Z to 22:31Z, main
+    //   3549b480d): B42 for staff, a viewer, Cycle Counts off, an empty list
+    //   and offline; B23 on iPhone and iPad for a manager, a staff approver
+    //   and staff without orders:approve.
+    // - walk-s5a (lab, 18:36Z to 19:53Z, PR head 6f2565fea): sign-out removes
+    //   the phone's token row, ends the other sessions (the web tab on
+    //   /signin, the other phone's alert), clears Notification Center, an
+    //   offline Sign out keeps the session; the sign-in and sign-out rows; the
+    //   new-device email line for a known account. The owner's iPhone check
+    //   (#450 release step 4) is not recorded in the docket; no line rests on
+    //   it.
+    // Left out: C20 (also in this update) was not asked for here; B65's
+    // Scan tab change (nothing a person sees); S5a's sessions channel words,
+    // its webhook filter, registration waiting for the authenticator code,
+    // and a phone signed out from another device (each in #450's "Not
+    // announced"); B75's book-list photo limits.
+    // Who is told: every member (the S5a and B65 entries have no audience);
+    // the summary starts "In the mobile app", as a phone shows only the title
+    // and the summary.
+    status: 'published',
+    title:
+      'In the mobile app, signing out stops notifications, broken links say not found, and AI chats have New chat',
+    summary:
+      'In the mobile app, after the latest update, signing out stops that phone getting your notifications and signs your other devices out, and phone sign-ins and sign-outs are in the Audit log. A mistyped link to a record says it was not found, AI Assistant chats have New chat and plain error messages, and Start a cycle count is offered only to managers who can start one. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-02T23:10:00Z',
+    entries: [
+      {
+        // platform: phone. From: S5a #450, its draft entry. Checked at
+        // 22e52f1ea: Sign out deletes this phone's push token row while the
+        // session still exists (apps/mobile/src/lib/push-unbind.ts:63, called
+        // from deviceSignOutSteps :133-160, before the session ends,
+        // sign-out-flow.ts:316), then the global logout (:318), and clears
+        // Notification Center once signed out (auth-context.tsx:532,
+        // push-unbind.ts:175-180). The note to the server ends every other
+        // session and names them on the account's channel
+        // (apps/web/src/app/api/v1/auth/signed-out/route.ts:66-84), as the
+        // web's Sign out signs them out. Use password instead and Use a
+        // different account delete the row too (auth-context.tsx:545-580,
+        // signOutToFallback). Offline: the session stays and the phone
+        // registers again (push-unbind.ts:158-160; walk-s5a W5). Walked:
+        // walk-s5a W4 (the web tab on /signin in under a second, the other
+        // phone's alert at once), step 5 (another person on the same phone),
+        // W5, W8.2. "an open web tab or a running app": a phone whose app is
+        // closed is signed out at its next token refresh, as before (#450).
+        id: 'app-sign-out-stops-notifications',
+        category: 'improved',
+        area: 'Mobile app',
+        title: 'In the mobile app, signing out stops that phone getting your notifications',
+        whatChanged:
+          'In the mobile app, after the latest update, Sign out stops that phone getting your notifications and clears the ones it still shows. Your other devices are signed out too, an open web tab or a running app within seconds, as when you sign out on the web. Use password instead and Use a different account also stop that phone getting your notifications.',
+        whyItMatters:
+          'Before, a phone kept getting your order, purchase order and stock notifications after you signed out of it, until someone else signed in on it, and your other devices stayed signed in for up to an hour. On a shared or handed-on phone, the next person no longer sees your notifications.',
+        howItAffectsYou:
+          'Notifications start again on a phone when you sign in on it. If the phone is offline when you press Sign out, you stay signed in, as before, and it keeps getting your notifications.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+      },
+      {
+        // platform: phone, through the server. From: S5a #450, its draft
+        // entry. Checked at 22e52f1ea: the phone sends its sign-in and
+        // sign-out notes (apps/mobile/src/lib/auth-notes.ts:27-60); the
+        // sign-in note writes user.signed_in in the organization
+        // (apps/web/src/app/api/v1/auth/signed-in/route.ts:169-176) and calls
+        // noteLoginDevice with the phone's name (:200-207); the sign-out note
+        // writes user.signed_out (signed-out/route.ts:99-102). The email goes
+        // only for a device the account has not used, and only when the
+        // account already has a known device (lib/auth/login-device.ts:94-118),
+        // as for a web sign-in (server/actions/auth.ts:223). The phone's name,
+        // "StockPilot app on iPhone 15 Pro (iOS 18.1)" (signed-in/route.ts
+        // :121-126). Change password signs out the other devices (#470,
+        // server/actions/auth.ts). Walked: walk-s5a W1, W2 and W3 (the rows
+        // and the email's dry-run line in the lab).
+        id: 'app-sign-ins-in-audit-log',
+        category: 'improved',
+        area: 'Account',
+        title:
+          'Signing in and out in the mobile app shows in the Audit log, and a new phone sends you an email',
+        whatChanged:
+          "In the mobile app, after the latest update, signing in and signing out are recorded in your organization's Audit log, as they are on the web. When your account signs in on a phone it has not used before, we email you, as the web does for a new browser, and the email names the phone, for example StockPilot app on iPhone 15 Pro (iOS 18.1).",
+        whyItMatters:
+          'Before, phone sign-ins and sign-outs were not in the Audit log, and signing in on a new phone never sent the email the web sends. If someone signs in to your account on a phone you do not recognize, you now hear about it.',
+        howItAffectsYou:
+          'The first time you sign in on each of your phones after the update, you may get one email about a new device. If it was you, there is nothing to do.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. If an email names a phone you do not recognize, change your password in Settings, Security on the web: changing it also signs out your other devices.',
+      },
+      {
+        // platform: phone. From: B65 #476, its draft entry. Checked at
+        // 22e52f1ea: each screen checks the link id with core isUuid before
+        // any read: apps/mobile/app/order/[id].tsx:1412 (and :550 offline),
+        // app/item/[id].tsx:707 (the alert :710, ITEM_NOT_FOUND_COPY :507,
+        // leaveItemScreen :517-518, back or Home), app/po/[id].tsx:324 (the
+        // words :740), app/po-import/[id].tsx:301 (:578),
+        // app/exceptions/[id].tsx:270 (EXCEPTION_NOT_AVAILABLE_COPY :159-160,
+        // Try again only for a well-formed id :360). Walked: simwalk-1102b w1
+        // step 6 (W1-W9) and step 14 (upper-case ids). No audience: anyone can
+        // open a broken link. The count screen is not in #476.
+        id: 'app-mistyped-record-link-not-found',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'In the mobile app, a mistyped or cut-off link to a record says it was not found',
+        whatChanged:
+          'In the mobile app, after the latest update, opening a link to an order, an item or book, a purchase order, a PO import or an exception whose id was mistyped or cut short shows that screen’s not-found message, such as “Order not found.”, as a link to a record that does not exist does. Before, the order, purchase order and PO import screens showed the database’s own error text with Try again, the item screen said “Check your connection and try again.”, and the exception screen said “The server sent an unexpected answer.”',
+        whyItMatters:
+          'Those messages blamed the connection, the server or the database for a broken link, and Try again could never work.',
+        howItAffectsYou:
+          'Links in notifications and inside the app carry whole ids and open as before. When the app cannot show an item, the message now reads “This item is not available to you, or it no longer exists.” instead of “This item no longer exists.”, and OK goes back to the screen before, or to Home when there is none. Back on an item opened from a link with no screen before it now goes to Home.',
+        whatToDo:
+          'If a link says the record was not found, check that the whole link was copied, or open the record from its list. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+      },
+      {
+        // platform: phone. From: B75 #435, its phone part (A); its route part
+        // (E) is told in phone-ai-long-chats-keep-answering. Checked at
+        // 22e52f1ea: New chat, apps/mobile/app/ai/chat.tsx:297-298 (shown once
+        // the chat has turns, hidden while an answer or a photo is pending)
+        // and startNewChat :179-184 (empties the chat and the box, forgets the
+        // session; nothing deleted); Chat error shows the route's own sentence
+        // or the status sentence (src/lib/ai-chat.ts:172-174, chat.tsx:157),
+        // else CONNECTION_FAILURE_COPY (src/lib/connection-copy.ts:17-18); the
+        // route's sentences, apps/web/src/app/api/ai/chat/route.ts:79 and
+        // :191; the body sends no history while a chat is held
+        // (ai-chat.ts:96-107). Walked: simwalk-1102b w1 steps 11-13 (W1-W7)
+        // and ipad. Audience: the route checks the AI module and items:update.
+        id: 'app-ai-new-chat-and-plain-errors',
+        category: 'improved',
+        area: 'AI Assistant',
+        title:
+          'The AI Assistant in the mobile app has New chat and says plainly why a message failed',
+        whatChanged:
+          'In the mobile app, after the latest update, a + button (New chat) at the top right of an AI Assistant chat clears it and starts a new one. It shows once the chat has started and is hidden while an answer is on its way. When a message cannot be sent, Chat error now says why in a sentence, such as “Your message is too long. Keep it under 2,000 characters.” or “Could not reach the server. Check your connection and try again.”',
+        whyItMatters:
+          'The only way to start over was to leave the chat and open it again, and a refused message showed technical text, such as AI chat 400 and the server’s raw answer.',
+        howItAffectsYou:
+          'The chat you leave with New chat is not deleted: it stays in the AI Assistant on the web, in the same workspace. The app also no longer sends the whole conversation with every message.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // platform: phone. From: B42 #423, its phone half (the web half is
+        // count-start-managers-only). Checked at 22e52f1ea: the + button
+        // (Start a cycle count) and the empty list's words,
+        // apps/mobile/app/(drawer)/(tabs)/cycle-counts.tsx:190-194, :566-568
+        // and :618-621, by core countStartAllowed (packages/core/src/
+        // warehouse/exception-recount.ts:450-458: the manager role or above,
+        // cycle_counts:assign and stock:adjust, the module on, never while the
+        // role is unknown); Review, src/components/count-select-bar.tsx:67 and
+        // :175 with src/lib/count-select-offers.ts:35-51; Select on Items and
+        // Books only when the bar offers Review or Group selected
+        // (items:update), (tabs)/inventory.tsx:251 and :945,
+        // (tabs)/books.tsx:244 and :905; New count's sentence above a disabled
+        // Start count, app/cycle-count/new.tsx:80, :196-204, with
+        // COUNT_START_MANAGER_ONLY_COPY (exception-recount.ts:84-85). Walked:
+        // walk-lpw-1102 (staff, viewer, module off, empty list on the iPad,
+        // offline cold start) and simwalk-1102b w1 step 7 (admin). Audience:
+        // as count-start-managers-only.
+        id: 'app-count-start-managers-only',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'In the mobile app, counts are started only by people who can start one',
+        whatChanged:
+          'In the mobile app, after the latest update, the + button on Cycle counts and Review in the Items and Books select bar show only for managers who can assign counts and adjust stock, where Cycle Counts is turned on. Select on Items and Books shows only when the bar has something for you, such as Group selected, so viewers no longer see it. Anyone who is not a manager able to assign counts and adjust stock and opens New count, for example from a link, reads “Only a manager with permission to assign counts and adjust stock can start a count.” above Start count, which stays off.',
+        whyItMatters:
+          'Staff and viewers could pick items and press Start count, and the start was always refused. Where Cycle Counts is turned off, Review could not start a count for anyone.',
+        howItAffectsYou:
+          'If you cannot start a count, an empty Cycle counts list says “Counts a manager starts appear here.” Counts you are given to enter work as before. When the app is opened without a connection, the + button and Review may not show until it is back online.',
+        whatToDo:
+          'No action needed. Ask a manager when a count needs starting. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['items:read', 'cycle_counts:read', 'stock:adjust'] },
+      },
+      {
+        // platform: phone. From: B23 #406, its phone half (the web half is in
+        // delivery-sites-by-name-and-deleted-driver). Checked at 22e52f1ea:
+        // apps/mobile/src/lib/order-manager-actions.ts:113-116 (approvers:
+        // orders:approve and not a viewer) and :164-167 (in transit, the
+        // driver deleted, Collect signature offered), the words from core
+        // deletedDriverHandOverLine (packages/core/src/orders/
+        // delivery-driver.ts:75-80), shown above the buttons
+        // (app/order/[id].tsx:3309-3315). Walked: walk-lpw-1102 B23 on iPhone
+        // and iPad, Large and AX5: a manager reads both buttons, a staff
+        // approver Collect signature only, staff without orders:approve no
+        // line. Audience: who approves orders where Orders is on.
+        id: 'app-deleted-driver-hand-over-line',
+        category: 'improved',
+        area: 'Orders',
+        title:
+          'In the mobile app, a delivery whose driver deleted their account says how to finish it',
+        whatChanged:
+          'In the mobile app, after the latest update, an order out for delivery whose driver deleted their StockPilot account now tells approvers, above the hand-over buttons: “The driver of this delivery deleted their account. Record the hand-over here with Collect signature or Physical signature.” Approvers who are not managers read Collect signature only.',
+        whyItMatters:
+          'When a driver deleted their account, the order lost its driver and nothing on it said why, so a delivery on its way looked unassigned.',
+        howItAffectsYou:
+          'Nothing is blocked: hand the order over with Collect signature as for any delivery, or Physical signature if you are a manager. The web already shows this line.',
+        whatToDo:
+          'No action needed. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'clearer-web-messages-2026-11',
+    revision: 1,
+    // Two web changes, from their drafts, in one release:
+    // - S31, #481 (squash a34543b81, live 2026-11-02 22:55:57Z, web build
+    //   ccd6388e778d): web-unexpected-failure-sentence, from #481's draft;
+    // - S29, #470 (squash 5cc3e778e, live 21:37:13Z, web build 107f86fd7cc8):
+    //   authenticator-code-plain-words, from #470's draft ("published with
+    //   the next web small-fixes release"). #481's second drafted entry
+    //   (authenticator-code-words, set-up) is published "only if #470's entry
+    //   has not already said it": it is folded into #470's entry as its last
+    //   sentence instead, so the reader gets one entry about codes.
+    // S32 (#470) has no entry: nothing a person normally sees changes.
+    // No phone update ships with either: the phone never calls these actions.
+    // Checks: postdeploy-1102/s31 (PASS: one sign-in, Settings, Team, Orders
+    // and Items read-only, 0 5xx, every S31 log tag 0) and postdeploy-1102/s29
+    // (PASS: sign-in with no code asked for an account without an
+    // authenticator, Security and Profile read, 0 5xx; the audit-anomalies
+    // run's summary). The failure paths cannot be brought about on production:
+    // they rest on the code and the tests of each PR.
+    // Claims checked against the code at 22e52f1ea (apps/web/src):
+    // - web-unexpected-failure-sentence: server/lib/action-error-result.ts
+    //   :47-54 (unexpectedActionError reports the failure and answers
+    //   UNEXPECTED_ERROR_MESSAGE, server/lib/api-error-response.ts:19, or the
+    //   feature's own sentence, action-error-result.ts:15-21, such as
+    //   ROW_NOT_IMPORTED_MESSAGE); actionErrorResult :80-110 keeps a
+    //   ServiceError's code and words (a refusal StockPilot writes itself);
+    //   72 server action files use it. This is Server Actions (forms); S16's
+    //   web-unexpected-failure-plain-sentence told the export and PO scan
+    //   routes, so this entry names saving, sending and importing.
+    // - authenticator-code-plain-words: lib/auth/mfa-code-attempts.ts:71-79
+    //   (the words), :96-118 (10 code presses per 15 minutes for one account
+    //   at one address, then 20 per hour for the account); the sign-in code
+    //   and the step-up modal, server/actions/mfa.ts:332-364
+    //   (challengeFactorAction); the reset's code step, server/actions/
+    //   auth.ts:492-544; set-up, mfa.ts:152-205 (verifyEnrollmentAction,
+    //   answered by mfaCodeFailure :49-72: a wrong code MFA_CODE_REFUSED, the
+    //   Auth server's limit MFA_CODE_GOTRUE_LIMITED, "Wait a minute").
+    // Changed from the drafts: S31's howItAffectsYou ("Try again. If it keeps
+    // happening, tell your administrator.") moves to whatToDo, with "contact
+    // support" for "tell your administrator" (an administrator cannot fix a
+    // server failure); its howItAffectsYou says what stays the same. S29's
+    // whyItMatters says the pause protects the account instead of who it
+    // slows down.
+    // Who is told: every member (no audience: anyone can meet a failed form,
+    // and anyone can use an authenticator app).
+    status: 'published',
+    title: 'Plain words when a web form fails, and clear messages for authenticator codes',
+    summary:
+      'On the web, a form that fails for a reason we did not expect now shows one plain sentence and reports the problem to us. When an authenticator code is not accepted, or codes were entered too many times, the web now says so in plain words.',
+    publishedAt: '2026-11-02T22:56:00Z',
+    entries: [
+      {
+        id: 'web-unexpected-failure-sentence',
+        category: 'improved',
+        area: 'Web app',
+        title: 'One plain sentence when a web form fails unexpectedly',
+        whatChanged:
+          'On the web, when saving, sending or importing something fails for a reason we did not expect, StockPilot now says “Something went wrong. Please try again.”, or a sentence written for that task, such as “Could not import this row.”, instead of technical text from the database, an outside service or the server.',
+        whyItMatters:
+          'The old text was technical, did not say what to do, and the failure was not reported to us. Each of these failures now reaches us.',
+        howItAffectsYou:
+          'Messages StockPilot writes itself, such as a duplicate tag name or a missing permission, keep their exact words.',
+        whatToDo:
+          'If you see “Something went wrong. Please try again.”, try again. If it keeps happening, contact support.',
+      },
+      {
+        id: 'authenticator-code-plain-words',
+        category: 'improved',
+        area: 'Account',
+        title: 'Clearer messages when an authenticator code is not accepted',
+        whatChanged:
+          'On the web, when you sign in or confirm an action with a code from your authenticator app and the code is not accepted, the page now says: That code is not valid. Check your authenticator app and try again. If codes are entered many times, the web pauses code checks for a few minutes (up to an hour after many tries in one hour), also when you finish a password reset, and says: Too many code attempts. Wait a few minutes and try again. Setting up an authenticator app in Settings, Security says the same when a code is not valid.',
+        whyItMatters:
+          'The old message used the sign-in service’s technical words. The pause protects your account from repeated guesses.',
+        howItAffectsYou:
+          'If you see the pause message, wait a few minutes, then enter the code your app shows at that moment; after many tries in one hour the pause can last until that hour is over. Code checks in the mobile app are unchanged.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'invites-calendar-record-pages-2026-11',
+    revision: 1,
+    // QW1, #483 (squash c7d6cc625, live 2026-11-02 22:28:58Z, web build
+    // 6d49594da622; web only, no migration, no phone code), from the draft
+    // in #483's description (one release, five entries; T25 has none). The
+    // draft gave some entries only a title, whatChanged and whatToDo: the
+    // other answers are written here from #483's "What people will see" and
+    // checked against the code. The draft's title said "tidier" and
+    // "honest": the title now says what changed.
+    // Check: postdeploy-1102/qw1 (PASS): a bundle, an order, its print view,
+    // a PO and an event opened as before; the month grid at 390 and 1280 px
+    // ends at Saturday (scrollWidth equal to clientWidth on the page, the
+    // grid 640 px wide at 390 px, scrolling inside its card); Billing with
+    // ?status=cancelled and ?status=success shows only its own line.
+    // Claims checked against the code at 22e52f1ea (apps/web/src):
+    // - invite-sign-in-link: app/invite/[token]/invite-copy.ts:12-21, drawn
+    //   by app/invite/[token]/page.tsx:159-164, answered by
+    //   server/actions/team.ts:587 and :607. No audience: the reader is
+    //   someone who already has an account.
+    // - team-calendar-seven-days: components/schedule/schedule-calendar.tsx
+    //   :464 (the chip is relative, so its clip cuts the hidden status word
+    //   that widened the grid), :140 (time and space in one text node),
+    //   :418 (the last row's padding on phones and touch screens).
+    // - record-pages-could-not-load: app/(dashboard)/dashboard/bundles/[id]/
+    //   page.tsx:43-45 and :69, bundles/[id]/edit/page.tsx:23-25 and :40,
+    //   orders/[id]/pick/page.tsx:29-31 and :60, orders/[id]/print/page.tsx
+    //   :69-71 and :83 (notFound only for not_found; anything else goes to
+    //   app/(dashboard)/error.tsx, which reports it, :53, and says "Something
+    //   broke loading this page", :71, with Try again, :91); the module check
+    //   also on orders/[id]/page.tsx:209-211, purchase-orders/[id]/page.tsx
+    //   :60-62 and schedule/[id]/page.tsx:72-74 (and their edit pages).
+    //   The order page itself is not named for the failed read: it already
+    //   sent only not_found to Page not found before #483 (c7d6cc625^,
+    //   orders/[id]/page.tsx:253-262); #483 added only its module check.
+    // - distribute-own-events: bundles/[id]/page.tsx:76 and :309-319 (the
+    //   events read filters organization_id); Distribute is offered by
+    //   canDistributeBundles (:59): bundles:distribute and the manager role or
+    //   above.
+    // - billing-checkout-result: settings/billing/page.tsx:27-40 and :73
+    //   (the two lines, only for ?status=success or cancelled); checkout
+    //   needs billing:manage (server/services/billing.ts:43).
+    status: 'published',
+    title:
+      'Invites point to Sign in, the team calendar stops at Saturday, and record pages say when they could not be loaded',
+    summary:
+      'On the web, an invite for an address that already has an account now points to the page’s Sign in link, and the team calendar no longer scrolls into blank space past Saturday. Bundle pages and an order’s pick and print views that cannot be loaded say so with Try again, instead of saying the record does not exist. Distribute offers only your organization’s events, and Billing says whether a checkout went through.',
+    publishedAt: '2026-11-02T22:29:00Z',
+    entries: [
+      {
+        id: 'invite-sign-in-link',
+        category: 'fixed',
+        area: 'Team',
+        title: 'Invites point to the right Sign in link',
+        whatChanged:
+          'If you open an invite for an email that already has an account, the message now says to use “Already have an account? Sign in” on the invite page, then accept the invite.',
+        whyItMatters:
+          'It used to name an “I already have an account” option the page does not have.',
+        howItAffectsYou:
+          'The link is at the bottom of the invite page. Sign in there with your existing account to accept the invite.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'team-calendar-seven-days',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar fits its seven days',
+        whatChanged:
+          'On the web, the team calendar’s month grid no longer scrolls sideways into blank space past Saturday on a phone, and no longer scrolls sideways at all on a wide screen. Screen readers now read each event’s time and title with a space between them, such as “9:00 AM Delivery run”.',
+        whyItMatters:
+          'Each event’s hidden status word made the grid wider than the week, and a screen reader ran the time into the title.',
+        howItAffectsYou:
+          'On a phone, the grid still scrolls sideways to show the whole week, and it stops at Saturday.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        id: 'record-pages-could-not-load',
+        category: 'fixed',
+        area: 'Bundles and Orders',
+        title: 'Bundle pages and order pick and print views that cannot be loaded say so',
+        whatChanged:
+          'On the web, when a bundle, or an order’s pick or print view, cannot be loaded, for example after a timeout, the page now says “Something broke loading this page” and offers Try again, instead of “Page not found”. A record that does not exist still shows Page not found. A link to a bundle, order, purchase order or Schedule event whose module is turned off now says the module is off.',
+        whyItMatters:
+          '“Page not found” made a passing problem look like a deleted record, and the failure was not reported to us.',
+        howItAffectsYou: 'Try again loads the page again. Pages that load work as before.',
+        whatToDo: 'If you see the error, press Try again.',
+        audience: { modules: ['bundles', 'orders', 'purchase_orders', 'schedule'] },
+      },
+      {
+        id: 'distribute-own-events',
+        category: 'fixed',
+        area: 'Bundles',
+        title: 'Distribute lists only your organization’s events',
+        whatChanged:
+          'If you belong to more than one organization, the event list in a bundle’s Distribute now shows only the events of the organization you are working in.',
+        whyItMatters:
+          'It also listed the other organization’s events, and handing kits out for one of them was refused.',
+        howItAffectsYou: 'The events of the organization you are in are listed as before.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['bundles:distribute'],
+          modules: ['bundles'],
+        },
+      },
+      {
+        id: 'billing-checkout-result',
+        category: 'improved',
+        area: 'Billing',
+        title: 'Billing says how your checkout ended',
+        whatChanged:
+          'After a Stripe checkout, Billing now says “Checkout complete. Your plan shows here once Stripe confirms the payment; reload the page if it has not changed yet.” or “Checkout cancelled. Nothing was charged, and your plan has not changed.”',
+        whyItMatters:
+          'Billing said nothing when you came back from Stripe, so it was not clear whether the checkout had gone through.',
+        howItAffectsYou: 'Your plan changes once Stripe confirms the payment, as before.',
+        whatToDo:
+          'No action needed. If your plan has not changed after a completed checkout, reload the page.',
+        audience: { anyPermission: ['billing:manage'] },
+      },
+    ],
+  },
+  {
     id: 'web-fixes-2026-11-02',
     revision: 1,
     // Two web fixes, published together at the top, the newest release:
