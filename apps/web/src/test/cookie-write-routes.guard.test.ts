@@ -76,6 +76,13 @@ interface Exemption {
 
 /** Paths relative to src/app. Reviewed 2026-10-24 (docket S14). */
 const EXEMPT: Record<string, Exemption> = {
+  'api/appearance/style/route.ts': {
+    methods: ['POST'],
+    auth: 'none',
+    session: 'none',
+    reason:
+      "Liquid Glass (REVISION-DEFAULT R6): sets only the caller's own sp_style cookie to a validated Design. It reads no session and writes no data, and it refuses a request the browser does not place on this origin (isSameOriginBrowserRequest) or that lacks x-sp-appearance: 1, so another site cannot flip it.",
+  },
   'api/admin/backfill-item-thumbs/route.ts': {
     methods: ['POST'],
     auth: 'admin secret',

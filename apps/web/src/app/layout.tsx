@@ -7,10 +7,11 @@ import { InterruptedRunExpiry } from '@/components/auth/interrupted-run-expiry';
 import { SessionFragmentScrub } from '@/components/auth/session-fragment-scrub';
 import { WebVitalsReporter } from '@/components/perf/web-vitals-reporter';
 import { Toaster } from '@/components/ui/sonner';
-import { isLiquidGlassEnabled } from '@/components/theme/appearance-flag';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { AppearanceProvider } from '@/components/theme/appearance-provider';
-import { APPEARANCE_SCRIPT } from '@/components/theme/appearance-script';
+import { appearanceScript } from '@/components/theme/appearance-script';
 import { ThemeProvider } from '@/components/theme/theme-provider';
+import { isScenePhotoBuilt, scenePhotoCss } from '@/styles/liquid-glass/scene-photo';
 
 import { APP_DESCRIPTION, APP_NAME } from '@stockpilot/core';
 
@@ -113,6 +114,7 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
+  const glassScript = appearanceScript(liquidGlassRollout());
   return (
     <html
       lang="en"
@@ -122,14 +124,21 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       {/*
         The first-paint appearance script (components/theme/appearance-script.ts):
         sets data-appearance="liquid-glass" on <html> before the first paint
-        when the device cookie holds that choice, and touches nothing
-        otherwise. Emitted only when this build offers Liquid Glass (the kill
-        switch, appearance-flag.ts). No route reads the cookie on the server,
-        so every page's HTML is the same for everyone and caching is unchanged.
+        when the Design cookie and the rollout say glass (under `default`:
+        unless the cookie says classic; under `opt-in`: only when it says
+        liquid-glass), and touches nothing otherwise. Not emitted under `off`
+        (the kill switch, appearance-flag.ts). No route reads the cookie on
+        the server, so every page's HTML is the same for everyone and caching
+        is unchanged. With it, when the build found the installed scene
+        photos (styles/liquid-glass/scene-photo.ts; never committed), the one
+        style that lets the glass material draw them.
       */}
-      {isLiquidGlassEnabled() ? (
+      {glassScript ? (
         <head>
-          <script dangerouslySetInnerHTML={{ __html: APPEARANCE_SCRIPT }} />
+          <script dangerouslySetInnerHTML={{ __html: glassScript }} />
+          {isScenePhotoBuilt() ? (
+            <style dangerouslySetInnerHTML={{ __html: scenePhotoCss() }} />
+          ) : null}
         </head>
       ) : null}
       <body className="bg-background min-h-screen font-sans antialiased">

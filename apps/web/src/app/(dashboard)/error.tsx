@@ -98,8 +98,8 @@ export default function DashboardError({
           <Button type="button" variant="ghost" onClick={signOutAndBackIn}>
             Sign out and back in
           </Button>
-          {/* Only while Liquid Glass is selected; nothing in the classic looks. */}
-          <AppearanceRecovery />
+          {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
+          <AppearanceRecovery error={error} />
         </div>
       </div>
     </div>

@@ -1,0 +1,28 @@
+{
+  "$comment": "Glass-only elements (Liquid Glass plan 4.4, 8.5; plans/REVISION-DEFAULT.md R13). The 8.5 action-inventory check (stage 4) fails on any glass-only action not listed here. A 'duplicate action' entry names the classic element it duplicates on the same route, behind the same gate; an 'appearance control (no data action)' entry has no classic twin: it changes only the viewer's own appearance and reads or writes no other data. appearance-render.guard.test.ts checks that every data-glass-only element in the source is listed.",
+  "kinds": {
+    "duplicate action": "Goes where an existing classic element on the same route goes, behind the same permission gate; classicTwin names that element.",
+    "appearance control (no data action)": "The header appearance menu (Design and Theme). No classic twin on the route; no permission gate; touches only the viewer's own appearance (device record, Design cookie, own user_appearance row)."
+  },
+  "entries": [
+    {
+      "id": "external-appearance-menu",
+      "source": "apps/web/src/components/auth/external-shell.tsx",
+      "selector": "[data-slot=\"external-appearance\"]",
+      "kind": "appearance control (no data action)",
+      "routes": [
+        "/portal",
+        "/p/items/[id]",
+        "/m/[token]",
+        "/returns/request/[token]",
+        "/orders/sign/[token]",
+        "/r/[token]",
+        "/r/track",
+        "/r/confirm"
+      ],
+      "$comment": "ExternalAppearanceCorner. ExternalShell draws it in its page frame when the page passes no top bar; app/r/layout.tsx draws it for /r/[token], /r/track and /r/confirm, whose columns use frame=\"column\" inside that layout. /invite/[token] and /onboarding pass a top bar that already holds the menu.",
+      "classicTwin": null,
+      "gate": null
+    }
+  ]
+}

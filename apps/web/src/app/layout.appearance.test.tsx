@@ -2,13 +2,14 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The root layout and the Liquid Glass kill switch (plan 2.1, D12). With
- * NEXT_PUBLIC_LIQUID_GLASS off the server HTML carries no appearance script
- * and no data-appearance at all; with it on, the one head script, recognised by
- * its text, is the only addition, and <html> still carries no appearance on
- * the server (the script sets it in the browser, from the cookie). No route
- * reads the cookie on the server, so the HTML is the same for every visitor
- * either way (appearance-render.guard.test.ts).
+ * The root layout and the Liquid Glass rollout (plan 2.1; REVISION-DEFAULT
+ * R5, R6). Under `off` the server HTML carries no appearance script and no
+ * data-appearance at all; under `opt-in` and `default`, the rollout's one head
+ * script, recognised by its text, is the only addition (plus the scene photo
+ * style when the build found the photos), and <html> still carries no
+ * appearance on the server (the script sets it in the browser, from the
+ * cookie). No route reads the cookie on the server, so the HTML is the same
+ * for every visitor (appearance-render.guard.test.ts).
  */
 
 vi.mock('next/font/google', () => {
@@ -27,7 +28,8 @@ vi.mock('@/server/actions/appearance', () => ({
   setMyAppearanceAction: vi.fn(),
 }));
 
-import { APPEARANCE_SCRIPT } from '@/components/theme/appearance-script';
+import { appearanceScript } from '@/components/theme/appearance-script';
+import { scenePhotoCss } from '@/styles/liquid-glass/scene-photo';
 
 import RootLayout from './layout';
 
@@ -42,33 +44,60 @@ const page = () =>
     </RootLayout>,
   );
 
-describe('root layout and the Liquid Glass flag', () => {
-  it('flag off: no appearance script and no data-appearance in the server HTML', () => {
+const escaped = (text: string) =>
+  renderToStaticMarkup(<script dangerouslySetInnerHTML={{ __html: text }} />)
+    .replace(/^<script>/u, '')
+    .replace(/<\/script>$/u, '');
+
+describe('root layout and the Liquid Glass rollout (REVISION-DEFAULT R5, R6; item 40)', () => {
+  it('off: no appearance script, no scene style and no data-appearance in the server HTML', () => {
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS_SCENE', '1');
     const markup = page();
-    expect(markup).not.toContain(APPEARANCE_SCRIPT);
-    expect(markup).not.toContain('sp_appearance');
+    expect(markup).not.toContain('sp_style');
     expect(markup).not.toContain('data-appearance');
+    expect(markup).not.toContain('--lg-scene-photo');
+    // React writes an empty <head> when the layout gives none; Next fills it.
+    expect(markup).not.toMatch(/<head>.+<\/head>/u);
     expect(markup).toContain('<p>the page</p>');
   });
 
-  it('flag on: the one head script, ahead of the body, and still no data-appearance on the server', () => {
-    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '1');
-    const markup = page();
-    const at = markup.indexOf(APPEARANCE_SCRIPT);
-    expect(at).toBeGreaterThan(-1);
-    expect(at).toBeLessThan(markup.indexOf('<body'));
-    expect(markup.split(APPEARANCE_SCRIPT)).toHaveLength(2);
-    expect(markup).not.toMatch(/<html[^>]*data-appearance/);
-  });
+  it.each(['opt-in', 'default'] as const)(
+    '%s: the rollout’s one head script, ahead of the body, and still no data-appearance on the server',
+    (rollout) => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      const markup = page();
+      const script = escaped(appearanceScript(rollout)!);
+      const at = markup.indexOf(script);
+      expect(at).toBeGreaterThan(-1);
+      expect(at).toBeLessThan(markup.indexOf('<body'));
+      expect(markup.split(script)).toHaveLength(2);
+      expect(markup).not.toMatch(/<html[^>]*data-appearance/u);
+    },
+  );
 
-  it('the rest of the document is the same with the flag on or off', () => {
+  it('the default and opt-in scripts differ only in their rule; the rest of the document is the same in every rollout', () => {
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
     const off = page();
-    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '1');
-    const on = page();
-    // React writes an empty <head> when the layout gives none; Next fills it.
-    const withoutScript = on.replace(`<script>${APPEARANCE_SCRIPT}</script>`, '');
-    expect(withoutScript).toBe(off);
+    for (const rollout of ['opt-in', 'default'] as const) {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      // React writes an empty <head> when the layout gives none.
+      const on = page().replace(`<script>${escaped(appearanceScript(rollout)!)}</script>`, '');
+      expect(on, rollout).toBe(off);
+    }
+  });
+
+  it('the scene photo style is emitted only when the build found the installed photos', () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS_SCENE', '');
+    expect(page()).not.toContain('--lg-scene-photo');
+    expect(page()).not.toContain('/liquid-glass/scene-');
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS_SCENE', '1');
+    const markup = page();
+    const css = renderToStaticMarkup(
+      <style dangerouslySetInnerHTML={{ __html: scenePhotoCss() }} />,
+    );
+    expect(markup).toContain(css);
+    expect(markup.indexOf(css)).toBeLessThan(markup.indexOf('<body'));
   });
 });

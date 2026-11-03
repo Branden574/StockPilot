@@ -48,7 +48,9 @@ describe('glass-only and classic-only elements', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('are listed: none in stage 2, so a new one is reviewed here first', () => {
-    expect(ELEMENTS.map((e) => e.file)).toEqual([]);
+  // plans/REVISION-DEFAULT.md item 22: the appearance menu in the external
+  // shell's corner (no data action; tests/e2e/appearance/glass-only-allowlist.json).
+  it('are listed: the external appearance menu only, so a new one is reviewed here first', () => {
+    expect(ELEMENTS.map((e) => e.file)).toEqual(['components/auth/external-shell.tsx']);
   });
 });

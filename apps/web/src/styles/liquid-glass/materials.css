@@ -89,6 +89,23 @@
         backdrop-filter: none;
       }
     }
+    /* The same on weak Chromium browsers (data-lg-material="reduced", set by
+       the head script and the provider; plans/REVISION-DEFAULT.md R7). Kept
+       declaration for declaration equal to the block above
+       (glass-material-twins.guard.test.ts). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      :is(
+        [data-glass='sidebar'],
+        [data-glass='tb-btn'],
+        [data-glass='menu'],
+        [data-glass='popover'],
+        [data-glass='dialog'],
+        [data-glass='sheet'],
+        [data-glass='navsheet']
+      ) {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
     @media (forced-colors: active) {
       :root[data-appearance='liquid-glass']
         :is(

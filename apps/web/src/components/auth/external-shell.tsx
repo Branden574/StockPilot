@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { cn } from '@/lib/utils';
 
 /**
@@ -17,6 +19,14 @@ import { cn } from '@/lib/utils';
  *   the page's own.
  * - Comfortable sizes (CONFLICTS E6): these pages are used one-handed at a
  *   dock, by principals and by requesters on a phone.
+ * - A way back to the classic design (plans/REVISION-DEFAULT.md R13): with
+ *   Liquid Glass in the build, a page that draws the whole frame and passes
+ *   no top bar gets the header appearance menu in a small corner that exists
+ *   only in glass (`data-glass-only`, hidden in classic by
+ *   styles/liquid-glass/visibility.css). Under the `off` rollout it is not
+ *   rendered at all, so the frame is today's markup. A layout that draws the
+ *   page itself around `frame="column"` pages (app/r/layout.tsx) renders the
+ *   same corner (ExternalAppearanceCorner).
  */
 
 const WIDTH = {
@@ -95,6 +105,22 @@ export function ExternalShell({
       ) : null}
       {column}
       {poweredBy ? <ExternalFooter className={WIDTH[width]} /> : null}
+      {topBar ? null : <ExternalAppearanceCorner />}
+    </div>
+  );
+}
+
+/**
+ * The header appearance menu (Design and Theme) in a small top-right corner
+ * that exists only in glass (R13): the way back to Classic on a page with no
+ * header menu of its own. Nothing at all under the `off` rollout. Listed in
+ * tests/e2e/appearance/glass-only-allowlist.json ("appearance control").
+ */
+export function ExternalAppearanceCorner() {
+  if (liquidGlassRollout() === 'off') return null;
+  return (
+    <div data-slot="external-appearance" data-glass-only="" className="absolute right-3 top-3">
+      <ThemeToggle />
     </div>
   );
 }

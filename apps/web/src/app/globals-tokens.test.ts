@@ -657,8 +657,12 @@ describe('globals.css follow-ups (redesign P2.1c)', () => {
         });
       }
     }
-    // The colours are emitted once, on :root in the theme layer, so .dark's
-    // --ed-* values on <html> reach them; nothing else sets them.
+    // The colours are emitted on :root in the theme layer, so .dark's --ed-*
+    // values on <html> reach them. The one other rule that sets them is the
+    // Liquid Glass exempt block (plans/REVISION-DEFAULT.md item 14: the label
+    // sheet and the signature pad keep classic inside glass), with the same
+    // formula, so it is computed again from the classic values declared
+    // beside it.
     const emitted = new Map<string, string[]>();
     built.walkDecls(/^--color-/, (decl) => {
       const where = `${(decl.parent as Rule).selector} ${enclosingAtRules(decl).join(' ')}`;
@@ -667,6 +671,7 @@ describe('globals.css follow-ups (redesign P2.1c)', () => {
     for (const [name, tokenName] of EDITORIAL_COLOURS) {
       expect(emitted.get(colourVar(name)), name).toEqual([
         `:root, :host @layer theme = var(${tokenName})`,
+        `:root[data-appearance="liquid-glass"] [data-appearance-exempt] @media screen @layer lg = var(${tokenName})`,
       ]);
     }
   });

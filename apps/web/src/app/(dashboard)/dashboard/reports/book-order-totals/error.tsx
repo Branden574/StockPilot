@@ -58,8 +58,8 @@ export default function BookOrderTotalsError({
             <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
               <RefreshCw aria-hidden /> {BOOK_REPORT_UI.tryAgain}
             </Button>
-            {/* Only while Liquid Glass is selected; nothing in the classic looks. */}
-            <AppearanceRecovery size="sm" />
+            {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
+            <AppearanceRecovery error={error} size="sm" />
           </>
         }
       />
