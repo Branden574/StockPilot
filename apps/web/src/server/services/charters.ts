@@ -67,6 +67,14 @@ export interface CharterNameRow {
   status: CharterRow['status'];
 }
 
+/** A charter's name, short code and status, for a list's Charter cell (listLabels). */
+export interface CharterLabelRow {
+  id: string;
+  name: string;
+  code: string | null;
+  status: CharterRow['status'];
+}
+
 /**
  * Trims an address down to the non-empty fields. Returns `null` when every
  * field is blank so we persist a clean `null` (not `{}`) — keeping the
@@ -149,6 +157,41 @@ export class ChartersService {
         updated_at: r.updated_at as string,
       };
     });
+  }
+
+  /**
+   * The organization's charters as a list's Charter cell names them: id, name,
+   * short code and status, AT ANY STATUS (or, with `exceptActive`, only the
+   * archived and inactive ones, beside list()'s active ones). Items and Books
+   * named a record tagged to an archived charter "Generic" because their
+   * lookup held active charters only (B97); archiving only sets the status,
+   * so the records keep the charter. A LABEL read: what is offered in a
+   * filter or a form still comes from list(). charters_select admits every
+   * member at any status.
+   *
+   * Every row, page by page, by name and then id, stopping at
+   * LOOKUP_ROW_CEILING rows (reported), as list() does. Throws on a failed
+   * read; the pages catch it and name none (a label, never the page).
+   */
+  async listLabels(opts: { exceptActive?: boolean } = {}): Promise<CharterLabelRow[]> {
+    const rows = await fetchAllRows<CharterLabelRow>(
+      (from, to) => {
+        let q = this.ctx.supabase
+          .from('charters')
+          .select('id, name, code, status')
+          .eq('organization_id', this.ctx.organizationId);
+        if (opts.exceptActive) q = q.neq('status', 'active');
+        return q
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+      },
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('charters.list_labels', { organizationId: this.ctx.organizationId });
+    }
+    return rows.map((r) => ({ id: r.id, name: r.name, code: r.code ?? null, status: r.status }));
   }
 
   async create(input: CreateCharterInput) {
