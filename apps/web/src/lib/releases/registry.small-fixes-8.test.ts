@@ -70,6 +70,11 @@ const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules:
  */
 // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: the authenticator code and integration retries releases only): the web fixes and archived charters releases are published later, at the top, and reach an owner, so they are read or seen with the others.
 const NEWER_IDS = [
+  // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without them): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
+  'export-items-permission-2026-11',
+  'mobile-app-fixes-2026-11-02',
+  'clearer-web-messages-2026-11',
+  'invites-calendar-record-pages-2026-11',
   'web-fixes-2026-11-02',
   'archived-charters-2026-11',
   'authenticator-code-requests-2026-11',
@@ -145,10 +150,13 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-2026-11-02b (2026-11-02; was: every pinned position one place higher): the lists-delivery-sites-and-fixes release is published directly below the B44 phone update draft, above the export fixes release, so every position below it moves down by one.
     // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: every pinned position one place higher): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the export fixes release at 4, ID at 5 and slice(6)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
-    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
-    expect(Date.parse(RELEASES[6]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    expect(RELEASES[7]?.id).toBe(ID);
-    for (const r of RELEASES.slice(8)) {
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
+    expect(RELEASES[10]?.id).toBe('export-fixes-2026-10');
+    expect(Date.parse(RELEASES[10]!.publishedAt)).toBeGreaterThan(
+      Date.parse(release().publishedAt),
+    );
+    expect(RELEASES[11]?.id).toBe(ID);
+    for (const r of RELEASES.slice(12)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
