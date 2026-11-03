@@ -4,12 +4,69 @@ import { ROLES } from '../constants/roles';
 
 import { emailSchema, slugSchema } from './common';
 
+/**
+ * The zone names the app and the database both use as an organization's zone
+ * (B41). The web and the phone render through resolveOrgTimezone, which keeps
+ * any zone this runtime's Intl accepts; the Book Order Totals report's SQL
+ * tries only UTC, GMT or an Area/Location name of this shape and falls back to
+ * Pacific otherwise (0379, 0382). A zone outside either would put the app and
+ * the report on different clocks, so a create path stores only zones both use.
+ */
+const ORG_ZONE_SHAPE = /^[A-Za-z]+(\/[A-Za-z0-9_+-]+){1,2}$/;
+
+export function isStorableOrgTimezone(raw: string): boolean {
+  const zone = raw.trim();
+  if (!(zone === 'UTC' || zone === 'GMT' || ORG_ZONE_SHAPE.test(zone))) return false;
+  try {
+    // Constructing the formatter is what validates the zone.
+    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const ORG_TIMEZONE_INVALID_MESSAGE =
+  'Enter a time zone name such as America/Chicago or UTC.';
+
+/**
+ * A zone typed in another case under its own name ('america/chicago' becomes
+ * 'America/Chicago'): Intl and Postgres match zone names whatever their case,
+ * but Settings finds a listed zone by its exact name. Only the letters' case
+ * changes, never one name for another: Intl may answer an alias's other name
+ * (America/Indianapolis for America/Indiana/Indianapolis), which is kept as
+ * typed.
+ */
+function zoneInItsOwnCase(raw: string): string {
+  try {
+    const named = new Intl.DateTimeFormat('en-US', { timeZone: raw }).resolvedOptions().timeZone;
+    return named.toLowerCase() === raw.toLowerCase() ? named : raw;
+  } catch {
+    return raw;
+  }
+}
+
+/** An organization's zone as a create path takes it: trimmed, in its own
+ *  case, and only a zone isStorableOrgTimezone accepts; `fallback` when none
+ *  is sent. Every refusal says ORG_TIMEZONE_INVALID_MESSAGE. Onboarding and
+ *  the platform console share it. */
+export function storableOrgTimezoneSchema(fallback: string) {
+  return z
+    .string()
+    .trim()
+    .min(1, ORG_TIMEZONE_INVALID_MESSAGE)
+    .max(64, ORG_TIMEZONE_INVALID_MESSAGE)
+    .default(fallback)
+    .transform(zoneInItsOwnCase)
+    .refine(isStorableOrgTimezone, ORG_TIMEZONE_INVALID_MESSAGE);
+}
+
 export const createOrganizationSchema = z.object({
   name: z.string().min(2).max(120).trim(),
   slug: slugSchema.optional(),
   industry: z.string().max(64).nullable().optional(),
   size: z.string().max(32).nullable().optional(),
-  timezone: z.string().min(1).max(64).default('UTC'),
+  timezone: storableOrgTimezoneSchema('UTC'),
   currency: z.string().length(3).default('USD'),
 });
 export type CreateOrganizationInput = z.infer<typeof createOrganizationSchema>;

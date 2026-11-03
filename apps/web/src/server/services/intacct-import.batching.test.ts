@@ -11,8 +11,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const created = vi.hoisted(() => [] as string[]);
 const pages = vi.hoisted(() => ({ records: [] as Array<Record<string, unknown>> }));
+/** What creating a SKU throws, for the per-row failure cases (S31). */
+const failures = vi.hoisted(() => new Map<string, unknown>());
 
-vi.mock('@/lib/auth/warehouse', () => ({
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+
+// The real ForbiddenError: RowFailures tells a warehouse refusal by it.
+vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/warehouse')>()),
   getWarehouseAccess: vi.fn(async () => ({
     writableIds: ['wh-1'],
     readableIds: ['wh-1'],
@@ -42,6 +48,7 @@ vi.mock('@/server/connectors/sage-intacct/client', () => ({
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
     async create(input: { sku: string }) {
+      if (failures.has(input.sku)) throw failures.get(input.sku);
       created.push(input.sku);
       return { id: `id-${input.sku}` };
     }
@@ -58,7 +65,9 @@ import {
   type MockCall,
 } from '@/test/supabase-mock';
 
-import type { ServiceContext } from './context';
+import { reportError } from '@/lib/error-reporter';
+
+import { ServiceError, type ServiceContext } from './context';
 import { importItemsFromIntacct } from './intacct-import';
 
 const skus = Array.from(
@@ -82,6 +91,8 @@ function ctxWith(itemsSelect: (call: MockCall) => { data: unknown; error: unknow
 }
 
 beforeEach(() => {
+  vi.clearAllMocks();
+  failures.clear();
   created.length = 0;
   pages.records = skus.map((id) => ({ id, name: id }));
 });
@@ -120,5 +131,44 @@ describe('importItemsFromIntacct existing-SKU check', () => {
       code: 'internal_error',
     });
     expect(created).toEqual([]);
+  });
+});
+
+// S31: the Intacct card showed each failed item's error text ("First errors:
+// SKU: <message>"), and nothing was reported. A refusal the app wrote keeps
+// its words; anything else says the fixed sentence, and the run sends one
+// report.
+describe("importItemsFromIntacct: a failed item never shows the error's text (S31)", () => {
+  it('three unexpected failures: the fixed sentence on each, ONE report; a refusal keeps its words', async () => {
+    const first = new Error('null value in column "name" of relation "inventory_items"');
+    failures.set(skus[0] as string, first);
+    failures.set(
+      skus[1] as string,
+      new TypeError("Cannot read properties of undefined (reading 'id')"),
+    );
+    failures.set(skus[2] as string, new Error('canceling statement due to statement timeout'));
+    failures.set(
+      skus[3] as string,
+      new ServiceError('conflict', 'An item with that SKU already exists.'),
+    );
+    pages.records = skus.slice(0, 5).map((id) => ({ id, name: id }));
+    const ctx = ctxWith(() => ({ data: [], error: null }));
+
+    const summary = await importItemsFromIntacct(ctx, { warehouseId: 'wh-1' });
+
+    expect(summary.created).toBe(1);
+    expect(summary.failed).toBe(4);
+    expect(summary.errors.map((e) => e.message)).toEqual([
+      'Could not import this row.',
+      'Could not import this row.',
+      'Could not import this row.',
+      'An item with that SKU already exists.',
+    ]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(first, {
+      tag: 'intacct_import.rows',
+      organizationId: ctx.organizationId,
+      extra: { failed: 3 },
+    });
   });
 });

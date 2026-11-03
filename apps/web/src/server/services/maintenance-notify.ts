@@ -13,6 +13,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
+import { listRows } from './lib/list-rows';
+import { postgrestErrorText } from './lib/postgrest-error';
 import { createNotification } from './notifications';
 
 /**
@@ -161,7 +163,11 @@ async function loadPrefFlags(
  *
  * Never throws: a resolution failure is reported (never silently swallowed
  * into a false "zero recipients" success) and resolves to `[]` so the
- * caller's fire-and-forget emit never blocks or fails the parent write.
+ * caller's fire-and-forget emit never blocks or fails the parent write. A
+ * read that answers with no list (an empty body) is such a failure (docket
+ * S27): read as "no rows" it dropped a revoke, or told nobody in silence. The
+ * module settings read is a list read for the same reason: with maybeSingle
+ * an empty body could not be told from "no row" ("nobody chose").
  */
 export async function resolveMaintenanceAudience(args: {
   organizationId: string;
@@ -192,26 +198,37 @@ export async function resolveMaintenanceAudience(args: {
         .from('organization_modules')
         .select('settings')
         .eq('organization_id', organizationId)
-        .eq('module_id', 'maintenance_requests')
-        .maybeSingle(),
+        .eq('module_id', 'maintenance_requests'),
     ]);
 
-    if (membersRes.error) throw new Error(membersRes.error.message);
-    if (roleOverridesRes.error) throw new Error(roleOverridesRes.error.message);
-    if (userOverridesRes.error) throw new Error(userOverridesRes.error.message);
-    if (moduleRes.error) throw new Error(moduleRes.error.message);
+    // postgrestErrorText: a gateway 5xx with an empty body has an empty
+    // message, and the report said nothing (docket B82).
+    if (membersRes.error) throw new Error(postgrestErrorText(membersRes.error, membersRes));
+    if (roleOverridesRes.error) {
+      throw new Error(postgrestErrorText(roleOverridesRes.error, roleOverridesRes));
+    }
+    if (userOverridesRes.error) {
+      throw new Error(postgrestErrorText(userOverridesRes.error, userOverridesRes));
+    }
+    if (moduleRes.error) throw new Error(postgrestErrorText(moduleRes.error, moduleRes));
 
-    const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
-    const roleOverrides = (roleOverridesRes.data ?? []) as Array<
-      PermissionOverride & { role: Role }
-    >;
-    const userOverrides = (userOverridesRes.data ?? []) as Array<
-      PermissionOverride & { user_id: string }
-    >;
-    const settings = (
-      moduleRes.data as { settings?: { notifyAudience?: Record<string, MaintenanceNotifyMode> } } | null
-    )?.settings;
-    const notifyAudience = settings?.notifyAudience ?? {};
+    const members = listRows<{ user_id: string; role: Role }>('organization_members', membersRes);
+    const roleOverrides = listRows<PermissionOverride & { role: Role }>(
+      'role_permission_overrides',
+      roleOverridesRes,
+    );
+    const userOverrides = listRows<PermissionOverride & { user_id: string }>(
+      'user_permission_overrides',
+      userOverridesRes,
+    );
+    // One row per (organization, module): no row is "nobody chose".
+    const moduleRows = listRows<{
+      settings?: { notifyAudience?: Record<string, MaintenanceNotifyMode> } | null;
+    }>('organization_modules', moduleRes);
+    if (moduleRows.length > 1) {
+      throw new Error('organization_modules answered more than one maintenance_requests row');
+    }
+    const notifyAudience = moduleRows[0]?.settings?.notifyAudience ?? {};
 
     // All computed in JS — the mock backing these tests replays canned
     // rows and does not simulate PostgREST filtering, so the actual

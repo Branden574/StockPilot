@@ -727,7 +727,8 @@ export class MaintenanceAttachmentsService {
     return { id: row.id as string, width, height };
   }
 
-  /** Deletes the row and both storage objects. Row-confirmed on BOTH the
+  /** Deletes the row and both storage objects. Only the request's requester
+   *  or a manage-holder may (B104, below). Row-confirmed on BOTH the
    *  pre-read and the delete itself (C2/Task 8 lesson): a delete that
    *  affects zero rows — because RLS refused it, not because a Postgres
    *  error occurred — must never be mistaken for success. Without the
@@ -747,6 +748,32 @@ export class MaintenanceAttachmentsService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!att) throw new ServiceError('not_found', 'Photo not found');
+
+    // B104: the requester or a manage-holder, the rule edits
+    // (MaintenanceRequestsService.update/cancel) and uploads
+    // (assertParentOwnedAndOpen) already apply, decided BEFORE anything is
+    // deleted. The delete policy (0317) is not this rule: it also admits a
+    // manager by role whatever maintenance_requests:manage says, and once the
+    // database refuses that caller (docket S47's photo guard, 42501) the
+    // refusal would reach them as an internal_error 500. The requester is
+    // read only when it decides the answer, by the request's organization and
+    // id like the closed-request read below. A failed read deletes nothing,
+    // and a missing requester (a deleted account leaves it null) is never the
+    // caller.
+    const isManager = can(this.ctx, 'maintenance_requests:manage');
+    if (!isManager) {
+      const { data: requestRow, error: requestErr } = await this.ctx.supabase
+        .from('maintenance_requests')
+        .select('requester_user_id')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', requestId)
+        .maybeSingle();
+      if (requestErr) throw new ServiceError('internal_error', requestErr.message);
+      const requesterUserId =
+        (requestRow as { requester_user_id: string | null } | null)?.requester_user_id ?? null;
+      const isRequester = requesterUserId !== null && requesterUserId === this.ctx.userId;
+      if (!isRequester) throw new ServiceError('forbidden', 'Not your request.');
+    }
 
     const { data: deleted, error: delErr } = await this.ctx.supabase
       .from('maintenance_request_attachments')
@@ -836,6 +863,11 @@ export class MaintenanceAttachmentsService {
       const thumbnailPath = r.thumbnail_path as string | null;
       if (thumbnailPath) paths.push(thumbnailPath);
     }
+    // sign-bound: the service writes at most MAINTENANCE_MAX_PHOTOS photos of
+    // each kind, a master and a thumbnail each (32 paths). Until 0420 (S9)
+    // revokes INSERT a requester can add rows directly, but one naming a path
+    // with no object fails the page at the master check below whatever the
+    // count, and 1,000 paths would take over 500 rows of real objects.
     const { data: signed, error: signErr } = await admin.storage.from(BUCKET).createSignedUrls(paths, VIEW_URL_TTL_SEC);
     // A whole-call failure means nothing signed at all — including every
     // master — so this throws exactly like a single-row master failure did

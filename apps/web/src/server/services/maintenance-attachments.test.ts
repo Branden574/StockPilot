@@ -81,7 +81,7 @@ vi.mock('@/lib/image-reencode', async () => {
 import { DEFAULT_MODULE_IDS, MAINTENANCE_MAX_PHOTOS, MAINTENANCE_MAX_PHOTO_BYTES, type ModuleId } from '@stockpilot/core';
 
 import { checkRateLimit } from '@/lib/rate-limit';
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 import { audit } from './audit';
 import { MaintenanceAttachmentsService } from './maintenance-attachments';
@@ -1090,6 +1090,195 @@ describe('remove', () => {
     expect(stub.fromCalls).not.toContain('maintenance_request_attachments');
     expect(adminRemoveMock).not.toHaveBeenCalled();
     expect(audit).not.toHaveBeenCalled();
+  });
+
+  // B104: who may remove a photo. The delete policy (0317) also admits a
+  // manager by role whatever maintenance_requests:manage says, so a manager
+  // whose manage permission is switched off could remove another member's
+  // photos, and once the database refuses that delete (docket S47's photo
+  // guard, 42501) remove() would answer it as internal_error (500). The rule
+  // is the one edits and uploads already apply: the request's requester or a
+  // manage holder, anyone else 'Not your request.', before anything is deleted.
+  describe('who may remove (B104): the requester or a manage holder', () => {
+    /** The manager defaults (submit, read_all, manage) with manage switched off. */
+    const MANAGE_OFF_MANAGER = {
+      role: 'manager' as const,
+      permissions: new Set(['maintenance_requests:submit', 'maintenance_requests:read_all']),
+    };
+
+    function arrange(
+      requesterUserId: string | null,
+      overrides: Parameters<typeof build>[1],
+      { photoOnRequest = true }: { photoOnRequest?: boolean } = {},
+    ) {
+      return build(
+        {
+          'maintenance_request_attachments.select': {
+            data: photoOnRequest
+              ? {
+                  id: 'att-1',
+                  storage_path: 'org-test/req/a.jpg',
+                  thumbnail_path: 'org-test/req/a-thumb.webp',
+                }
+              : null,
+            error: null,
+          },
+          // The delete answers as the policy does today: its role arm lets a
+          // manager through.
+          'maintenance_request_attachments.delete': { data: { id: 'att-1' }, error: null },
+          // The request answers only a read whose filters match it, so a
+          // requester read keyed by the photo's id instead of the request's
+          // finds no requester, as it would in the database.
+          'maintenance_requests.select': servedLikePostgrest([
+            {
+              id: REQ_ID,
+              organization_id: 'org-test',
+              requester_user_id: requesterUserId,
+              archived_at: null,
+              cancelled_at: null,
+              resolved_at: null,
+            },
+          ]),
+        },
+        overrides,
+      );
+    }
+
+    /** The one requester read remove() makes for a caller without manage:
+     *  requester_user_id of THIS request, in the caller's organization (the
+     *  mint test above pins the same filters for uploads). */
+    function expectRequesterReadOfThisRequest(
+      stub: ReturnType<typeof build>['stub'],
+      ctx: ReturnType<typeof build>['ctx'],
+    ) {
+      const reads = stub.chainArgsAll.get('maintenance_requests.select');
+      expect(reads).toHaveLength(1);
+      expect(reads![0]).toEqual([
+        ['requester_user_id'],
+        ['organization_id', ctx.organizationId],
+        ['id', REQ_ID],
+      ]);
+    }
+
+    it.each([
+      ['another member', 'someone-else'],
+      // A deleted account leaves requester_user_id null (0314 ON DELETE SET
+      // NULL): a missing requester is never the caller.
+      ['a member whose account was deleted', null],
+    ])(
+      'a manager whose manage permission is switched off is refused on a request filed by %s, before any delete, storage removal or audit',
+      async (_who, requesterUserId) => {
+        const { stub, ctx } = arrange(requesterUserId, MANAGE_OFF_MANAGER);
+
+        await expect(
+          new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1'),
+        ).rejects.toMatchObject({
+          code: 'forbidden',
+          message: 'Not your request.',
+        });
+        expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toBeUndefined();
+        expect(adminRemoveMock).not.toHaveBeenCalled();
+        expect(audit).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a failed read of the requester refuses (internal_error) and deletes nothing', async () => {
+      const { stub, ctx } = build(
+        {
+          'maintenance_request_attachments.select': {
+            data: { id: 'att-1', storage_path: 'org-test/req/a.jpg', thumbnail_path: null },
+            error: null,
+          },
+          'maintenance_request_attachments.delete': { data: { id: 'att-1' }, error: null },
+          'maintenance_requests.select': { data: null, error: { message: 'connection reset' } },
+        },
+        MANAGE_OFF_MANAGER,
+      );
+
+      await expect(
+        new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1'),
+      ).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+      expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toBeUndefined();
+      expect(adminRemoveMock).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    function expectPhotoRemoved(
+      stub: ReturnType<typeof build>['stub'],
+      ctx: ReturnType<typeof build>['ctx'],
+    ) {
+      expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toHaveLength(1);
+      expect(adminRemoveMock).toHaveBeenCalledWith([
+        'org-test/req/a.jpg',
+        'org-test/req/a-thumb.webp',
+      ]);
+      expect(audit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'maintenance_request.attachment_removed',
+          entityId: REQ_ID,
+        }),
+        ctx,
+      );
+    }
+
+    it.each([
+      ['the requester (staff: submit only)', { role: 'staff' as const }],
+      [
+        'a manager whose manage permission is switched off, on their own request',
+        MANAGE_OFF_MANAGER,
+      ],
+    ])(
+      '%s still removes the photo, after reading the requester of this request in this organization',
+      async (_who, overrides) => {
+        const { stub, ctx } = arrange('user-test', overrides);
+
+        await new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1');
+
+        expectRequesterReadOfThisRequest(stub, ctx);
+        expectPhotoRemoved(stub, ctx);
+      },
+    );
+
+    it('a manage holder removes the photo of a request they did not file without reading its requester, so a failed read cannot refuse them', async () => {
+      const { stub, ctx } = build(
+        {
+          'maintenance_request_attachments.select': {
+            data: {
+              id: 'att-1',
+              storage_path: 'org-test/req/a.jpg',
+              thumbnail_path: 'org-test/req/a-thumb.webp',
+            },
+            error: null,
+          },
+          'maintenance_request_attachments.delete': { data: { id: 'att-1' }, error: null },
+          // Were the requester read for them, this answer would refuse the remove.
+          'maintenance_requests.select': { data: null, error: { message: 'connection reset' } },
+        },
+        { role: 'manager' },
+      );
+
+      await new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1');
+
+      expect(stub.chainsAll.get('maintenance_requests.select')).toBeUndefined();
+      expectPhotoRemoved(stub, ctx);
+    });
+
+    it('a caller without manage gets 404 "Photo not found" for a photo that is not on the request, before its requester is read', async () => {
+      const { stub, ctx } = arrange('someone-else', MANAGE_OFF_MANAGER, { photoOnRequest: false });
+
+      await expect(
+        new MaintenanceAttachmentsService(ctx).remove(REQ_ID, 'att-1'),
+      ).rejects.toMatchObject({
+        code: 'not_found',
+        message: 'Photo not found',
+      });
+      expect(stub.chainsAll.get('maintenance_requests.select')).toBeUndefined();
+      expect(stub.chainsAll.get('maintenance_request_attachments.delete')).toBeUndefined();
+      expect(adminRemoveMock).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
   });
 });
 

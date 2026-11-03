@@ -2,7 +2,6 @@ import { X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -21,6 +20,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';

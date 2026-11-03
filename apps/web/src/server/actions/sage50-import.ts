@@ -3,12 +3,12 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { SuppliersService } from '@/server/services/suppliers';
+import { actionErrorResult, RowFailures } from '@/server/lib/action-error-result';
 
 import { can, err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -181,6 +181,11 @@ export async function importSage50Action(
 
     // ── Items through the service layer (movement-ledger-correct). ──
     const svc = new InventoryService(ctx);
+    // A failed item says a refusal's words, else the fixed sentence; the
+    // unexpected ones are reported once for the chunk (S31).
+    const itemFailures = new RowFailures('actions.sage50_import.rows', {
+      organizationId: ctx.organizationId,
+    });
     for (let i = 0; i < parsed.data.items.length; i++) {
       const rowNum = parsed.data.rowOffset + i + 2; // 1-based + header row
       const pi = itemSchema.safeParse(parsed.data.items[i]);
@@ -222,23 +227,19 @@ export async function importSage50Action(
         summary.items.created++;
       } catch (e) {
         summary.items.failed++;
+        const message = itemFailures.message(e);
         if (summary.items.errors.length < 50) {
-          summary.items.errors.push({
-            row: rowNum,
-            sku: item.sku,
-            message: e instanceof Error ? e.message : 'Unknown error',
-          });
+          summary.items.errors.push({ row: rowNum, sku: item.sku, message });
         }
       }
     }
 
+    itemFailures.report();
     revalidatePath('/dashboard');
     revalidatePath('/dashboard/inventory');
     await revalidateInventoryListForCurrentOrg();
     return ok(summary);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.sage50_import.import_sage50');
   }
 }

@@ -11,6 +11,7 @@ import {
   type UnofferedSupplier,
 } from '@/lib/purchase-orders/unoffered-choice';
 
+import type { CharterLabelRow, CharterNameRow } from '../charters';
 import { fetchAllRowsByIds, reportDegradedRead } from './fetch-by-ids';
 
 /**
@@ -127,4 +128,55 @@ export async function readUnofferedSuppliers(
     else fold.push({ id, name: name ?? 'Unnamed supplier' });
   }
   return { unoffered, fold };
+}
+
+/**
+ * The names and statuses of charters that a member or a record holds and the
+ * active charter list lacks (`ids`): an archived or inactive charter keeps its
+ * warehouse links and the assignments and records that carry it, so Team's
+ * member Charters dialog and the item forms name it instead of leaving it out
+ * or showing its id (S44).
+ *
+ * A LABEL read: which charters are held never comes from it. A failed read is
+ * reported (`tag` names the caller) and answers [], and the caller shows a
+ * neutral label for every id. Never thrown (recurring pattern #1).
+ *
+ * `namesByIds` is ChartersService.namesByIds: every status, batched; it throws
+ * on a failed read.
+ */
+export async function readCharterLabels(
+  namesByIds: (ids: readonly string[]) => Promise<CharterNameRow[]>,
+  ids: readonly string[],
+  tag: string,
+): Promise<CharterNameRow[]> {
+  const wanted = [...new Set(ids.filter(Boolean))];
+  if (wanted.length === 0) return [];
+  try {
+    return await namesByIds(wanted);
+  } catch (err) {
+    reportDegradedRead(tag, err, { ids: wanted.length });
+    return [];
+  }
+}
+
+/**
+ * The charters a list's Charter cell names besides the active ones it offers
+ * (Items, Books, Rentals > Items; B97): `listLabels` is a
+ * ChartersService.listLabels call. A record tagged to an archived charter was
+ * called "Generic" because the list knew active charters only.
+ *
+ * A LABEL read: a failed read is reported (`tag` names the caller) and answers
+ * [], and the cell then shows nothing for those records, never Generic. Never
+ * thrown (recurring pattern #1).
+ */
+export async function readCharterCellLabels(
+  listLabels: () => Promise<CharterLabelRow[]>,
+  tag: string,
+): Promise<CharterLabelRow[]> {
+  try {
+    return await listLabels();
+  } catch (err) {
+    reportDegradedRead(tag, err);
+    return [];
+  }
 }

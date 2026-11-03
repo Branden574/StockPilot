@@ -85,6 +85,8 @@ vi.mock('next/link', async () => {
 
 import AiPage from './ai/page';
 import BooksPage from './books/page';
+import EditBundlePage from './bundles/[id]/edit/page';
+import BundlePage from './bundles/[id]/page';
 import BundlesPage from './bundles/page';
 import CustomersPage from './customers/page';
 import CycleCountsPage from './cycle-counts/page';
@@ -92,6 +94,9 @@ import InsightsPage from './insights/page';
 import MaintenanceRequestPage from './maintenance/[id]/page';
 import NewMaintenanceRequestPage from './maintenance/new/page';
 import MaintenancePage from './maintenance/page';
+import OrderPage from './orders/[id]/page';
+import PickOrderPage from './orders/[id]/pick/page';
+import PrintOrderPage from './orders/[id]/print/page';
 import ManageOrderItemsPage from './orders/manage-items/page';
 import NewOrderPage from './orders/new/page';
 import OrdersPage from './orders/page';
@@ -99,6 +104,8 @@ import PlanningPage from './planning/page';
 import ProceduresPage from './procedures/page';
 import ProductGroupLinkPage from './product-groups/link/page';
 import ProductGroupsPage from './product-groups/page';
+import EditPoPage from './purchase-orders/[id]/edit/page';
+import PoPage from './purchase-orders/[id]/page';
 import PoImportPage from './purchase-orders/imports/[id]/page';
 import NewPoImportPage from './purchase-orders/imports/new/page';
 import PoImportsPage from './purchase-orders/imports/page';
@@ -110,6 +117,8 @@ import RentalsPage from './rentals/page';
 import BookOrderTotalsPage from './reports/book-order-totals/page';
 import ReturnPage from './returns/[id]/page';
 import ReturnsPage from './returns/page';
+import EditScheduleEventPage from './schedule/[id]/edit/page';
+import ScheduleEventPage from './schedule/[id]/page';
 import SchedulePage from './schedule/page';
 import IntegrationsPage from './settings/integrations/page';
 import PublicLinkPage from './settings/public-requests/[linkId]/page';
@@ -127,6 +136,10 @@ type Page = (props: never) => unknown;
 const PAGES: Array<[string, Page, ModuleId, () => Record<string, unknown>]> = [
   ['AI assistant', AiPage, 'ai', () => ({})],
   ['Books', BooksPage, 'books', () => ({ searchParams: Promise.resolve({}) })],
+  // A record page's own module off (a stale link) is this panel too, never
+  // the error page its read's module_disabled used to throw (B66).
+  ['A bundle', BundlePage, 'bundles', () => id],
+  ['Edit bundle', EditBundlePage, 'bundles', () => id],
   ['Bundles', BundlesPage, 'bundles', () => ({ searchParams: Promise.resolve({}) })],
   ['Customers', CustomersPage, 'b2b_portal', () => ({})],
   ['Cycle counts', CycleCountsPage, 'cycle_counts', () => ({ searchParams: Promise.resolve({}) })],
@@ -156,11 +169,16 @@ const PAGES: Array<[string, Page, ModuleId, () => Record<string, unknown>]> = [
     () => ({ searchParams: Promise.resolve({}) }),
   ],
   ['New order', NewOrderPage, 'orders', () => ({ searchParams: Promise.resolve({}) })],
+  ['An order', OrderPage, 'orders', () => ({ ...id, searchParams: Promise.resolve({}) })],
+  ["An order's pick", PickOrderPage, 'orders', () => id],
+  ["An order's print view", PrintOrderPage, 'orders', () => id],
   ['Orders', OrdersPage, 'orders', () => ({ searchParams: Promise.resolve({}) })],
   ['Planning', PlanningPage, 'planning', () => ({})],
   ['Procedures', ProceduresPage, 'procedures', () => ({ searchParams: Promise.resolve({}) })],
   ['Link products into groups', ProductGroupLinkPage, 'sports', () => ({})],
   ['Product groups', ProductGroupsPage, 'sports', () => ({ searchParams: Promise.resolve({}) })],
+  ['A purchase order', PoPage, 'purchase_orders', () => id],
+  ['Edit purchase order', EditPoPage, 'purchase_orders', () => id],
   ['A PO import', PoImportPage, 'po_imports', () => id],
   ['New PO import', NewPoImportPage, 'po_imports', () => ({})],
   ['PO imports', PoImportsPage, 'po_imports', () => ({ searchParams: Promise.resolve({}) })],
@@ -188,6 +206,8 @@ const PAGES: Array<[string, Page, ModuleId, () => Record<string, unknown>]> = [
   ['A return', ReturnPage, 'returns', () => id],
   ['Returns', ReturnsPage, 'returns', () => ({ searchParams: Promise.resolve({}) })],
   ['Schedule', SchedulePage, 'schedule', () => ({ searchParams: Promise.resolve({}) })],
+  ['A schedule event', ScheduleEventPage, 'schedule', () => id],
+  ['Edit schedule event', EditScheduleEventPage, 'schedule', () => id],
   ['Integrations', IntegrationsPage, 'integrations', () => ({})],
   ['A public request link', PublicLinkPage, 'public_requests', () => linkId],
   ['Public requests', PublicRequestsPage, 'public_requests', () => ({})],

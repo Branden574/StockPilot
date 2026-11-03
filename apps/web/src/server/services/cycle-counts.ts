@@ -23,6 +23,7 @@ import { dispatchEvent } from './integration-events';
 import { assertAcceptedMember, assertCountStartFloors, gateCountItems } from './lib/count-start-preflight';
 import { scheduleExceptionSync } from './lib/exception-sync-schedule';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 import { fetchAllRows } from './lib/paginate';
 import {
@@ -725,6 +726,12 @@ export class CycleCountsService {
         { reason: 'release_reason_required' },
       );
     }
+    // S39: the count is read in THIS organization first, and a miss refuses
+    // before the function. release_cycle_count decides on the COUNT's own
+    // organization, so for a member of two organizations a phone screen left
+    // open after a switch released the other organization's count while the
+    // audit row below (with the reason) went to this one.
+    await readInActiveOrg(this.ctx, 'cycle_counts', id, 'Cycle count not found.');
     const { data, error } = await this.ctx.supabase.rpc('release_cycle_count', {
       p_count_id: id,
       p_reason: reason,
@@ -824,6 +831,10 @@ export class CycleCountsService {
         { reason: 'reassign_reason_required' },
       );
     }
+    // S39: read in THIS organization first, as release() does: the function
+    // decides on the count's own organization, and the audit row below (the
+    // reason and the new assignee) is written here.
+    await readInActiveOrg(this.ctx, 'cycle_counts', id, 'Cycle count not found.');
     const { data, error } = await this.ctx.supabase.rpc(
       'force_reassign_cycle_count',
       { p_count_id: id, p_user_id: userId, p_reason: reason },

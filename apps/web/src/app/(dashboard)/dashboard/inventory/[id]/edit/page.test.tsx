@@ -61,14 +61,43 @@ vi.mock('@/server/services/tags', () => ({
 vi.mock('@/server/services/warehouses', () => ({
   WarehousesService: svc({ listNames: async () => [{ id: 'wh-1', name: 'North DC' }] }),
 }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: svc({ list: async () => [] }) }));
+// The page's active charters, the record's charter and the by-id names read
+// for a record charter the active list lacks (S44).
+const { charterState, reportError } = vi.hoisted(() => ({
+  charterState: {
+    list: [] as Array<{ id: string; name: string; status: string }>,
+    recordCharterId: null as string | null,
+    namesByIds: (async () => []) as (ids: readonly string[]) => Promise<unknown[]>,
+  },
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
+}));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: svc({
+    list: async () => charterState.list,
+    namesByIds: (ids: readonly string[]) => charterState.namesByIds(ids),
+  }),
+}));
+// The page's warehouse charter pairs, and the shared LOOKUP_ROW_CEILING (a
+// getter, so a test can lower it: the page reads the binding on every render).
+const { pairs, ceiling } = vi.hoisted(() => ({
+  pairs: { current: [] as Array<{ warehouse_id: string; charter_id: string }> },
+  ceiling: { value: 10_000 },
+}));
 vi.mock('@/server/services/warehouse-charters', () => ({
-  WarehouseChartersService: svc({ listPairs: async () => [] }),
+  WarehouseChartersService: svc({ listPairs: async () => pairs.current }),
+}));
+vi.mock('@/server/services/lib/lookup-ceiling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/services/lib/lookup-ceiling')>()),
+  get LOOKUP_ROW_CEILING() {
+    return ceiling.value;
+  },
 }));
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: svc({
     get: async (id: string) => {
-      if (id === 'missing') {
+      // MISSING below: a well-formed id the service does not find.
+      if (id === '5eed0000-0000-4000-8000-0000000000e2') {
         const { ServiceError } = await import('@/server/services/context');
         throw new ServiceError('not_found', 'Not found');
       }
@@ -85,6 +114,8 @@ vi.mock('@/server/services/inventory', () => ({
         status: 'active',
         item_type: 'product',
         custom_fields: {},
+        warehouse_id: 'wh-1',
+        charter_id: charterState.recordCharterId,
       };
     },
   }),
@@ -105,7 +136,10 @@ vi.mock('@/components/inventory/item-form', () => ({
 
 import EditItemPage, { metadata } from './page';
 
-const page = (id = 'rec-1', ret?: string) =>
+const REC = '5eed0000-0000-4000-8000-0000000000e1';
+const MISSING = '5eed0000-0000-4000-8000-0000000000e2';
+
+const page = (id = REC, ret?: string) =>
   EditItemPage({
     params: Promise.resolve({ id }),
     searchParams: Promise.resolve(ret === undefined ? {} : { return: ret }),
@@ -114,6 +148,11 @@ const page = (id = 'rec-1', ret?: string) =>
 beforeEach(() => {
   vi.clearAllMocks();
   ctxHolder.current = { role: 'manager' };
+  pairs.current = [];
+  ceiling.value = 10_000;
+  charterState.list = [];
+  charterState.recordCharterId = null;
+  charterState.namesByIds = async () => [];
 });
 
 describe('Edit item page', () => {
@@ -125,18 +164,18 @@ describe('Edit item page', () => {
     render(await page());
     expect(screen.getByRole('link', { name: '← Back to item' })).toHaveAttribute(
       'href',
-      '/dashboard/inventory/rec-1',
+      `/dashboard/inventory/${REC}`,
     );
     expect(screen.getByRole('heading', { level: 1, name: 'Edit item' })).toBeInTheDocument();
     const card = screen.getByRole('region', { name: 'Falcons Home Jersey' });
     expect(card).toContainElement(screen.getByTestId('item-form'));
     expect(formProps).toHaveBeenCalledWith(
-      expect.objectContaining({ returnHref: '/dashboard/inventory/rec-1' }),
+      expect.objectContaining({ returnHref: `/dashboard/inventory/${REC}` }),
     );
   });
 
   it('goes back to the list it came from when the link carried one', async () => {
-    render(await page('rec-1', '/dashboard/inventory?page=2'));
+    render(await page(REC, '/dashboard/inventory?page=2'));
     expect(screen.getByRole('link', { name: '← Back to item' })).toHaveAttribute(
       'href',
       '/dashboard/inventory?page=2',
@@ -144,8 +183,125 @@ describe('Edit item page', () => {
   });
 
   it('still sends someone without items:update to the record, and a missing one to not found', async () => {
-    await expect(page('missing')).rejects.toThrow('not-found');
+    await expect(page(MISSING)).rejects.toThrow('not-found');
     ctxHolder.current = { role: 'viewer' };
-    await expect(page()).rejects.toThrow('redirect:/dashboard/inventory/rec-1');
+    await expect(page()).rejects.toThrow(`redirect:/dashboard/inventory/${REC}`);
+  });
+
+  // B63: a mistyped or cut-off link is Page not found, before the edit gate
+  // sends anyone away and before anything is read.
+  it('an id that is not a uuid is the not-found page, ahead of the items:update redirect', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    for (const role of ['manager', 'viewer'] as const) {
+      ctxHolder.current = { role };
+      vi.mocked(requireOrgContext).mockClear();
+      await expect(page('not-a-uuid'), role).rejects.toThrow('not-found');
+      await expect(page(REC.slice(0, -1)), role).rejects.toThrow('not-found');
+      expect(requireOrgContext).not.toHaveBeenCalled();
+    }
+  });
+});
+
+/**
+ * B47 decisions round (2026-11-01): listPairs stops at LOOKUP_ROW_CEILING
+ * links. At that many the list may be cut, so the page tells the form, which
+ * then keeps the record's charter on a warehouse change instead of clearing it
+ * from part of the list (the save checks the pair on the server).
+ */
+describe('Edit item page: the warehouse charter list at the ceiling', () => {
+  const pairsOf = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      warehouse_id: 'wh-1',
+      charter_id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+    }));
+
+  it('a list that reached the ceiling is passed as cut', async () => {
+    ceiling.value = 5;
+    pairs.current = pairsOf(5);
+    render(await page());
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseCharters: pairs.current, warehouseChartersCapped: true }),
+    );
+  });
+
+  it('a list under the ceiling is passed as whole', async () => {
+    ceiling.value = 5;
+    pairs.current = pairsOf(4);
+    render(await page());
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({ warehouseChartersCapped: false }),
+    );
+  });
+});
+
+/**
+ * S44: the page lists active charters only. A record whose own charter has
+ * been archived (or set inactive) still carries it, so the page reads that
+ * charter's name and status by id and passes it to the form as
+ * `recordCharter`, which names it '(archived)' instead of showing its id. A
+ * label read: only when the active list lacks the record's charter, and a
+ * failed read is a warning with a neutral label, never an error page.
+ */
+describe("Edit item page: the record's charter the active list lacks", () => {
+  const ARCH = '66666666-6666-4666-8666-666666666666';
+  const NORTH = '22222222-2222-4222-8222-222222222222';
+
+  it('reads its name and status once and passes them as recordCharter', async () => {
+    charterState.recordCharterId = ARCH;
+    charterState.list = [{ id: NORTH, name: 'North Campus', status: 'active' }];
+    const namesByIds = vi.fn(async () => [{ id: ARCH, name: 'Old Campus', status: 'archived' }]);
+    charterState.namesByIds = namesByIds;
+
+    render(await page());
+
+    expect(namesByIds).toHaveBeenCalledTimes(1);
+    expect(namesByIds).toHaveBeenCalledWith([ARCH]);
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recordCharter: { id: ARCH, name: 'Old Campus', status: 'archived' },
+        defaults: expect.objectContaining({ charterId: ARCH }),
+      }),
+    );
+  });
+
+  it('an active charter, or none, sends no read and passes recordCharter null', async () => {
+    const namesByIds = vi.fn(async () => []);
+    charterState.namesByIds = namesByIds;
+    charterState.list = [{ id: NORTH, name: 'North Campus', status: 'active' }];
+
+    charterState.recordCharterId = NORTH;
+    render(await page());
+    expect(formProps).toHaveBeenLastCalledWith(expect.objectContaining({ recordCharter: null }));
+
+    charterState.recordCharterId = null;
+    render(await page());
+    expect(formProps).toHaveBeenLastCalledWith(expect.objectContaining({ recordCharter: null }));
+
+    expect(namesByIds).not.toHaveBeenCalled();
+  });
+
+  it('a failed read still renders the form, with recordCharter null and one warning report', async () => {
+    charterState.recordCharterId = ARCH;
+    charterState.namesByIds = async () => {
+      throw new Error('upstream connect error');
+    };
+
+    render(await page());
+
+    expect(screen.getByTestId('item-form')).toBeInTheDocument();
+    expect(formProps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recordCharter: null,
+        defaults: expect.objectContaining({ charterId: ARCH }),
+      }),
+    );
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [, opts] = reportError.mock.calls[0] as [
+      Error,
+      { tag: string; level: string; extra: Record<string, unknown> },
+    ];
+    expect(opts.tag).toBe('inventory.edit.record_charter');
+    expect(opts.level).toBe('warning');
+    expect(String(opts.extra.detail)).toContain('upstream connect error');
   });
 });

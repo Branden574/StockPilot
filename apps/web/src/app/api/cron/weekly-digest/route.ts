@@ -22,6 +22,7 @@ import {
   isDigestEmpty,
   loadDigestReaderData,
 } from '@/server/services/digest';
+import { rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export const runtime = 'nodejs';
@@ -406,7 +407,11 @@ export async function GET(req: Request) {
       } catch (orgErr) {
         // One bad org shouldn't kill the whole run.
         failed += group.recipients.length;
-        void reportError(orgErr, {
+        // The read's own text (rawErrorText): the reporter logs and posts an
+        // error's message only, and a ServiceError('internal_error') from a
+        // failed or non-list read keeps its text in internalDetail behind the
+        // generic sentence (docket S27).
+        void reportError(new Error(rawErrorText(orgErr)), {
           tag: 'cron.weekly-digest.org',
           extra: { orgId },
         });

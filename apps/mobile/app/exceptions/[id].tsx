@@ -23,6 +23,7 @@ import {
   describeTimelineEvent,
   exceptionActDisabledReason,
   isRecountableRule,
+  isUuid,
   occurrenceStateLabel,
   recountDisabledReason,
   recurrenceBadge,
@@ -154,6 +155,10 @@ type Loaded =
     }
   | { kind: 'error'; message: string };
 
+/** A 404, and a link whose id is not a uuid (B65): the same words. */
+const EXCEPTION_NOT_AVAILABLE_COPY =
+  'This exception is not available to you, or it no longer exists.';
+
 export default function ExceptionDetailScreen() {
   const { c } = useTheme();
   const router = useRouter();
@@ -192,8 +197,11 @@ export default function ExceptionDetailScreen() {
   const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
-    // Offline there is nothing to ask; the view below is derived instead.
-    if (!id || !orgId || offline) return;
+    // Offline there is nothing to ask; the view below is derived instead. A
+    // link id that is not a uuid (B65) is never asked about either:
+    // getException refuses it as "The server sent an unexpected answer.",
+    // and the view below says the exception is not available.
+    if (!id || !isUuid(id) || !orgId || offline) return;
     const seq = ++seqRef.current;
     const readTick = evidenceTick();
     try {
@@ -214,7 +222,7 @@ export default function ExceptionDetailScreen() {
       const status = (e as { status?: unknown }).status;
       const kept = recalledDetail(userId, orgId, id);
       if (status === 404) {
-        setState({ kind: 'error', message: 'This exception is not available to you, or it no longer exists.' });
+        setState({ kind: 'error', message: EXCEPTION_NOT_AVAILABLE_COPY });
         return;
       }
       // Worded by status for a 429 or 5xx, so a bare code never shows.
@@ -259,7 +267,12 @@ export default function ExceptionDetailScreen() {
   // shown under this one's heading).
   const mine = stored.kind === 'ready' && stored.detail.occurrence.id !== id ? null : stored;
   let state: Loaded;
-  if (offline) {
+  if (!isUuid(id)) {
+    // A link id that is not a uuid (mistyped or cut off; B65) names no
+    // exception, online or offline (no connection could open it), and no
+    // read is sent, so it is said here and not by load.
+    state = { kind: 'error', message: EXCEPTION_NOT_AVAILABLE_COPY };
+  } else if (offline) {
     const kept =
       mine?.kind === 'ready'
         ? { detail: mine.detail, receivedAt: mine.receivedAt, readTick: mine.readTick }
@@ -343,11 +356,14 @@ export default function ExceptionDetailScreen() {
             <Body size={14.5} accessibilityRole="alert">
               {state.message}
             </Body>
-            <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-              <Button variant="outline" size="sm" onPress={() => void refresh()}>
-                Try again
-              </Button>
-            </View>
+            {/* No Try again for a link id that is not a uuid: no read is sent. */}
+            {isUuid(id) ? (
+              <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
+                <Button variant="outline" size="sm" onPress={() => void refresh()}>
+                  Try again
+                </Button>
+              </View>
+            ) : null}
           </Card>
         </View>
       ) : (

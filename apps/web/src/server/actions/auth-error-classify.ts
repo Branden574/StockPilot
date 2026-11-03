@@ -49,3 +49,103 @@ export function isBannedUserAuthError(
 ): boolean {
   return error?.code === 'user_banned';
 }
+
+/**
+ * How GoTrue refused `updateUser({ password })` on a reset link's session, so
+ * completePasswordResetAction can answer in plain words (docket B50). Same rule
+ * as above: the structured `code` only, never the message.
+ *
+ *   insufficient_aal          the account has a verified authenticator and the
+ *                             session is not AAL2 (as when the action skipped
+ *                             the code step because the factor list could not
+ *                             be read)
+ *   same_password             the new password is the current one
+ *   weak_password             the password rules; with 'pwned' in `reasons`, a
+ *                             password found in a known breach
+ *   session_not_found,        the link's session is gone: spent, expired, or
+ *   session_expired,          ended by a reset finished in another tab
+ *   refresh_token_not_found
+ *
+ * The one exception is the SDK's own session-missing error. auth-js turns
+ * GoTrue's session_not_found into AuthSessionMissingError, and raises it itself
+ * when there is no session at all, and that error carries no code, so it is
+ * matched by `name`: the field auth-js's own isAuthSessionMissingError() reads,
+ * set by the SDK and never by text, as the phone does
+ * (apps/mobile/src/lib/account-disabled-probe.ts).
+ *
+ * Anything else is null, and the caller keeps its own answer.
+ */
+export type PasswordUpdateRefusal =
+  | { kind: 'aal' }
+  | { kind: 'same' }
+  | { kind: 'weak'; breached: boolean }
+  | { kind: 'session_gone' };
+
+const SESSION_GONE_CODES: ReadonlySet<unknown> = new Set([
+  'session_not_found',
+  'session_expired',
+  'refresh_token_not_found',
+]);
+
+export function classifyPasswordUpdateError(
+  error:
+    | { code?: unknown; name?: unknown; reasons?: unknown; status?: unknown; message?: unknown }
+    | null
+    | undefined,
+): PasswordUpdateRefusal | null {
+  const code = error?.code;
+  if (code === 'insufficient_aal') return { kind: 'aal' };
+  if (code === 'same_password') return { kind: 'same' };
+  if (code === 'weak_password') {
+    const reasons = error?.reasons;
+    return { kind: 'weak', breached: Array.isArray(reasons) && reasons.includes('pwned') };
+  }
+  if (SESSION_GONE_CODES.has(code) || error?.name === 'AuthSessionMissingError') {
+    return { kind: 'session_gone' };
+  }
+  return null;
+}
+
+/**
+ * How GoTrue answered an authenticator code check (auth.mfa.challenge or
+ * auth.mfa.verify) for the sign-in code, the step-up and the reset's code step
+ * (lib/auth/mfa-code-attempts.ts). The same rule as above: the structured
+ * `code`, the SDK's error `name` and the HTTP `status`, never the message.
+ *
+ *   refused        GoTrue judged the code wrong: mfa_verification_failed, and
+ *                  nothing else. Only this answer writes an mfa.code_refused
+ *                  row, so it is positive only.
+ *   session_gone   the session is gone: the SDK's session-missing error (auth-js
+ *                  raises it for GoTrue's session_not_found too), the
+ *                  session-gone codes above, bad_jwt, no_authorization
+ *   no_answer      no answer, or a 5xx (AuthRetryableFetchError)
+ *   limited        GoTrue's own rate limit: over_request_rate_limit, or 429
+ *   unchecked      anything else: an answer that is not JSON (AuthUnknownError,
+ *                  which carries no status), an expired challenge, an address
+ *                  mismatch, a factor not found, a code this does not know, a
+ *                  message alone, no error at all
+ *
+ * Only `refused` says anything about the code; every other answer never judged
+ * it.
+ */
+export type MfaCodeOutcome = 'refused' | 'session_gone' | 'no_answer' | 'limited' | 'unchecked';
+
+const MFA_SESSION_GONE_CODES: ReadonlySet<unknown> = new Set([
+  ...SESSION_GONE_CODES,
+  'bad_jwt',
+  'no_authorization',
+]);
+
+export function classifyMfaCodeError(
+  error: { code?: unknown; name?: unknown; status?: unknown; message?: unknown } | null | undefined,
+): MfaCodeOutcome {
+  const code = error?.code;
+  const name = error?.name;
+  if (code === 'mfa_verification_failed') return 'refused';
+  if (name === 'AuthSessionMissingError' || MFA_SESSION_GONE_CODES.has(code)) {
+    return 'session_gone';
+  }
+  if (name === 'AuthRetryableFetchError') return 'no_answer';
+  if (code === 'over_request_rate_limit' || error?.status === 429) return 'limited';
+  return 'unchecked';
+}

@@ -42,6 +42,10 @@ export async function sendNewDeviceLoginEmail(args: {
   to: string;
   userAgent: string;
   ip: string | null;
+  /** The phone's own name for itself (S5), used instead of the guess from the
+   *  agent: the app's agent ("StockPilot/<build> CFNetwork/... Darwin/...")
+   *  matches no case in friendlyDevice. The template escapes it. */
+  deviceLabel?: string | null;
 }): Promise<void> {
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://stockpilotusa.com';
   const when =
@@ -53,7 +57,7 @@ export async function sendNewDeviceLoginEmail(args: {
 
   const message = renderSigninAlertEmail({
     email: args.to,
-    device: friendlyDevice(args.userAgent),
+    device: args.deviceLabel?.trim() || friendlyDevice(args.userAgent),
     ip: args.ip,
     when,
     securityUrl: `${appUrl}/dashboard/settings/security`,

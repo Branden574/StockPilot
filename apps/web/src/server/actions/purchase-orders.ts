@@ -19,14 +19,13 @@ import {
   updatePoStatusSchema,
   type CreatePoInput,
 } from '@/server/services/purchase-orders';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.purchase_orders');
 }
 
 export async function createPoAction(input: CreatePoInput): Promise<ActionResult<{ id: string }>> {

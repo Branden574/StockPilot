@@ -1,6 +1,7 @@
 import { Download } from 'lucide-react';
 import { notFound } from 'next/navigation';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { ItemThumb } from '@/components/items/item-thumb';
 import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
@@ -25,6 +26,8 @@ import {
 } from '@/components/ui/table';
 import { PoAccessDenied } from '@/components/po/po-access-denied';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ServiceError } from '@/server/services/context';
 import { InventoryService } from '@/server/services/inventory';
 import { loadSizeRunGroups } from '@/server/services/size-run-display';
@@ -48,6 +51,16 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 
 export default async function PoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63): the PO read beside its receipts and
+  // attachments reads below all started with it.
+  notFoundUnlessUuid(id);
+  // Purchase orders off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('purchase_orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="purchase_orders" access={moduleAccess} />;
+  }
 
   // Gate in-page BEFORE any service call. poSvc.get() asserts
   // purchase_orders:read and THROWS forbidden when revoked; a thrown RSC trips

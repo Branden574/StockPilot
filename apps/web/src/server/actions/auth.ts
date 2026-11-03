@@ -6,17 +6,35 @@ import { after } from 'next/server';
 
 import { loadAccountStatus, noteDisabledAccountBlocked } from '@/lib/auth/account-status';
 import { noteLoginDevice } from '@/lib/auth/login-device';
+import {
+  checkMfaCode,
+  MFA_CHALLENGE_NOT_STARTED,
+  MFA_CODE_BUDGET_SPENT,
+  MFA_CODE_GOTRUE_LIMITED,
+  MFA_CODE_NOT_CHECKED,
+  MFA_CODE_REFUSED,
+} from '@/lib/auth/mfa-code-attempts';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
-import { REMEMBER_SESSION_COOKIE, rememberPreferenceOptions } from '@/lib/supabase/session-cookies';
-import { isBannedUserAuthError } from '@/server/actions/auth-error-classify';
-import { audit, insertAuditRowReported, type AuditEvent } from '@/server/services/audit';
+import {
+  REMEMBER_SESSION_COOKIE,
+  SUPABASE_AUTH_COOKIE,
+  rememberPreferenceOptions,
+} from '@/lib/supabase/session-cookies';
+import {
+  classifyPasswordUpdateError,
+  isBannedUserAuthError,
+} from '@/server/actions/auth-error-classify';
+import { unexpectedActionError } from '@/server/lib/action-error-result';
+import { audit } from '@/server/services/audit';
+import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
+import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 
 import {
   ACCOUNT_DISABLED_MESSAGE,
@@ -50,115 +68,11 @@ async function getClientIp(): Promise<string> {
 }
 
 /**
- * Writes an auth-lifecycle audit row directly via the admin client.
- *
- * The standard `audit()` helper requires a ServiceContext, and its
- * `withContext()` fallback throws NEXT_REDIRECT for org-less callers —
- * which would corrupt the control flow of a sign-in (no resolved org
- * yet) or a sign-in-failure (no authenticated user). This direct helper
- * writes the event with whatever attribution we have, tags IP/UA from
- * the request headers, and never throws.
- *
- * organization_id and user_id are both nullable on audit_logs (see
- * migration 0002_inventory.sql), so a sign-in-failure with both null
- * is still a valid forensic row.
- */
-async function emitAuthAudit(params: {
-  event: AuditEvent;
-  userId?: string | null;
-  organizationId?: string | null;
-  extra?: Record<string, unknown>;
-}): Promise<void> {
-  try {
-    const h = await headers();
-    const ip =
-      h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? h.get('x-real-ip') ?? null;
-    const userAgent = h.get('user-agent') ?? null;
-
-    // Reads the INSERT's own result: supabase-js returns a refused write as
-    // { error } rather than throwing, so the catch below never saw one.
-    await insertAuditRowReported({
-      organization_id: params.organizationId ?? null,
-      user_id: params.userId ?? null,
-      event: params.event,
-      ip,
-      user_agent: userAgent,
-      metadata: {
-        entity_type: 'user',
-        entity_id: params.userId ?? null,
-        warehouse_id: null,
-        before: null,
-        after: null,
-        reason: null,
-        ...(params.extra ?? {}),
-      },
-    });
-  } catch (e) {
-    // Best-effort — never let a logging failure break an auth action.
-    void reportError(e, {
-      tag: 'audit.auth_emit_failed',
-      level: 'warning',
-      extra: { event: params.event },
-    });
-  }
-}
-
-/**
- * Resolves a user's default organization + role for audit attribution
- * and ServiceContext construction. Returns nulls if the lookup fails —
- * the audit row is still written (organization_id is nullable). Uses
- * the admin client because the user may be on a freshly-issued or
- * recovery session with limited RLS context.
- */
-async function resolveDefaultOrgAndRole(
-  userId: string,
-): Promise<{ organizationId: string | null; role: string | null }> {
-  try {
-    const admin = createAdminClient();
-    const { data: profile } = await admin
-      .from('user_profiles')
-      .select('default_organization_id')
-      .eq('id', userId)
-      .maybeSingle();
-    const defaultOrgId =
-      (profile as { default_organization_id: string | null } | null)
-        ?.default_organization_id ?? null;
-
-    if (defaultOrgId) {
-      const { data: member } = await admin
-        .from('organization_members')
-        .select('organization_id, role')
-        .eq('user_id', userId)
-        .eq('organization_id', defaultOrgId)
-        .not('accepted_at', 'is', null)
-        .maybeSingle();
-      const row = member as { organization_id: string; role: string } | null;
-      if (row) return { organizationId: row.organization_id, role: row.role };
-    }
-
-    const { data: anyMember } = await admin
-      .from('organization_members')
-      .select('organization_id, role')
-      .eq('user_id', userId)
-      .not('accepted_at', 'is', null)
-      // Oldest first: the same tie-break as every other membership resolver (0355).
-      .order('created_at', { ascending: true })
-      .order('organization_id', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const row = anyMember as { organization_id: string; role: string } | null;
-    return {
-      organizationId: row?.organization_id ?? null,
-      role: row?.role ?? null,
-    };
-  } catch {
-    return { organizationId: null, role: null };
-  }
-}
-
-/**
  * Public self-signup is disabled — this is an internal-company tool.
- * Account creation happens via the invite-acceptance flow only.
+ * Accounts are created only by a team invite (acceptInviteWithSignupAction in
+ * actions/team.ts), Platform > Provision (createOrgForCustomerAction in
+ * actions/platform-admin.ts) and the B2B portal invite
+ * (CustomersService.inviteUser in services/customers.ts).
  *
  * The function is kept exported (rather than deleted) so the existing
  * /signup page can render a "request access from your admin" notice
@@ -315,41 +229,128 @@ export async function signInAction(input: SignInInput): Promise<ActionResult<{ n
 export async function signOutAction(): Promise<void> {
   const supabase = await createClient();
 
-  // Snapshot the user BEFORE signOut so we still have a userId to
-  // attribute the audit row to. Best-effort: a missing user just yields
-  // a null-attributed row, which is fine on the sign-out path.
+  // The account this sign-out is for, read BEFORE signOut so the broadcast
+  // and the audit row below can name it after the session is gone. When
+  // GoTrue's answer names nobody (a 5xx or no answer: auth-js then returns no
+  // user and keeps the stored session), the session's verified claims name
+  // it instead, read here because the sign-out clears the cookie. Only a
+  // token whose signature checks out names anyone (lib/auth/verified-claims),
+  // and with no verified account nothing is broadcast or written: anyone can
+  // post this action with no session at all.
   const {
     data: { user },
   } = await supabase.auth.getUser();
+  const claims = user ? null : await readVerifiedSessionClaims(supabase);
+  const accountId = user?.id ?? claims?.userId ?? null;
 
   // scope: 'global' revokes ALL refresh tokens for the user across
   // every device + tab. Default ('local') only kills the calling
   // tab's token, leaving other browser tabs and the mobile app
   // alive until natural expiry (~1h). For an internal enterprise
   // tool, "Sign out" should mean "log me out everywhere."
-  await supabase.auth.signOut({ scope: 'global' });
+  //
+  // auth-js returns a failure rather than throwing, so the answer is read.
+  // No error means nothing was reported, not that every session ended: GoTrue
+  // answering 401/403/404 for this token is no error either.
+  const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
+  const databaseRevoke = revokeError
+    ? await endSessionsAfterFailedGlobalSignOut(revokeError, accountId, {
+        tag: 'auth.sign_out_revoke_failed',
+        message: 'Sign out could not confirm that every session ended',
+      })
+    : 'not_needed';
   // The revoke above only kills REFRESH tokens — devices coast on their
   // current access token for up to ~1h ("signed out on web, phone still
   // let me in", owner-observed 2026-07-02). The broadcast makes every
   // device's session-revocation listener sign out locally within ~1s.
   // keepId:null targets ALL sessions (see use-session-revocation.ts).
-  if (user) {
-    await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId: null });
+  //
+  // Sent also when neither revoke could be confirmed: the person asked to be
+  // signed out everywhere, and each device's listener decides what the
+  // message means for its own session (a web tab asks GoTrue first and stays
+  // while its session is alive). Not sent twice when the database revoke
+  // already did.
+  if (accountId && databaseRevoke !== 'ok') {
+    await broadcastToChannel(`user:${accountId}:sessions`, 'revoked', { keepId: null });
   }
   const cookieStore = await cookies();
   cookieStore.delete(REMEMBER_SESSION_COOKIE);
 
-  if (user) {
-    const { organizationId } = await resolveDefaultOrgAndRole(user.id);
+  if (accountId) {
+    const { organizationId } = await resolveDefaultOrgAndRole(accountId);
     await emitAuthAudit({
       event: 'user.signed_out',
-      userId: user.id,
+      userId: accountId,
       organizationId,
-      extra: { email: user.email ?? null, scope: 'global' },
+      extra: {
+        email: user?.email ?? null,
+        scope: 'global',
+        revoke_error: revokeErrorLabel(revokeError),
+        database_revoke: databaseRevoke,
+      },
     });
   }
 
   redirect('/');
+}
+
+/** The failure a sign-out returned, as auth-js hands it back. */
+type SignOutError = { name: string; code?: string; status?: number };
+
+/**
+ * What an audit row says about a sign-out's answer: GoTrue's code, or the
+ * error's name when it has none, or null when it returned no error. What is
+ * known, never "confirmed": no error also covers GoTrue answering 401, 403 or
+ * 404 for the token, which auth-js does not report.
+ */
+function revokeErrorLabel(error: SignOutError | null): string | null {
+  return error ? (error.code ?? error.name) : null;
+}
+
+/**
+ * The backstop for a global sign-out (Sign out, a finished password reset)
+ * that returned an error instead of ending the account's sessions:
+ *
+ *   1. Every other session of the account is still alive, so they are ended
+ *      in the database instead (revokeAllSessionsForUser, the by-user-id
+ *      revoke behind member removal and account disable, which tells the
+ *      devices itself when it worked). Only for an account a verified answer
+ *      named.
+ *   2. This browser's own session: when auth-js could not load it (an expired
+ *      access token whose refresh failed) it returns that error BEFORE
+ *      removing the local session, so the cookies would stay and be refreshed
+ *      once the Auth server answers again. Its Supabase auth cookies are
+ *      expired, as app/auth/session-ended/route.ts does.
+ *   3. A warning report with the error's name, code and status, never
+ *      GoTrue's message.
+ *
+ * Returns what the database revoke did, for the caller's broadcast and row.
+ */
+async function endSessionsAfterFailedGlobalSignOut(
+  revokeError: SignOutError,
+  accountId: string | null,
+  report: { tag: string; message: string },
+): Promise<'ok' | 'failed' | 'no_account'> {
+  const databaseRevoke = accountId
+    ? (await revokeAllSessionsForUser(accountId)).ok
+      ? 'ok'
+      : 'failed'
+    : 'no_account';
+  const cookieStore = await cookies();
+  for (const c of cookieStore.getAll()) {
+    if (SUPABASE_AUTH_COOKIE.test(c.name)) cookieStore.set(c.name, '', { path: '/', maxAge: 0 });
+  }
+  void reportError(new Error(report.message), {
+    tag: report.tag,
+    level: 'warning',
+    extra: {
+      name: revokeError.name,
+      code: revokeError.code ?? null,
+      status: revokeError.status ?? null,
+      database_revoke: databaseRevoke,
+    },
+  });
+  return databaseRevoke;
 }
 
 export async function requestPasswordResetAction(
@@ -401,11 +402,24 @@ function normalizeTotpCode(raw: unknown): string | null {
   return /^\d{6}$/.test(code) ? code : null;
 }
 
+/**
+ * The reset form's request for the authenticator code. It answers a press
+ * that came without one, and GoTrue's own refusal for want of AAL2, with
+ * `details.reason: 'aal2_required'`, which makes the form show its code box.
+ */
+const RESET_CODE_ASK =
+  'Enter the 6-digit code from your authenticator app to finish resetting your password.';
+
+/** The reset link's session is gone: spent, expired, or ended in another tab. */
+const RESET_LINK_GONE =
+  'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
+
 export async function completePasswordResetAction(
   // `totpCode` is additive and optional: the emailed recovery link and the
   // form both keep working without it, and it is read off the raw input rather
-  // than through completePasswordResetSchema so this fix stays inside the
-  // action layer. See the MFA step-up block below for why it exists.
+  // than through completePasswordResetSchema, so the shared schema stays as it
+  // is. The reset form sends it once this action asks for it (docket B50). See
+  // the MFA step-up block below for why it exists.
   input: CompletePasswordResetInput & { totpCode?: string },
 ): Promise<ActionResult<{ next: string }>> {
   const parsed = completePasswordResetSchema.safeParse(input);
@@ -425,7 +439,8 @@ export async function completePasswordResetAction(
   const supabase = await createClient();
 
   // Snapshot the user BEFORE updateUser/signOut so we can attribute the
-  // audit row to a real userId even after the global signOut.
+  // audit row to a real userId even after the global signOut. If this one
+  // read fails, the update's own answer names the account (resetUser below).
   const {
     data: { user: preUser },
   } = await supabase.auth.getUser();
@@ -466,38 +481,95 @@ export async function completePasswordResetAction(
       if (!code) {
         // `details.reason` lets the reset form reveal its code field instead of
         // showing a dead end. Same vocabulary as the API gate's aal2_required.
-        return err(
-          'forbidden',
-          'Enter the 6-digit code from your authenticator app to finish resetting your password.',
-          { reason: 'aal2_required' },
-        );
+        return err('forbidden', RESET_CODE_ASK, { reason: 'aal2_required' });
       }
-      const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
-        factorId: totpFactorId,
-      });
-      if (chErr || !challenge) {
-        return err('internal_error', 'Could not start the authenticator check. Please try again.');
+      // The account whose code budget this press spends (shared with the
+      // sign-in code and the step-up, lib/auth/mfa-code-attempts.ts): the
+      // first read's, else the link session's verified claims. With neither,
+      // the code is not checked and nothing is spent.
+      const accountId = preUser?.id ?? (await readVerifiedSessionClaims(supabase))?.userId ?? null;
+      if (!accountId) {
+        return err('forbidden', MFA_CODE_NOT_CHECKED, { reason: 'aal2_required' });
       }
-      const { error: verifyErr } = await supabase.auth.mfa.verify({
+      const check = await checkMfaCode(supabase, {
+        userId: accountId,
         factorId: totpFactorId,
-        challengeId: challenge.id,
         code,
+        path: 'password_reset',
       });
-      if (verifyErr) {
-        // Generic on purpose: never let the caller distinguish "wrong code"
-        // from "wrong/expired link" — and never echo GoTrue's message, which
-        // can carry factor/challenge identifiers.
+      // The two pauses (this account's code budget spent, GoTrue's own limit
+      // on code checks) carry `reason` too: an authenticator code changes
+      // every 30 seconds, so the one in the box is stale once the wait is
+      // over. With the reason the form empties the box and shows the words
+      // under it, as for a refused code; without it the form kept the code,
+      // and the next press was certain to be refused.
+      if (check.kind === 'budget_spent') {
+        return err('rate_limited', MFA_CODE_BUDGET_SPENT, { reason: 'aal2_required' });
+      }
+      if (check.kind !== 'verified') {
+        // Never echo GoTrue's message, which can carry factor/challenge
+        // identifiers.
+        if (check.outcome === 'session_gone') return err('unauthenticated', RESET_LINK_GONE);
+        if (check.outcome === 'limited') {
+          return err('rate_limited', MFA_CODE_GOTRUE_LIMITED, { reason: 'aal2_required' });
+        }
+        if (check.kind === 'challenge_failed') {
+          return err('internal_error', MFA_CHALLENGE_NOT_STARTED);
+        }
         return err(
           'forbidden',
-          'That code is not valid. Check your authenticator app and try again.',
+          check.outcome === 'refused' ? MFA_CODE_REFUSED : MFA_CODE_NOT_CHECKED,
           { reason: 'aal2_required' },
         );
       }
     }
   }
 
-  const { error } = await supabase.auth.updateUser({ password: parsed.data.password });
-  if (error) return err('internal_error', error.message);
+  const { data: updated, error } = await supabase.auth.updateUser({
+    password: parsed.data.password,
+  });
+  if (error) {
+    // GoTrue's refusals of the new password, in plain words (docket B50). Read
+    // by GoTrue's code only (auth-error-classify.ts); any other refusal is
+    // reported and says the fixed sentence, never GoTrue's text (S31). Nothing
+    // below has run: nobody is signed out and the old password still works.
+    const refusal = classifyPasswordUpdateError(error);
+    if (refusal?.kind === 'aal') {
+      // GoTrue still wants AAL2, so the code step above did not run (as when
+      // the factor list could not be read). Ask for the code, so the form
+      // shows its box; a code sent with this press was never checked, so say
+      // that.
+      return err(
+        'forbidden',
+        normalizeTotpCode(input.totpCode) ? MFA_CODE_NOT_CHECKED : RESET_CODE_ASK,
+        { reason: 'aal2_required' },
+      );
+    }
+    if (refusal?.kind === 'same') {
+      return err('validation_error', 'Choose a password that is different from your current one.');
+    }
+    if (refusal?.kind === 'weak') {
+      return err(
+        'validation_error',
+        refusal.breached
+          ? 'This password has appeared in a known data breach. Choose a different one.'
+          : 'This password does not meet the password rules. Choose a stronger one.',
+      );
+    }
+    if (refusal?.kind === 'session_gone') {
+      // The link's session is gone (spent, expired, or ended by a reset
+      // finished in another tab). The words follow the sign-in card's
+      // LINK_FAILED_NOTICE (lib/auth/auth-page-notices.ts).
+      return err('unauthenticated', RESET_LINK_GONE);
+    }
+    return unexpectedActionError(error, 'actions.auth.password_reset');
+  }
+
+  // The account the new password was set for. A failed first read (a GoTrue
+  // 5xx) leaves preUser null while the rest of the press can still go
+  // through; the update's own answer names the same account, so the revoke
+  // broadcast and the audit row below still go out (docket B50 review).
+  const resetUser = preUser ?? updated?.user ?? null;
 
   // SECURITY: after an email-recovery password update, force a fresh
   // sign-in rather than auto-elevating the recovery session into the
@@ -506,22 +578,39 @@ export async function completePasswordResetAction(
   // pivot straight into the account. scope: 'global' also kills every
   // other live session for this user across all devices so a leaked
   // legitimate session is forcibly evicted.
-  await supabase.auth.signOut({ scope: 'global' });
+  //
+  // auth-js returns a failure rather than throwing, so the answer is read.
+  // When it is an error, the sessions are ended in the database instead and
+  // this browser's auth cookies are expired: an AAL2 recovery session left in
+  // the browser would otherwise pass the proxy's local token check for up to
+  // an hour, the auto-elevation this block exists to prevent.
+  const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
+  const databaseRevoke = revokeError
+    ? await endSessionsAfterFailedGlobalSignOut(revokeError, resetUser?.id ?? null, {
+        tag: 'auth.password_reset_revoke_failed',
+        message: 'Password reset could not confirm that every session ended',
+      })
+    : 'not_needed';
   // Evict live devices NOW, not at access-token expiry (≤1h): the whole
   // point of resetting a password is that existing sessions may be in
-  // hostile hands. Same broadcast contract as device management.
-  if (preUser) {
-    await broadcastToChannel(`user:${preUser.id}:sessions`, 'revoked', { keepId: null });
+  // hostile hands. Same broadcast contract as device management. Not sent
+  // twice when the database revoke already did.
+  if (resetUser && databaseRevoke !== 'ok') {
+    await broadcastToChannel(`user:${resetUser.id}:sessions`, 'revoked', { keepId: null });
   }
 
   // Audit the successful recovery-based reset.
-  if (preUser) {
-    const { organizationId } = await resolveDefaultOrgAndRole(preUser.id);
+  if (resetUser) {
+    const { organizationId } = await resolveDefaultOrgAndRole(resetUser.id);
     await emitAuthAudit({
       event: 'user.password.reset_completed',
-      userId: preUser.id,
+      userId: resetUser.id,
       organizationId,
-      extra: { email: preUser.email ?? null },
+      extra: {
+        email: resetUser.email ?? null,
+        revoke_error: revokeErrorLabel(revokeError),
+        database_revoke: databaseRevoke,
+      },
     });
   }
 
@@ -635,6 +724,11 @@ export async function changePasswordAction(
     }
   }
 
+  // The account's sessions, listed BEFORE the password changes, so the ones
+  // the change ends can be named to their devices below: once ended they
+  // cannot be listed. Never throws; unreadable is null and nothing is named.
+  const listedSessions = await listMySessionIds(supabase);
+
   const { error: updateError } = await supabase.auth.updateUser({
     password: parsed.data.newPassword,
   });
@@ -644,11 +738,17 @@ export async function changePasswordAction(
   // other browsers, stale tabs) but keep the current tab signed in so
   // the in-app password change doesn't bounce the user to /signin.
   // Best-effort — never block the success response on a signOut error.
+  //
+  // auth-js RETURNS a failure rather than throwing, so the catch below never
+  // saw one; the answer is read, and a returned error is answered below with
+  // the database revoke of the other sessions.
+  let othersError: SignOutError | null = null;
   try {
-    await supabase.auth.signOut({ scope: 'others' });
+    ({ error: othersError } = await supabase.auth.signOut({ scope: 'others' }));
   } catch (e) {
     console.warn('[changePasswordAction] signOut others failed:', e);
   }
+  let databaseRevoke: 'not_needed' | 'ok' | 'failed' | 'no_session_id' = 'not_needed';
 
   // The revoke above only kills REFRESH tokens. Every other live client coasts
   // on its current ACCESS token for up to ~1h: another browser's middleware
@@ -660,16 +760,26 @@ export async function changePasswordAction(
   // listener for this window — the same one signOutAction and
   // completePasswordResetAction drive — it just was never told from here.
   //
-  // keepId spares the tab that made the change. A `keepId: null` payload means
-  // "evict EVERY session" (signOutAction's semantics), so when the current
-  // session id can't be derived we SKIP the broadcast rather than send a null
-  // we don't mean and bounce the user to /signin mid-flow. The id is the
-  // access token's `session_id` claim once its signature checks out
-  // (lib/auth/verified-claims), not getSession()'s token decoded unchecked.
+  // The broadcast names the sessions that ended (the listed ones other than
+  // this tab's), never the one that stays: the channel is public, and a live
+  // session id must not go out on it (S5, services/sessions.ts). A
+  // `keepId: null` payload means "evict EVERY session" (signOutAction's
+  // semantics), so when the current session id can't be derived we SKIP the
+  // broadcast rather than send a null we don't mean and bounce the user to
+  // /signin mid-flow. The id is the access token's `session_id` claim once
+  // its signature checks out (lib/auth/verified-claims), not getSession()'s
+  // token decoded unchecked.
   try {
-    const keepId = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
-    if (keepId) {
-      await broadcastToChannel(`user:${user.id}:sessions`, 'revoked', { keepId });
+    const current = (await readVerifiedSessionClaims(supabase))?.sessionId ?? null;
+    if (othersError) {
+      // The other sessions are still alive. revoke_my_other_sessions (0213)
+      // ends every session of auth.uid() except the one given, so it is called
+      // only with this tab's verified session id: with null, `id is distinct
+      // from null` would end this session too.
+      databaseRevoke = current ? await revokeMyOtherSessions(supabase, current) : 'no_session_id';
+    }
+    if (current) {
+      await broadcastEndedSessions(user.id, listedSessions, current);
     } else {
       console.warn(
         '[changePasswordAction] could not derive current session id — skipped revocation broadcast',
@@ -680,12 +790,45 @@ export async function changePasswordAction(
     // refresh tokens ARE revoked; the broadcast only shortens the eviction lag.
     console.warn('[changePasswordAction] revocation broadcast failed:', e);
   }
+  if (othersError) {
+    // Never GoTrue's message: the name, code and status say what failed.
+    void reportError(new Error('Password change could not confirm that the other sessions ended'), {
+      tag: 'auth.password_change_revoke_failed',
+      level: 'warning',
+      extra: {
+        name: othersError.name,
+        code: othersError.code ?? null,
+        status: othersError.status ?? null,
+        database_revoke: databaseRevoke,
+      },
+    });
+  }
 
   await audit({
     event: 'user.password.changed',
     entityType: 'user',
     entityId: user.id,
+    extra: { revoke_error: revokeErrorLabel(othersError), database_revoke: databaseRevoke },
   });
 
   return ok({ ok: true });
+}
+
+/**
+ * Ends every session of the signed-in account except `keepSessionId`, in the
+ * database (revoke_my_other_sessions, 0213; granted to authenticated). Never
+ * throws: what happened is the answer.
+ */
+async function revokeMyOtherSessions(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  keepSessionId: string,
+): Promise<'ok' | 'failed'> {
+  try {
+    const { error } = await supabase.rpc('revoke_my_other_sessions', {
+      p_keep_session_id: keepSessionId,
+    });
+    return error ? 'failed' : 'ok';
+  } catch {
+    return 'failed';
+  }
 }

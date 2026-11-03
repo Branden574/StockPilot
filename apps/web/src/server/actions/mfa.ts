@@ -4,17 +4,72 @@ import { revalidatePath, updateTag } from 'next/cache';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { classifyMfaCodeError } from '@/server/actions/auth-error-classify';
+import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
+import {
+  checkMfaCode,
+  MFA_CHALLENGE_NOT_STARTED,
+  MFA_CODE_BUDGET_SPENT,
+  MFA_CODE_GOTRUE_LIMITED,
+  MFA_CODE_NOT_CHECKED,
+  MFA_CODE_REFUSED,
+  MFA_SESSION_ENDED,
+  MFA_SETUP_NOT_OPEN,
+  MFA_SETUP_UNREADABLE,
+} from '@/lib/auth/mfa-code-attempts';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createClient } from '@/lib/supabase/server';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
+
+type GoTrueError = { code?: unknown; name?: unknown; status?: unknown; message?: unknown };
+
+/** GoTrue's structured code for a report, never its message. */
+function goTrueCode(error: GoTrueError | null | undefined): { code?: string } {
+  return typeof error?.code === 'string' ? { code: error.code } : {};
+}
+
+/**
+ * The answer to an authenticator challenge or code check GoTrue did not pass,
+ * chosen by how it answered (classifyMfaCodeError: code, SDK name, status),
+ * never its message, which can carry factor and challenge identifiers (S31;
+ * the words of docket S29-S32). Only a code GoTrue judged wrong is "not
+ * valid"; a gone session, GoTrue's own rate limit and no answer say so; a
+ * challenge that could not start, or an answer this does not know, is
+ * reported (the latter as a warning).
+ */
+function mfaCodeFailure(
+  step: 'challenge' | 'verify',
+  error: GoTrueError | null | undefined,
+  tag: string,
+): ActionResult<never> {
+  const outcome = classifyMfaCodeError(error);
+  if (outcome === 'session_gone') return err('unauthenticated', MFA_SESSION_ENDED);
+  if (outcome === 'limited') return err('rate_limited', MFA_CODE_GOTRUE_LIMITED);
+  if (step === 'challenge') {
+    return unexpectedActionError(error ?? new Error('mfa challenge returned no challenge'), tag, {
+      message: MFA_CHALLENGE_NOT_STARTED,
+      extra: goTrueCode(error),
+    });
+  }
+  if (outcome === 'refused') return err('validation_error', MFA_CODE_REFUSED);
+  if (outcome === 'unchecked') {
+    return unexpectedActionError(error ?? new Error('mfa verify failed'), tag, {
+      message: MFA_CODE_NOT_CHECKED,
+      level: 'warning',
+      extra: goTrueCode(error),
+    });
+  }
+  return err('internal_error', MFA_CODE_NOT_CHECKED);
+}
 
 /**
  * Begin TOTP enrollment for the current user. Supabase issues an unverified
@@ -41,7 +96,13 @@ export async function enrollFactorAction(): Promise<
       friendlyName: `StockPilot · ${new Date().toISOString().slice(0, 10)}`,
     });
     if (error || !data) {
-      return err('internal_error', error?.message ?? 'Failed to enroll factor');
+      return unexpectedActionError(
+        error ?? new Error('mfa enroll returned no factor'),
+        'actions.mfa.enroll',
+        {
+          extra: goTrueCode(error),
+        },
+      );
     }
     if (data.type !== 'totp') {
       return err('internal_error', 'Unexpected factor type from Supabase');
@@ -124,11 +185,28 @@ export async function verifyEnrollmentAction(input: {
       );
     }
 
+    // Only the set-up just started: the factor id must be one the account's
+    // factor list shows as unverified. Nothing else is confirmed here, a
+    // verified authenticator above all (its code is checked at sign-in and in
+    // the step-up, with their own budget and record), and a set-up replaced
+    // in another tab (enrollFactorAction removes unverified ones) is no longer
+    // open. The set-up screen is not shown once a factor is verified.
+    const { data: factors, error: factorsError } = await supabase.auth.mfa.listFactors();
+    if (factorsError || !factors) {
+      return err('internal_error', MFA_SETUP_UNREADABLE);
+    }
+    const openSetUp = (factors.all ?? []).some(
+      (f) => f.id === parsed.data.factorId && f.status === 'unverified',
+    );
+    if (!openSetUp) {
+      return err('validation_error', MFA_SETUP_NOT_OPEN);
+    }
+
     const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
       factorId: parsed.data.factorId,
     });
     if (chErr || !challenge) {
-      return err('internal_error', chErr?.message ?? 'Failed to challenge factor');
+      return mfaCodeFailure('challenge', chErr, 'actions.mfa.verify_enrollment');
     }
     const { error: vErr } = await supabase.auth.mfa.verify({
       factorId: parsed.data.factorId,
@@ -136,7 +214,7 @@ export async function verifyEnrollmentAction(input: {
       code: parsed.data.code,
     });
     if (vErr) {
-      return err('validation_error', vErr.message ?? 'Invalid code');
+      return mfaCodeFailure('verify', vErr, 'actions.mfa.verify_enrollment');
     }
     await audit({
       event: 'mfa.enrolled',
@@ -191,7 +269,7 @@ export async function unenrollFactorAction(input: {
     // throw), so a timeout landed on 'optional' and allowed the unenroll under
     // a policy that forbids it. Zero rows is held to the strictest policy.
     if (orgError) {
-      return err('internal_error', 'Could not check your organization\'s MFA policy. Try again.');
+      return err('internal_error', "Could not check your organization's MFA policy. Try again.");
     }
     const policy = enforcedMfaPolicy(orgRow);
     const role = ctx.role;
@@ -206,7 +284,12 @@ export async function unenrollFactorAction(input: {
     }
 
     const { error } = await supabase.auth.mfa.unenroll({ factorId: parsed.data.factorId });
-    if (error) return err('internal_error', error.message);
+    if (error) {
+      return unexpectedActionError(error, 'actions.mfa.unenroll', {
+        organizationId: ctx.organizationId,
+        extra: goTrueCode(error),
+      });
+    }
     await audit({
       event: 'mfa.unenrolled',
       entityType: 'user',
@@ -233,7 +316,13 @@ export async function unenrollFactorAction(input: {
 
 /**
  * Sign-in challenge: user already has password session at AAL1, supplies the
- * 6-digit code to upgrade to AAL2.
+ * 6-digit code to upgrade to AAL2. Also the step-up modal's check
+ * (components/auth/step-up-modal.tsx), at AAL1 or AAL2.
+ *
+ * Each press spends one attempt of the account's code budget (once at this
+ * client address, then, only when that allowed it, once for the account at any
+ * address), shared with the reset's code step, and a code GoTrue judged wrong
+ * writes an mfa.code_refused row (lib/auth/mfa-code-attempts.ts).
  */
 const signInChallengeSchema = z.object({
   factorId: z.string().min(1),
@@ -250,20 +339,31 @@ export async function challengeFactorAction(input: {
   }
   try {
     const supabase = await createClient();
-    const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
+    // The account and level of THIS session, from its verified token: both
+    // buckets of the budget are keyed on that account (one with the client
+    // address), never on the input. No verified session, no code check
+    // (lib/auth/mfa-code-attempts).
+    const claims = await readVerifiedSessionClaims(supabase);
+    if (!claims) return err('unauthenticated', MFA_SESSION_ENDED);
+
+    const check = await checkMfaCode(supabase, {
+      userId: claims.userId,
       factorId: parsed.data.factorId,
-    });
-    if (chErr || !challenge) {
-      return err('internal_error', chErr?.message ?? 'Failed to start challenge');
-    }
-    const { error: vErr } = await supabase.auth.mfa.verify({
-      factorId: parsed.data.factorId,
-      challengeId: challenge.id,
       code: parsed.data.code,
+      path: 'challenge',
+      sessionAal: claims.aal,
     });
-    if (vErr) return err('validation_error', vErr.message ?? 'Invalid code');
-    return ok(undefined);
+    if (check.kind === 'verified') return ok(undefined);
+    if (check.kind === 'budget_spent') return err('rate_limited', MFA_CODE_BUDGET_SPENT);
+    // Plain words, never GoTrue's: its message can carry factor and challenge
+    // identifiers.
+    if (check.outcome === 'session_gone') return err('unauthenticated', MFA_SESSION_ENDED);
+    if (check.outcome === 'limited') return err('rate_limited', MFA_CODE_GOTRUE_LIMITED);
+    if (check.kind === 'challenge_failed') return err('internal_error', MFA_CHALLENGE_NOT_STARTED);
+    if (check.outcome === 'refused') return err('validation_error', MFA_CODE_REFUSED);
+    return err('internal_error', MFA_CODE_NOT_CHECKED);
   } catch (e) {
+    rethrowControlFlow(e);
     if (e instanceof ServiceError) return err(e.code, e.message);
     // Don't console.error raw exception — Supabase auth errors can
     // include factor IDs and challenge tokens. Funnel through the
@@ -306,7 +406,11 @@ export async function setOrgMfaPolicyAction(input: {
       .eq('id', ctx.organizationId)
       .select('id')
       .maybeSingle();
-    if (error) return err('internal_error', error.message);
+    if (error) {
+      return unexpectedActionError(error, 'actions.mfa.policy', {
+        organizationId: ctx.organizationId,
+      });
+    }
     // Fail CLOSED: a 0-row update means RLS blocked the write (stale/removed
     // admin) — never audit + report a policy change (incl. a downgrade) that
     // didn't actually land.

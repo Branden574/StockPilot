@@ -109,7 +109,12 @@ vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
   getWarehouseAccess: (ctx: unknown) => getWarehouseAccessMock(ctx),
 }));
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: (moduleId: string) => checkModuleAccessMock(moduleId),
+  // Orders, the page's own module, is on: the page checks it before it reads
+  // (B66). The mock answers every other module.
+  checkModuleAccess: (moduleId: string) =>
+    moduleId === 'orders'
+      ? Promise.resolve({ enabled: true, canManage: false })
+      : checkModuleAccessMock(moduleId),
 }));
 
 const SUPABASE_CLIENT = { from: () => ({}) } as const;

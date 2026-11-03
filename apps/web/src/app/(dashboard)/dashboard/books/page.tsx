@@ -18,14 +18,16 @@ import { PageHeader } from '@/components/patterns/page-header';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { RackFilterDropdown } from '@/components/inventory/rack-filter-dropdown';
 import { Button } from '@/components/ui/button';
-import { can, isManagerOrAbove, type Role } from '@stockpilot/core';
+import { can, countStartAllowed, isManagerOrAbove, type Role } from '@stockpilot/core';
 import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-unavailable-notice';
+import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
 import {
   deriveInstantView,
   instantStateFromPageParams,
   parseRevealGroupParam,
   type PlannedServerPage,
 } from '@/lib/inventory/instant-mode';
+import { listFilterActive, otherWarehouseHintApplies } from '@/lib/inventory/list-filter-active';
 import {
   ALL_WAREHOUSES_KEY,
   canUseSharedInventoryCaches,
@@ -40,7 +42,9 @@ import {
   type InventoryListLookups,
 } from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
+import { charterCellLookup } from '@/lib/charter-display';
 import { ChartersService } from '@/server/services/charters';
+import { readCharterCellLabels } from '@/server/services/lib/unoffered-choices';
 import { InventoryService } from '@/server/services/inventory';
 import { createClient } from '@/lib/supabase/server';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -48,6 +52,7 @@ import {
   displayGroupFields,
   readDisplayGroupsByItemIds,
 } from '@/server/services/lib/display-groups';
+import { countMatchesInOtherWarehouses } from '@/server/services/lib/other-warehouse-matches';
 import { planLivePage, readPlannedPage } from '@/server/services/lib/planned-page';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
@@ -58,6 +63,7 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { withContext } from '@/server/services/context';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
+import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 
 // Lowered 50 → 30 in line with the inventory page. Book covers
 // average noticeably larger than item thumbnails (more variety of
@@ -148,14 +154,21 @@ export default async function BooksPage({
   const contextStarted = withContext();
   contextStarted.catch(() => {});
   // Ungroup anything (owner 2026-10-12): the sports gate joins them, for
-  // Ungroup on a size family (request-cached, no round trip of its own).
-  const [moduleAccess, { enabled: priceTrackingEnabled }, { enabled: sportsEnabled }, params] =
-    await Promise.all([
-      checkModuleAccess('books'),
-      checkModuleAccess('price_tracking'),
-      checkModuleAccess('sports'),
-      searchParams,
-    ]);
+  // Ungroup on a size family (request-cached, no round trip of its own). So
+  // does Cycle Counts, for the bulk bar's Cycle count (B42).
+  const [
+    moduleAccess,
+    { enabled: priceTrackingEnabled },
+    { enabled: sportsEnabled },
+    { enabled: cycleCountsEnabled },
+    params,
+  ] = await Promise.all([
+    checkModuleAccess('books'),
+    checkModuleAccess('price_tracking'),
+    checkModuleAccess('sports'),
+    checkModuleAccess('cycle_counts'),
+    searchParams,
+  ]);
   if (!moduleAccess.enabled) {
     return <ModuleUnavailable moduleId="books" access={moduleAccess} />;
   }
@@ -187,7 +200,7 @@ export default async function BooksPage({
     requireOrgContext(),
     effectiveNavLabel('/dashboard/books', 'Books'),
     InventoryService.forCurrentUser().then((svc) => svc.listDistinctRacks({ scope: 'books' })),
-    booksTableSection({ params, lifecycleStatus, sportsEnabled }),
+    booksTableSection({ params, lifecycleStatus, sportsEnabled, cycleCountsEnabled }),
   ]);
 
   const canCreate = can(sessionCtx, 'items:create');
@@ -278,6 +291,7 @@ type SectionData = {
   suppliers: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
+  unlistedCharters: InventoryListLookups['unlistedCharters'];
   trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   /** ACTIVE books awaiting first receipt (mig 0277) — the "Expected"
    *  chip's count badge (server mode; instant mode derives locally). */
@@ -303,11 +317,14 @@ async function booksTableSection({
   params,
   lifecycleStatus,
   sportsEnabled,
+  cycleCountsEnabled,
 }: {
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   /** The sports module is on (Ungroup on a size family). */
   sportsEnabled: boolean;
+  /** The Cycle Counts module is on (the bulk bar's Cycle count, B42). */
+  cycleCountsEnabled: boolean;
 }): Promise<ReactNode> {
   const page = Math.max(1, Number(params.page) || 1);
   // Saved views are strictly per-user — they never enter the shared
@@ -351,6 +368,38 @@ async function booksTableSection({
   // sports:manage with the sports module on; the page asked the module gate
   // with the others).
   const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
+  // The bulk "Cycle count" shortcut (B42): only for someone who can start a
+  // count, by the server's floors (core countStartAllowed: a manager with
+  // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
+  // staff were sent to Start a count and refused.
+  const canStartCount = countStartAllowed({
+    role: sessionCtx.role as Role,
+    permissions: sessionCtx.permissions,
+    cycleCountsEnabled,
+  });
+
+  // "NOTHING HERE IN <WAREHOUSE>", as on the Items page (review of batch D,
+  // 2026-10-20). The list and the instant dataset are narrowed to the
+  // warehouse filter (the switcher's cookie, or a saved view's warehouse), and
+  // when that alone left the view empty the page said "No books yet" and
+  // offered to add a first book, with no filter bar and nothing naming the
+  // warehouse. For an empty view the count elsewhere can answer (the search
+  // alone, Active or All: otherWarehouseHintApplies), it asks how many books
+  // match in the other warehouses and the warehouse's name, together and only
+  // then, so a view with rows or another narrowing pays no round trip.
+  const otherWarehouseHint = async (total: number): Promise<OtherWarehouseHint | null> => {
+    if (total !== 0 || !warehouseFilter || !otherWarehouseHintApplies(params, 'books')) {
+      return null;
+    }
+    const [warehouses, matches] = await Promise.all([
+      getWarehousesForRequest(sessionCtx.organizationId),
+      countMatchesInOtherWarehouses(sessionCtx.organizationId, params, 'books'),
+    ]);
+    const warehouseName = warehouses.find((w) => w.id === warehouseFilter)?.name ?? null;
+    return warehouseName && matches > 0 ? { warehouseName, matches } : null;
+  };
 
   // INSTANT MODE — same contract as the Items page: manager+ orgs at or
   // under INSTANT_MODE_MAX_ROWS get the FULL Books dataset and the
@@ -413,6 +462,7 @@ async function booksTableSection({
       params,
       lifecycleStatus,
       canCreate,
+      otherWarehouses: await otherWarehouseHint(derived.total),
     });
     // A zero-result view is a FINISHED page, so it carries the performance
     // marker itself. With rows, BooksInventoryTable -> InventoryTable carries it.
@@ -427,13 +477,15 @@ async function booksTableSection({
             lookups.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
           ),
           locations: new Map(lookups.locations.map((l) => [l.id, { name: l.name }])),
-          charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+          charters: charterCellLookup(lookups.charters, lookups.unlistedCharters),
         }}
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
+        canExport={canExport}
+        canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
         charters={lookups.charters}
@@ -479,6 +531,7 @@ async function booksTableSection({
         suppliers: payload.suppliers,
         tags: payload.tags,
         charters: payload.charters,
+        unlistedCharters: payload.unlistedCharters,
         trends: new Map(Object.entries(payload.trends)),
         expectedCount: payload.expectedCount,
       };
@@ -517,13 +570,19 @@ async function booksTableSection({
         TagsService.forCurrentUser(),
         ChartersService.forCurrentUser(),
       ]);
-      const [categories, locations, suppliers, tags, charters] = await Promise.all([
-        categoriesSvc.list(),
-        locationsSvc.list({ sitesOnly: true }),
-        suppliersSvc.listForLookups(),
-        tagsSvc.list(),
-        chartersSvc.list(),
-      ]);
+      const [categories, locations, suppliers, tags, charters, unlistedCharters] =
+        await Promise.all([
+          categoriesSvc.list(),
+          locationsSvc.list({ sitesOnly: true }),
+          suppliersSvc.listForLookups(),
+          tagsSvc.list(),
+          chartersSvc.list(),
+          // Names only, for the Charter cell: an archived charter's records (B97).
+          readCharterCellLabels(
+            () => chartersSvc.listLabels({ exceptActive: true }),
+            'books.charter_cell_labels',
+          ),
+        ]);
       return {
         categories: categories.map((c) => ({
           id: c.id as string,
@@ -534,6 +593,9 @@ async function booksTableSection({
         suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
         tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
         charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+        unlistedCharters: unlistedCharters.flatMap((c) =>
+          c.status === 'active' ? [] : [{ ...c, status: c.status }],
+        ),
       };
     };
 
@@ -682,7 +744,7 @@ async function booksTableSection({
   const lookups = {
     categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
     locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
-    charters: new Map(data.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+    charters: charterCellLookup(data.charters, data.unlistedCharters),
   };
 
   const emptyState = booksEmptyState({
@@ -690,6 +752,7 @@ async function booksTableSection({
     params,
     lifecycleStatus,
     canCreate,
+    otherWarehouses: await otherWarehouseHint(data.total),
   });
   // Same as the instant branch: the zero-result view carries its own marker.
   if (emptyState) return <PerfUseful>{emptyState}</PerfUseful>;
@@ -705,6 +768,8 @@ async function booksTableSection({
       canUngroup={canUngroup}
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
+      canExport={canExport}
+      canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}
       charters={data.charters}
@@ -736,41 +801,55 @@ async function booksTableSection({
   );
 }
 
+/** The warehouse the view is filtered to, and how many books match in the others. */
+type OtherWarehouseHint = { warehouseName: string; matches: number };
+
 /**
- * The rich zero-result EmptyStates, shared VERBATIM by the instant and
- * server branches (extracted, not duplicated, so the two modes can't
- * drift). Returns null when the table should render.
+ * The zero-result EmptyStates, shared VERBATIM by the instant and server
+ * branches (extracted, not duplicated, so the two modes can't drift).
+ * Returns null when the table should render, which it does for every view a
+ * filter or a search narrows (listFilterActive), as on the Items page.
  */
 function booksEmptyState({
   total,
   params,
   lifecycleStatus,
   canCreate,
+  otherWarehouses,
 }: {
   total: number;
   params: BooksSearchParams;
   lifecycleStatus: 'archived' | 'discontinued' | 'all' | 'active';
   canCreate: boolean;
+  /** Set only when the warehouse filter alone emptied the view (see the page). */
+  otherWarehouses?: OtherWarehouseHint | null;
 }) {
   if (total !== 0) return null;
-  // Expected chip view (mig 0277) with zero rows — same dedicated branch
-  // as the Items page so the generic "No books yet" CTA never fires here.
-  if (params.expected === '1' && !params.q && !params.stock) {
+  // First, as on the Items page: the view is empty only because of the
+  // warehouse filter, so say so and offer the way out, in the Items page's
+  // words, instead of "No books yet".
+  if (otherWarehouses) {
+    const { warehouseName, matches: n } = otherWarehouses;
     return (
       <EmptyState
         icon={BookOpen}
-        title="No expected books"
-        description="Books created from purchase orders appear here until their first stock is received."
-        cta={{ label: 'Back to all books', href: '/dashboard/books' }}
+        title={`Nothing here in ${warehouseName}`}
+        description={`${n === 1 ? '1 item matches' : `${n} items match`} in your other warehouses. This view is filtered to ${warehouseName}.`}
+        action={<ClearWarehouseFilterButton label="Search all warehouses" />}
       />
     );
   }
-  // Excludes ?auto=1 (the "Auto-archived only" chip) — same rationale as
-  // the Items page: a zero result there just means none of the archived
-  // books were system-archived, not that nothing is archived at all. So
-  // does "No books yet" below, as on Items: the view falls through to the
-  // table's own "No items match your filters." row, chip and all.
-  if (lifecycleStatus === 'archived' && !params.q && !params.stock && params.auto !== '1') {
+  // A filter or a search that leaves nothing is the table's own no-match
+  // state, with the filter bar, the active chips and "Clear all filters",
+  // in every mode (grouping walk 2026-10-20, W4 no-match; see the Items
+  // page). It used to be "No books yet" with an offer to add a first book
+  // whenever the view had no search, stock view or Auto-archived only chip,
+  // and a stock view or the Expected chip had a page-level state without
+  // the bar: their words ("No low-stock books", "No out-of-stock books", "No
+  // expected books") are the table's now, unchanged (listEmptyMessage).
+  if (listFilterActive(params)) return null;
+  // The Archived view with nothing archived (no filter on it: see above).
+  if (lifecycleStatus === 'archived') {
     return (
       <EmptyState
         icon={BookOpen}
@@ -780,39 +859,17 @@ function booksEmptyState({
       />
     );
   }
-  if (!params.q && !params.stock && params.auto !== '1') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No books yet"
-        description={
-          canCreate
-            ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
-            : 'No books have been added to this workspace yet.'
-        }
-        cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
-      />
-    );
-  }
-  if (params.stock === 'low') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No low-stock books"
-        description="No books are at or below their reorder point right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  if (params.stock === 'out') {
-    return (
-      <EmptyState
-        icon={BookOpen}
-        title="No out-of-stock books"
-        description="Nothing is at zero quantity right now. Clear the filter to see all books."
-        cta={{ label: 'Show all books', href: '/dashboard/books' }}
-      />
-    );
-  }
-  return null;
+  // The list itself is empty and nothing filters it.
+  return (
+    <EmptyState
+      icon={BookOpen}
+      title="No books yet"
+      description={
+        canCreate
+          ? 'Add your first book — title, ISBN, author, quantity. Books roll up into the same dashboard totals as regular items.'
+          : 'No books have been added to this workspace yet.'
+      }
+      cta={canCreate ? { label: 'Add your first book', href: '/dashboard/books/new' } : undefined}
+    />
+  );
 }

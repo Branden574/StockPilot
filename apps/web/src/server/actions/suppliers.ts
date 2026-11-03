@@ -11,15 +11,13 @@ import {
   type UpdateSupplierInput,
 } from '@/server/services/suppliers';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.suppliers');
 }
 
 export async function createSupplierAction(input: CreateSupplierInput): Promise<ActionResult<{ id: string }>> {

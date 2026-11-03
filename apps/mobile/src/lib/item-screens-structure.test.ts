@@ -269,7 +269,7 @@ describe('the item screen keeps every word', () => {
     'From PO receipt — change status instead.',
     'Could not load this item',
     'Not found',
-    'This item no longer exists.',
+    'This item is not available to you, or it no longer exists.',
     'Could not restore',
   ])('says "%s"', (word) => {
     expect(words).toContain(word);

@@ -52,7 +52,7 @@ import 'server-only';
 //   • rows+placement   (org, warehouseKey, view)  'inventory-list-v7'
 //     (page 1 + its placement; on Items under the instant cap page 1 is
 //      PLANNED with the instant derivation, see loadInventoryRowsUncached)
-//   • lookup tables    (org)                      'inventory-lookups-v1'
+//   • lookup tables    (org)                      'inventory-lookups-v2'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
 //   • trend buckets    (org)                      'inventory-trend-buckets-v2'
 //   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v3'
@@ -117,7 +117,8 @@ import {
   revalidateInventoryList,
 } from '@/server/services/lib/inventory-list-cache';
 import { displayGroupFields, readDisplayGroupsForOrg } from '@/server/services/lib/display-groups';
-import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
+import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from '@/server/services/lib/lookup-ceiling';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
 export type InventoryListView = 'items' | 'books';
@@ -404,6 +405,15 @@ export interface InventoryListLookups {
   suppliers: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
+  /** The archived and inactive charters, by name, for the Charter cell only
+   *  (B97): a record tagged to one was called "Generic". Never offered in the
+   *  Charter filter, which lists `charters`. */
+  unlistedCharters: Array<{
+    id: string;
+    name: string;
+    code: string | null;
+    status: 'inactive' | 'archived';
+  }>;
 }
 
 export interface InventoryListPayload extends InventoryListLookups {
@@ -1311,18 +1321,27 @@ const DATASET_ID_BATCH_CONCURRENCY = 20;
  * (organizationId): for manager-and-above these are org-uniform (the
  * only role class allowed near this cache — see
  * canUseSharedInventoryCaches). Queries mirror the pages' live-branch
- * services exactly:
- *   categories → CategoriesService.list()            (not deleted, name ASC)
- *   locations  → LocationsService.list({sitesOnly})   (not deleted, every
- *                page by name then id, isSiteLocation filter — same shared
- *                predicate)
+ * services exactly, and like them each reads EVERY page (fetchAllRows),
+ * ordered by name and then id: one read stopped at PostgREST's 1000-row
+ * max_rows with no error, so past 1000 of a list both paths lost every row
+ * whose name sorts after them (small fixes slice 8 for locations, B47 for
+ * the rest). A failed page throws with its lookup's label and the PostgREST
+ * text, so a partial list is never cached. Categories, tags, charters and
+ * suppliers stop at LOOKUP_ROW_CEILING rows, as their services do, and
+ * reaching it is reported once per fill (B47 decisions round):
+ *   categories → CategoriesService.list()            (not deleted)
+ *   locations  → LocationsService.list({sitesOnly})   (not deleted,
+ *                isSiteLocation filter — same shared predicate)
  *   suppliers  → SuppliersService.list() behind the module gate
  *                (module off → [] fail-closed, see loadSuppliersIfEnabled)
- *   tags       → TagsService.list()                   (name ASC)
- *   charters   → ChartersService.list()               (status=active, name ASC)
+ *   tags       → TagsService.list()
+ *   charters   → ChartersService.list()               (status=active)
+ *   unlisted   → ChartersService.listLabels({ exceptActive: true })
+ *                (archived and inactive: names for the Charter cell, B97)
  */
 export async function loadInventoryLookups(organizationId: string): Promise<InventoryListLookups> {
-  const cached = unstable_cache(loadInventoryLookupsUncached, ['inventory-lookups-v1'], {
+  // v2: the payload gained unlistedCharters (B97).
+  const cached = unstable_cache(loadInventoryLookupsUncached, ['inventory-lookups-v2'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -1332,19 +1351,52 @@ export async function loadInventoryLookups(organizationId: string): Promise<Inve
 /** A location as the lookups read it: enough to pick out the sites. */
 type LocationLookupRow = { id: string; name: string; type: string | null; kind: string | null };
 
+/**
+ * Rethrows a failed lookup read with the lookup's label. fetchAllRows throws a
+ * ServiceError whose public message is generic; rawErrorText keeps the
+ * PostgREST cause (its internalDetail), so the log says which lookup failed
+ * and why. This message stays server side.
+ */
+function lookupReadFailed(lookup: string): (err: unknown) => never {
+  return (err) => {
+    throw new Error(`inventory-list ${lookup} query failed: ${rawErrorText(err)}`);
+  };
+}
+
+/**
+ * Reports a lookup that reached LOOKUP_ROW_CEILING (its first rows by name,
+ * then id, are the list) and passes the rows on.
+ */
+function noteLookupCeiling<Row>(lookup: string, organizationId: string, rows: Row[]): Row[] {
+  if (rows.length >= LOOKUP_ROW_CEILING) {
+    reportLookupCeiling(`inventory_lookups.${lookup}`, { organizationId });
+  }
+  return rows;
+}
+
 async function loadInventoryLookupsUncached(organizationId: string): Promise<InventoryListLookups> {
   const admin = createAdminClient();
-  const [categoriesRes, locationRows, suppliers, tagsRes, chartersRes] = await Promise.all([
-    admin
-      .from('categories')
-      .select('id, name, color')
-      .eq('organization_id', organizationId)
-      .is('deleted_at', null)
-      .order('name', { ascending: true }),
-    // Every page, as LocationsService.list reads it (small fixes slice 8):
-    // the sites are picked out of every location kind below, so one read
-    // capped at 1000 rows lost each site whose name sorts past them. A failed
-    // page throws, so a partial list is never cached.
+  // Every list page by page, by name and then id, as its live service reads
+  // it (B47; the locations since small fixes slice 8). Any failed page throws,
+  // so a partial list is never cached.
+  const [categoryRows, locationRows, suppliers, tagRows, charterRows, others] = await Promise.all([
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('categories')
+          .select('id, name, color')
+          .eq('organization_id', organizationId)
+          .is('deleted_at', null)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => noteLookupCeiling('categories', organizationId, rows),
+      lookupReadFailed('categories'),
+    ),
+    // The sites are picked out of every location kind below, so one read
+    // capped at 1000 rows lost each site whose name sorts past them.
     fetchAllRows<LocationLookupRow>(
       (from, to) =>
         admin
@@ -1358,32 +1410,53 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
           data: LocationLookupRow[] | null;
           error: { message: string } | null;
         }>,
-    ),
+    ).catch(lookupReadFailed('locations')),
     loadSuppliersIfEnabled(admin, organizationId),
-    admin
-      .from('tags')
-      .select('id, name, color')
-      .eq('organization_id', organizationId)
-      .order('name', { ascending: true }),
-    admin
-      .from('charters')
-      .select('id, name, code')
-      .eq('organization_id', organizationId)
-      .eq('status', 'active')
-      .order('name', { ascending: true }),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('tags')
+          .select('id, name, color')
+          .eq('organization_id', organizationId)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then((rows) => noteLookupCeiling('tags', organizationId, rows), lookupReadFailed('tags')),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('charters')
+          .select('id, name, code')
+          .eq('organization_id', organizationId)
+          .eq('status', 'active')
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => noteLookupCeiling('charters', organizationId, rows),
+      lookupReadFailed('charters'),
+    ),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('charters')
+          .select('id, name, code, status')
+          .eq('organization_id', organizationId)
+          .neq('status', 'active')
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => noteLookupCeiling('unlisted_charters', organizationId, rows),
+      lookupReadFailed('unlisted charters'),
+    ),
   ]);
 
-  // Throw on ANY read error so a failed pass is never cached.
-  if (categoriesRes.error) {
-    throw new Error(`inventory-list categories query failed: ${categoriesRes.error.message}`);
-  }
-  if (tagsRes.error) throw new Error(`inventory-list tags query failed: ${tagsRes.error.message}`);
-  if (chartersRes.error) {
-    throw new Error(`inventory-list charters query failed: ${chartersRes.error.message}`);
-  }
-
   return {
-    categories: (categoriesRes.data ?? []).map((c) => ({
+    categories: categoryRows.map((c) => ({
       id: c.id as string,
       name: c.name as string,
       color: (c.color as string | null) ?? null,
@@ -1392,15 +1465,21 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
       .filter((l) => isSiteLocation(l))
       .map((l) => ({ id: l.id, name: l.name })),
     suppliers,
-    tags: (tagsRes.data ?? []).map((t) => ({
+    tags: tagRows.map((t) => ({
       id: t.id as string,
       name: t.name as string,
       color: (t.color as string | null) ?? null,
     })),
-    charters: (chartersRes.data ?? []).map((c) => ({
+    charters: charterRows.map((c) => ({
       id: c.id as string,
       name: c.name as string,
       code: (c.code as string | null) ?? null,
+    })),
+    unlistedCharters: others.map((c) => ({
+      id: c.id as string,
+      name: c.name as string,
+      code: (c.code as string | null) ?? null,
+      status: c.status as 'inactive' | 'archived',
     })),
   };
 }
@@ -1674,14 +1753,24 @@ async function loadSuppliersIfEnabled(
   // Comp wins even over an explicit enabled=false row — identical to
   // getModulesForRequest, which adds all non-core ids after the query.
   if (!modRes.data?.enabled && !comped) return [];
-  const { data, error: listErr } = await admin
-    .from('suppliers')
-    .select('id, name')
-    .eq('organization_id', organizationId)
-    .is('deleted_at', null)
-    .order('name', { ascending: true });
-  if (listErr) throw new Error(`inventory-list suppliers query failed: ${listErr.message}`);
-  return (data ?? []).map((s) => ({ id: s.id as string, name: s.name as string }));
+  // Every page, by name and then id, as SuppliersService.list reads it (B47),
+  // up to LOOKUP_ROW_CEILING rows.
+  const rows = await fetchAllRows(
+    (from, to) =>
+      admin
+        .from('suppliers')
+        .select('id, name')
+        .eq('organization_id', organizationId)
+        .is('deleted_at', null)
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    { cap: LOOKUP_ROW_CEILING },
+  ).then(
+    (found) => noteLookupCeiling('suppliers', organizationId, found),
+    lookupReadFailed('suppliers'),
+  );
+  return rows.map((s) => ({ id: s.id as string, name: s.name as string }));
 }
 
 /* ---- prewarm (cron) ---------------------------------------------------- */

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { assertPermission, ServiceError, withContext } from '@/server/services/context';
 import { audit } from '@/server/services/audit';
+import { readInActiveOrg } from '@/server/services/lib/in-active-org';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -54,6 +55,13 @@ export async function editMovementNoteAction(
     // permission take effect) and MFA-aware, the twin of the SQL gate inside
     // the RPC. Throws ServiceError('forbidden'); the RPC re-checks regardless.
     assertPermission(ctx, 'movements:edit_notes');
+    // S39: the movement is read in THIS organization first, and a miss
+    // answers 'Movement not found.' (the phone route's sentence) before the
+    // RPC. edit_movement_note decides on the movement's own organization, so
+    // for a member of two organizations a Movements page left open after a
+    // switch edited the other organization's note while the audit row below
+    // (the old and the new text) went to this one.
+    await readInActiveOrg(ctx, 'stock_movements', movementId, 'Movement not found.');
 
     const { data, error } = await ctx.supabase.rpc('edit_movement_note', {
       p_movement_id: movementId,

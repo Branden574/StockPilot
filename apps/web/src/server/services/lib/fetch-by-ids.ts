@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
+import { nonErrorText } from '@/lib/error-text';
 import {
   chunkInFilterValues,
   IN_FILTER_DEFAULT_CONCURRENCY,
@@ -58,19 +59,20 @@ export type BatchOpts = {
  * Throws the `ServiceError('internal_error')` from `fetchAllRows` unchanged on
  * the first failed page: its public message is generic and the raw PostgREST
  * text is in `.internalDetail`. A caller whose read feeds a decision lets it
- * propagate; a cosmetic read catches it and reports it.
+ * propagate; a cosmetic read catches it and reports it. `requireList` goes to
+ * every batch's `fetchAllRows`: a page that is not a list is a failed page.
  */
 export async function fetchAllRowsByIds<Row, V extends string | number = string>(
   values: readonly (V | null | undefined)[],
   buildPage: (batch: V[]) => (from: number, to: number) => PromiseLike<PageResult<Row>>,
-  opts: BatchOpts = {},
+  opts: BatchOpts & { requireList?: string } = {},
 ): Promise<Row[]> {
   const batches = chunkInFilterValues(values, opts);
   if (batches.length === 0) return [];
   const perBatch = await mapWithConcurrency(
     batches,
     opts.concurrency ?? IN_FILTER_DEFAULT_CONCURRENCY,
-    (batch) => fetchAllRows<Row>(buildPage(batch)),
+    (batch) => fetchAllRows<Row>(buildPage(batch), { requireList: opts.requireList }),
   );
   const rows: Row[] = [];
   for (const batchRows of perBatch) for (const row of batchRows) rows.push(row);
@@ -160,11 +162,13 @@ export async function writeInIdBatches<V extends string | number, Row = never>(
 
 /** The raw text behind an error, for server logs: a ServiceError's
  *  `internalDetail` (the PostgREST text its public message hides), else the
- *  Error's message, else the value itself. */
+ *  Error's message, else the reporter's text for any other value
+ *  (lib/error-text.ts: a supabase-js error object's message and code, never
+ *  its details; String() of it was "[object Object]"). */
 export function rawErrorText(err: unknown): string {
   if (err instanceof ServiceError && err.internalDetail) return err.internalDetail;
   if (err instanceof Error) return err.message;
-  return String(err);
+  return nonErrorText(err);
 }
 
 /**

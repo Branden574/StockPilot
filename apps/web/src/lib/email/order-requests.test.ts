@@ -42,6 +42,13 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => adminHolder.client),
 }));
 
+const reportErrorMock = vi.fn(async (_err: unknown, _context: unknown) => undefined);
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: (err: unknown, context: unknown) => reportErrorMock(err, context),
+}));
+
+import { createAdminClient } from '@/lib/supabase/admin';
+
 import { esEmailById } from './es/registry';
 import { sendOrderRequestEmail, type OrderRequestEmailKind } from './order-requests';
 
@@ -761,5 +768,150 @@ describe('sendOrderRequestEmail — the Track link carries the request track tok
       appUrl: APP_URL,
     });
     expect(stub.fromCalls).not.toContain('order_request_secrets');
+  });
+
+  // B20a: at a hand-over the sign route also sends the completed receipt to a
+  // physical signer whose address differs (api/orders/sign/route.ts). The link
+  // named the signer in `&email=` but carried the ORDER's own key, and the
+  // tracker's email field stays editable: typed with the requester's address,
+  // that key opened the order and, for a completed order with Returns on, the
+  // requester's return link. The order's own key now goes only to the address
+  // the order is for. Mutation caught: no recipient rule, or one applied to
+  // the link but not to the read.
+  it('a completed receipt to a signer who is not the order address carries no key, and the side table is not read', async () => {
+    const stub = wireSide(SIDE);
+    await sendOrderRequestEmail({
+      kind: 'completed',
+      request: makeRow({ status: 'completed' }),
+      recipientEmail: 'dock-signer@example.com',
+      recipientName: 'Dock signer',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`email=${encodeURIComponent('dock-signer@example.com')}`);
+    expect(trackLink()).not.toContain('&t=');
+    const sent = sendEmailMock.mock.calls.at(-1)![0];
+    expect(sent.html).not.toContain(SIDE);
+    expect(sent.text ?? '').not.toContain(SIDE);
+    expect(stub.fromCalls).not.toContain('order_request_secrets');
+  });
+
+  // Mutation caught: an exact comparison (the sign route keeps the stored
+  // address's own casing for the requester; a typed or stored address can
+  // differ in case or carry spaces).
+  it('the same receipt to the order address, in another letter case, still carries the key', async () => {
+    wireSide(SIDE);
+    await sendOrderRequestEmail({
+      kind: 'completed',
+      request: makeRow({ status: 'completed', requester_email: 'pat.requester@example.com' }),
+      recipientEmail: 'Pat.Requester@Example.COM',
+      recipientName: 'Pat',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`&t=${SIDE}`);
+
+    wireSide(SIDE);
+    await sendOrderRequestEmail({
+      kind: 'completed',
+      request: makeRow({ status: 'completed', requester_email: ' pat.requester@example.com ' }),
+      recipientEmail: 'pat.requester@example.com',
+      recipientName: 'Pat',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).toContain(`&t=${SIDE}`);
+  });
+
+  it('the catalog token a caller holds goes only to the order address too', async () => {
+    const CATALOG = 'catalog-token-for-this-link';
+    wireSide(null);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow(),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+      publicRequestToken: CATALOG,
+    });
+    expect(trackLink()).toContain(`&t=${CATALOG}`);
+
+    wireSide(null);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow(),
+      recipientEmail: 'dock-signer@example.com',
+      recipientName: 'Dock signer',
+      appUrl: APP_URL,
+      publicRequestToken: CATALOG,
+    });
+    expect(trackLink()).not.toContain('&t=');
+  });
+
+  function trackTokenReports() {
+    return reportErrorMock.mock.calls.filter(
+      ([, context]) => (context as { tag?: string } | undefined)?.tag === 'orders.track-token',
+    );
+  }
+
+  // The read used to be `catch { return null }` over resolveTrackToken, which
+  // folds a failed read into "no key": a dead Track button in every status
+  // email, and nothing reported. Mutation caught: the failure swallowed again.
+  it('a failed side read is reported once, with the order id and never a key, and the link goes out without one', async () => {
+    wireSide(null, true);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow(),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(trackLink()).not.toBe('');
+    expect(trackLink()).not.toContain('&t=');
+    const reports = trackTokenReports();
+    expect(reports).toHaveLength(1);
+    const [err, context] = reports[0]!;
+    expect(context).toEqual({
+      tag: 'orders.track-token',
+      extra: { orderId: '99999999-8888-7777-6666-555555555555' },
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(JSON.stringify([(err as Error).message, context])).not.toMatch(/[0-9a-f]{64}/i);
+  });
+
+  it('an admin client that cannot be built is reported once, and the link goes out without a key', async () => {
+    vi.mocked(createAdminClient).mockImplementation(() => {
+      throw new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    });
+    try {
+      await sendOrderRequestEmail({
+        kind: 'approved',
+        request: makeRow(),
+        recipientEmail: EMAIL,
+        recipientName: 'Jane',
+        appUrl: APP_URL,
+      });
+    } finally {
+      vi.mocked(createAdminClient).mockImplementation(() => adminHolder.client as never);
+    }
+    expect(sendEmailMock).toHaveBeenCalledTimes(1);
+    expect(trackLink()).not.toContain('&t=');
+    const reports = trackTokenReports();
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({
+      tag: 'orders.track-token',
+      extra: { orderId: '99999999-8888-7777-6666-555555555555' },
+    });
+  });
+
+  it('an order with no key is not a failure: nothing is reported', async () => {
+    wireSide(null);
+    await sendOrderRequestEmail({
+      kind: 'approved',
+      request: makeRow(),
+      recipientEmail: EMAIL,
+      recipientName: 'Jane',
+      appUrl: APP_URL,
+    });
+    expect(trackLink()).not.toContain('&t=');
+    expect(trackTokenReports()).toEqual([]);
   });
 });

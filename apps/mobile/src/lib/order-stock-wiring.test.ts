@@ -281,8 +281,10 @@ describe('order screen: offline (in memory only)', () => {
     expect(screen).toContain(
       'const shipment = recalled ? recalled.view.shipment : loadedShipment;',
     );
+    // B65: a malformed link id is "Order not found." offline too (no
+    // connection could ever open it), so the offline sentence needs a uuid.
     expect(screen).toMatch(
-      /const loadError =\s*offline && order === null \? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;/,
+      /const loadError =\s*offline && order === null && isUuid\(id\)\s*\? ORDER_OFFLINE_NOTHING_LOADED_COPY\s*: loadErrorState;/,
     );
   });
 

@@ -4,8 +4,8 @@ import { revalidatePath } from 'next/cache';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
 import { TagsService, type TagRow } from '@/server/services/tags';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   createTagSchema,
@@ -21,9 +21,7 @@ import {
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  console.error(error);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.tags');
 }
 
 export async function createTagAction(

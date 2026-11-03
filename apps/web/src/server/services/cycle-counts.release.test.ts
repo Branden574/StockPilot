@@ -43,9 +43,10 @@ import { CycleCountsService } from './cycle-counts';
 
 beforeEach(() => vi.clearAllMocks());
 
-// A supabase stub whose .rpc(name) resolves to the given result.
+// A supabase stub whose .rpc(name) resolves to the given result. The count
+// is read in the organization before the RPC (S39) and is found.
 function rpcStub(result: { data: unknown; error: { message: string } | null }) {
-  const stub = makeSupabaseStub({});
+  const stub = makeSupabaseStub({ 'cycle_counts.select': { data: { id: 'cc-1' }, error: null } });
   // makeSupabaseStub's client exposes .rpc; override it for this test.
   (stub.client as unknown as { rpc: unknown }).rpc = vi.fn(async () => result);
   return stub;

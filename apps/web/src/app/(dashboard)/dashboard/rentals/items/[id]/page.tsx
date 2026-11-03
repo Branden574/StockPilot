@@ -1,5 +1,6 @@
 import { ItemDetail } from '@/components/inventory/item-detail';
 import { safeReturnPath } from '@/lib/safe-return-path';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { InventoryService } from '@/server/services/inventory';
 
 const DEFAULT_BACK = '/dashboard/rentals/items';
@@ -12,6 +13,9 @@ export default async function RentalItemDetailPage({
   searchParams: Promise<{ tab?: string; return?: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const { tab, return: returnParam } = await searchParams;
   const validated = safeReturnPath(returnParam);
   const backHref = validated ?? DEFAULT_BACK;

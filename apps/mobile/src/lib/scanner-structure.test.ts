@@ -16,6 +16,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { parseItemId } from './scan-item-label';
 import { palette, type Palette } from './theme';
 
 /**
@@ -904,13 +905,16 @@ describe('Scan tab: the flows and their gates are unchanged', () => {
     expect(body).toMatch(/if \(is404\) \{\s*setAddItem\(\{\s*upc: data,\s*source: 'not_found',/);
   });
 
+  // B65: parseItemId lives in src/lib/scan-item-label.ts (strict: only a
+  // uuid is a label id; scan-item-label.test.ts has the near-misses). The
+  // other two are still the screen's own top-level functions.
   it('tells a packing-slip QR, an item label QR and an ISBN apart exactly as before', () => {
-    const fns = screenFunctions(SCAN_TAB, ['parseItemId', 'parseSignToken', 'looksLikeIsbn']);
+    const fns = screenFunctions(SCAN_TAB, ['parseSignToken', 'looksLikeIsbn']);
     const id = '3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b';
-    expect(fns.parseItemId!(`https://stockpilotusa.com/p/items/${id}`)).toBe(id);
-    expect(fns.parseItemId!(`https://stockpilotusa.com/dashboard/inventory/${id}`)).toBe(id);
-    expect(fns.parseItemId!(`https://stockpilotusa.com/dashboard/books/${id}`)).toBe(id);
-    expect(fns.parseItemId!('012345678905')).toBeNull();
+    expect(parseItemId(`https://stockpilotusa.com/p/items/${id}`)).toBe(id);
+    expect(parseItemId(`https://stockpilotusa.com/dashboard/inventory/${id}`)).toBe(id);
+    expect(parseItemId(`https://stockpilotusa.com/dashboard/books/${id}`)).toBe(id);
+    expect(parseItemId('012345678905')).toBeNull();
     expect(fns.parseSignToken!('https://stockpilotusa.com/orders/sign/abc.DEF_12-~')).toBe(
       'abc.DEF_12-~',
     );

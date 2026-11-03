@@ -833,7 +833,8 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
 
     // The admin route makes them on the server with lib/item-photo-thumbnail.ts,
     // which reads the shared config and has no size or quality of its own
-    // (only the decode's pixel limit and the 0-1 to percent factor).
+    // (only the 0-1 to percent factor; the decode's pixel limit is the capped
+    // decoder's, lib/image-decode.ts).
     const route = stripComments(
       read(path.join(WEB, 'src', 'app', 'api', 'admin', 'backfill-item-thumbs', 'route.ts')),
     );
@@ -847,6 +848,6 @@ describe('ARM 3: DRIFT GUARD on the source', () => {
     );
     expect(codeOnly(maker)).toMatch(/IMAGE_VARIANTS\.thumb\.maxDimension/);
     expect(codeOnly(maker)).toMatch(/IMAGE_VARIANTS\.thumb\.quality/);
-    expect(ownNumbers(maker)).toEqual(['50_000_000', '100']);
+    expect(ownNumbers(maker)).toEqual(['100']);
   });
 });

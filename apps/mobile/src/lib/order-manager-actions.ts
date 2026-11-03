@@ -19,12 +19,22 @@
  * and is not decided here.
  */
 
+import { deletedDriverHandOverLine } from '@stockpilot/core';
+
 /** What decides the section; every flag is the viewer's EFFECTIVE answer. */
 export interface OrderManagerActionsInput {
   status: string | null | undefined;
   fulfillmentType: string | null | undefined;
   /** can(orders:approve): the effective set, static role defaults while it loads. */
   canApproveOrders: boolean;
+  /** The viewer may write to the ORDER's warehouse (order-warehouse-scope.ts
+   *  orderWarehouseAccess `writes`): every warehouse for an owner, admin or
+   *  manager, the assigned ones for staff, none for a viewer. Security slice
+   *  E (0416): every approval-class action here asks it (the six order
+   *  functions since 0416; the pick slip, packing slips, staging, delivery and
+   *  the hand-over link before), so an approver outside the order's warehouse
+   *  is offered none of them. An assigned driver's own steps do not ask it. */
+  writesOrderWarehouse: boolean;
   /** can(orders:assign_delivery): the permission assignDelivery checks. */
   canAssignDelivery: boolean;
   /** Owner, admin or manager by role: only confirm_physical_signature still
@@ -35,6 +45,9 @@ export interface OrderManagerActionsInput {
   isAssignedDriver: boolean;
   /** The order has a delivery driver at all. */
   hasAssignedDriver: boolean;
+  /** B23: the delivery went out and its driver deleted their account (core
+   *  isDeliveryDriverDeleted, from the order's own columns). Omitted: false. */
+  driverDeleted?: boolean;
   /** The shared order state machine offers reopen_picking to this viewer
    *  (core availableOrderActions with canApproveOrders, the web panel's own
    *  answer). */
@@ -78,6 +91,11 @@ export interface OrderManagerActions {
   /** Close as delivered-partial at backordered, as the shared machine offers
    *  it (never on an exchange replacement: RX-2 review fix F-1). */
   closePartial: boolean;
+  /** B23: the line an approver reads at an in-transit delivery whose driver
+   *  deleted their account (core deletedDriverHandOverLine, the web panel's
+   *  words), naming the hand-over buttons this viewer has; null otherwise.
+   *  Never opens the section by itself. */
+  deletedDriverLine: string | null;
 }
 
 /** The statuses whose actions are orders:approve actions: the web page's
@@ -101,8 +119,9 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
   const st = input.status ?? '';
   const ft = input.fulfillmentType ?? '';
   // Approval-class actions: the effective orders:approve, never for a viewer
-  // (every one of them asks warehouse write, which the app never gives one).
-  const approves = input.canApproveOrders && !input.isViewerRole;
+  // (every one of them asks warehouse write, which the app never gives one),
+  // and only in a warehouse the viewer writes to (slice E).
+  const approves = input.canApproveOrders && !input.isViewerRole && input.writesOrderWarehouse;
   const approver = approves && APPROVER_STATUSES.has(st);
   const driverHere = input.isAssignedDriver && DRIVER_STATUSES.has(st);
   // The web's showActionsPanel audience for these statuses.
@@ -111,7 +130,9 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
   const at = (s: string) => audience && st === s;
   const handOver = st === 'staged_for_pickup' || st === 'in_transit';
 
-  const gates: Omit<OrderManagerActions, 'showSection'> = {
+  // The buttons only: the deleted-driver line is not one and never opens the
+  // section by itself.
+  const gates: Omit<OrderManagerActions, 'showSection' | 'deletedDriverLine'> = {
     approve: approver && st === 'pending_approval',
     approvePartial: approver && st === 'pending_approval',
     deny: approver && st === 'pending_approval',
@@ -141,5 +162,19 @@ export function orderManagerActions(input: OrderManagerActionsInput): OrderManag
     closePartial: approver && st === 'backordered' && input.machineOffersClosePartial !== false,
   };
   const showSection = audience && Object.values(gates).some(Boolean);
-  return { showSection, ...gates };
+  // B23: nobody else will finish this delivery. Said to the approvers who
+  // hand it over (the web panel's `approves` side), with their buttons. It
+  // follows this screen's Collect signature button. Since security slice E
+  // (0416) the screen reads the viewer's warehouses when it loads, and
+  // `approver` asks write access to the order's warehouse, so a staff
+  // approver from another warehouse is offered neither the button nor this
+  // line, as on the web panel, which says it only to a viewer who may hand
+  // the order over (review 2026-10-31). Only when that read failed (it then
+  // decides nothing) are both offered, and the sign route (mayHandOverOrder)
+  // refuses the hand-over as before.
+  const deletedDriverLine =
+    approver && st === 'in_transit' && input.driverDeleted === true && gates.digitalSignature
+      ? deletedDriverHandOverLine({ offersPhysicalSignature: gates.physicalSignature })
+      : null;
+  return { showSection, ...gates, deletedDriverLine };
 }

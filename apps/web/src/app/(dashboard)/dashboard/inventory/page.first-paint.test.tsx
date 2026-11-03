@@ -301,6 +301,12 @@ function snapshot(container: HTMLElement) {
      *  state draws through the state panel, whose title sits under the page's
      *  h1 as an h2. The page header's own h1 is not an empty state's title. */
     headings: [...container.querySelectorAll('h2, h3')].map((n) => norm(n.textContent)),
+    /** Every empty area on screen, the page's or the table's (the table's sits
+     *  under its header row, outside the rows, since the review of
+     *  2026-10-20: inside them it was out of sight at phone width). */
+    empty: [...container.querySelectorAll('[data-slot="state-panel"]')].map((p) =>
+      norm(p.textContent),
+    ),
   };
 }
 
@@ -606,10 +612,136 @@ describe('URL probe: an Items URL paints what it settles on (review 2026-10-05)'
 
       const { firstPaint } = await openUrl(target);
       expect(firstPaint).toEqual(inApp);
-      expect(firstPaint.rows.map((r) => r.text)).toEqual(['No items match your filters.']);
+      expect(firstPaint.rows).toEqual([]);
+      expect(firstPaint.empty).toEqual(['No items match your filters.']);
       expect(firstPaint.headings).not.toContain('No items yet');
     },
   );
+
+  // Grouping walk 2026-10-20 (W4 no-match): a Category no item is in showed
+  // the table's no-match row with its filters right after the tick, and "No
+  // items yet" with an offer to add a first item, and no filter bar, once the
+  // same address was reloaded or opened as a link. The filter must stay seen
+  // and undoable: the link shows what the app shows.
+  describe('a filter that leaves nothing', () => {
+    const EMPTY_CATEGORY = '0c000000-0000-4000-8000-0000000000ee';
+    beforeEach(() => {
+      // A Category no item is in (the fixture's own Apparel holds rows).
+      h.db!.tables.categories!.push({
+        id: EMPTY_CATEGORY,
+        organization_id: fixture.FIXTURE_ORG,
+        name: 'Seasonal Decor',
+        color: null,
+        deleted_at: null,
+      });
+    });
+
+    it.each([
+      [`cat=${EMPTY_CATEGORY}`, ''],
+      [`status=archived&cat=${EMPTY_CATEGORY}`, 'status=archived'],
+    ])(
+      '?%s opened as a link shows what the app shows on reaching it from ?%s, filter bar and all',
+      async (target, from) => {
+        const start = await openUrl(from);
+        await act(async () => nav.set(target));
+        const inApp = snapshot(start.view.container);
+        start.view.unmount();
+
+        const { view, firstPaint } = await openUrl(target);
+        expect(firstPaint).toEqual(inApp);
+        expect(firstPaint.rows).toEqual([]);
+        expect(firstPaint.empty).toEqual(['No items match your filters.']);
+        expect(firstPaint.headings).not.toContain('No items yet');
+        expect(firstPaint.headings).not.toContain('No archived items');
+        const page = within(view.container);
+        expect(page.getByRole('button', { name: 'Filter by Category' })).toHaveTextContent(
+          /Category\s*1/,
+        );
+        expect(page.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+        expect(page.queryByRole('link', { name: 'Add your first item' })).toBeNull();
+      },
+    );
+
+    // Integrator decision 1 (2026-10-20): the page's own words for a search
+    // that matches nothing stay, now in the table's empty area, with the
+    // search box and Clear all filters on screen around them.
+    it('a search that matches nothing, opened as a link: "No items match your search", the search in its box, and Clear all filters', async () => {
+      const start = await openUrl('');
+      await act(async () => nav.set('q=zzqqxx'));
+      const inApp = snapshot(start.view.container);
+      start.view.unmount();
+
+      const { view, firstPaint } = await openUrl('q=zzqqxx');
+      expect(firstPaint).toEqual(inApp);
+      expect(firstPaint.rows).toEqual([]);
+      expect(firstPaint.headings).toContain('No items match your search');
+      // Its title, its sentence and its way back (textContent runs them together).
+      expect(firstPaint.empty).toEqual([
+        [
+          'No items match your search',
+          'Nothing matched "zzqqxx". Try a different SKU, name, or barcode.',
+          'Clear search',
+        ].join(''),
+      ]);
+      const page = within(view.container);
+      expect(page.getByRole('textbox', { name: 'Search items' })).toHaveValue('zzqqxx');
+      expect(page.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+      expect(page.getByRole('link', { name: 'Clear search' })).toHaveAttribute(
+        'href',
+        '/dashboard/inventory',
+      );
+      expect(page.queryByRole('link', { name: 'Add your first item' })).toBeNull();
+    });
+
+    it.each([
+      [
+        'stock=low',
+        [
+          'No low-stock items',
+          'Nothing is at or below its reorder point right now. Nice.',
+          'Show all items',
+        ],
+      ],
+      [
+        'expected=1',
+        [
+          'No expected items',
+          'Items created from purchase orders appear here until their first stock is received.',
+          'Back to all items',
+        ],
+      ],
+    ])(
+      "?%s with nothing in it, opened as a link: the page's own words in the table",
+      async (qs, parts) => {
+        const words = parts.join('');
+        // Nothing is low or expected in the fixture's view once these are gone.
+        h.db!.tables.inventory_items = h.db!.tables.inventory_items!.filter(
+          (r) =>
+            !(r.awaiting_first_receipt === true) &&
+            Number(r.quantity_on_hand) > Number(r.reorder_point ?? 0) &&
+            Number(r.quantity_on_hand) > 0,
+        );
+        const { view, firstPaint } = await openUrl(qs);
+        expect(firstPaint.rows).toEqual([]);
+        expect(firstPaint.empty).toEqual([words]);
+        expect(
+          within(view.container).getByRole('button', { name: 'Filter by Category' }),
+        ).toBeInTheDocument();
+      },
+    );
+
+    it('an empty Archived view with no filter keeps its own state, words and way back', async () => {
+      h.db!.tables.inventory_items = h.db!.tables.inventory_items!.filter(
+        (r) => r.status !== 'archived',
+      );
+      const { view, firstPaint } = await openUrl('status=archived');
+      expect(firstPaint.headings).toContain('No archived items');
+      expect(firstPaint.rows).toEqual([]);
+      expect(
+        within(view.container).getByRole('link', { name: 'Back to active items' }),
+      ).toHaveAttribute('href', '/dashboard/inventory');
+    });
+  });
 
   it('Active, from the Auto-archived only view, opens the plain list: the toggle drops auto', async () => {
     const { view } = await openUrl('status=archived&auto=1');

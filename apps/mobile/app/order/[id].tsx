@@ -19,7 +19,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -68,6 +67,7 @@ import {
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -193,6 +193,12 @@ import { orderManagerActions } from '@/lib/order-manager-actions';
 import { reloadAfterFailedOrderAction } from '@/lib/order-action-refusal';
 import { keepReasonDialogOpen } from '@/lib/order-reason-dialog';
 import {
+  needsOrderWarehouseScope,
+  orderWarehouseAccess,
+  readOrderWarehouseScope,
+  type OrderWarehouseScope,
+} from '@/lib/order-warehouse-scope';
+import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
   holdTopUpNotice,
@@ -236,6 +242,8 @@ import {
   formatOrderNumber,
   derivePickingStatus,
   HOLD_AVAILABLE_STOCK_LABEL,
+  isDeliveryDriverDeleted,
+  isUuid,
   orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
@@ -271,6 +279,7 @@ import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 
 const BUCKET = 'order-attachments';
 
@@ -349,6 +358,9 @@ interface OrderHeader {
   signedAt: string | null;
   createdAt: string | null;
   assignedDeliveryUserId: string | null;
+  /** When the order went out (in_transit_at), null until then. B23: with no
+   *  driver on a delivery that went out, the driver deleted their account. */
+  inTransitAt: string | null;
   /** The locked-in picker (null when unclaimed). Drives the picker chip. */
   assignedPickerId: string | null;
   /** Resolved display name of the assigned picker, when readable. */
@@ -406,6 +418,10 @@ interface OrderHeader {
   /** The replacement block from GET /api/v1/orders/[id] (banner, gate, release,
    *  the driver's line); null for an ordinary order or when unread. */
   replacement: MobileOrderReplacement | null;
+  /** Security slice E (0416): the viewer's warehouses, read with this order
+   *  for an approver below manager rank, or a picker at a picking status
+   *  (lib/order-warehouse-scope.ts). Null: not read (nothing it decides). */
+  warehouseScope: OrderWarehouseScope | null;
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -500,6 +516,8 @@ export default function OrderDetail() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  // A proof photo or file still uploading: the phone update pop-up waits (B44).
+  useHoldUpdatePrompt(uploading, 'photo');
   /** `percent` is the REAL transported percentage across the batch — floored,
    *  monotonic, held at 99 unless every file genuinely succeeded (see
    *  lib/storage-upload.ts UploadBatchProgress). Never synthesised. */
@@ -536,9 +554,10 @@ export default function OrderDetail() {
   const attachmentsError = recalled ? recalled.view.attachmentsError : loadedAttachmentsError;
   const shipment = recalled ? recalled.view.shipment : loadedShipment;
   // Why the order is not shown. Offline with nothing to show, it says so
-  // (never "Order not found." and never a stale read error).
+  // (never "Order not found." and never a stale read error). A link id that
+  // is not a uuid is "Order not found." offline too: no connection opens it.
   const loadError =
-    offline && order === null ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
+    offline && order === null && isUuid(id) ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
@@ -666,11 +685,12 @@ export default function OrderDetail() {
   // Effective permission set (org role/user overrides applied; static role
   // defaults while loading). Feeds `viewerCanPick` below.
   const permissions = useEffectivePermissions();
-  // Whether THIS viewer can pick — manager+ OR holds items:update. Mobile can't
-  // see warehouse assignments (the backend + assign_picking enforce warehouse),
-  // so this at least keeps a `viewer` role from being offered Claim/Pick. `can`
-  // falls back to the static role default when `permissions` hasn't loaded, so a
-  // staffer sees pick affordances immediately and a viewer never does.
+  // Whether THIS viewer can pick — manager+ OR holds items:update. This keeps
+  // a `viewer` role from being offered Claim/Pick; the order's warehouse is
+  // added once the order is read (viewerCanPickHere, security slice E: the
+  // scope is read with the order at a picking status). `can` falls back to
+  // the static role default when `permissions` hasn't loaded, so a staffer
+  // sees pick affordances immediately and a viewer never does.
   const viewerCanPick =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
 
@@ -889,12 +909,43 @@ export default function OrderDetail() {
   // Returns RX-2: an exchange replacement's items come from its RMA; they are
   // changed or cancelled only there ("Change or cancel in RMA-…").
   const isReplacementOrder = Boolean(order?.replacementForReturnId);
-  const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder;
+  // SECURITY SLICE E (0416): what the viewer may do to THIS order by its
+  // warehouse, from the scope read with it (lib/order-warehouse-scope.ts):
+  // every warehouse for an owner, admin or manager; the assigned ones for
+  // anyone else; never write for a viewer. An approver outside the order's
+  // warehouse is offered none of an approver's controls, together: Approve,
+  // Deny and every pipeline step, Cancel, Hold, the needed-by Change, the
+  // line edits and Add items, and in picking Claim and Release (the web order
+  // page's approverWritesHere and viewerCanPick). A read that failed decides
+  // nothing: offered as before, and the server answers in its one sentence.
+  const orderAccess = orderWarehouseAccess({
+    role,
+    warehouseId: order?.warehouseId ?? null,
+    scope: order?.warehouseScope ?? null,
+  });
+  // `=== true` makes each a plain boolean the React Compiler can see: read
+  // off the object as it is, it may alias that object, which then passes to
+  // availableOrderActions below, and the compiler gave up memoizing `load`
+  // (react-hooks/preserve-manual-memoization).
+  const writesHere = orderAccess.writes === true;
+  // The pick gate with the order's warehouse, as the web page decides it.
+  const viewerCanPickHere = viewerCanPick && writesHere;
+  // The line edits ask READ access to the order's warehouse of everyone, the
+  // person who placed the order included (loadEditableOrderHeader; the line
+  // insert policy also refuses a raw insert of any item of that warehouse
+  // they cannot read), so being the requester never stands in for it: an
+  // approver whose own order sits in a warehouse they don't work in is
+  // offered no Add items or line edit (slice E review; the web page's
+  // viewerMayChangeLines). Nothing is read for a requester who neither
+  // approves nor picks here, so the scope is null and they are offered as
+  // before (orderWarehouseAccess reads: true); the server answers.
+  const linesInScope = orderAccess.reads === true;
+  const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder && linesInScope;
   // Correcting a line rides the SAME gate — on the server all three line
   // mutations load the order through one helper (loadEditableOrderHeader), and
   // an order you can add to but cannot correct is exactly the bug the owner
   // reported.
-  const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder;
+  const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder && linesInScope;
   const existingItemIds = React.useMemo(
     () => (order?.lines ?? []).map((l) => l.itemId).filter((x): x is string => x !== null),
     [order],
@@ -1396,6 +1447,16 @@ export default function OrderDetail() {
 
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no order.
+    // It is "Order not found." at once, online or offline: Postgres refuses
+    // it, so the read could only fail, and its raw text with Try again was
+    // all the screen could say.
+    if (!isUuid(id)) {
+      setOrder(null);
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     if (offline) {
       // OFFLINE: nothing is asked. Every read would fail, and a failed header
       // read would replace the order on screen with an error. The view is
@@ -1425,7 +1486,7 @@ export default function OrderDetail() {
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          requester_deleted_at, signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
-         needed_by, notes, delivery_charter_id, replacement_for_return_id,
+         in_transit_at, needed_by, notes, delivery_charter_id, replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          picker:user_profiles!assigned_picker_id (full_name, email)`,
@@ -1469,6 +1530,23 @@ export default function OrderDetail() {
         }),
       })
         ? readOrgTimeZone(supabase, orgId)
+        : null;
+    // Security slice E (0416): the viewer's warehouses, started beside the
+    // lines read (no serial round trip), for an approver below manager rank
+    // (their controls ask write access to the order's warehouse at every
+    // status) or a picker at a picking status (Claim and Release ask it).
+    // Below manager rank the pick gate is items:update (viewerCanPick), the
+    // permission rpItems already answers for this load. Never throws: a
+    // failed read decides nothing (lib/order-warehouse-scope).
+    const warehouseScopeRead =
+      headerForReadiness &&
+      needsOrderWarehouseScope({
+        role,
+        canApproveOrders: rpApprove,
+        canPick: rpItems,
+        status: (headerForReadiness.status as string | null) ?? null,
+      })
+        ? readOrderWarehouseScope(supabase, { role, organizationId: orgId, userId })
         : null;
     // Order lines — both the per-line ITEMS list (a manager must SEE what's
     // being ordered before approving) and the backorder roll-ups. In
@@ -1701,6 +1779,7 @@ export default function OrderDetail() {
     // (F2-4). Any of the reads may supply it.
     orgTimezone =
       orgTimezone ?? readinessAnswer?.[1] ?? (neededByZoneRead ? await neededByZoneRead : null);
+    const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;
 
     let shown: OrderHeader | null = null;
     setLoadError(null);
@@ -1746,6 +1825,7 @@ export default function OrderDetail() {
         signedAt: (r.signed_at as string | null) ?? null,
         createdAt: (r.created_at as string | null) ?? null,
         assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
+        inTransitAt: (r.in_transit_at as string | null) ?? null,
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
         pickerName: pkObj?.full_name?.trim() || pkObj?.email?.trim() || null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
@@ -1765,6 +1845,7 @@ export default function OrderDetail() {
         returns: orderReturns,
         replacementForReturnId,
         replacement,
+        warehouseScope,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -2079,12 +2160,13 @@ export default function OrderDetail() {
   );
 
   // F2-2 "Hold available stock" on the readiness card: core's rule, the web
-  // strip's own (approvers, hold statuses, some line not or partly held).
+  // strip's own (approvers, hold statuses, some line not or partly held), in
+  // a warehouse the approver writes to (slice E: hold_order_stock asks it).
   const offerHold =
     readinessShown &&
     shouldOfferHoldStock({
       assessment: order?.readiness?.state === 'ok' ? order.readiness.assessment : null,
-      canApproveOrders: rpApprove,
+      canApproveOrders: rpApprove && writesHere,
     });
 
   // F2-5 "Draft PO for what is short" on the readiness card, when something
@@ -2110,14 +2192,15 @@ export default function OrderDetail() {
 
   // F2-4 "Change" beside the needed-by: approvers (the effective
   // orders:approve; since 0390 the database has no manager-by-role exception)
-  // on an open order where Orders is on. Warehouse write
-  // access is checked when the sheet opens; the server re-checks all of it.
+  // on an open order where Orders is on, in a warehouse they write to (slice
+  // E: the scope read with the order; the web hides it the same way). Write
+  // access is checked again when the sheet opens; the server re-checks all of it.
   const canChangeNeededBy =
     order !== null &&
     canOfferNeededByChange({
       status: order.status,
       role,
-      canApproveOrders: rpApprove,
+      canApproveOrders: rpApprove && writesHere,
       ordersModuleEnabled: enabledModules.has('orders'),
     });
 
@@ -2202,9 +2285,13 @@ export default function OrderDetail() {
           viewerUserId: user?.id ?? '',
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
-          viewerCanPick,
-          // 0390: approval-class actions follow the effective permission.
-          canApproveOrders: rpApprove,
+          // Slice E: Claim, the pick and Release ask write access to the
+          // order's warehouse (claim_picking, complete_picking,
+          // release_picking), as on the web.
+          viewerCanPick: viewerCanPickHere,
+          // 0390: approval-class actions follow the effective permission;
+          // slice E: in a warehouse the viewer writes to.
+          canApproveOrders: rpApprove && writesHere,
         })
       : [];
   const canClaimPick = pickActions.includes('claim_picking');
@@ -2231,10 +2318,11 @@ export default function OrderDetail() {
           viewerUserId: user?.id ?? '',
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
-          viewerCanPick,
+          viewerCanPick: viewerCanPickHere,
           // 0390: reopen_picking asks orders:approve, so a granted staff
-          // member is offered it and a revoked manager is not (as on the web).
-          canApproveOrders: rpApprove,
+          // member is offered it and a revoked manager is not (as on the web);
+          // slice E: and write access to the order's warehouse.
+          canApproveOrders: rpApprove && writesHere,
           isReplacement: isReplacementOrder,
         })
       : [];
@@ -2251,10 +2339,16 @@ export default function OrderDetail() {
     status: st,
     fulfillmentType: ft,
     canApproveOrders: rpApprove,
+    writesOrderWarehouse: writesHere,
     canAssignDelivery: role !== null && can({ role: role as Role, permissions }, 'orders:assign_delivery'),
     isManagerByRole: isManager,
     isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
     hasAssignedDriver: !!order?.assignedDeliveryUserId,
+    driverDeleted: isDeliveryDriverDeleted({
+      fulfillmentType: ft,
+      inTransitAt: order?.inTransitAt,
+      assignedDeliveryUserId: order?.assignedDeliveryUserId,
+    }),
     machineOffersClosePartial,
     machineOffersReopen: canReopenPicking,
     isViewerRole: role === 'viewer',
@@ -2291,6 +2385,7 @@ export default function OrderDetail() {
   const cancelOffer = isReplacementOrder ? null : phoneOrderCancel({
     status: st,
     canApproveOrders: rpApprove,
+    writesOrderWarehouse: writesHere,
     isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
     canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
   });
@@ -2557,8 +2652,8 @@ export default function OrderDetail() {
 
   function addProof() {
     Alert.alert('Add proof of delivery', `Saving as "${KIND_LABELS[kind]}"`, [
-      { text: 'Take photo', onPress: () => void fromCamera() },
-      { text: 'Choose from library', onPress: () => void fromLibrary() },
+      { text: 'Take photo', onPress: () => void whileUpdatePromptHeld(fromCamera) },
+      { text: 'Choose from library', onPress: () => void whileUpdatePromptHeld(fromLibrary) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
@@ -3281,6 +3376,14 @@ export default function OrderDetail() {
                     ),
                   )
                 : null}
+              {/* B23: the driver deleted their account on the way; the
+                  approver reads who is left to hand it over (the web
+                  panel's words). */}
+              {managerActions.deletedDriverLine ? (
+                <Body size={12.5} color={c.ink3} accessibilityRole="text">
+                  {managerActions.deletedDriverLine}
+                </Body>
+              ) : null}
               {managerActions.digitalSignature
                 ? actionBtn('Collect signature', 'sig', () =>
                     confirmDeparture('signature', collectSignature),
