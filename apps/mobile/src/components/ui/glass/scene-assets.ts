@@ -16,9 +16,12 @@ import type { ImageSourcePropType } from 'react-native';
  * Metro (Expo's Metro config sets allowOptionalDependencies): a bundle built
  * without the files still builds, and the require throws at run time, so the
  * scene is null and SceneBackground draws the opaque --bg, the fallback the
- * artifact itself names. With the files installed before `expo export` or
- * `eas update`, they are bundled and drawn. scene-assets.test.ts pins the
- * paths to the install script's.
+ * artifact itself names. With the files installed, a local build (a dev
+ * client, `expo export`) bundles and draws them. A phone update never does
+ * before SC1 is settled: both OTA scripts run scripts/refuse-unconfirmed-scene.sh
+ * first, which refuses while a photo is installed but not committed.
+ * scene-assets.test.ts runs Metro's own dependency collector under this app's
+ * Metro config on this file, the run-time mapping, and that guard.
  */
 let day: ImageSourcePropType | null = null;
 let night: ImageSourcePropType | null = null;

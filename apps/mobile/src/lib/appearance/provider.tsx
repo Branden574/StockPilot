@@ -79,35 +79,30 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     return () => clearTimeout(timer);
   }, [controller]);
 
-  // Item 32: a Design adopted from the account while the person was in the
-  // middle of something is drawn at the next return to the app at the latest.
+  // Every AppState change goes to the controller, starting with the state
+  // found now (a launch in the background). Item 32: a Design adopted from
+  // the account while the person was in the middle of something is drawn at
+  // the next return to the app at the latest, a return being B44's
+  // (background, then active). Rule 2: any 'active' also tries again what is
+  // owed.
   React.useEffect(() => {
-    const sub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') controller.resumed();
-    });
+    controller.onAppState(AppState.currentState);
+    const sub = AppState.addEventListener('change', controller.onAppState);
     return () => sub.remove();
   }, [controller]);
 
-  // Rule 2: a save that failed (or a read that found no account store) is
-  // tried again when the app comes back to the foreground and when the
-  // network comes back, as well as by Try again.
-  const status = snapshot.state.status;
+  // Rule 2: a save that failed, a read that found no account store, or a
+  // read that failed (offline: R9's default holds only "until it can read the
+  // row") is tried again when the network reports itself online, as well as
+  // at the foreground and by Try again. Listened to only while one is owed.
+  const retryOwed = snapshot.retryOwed;
   React.useEffect(() => {
-    if (status !== 'failed' && status !== 'unavailable') return;
-    const appSub = AppState.addEventListener('change', (next) => {
-      if (next === 'active') controller.retry();
-    });
-    let wasConnected: boolean | null = null;
+    if (!retryOwed) return;
     const netSub = Network.addNetworkStateListener((net) => {
-      const connected = net.isConnected === true && net.isInternetReachable !== false;
-      if (wasConnected === false && connected) controller.retry();
-      wasConnected = connected;
+      controller.onNetwork(net.isConnected === true && net.isInternetReachable !== false);
     });
-    return () => {
-      appSub.remove();
-      netSub.remove();
-    };
-  }, [controller, status]);
+    return () => netSub.remove();
+  }, [controller, retryOwed]);
 
   const { material, scene } = useMaterial(snapshot.style);
 

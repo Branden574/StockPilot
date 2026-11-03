@@ -41,10 +41,46 @@ describe('root layout', () => {
 
   it('the first paint waits for the appearance read as it does for the fonts, after them', () => {
     const fonts = src.indexOf('if (!fontsReady) {');
-    const appearance = src.indexOf('if (!appearanceReady) {');
+    const appearance = src.indexOf('{appearanceReady ? (');
     expect(fonts).toBeGreaterThan(-1);
     expect(appearance).toBeGreaterThan(fonts);
     expect(src).toContain('const appearanceReady = useAppearanceReady();');
+    // Everything drawn waits: the status bar, RootGate (and every screen),
+    // the crash notice and the splash.
+    const drawnAt = [...src.matchAll(/\{appearanceReady \? \(/g)].map((m) => m.index ?? -1);
+    expect(drawnAt).toHaveLength(2);
+    const [shell, overlays] = drawnAt;
+    for (const [what, at] of [
+      ['status bar', src.indexOf('<StatusBar ')],
+      ['RootGate', src.indexOf('<RootGate />')],
+    ] as const) {
+      expect(at, what).toBeGreaterThan(shell);
+      expect(at, what).toBeLessThan(src.indexOf('</AuthProvider>'));
+    }
+    expect(src.indexOf('<AppearanceFallbackNotice />')).toBeGreaterThan(overlays);
+    expect(src.indexOf('<ColdLaunchSplash')).toBeGreaterThan(overlays);
+  });
+
+  it('AuthProvider mounts the moment the fonts are ready, as before, never behind the appearance wait (finding 2)', () => {
+    // auth-js validates the stored session inside its own initialize(): a
+    // refresh the server refuses removes it and announces SIGNED_OUT to the
+    // listeners subscribed at that moment only (later ones get
+    // INITIAL_SESSION). The first-start wait reads the session and the row
+    // (both await that initialize), so AuthProvider must already be listening
+    // or the involuntary sign-out (sign-in routing, the L137 cleanup) is lost.
+    const layout = src.slice(
+      src.indexOf('function RootLayout()'),
+      src.indexOf('function AppearanceRoot()'),
+    );
+    expect(layout).not.toContain('if (!appearanceReady)');
+    const fonts = layout.indexOf('if (!fontsReady) {');
+    const auth = layout.indexOf('<AuthProvider>');
+    const bridge = layout.indexOf('<AppearanceSessionBridge />');
+    const firstWait = layout.indexOf('{appearanceReady ? (');
+    expect(fonts).toBeGreaterThan(-1);
+    expect(auth).toBeGreaterThan(fonts);
+    expect(bridge).toBeGreaterThan(auth);
+    expect(firstWait).toBeGreaterThan(bridge);
   });
 
   it('RootLayout subscribes to the ready flag alone, never to the sync status', () => {
@@ -61,11 +97,23 @@ describe('root layout', () => {
     expect(provider).not.toContain('applyOsScheme(snapshot.style');
   });
 
-  it('a held adoption is drawn at the next return to the app (item 32)', () => {
+  it('every AppState change goes to the controller, which keeps B44’s definition of a return (item 32)', () => {
     const provider = flat('src/lib/appearance/provider.tsx');
+    // Seeded with the state found at subscription (a launch in the background).
     expect(provider).toContain(
-      "const sub = AppState.addEventListener('change', (next) => { if (next === 'active') controller.resumed(); });",
+      "controller.onAppState(AppState.currentState); const sub = AppState.addEventListener('change', controller.onAppState);",
     );
+    // No 'active' check of its own: inactive to active is not a return.
+    expect(provider).not.toMatch(/next === 'active'/);
+  });
+
+  it('the network is listened to while a retry is owed, a failed read included (rule 2)', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('const retryOwed = snapshot.retryOwed;');
+    expect(provider).toContain(
+      'if (!retryOwed) return; const netSub = Network.addNetworkStateListener((net) => { controller.onNetwork(net.isConnected === true && net.isInternetReachable !== false); });',
+    );
+    expect(provider).toContain('}, [controller, retryOwed]);');
   });
 
   it('the first-start account read waits inside the font gate’s 4 s, never after it (item 31)', () => {

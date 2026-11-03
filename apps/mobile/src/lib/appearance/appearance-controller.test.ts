@@ -96,9 +96,11 @@ function setup(
     now?: number;
     /** What the stored session says at the first start (item 31). */
     peek?: string | null | (() => Promise<string | null>);
+    /** The same phone again: a later cold start reads what the earlier one stored. */
+    storage?: FakeStorage;
   } = {},
 ) {
-  const storage = new FakeStorage(seed);
+  const storage = opts.storage ?? new FakeStorage(seed);
   const account = new FakeAccount();
   const holds = new FakeHolds();
   let now = opts.now ?? T0;
@@ -267,6 +269,103 @@ describe('the first start of the new JS (round 2, finding 10; item 31)', () => {
     expect(snap()).toMatchObject({ style: 'liquid-glass', adoptionPending: true });
     holds.set(false);
     expect(snap()).toMatchObject({ style: 'classic', adoptionPending: false });
+  });
+
+  it('only the first start waits: the next cold start opens at once and reads the row after the first paint', async () => {
+    const first = setup({}, { peek: A });
+    await first.controller.hydrate();
+    expect(first.snap().ready).toBe(false);
+    await first.account.release({ ok: true, row: null }); // never chose anywhere
+    await first.controller.flush();
+
+    // The next cold start of the same phone; the person still never chose.
+    const next = setup({}, { peek: A, storage: first.storage });
+    await next.controller.hydrate();
+    expect(next.snap()).toMatchObject({ ready: true, style: 'liquid-glass' });
+    expect(next.peeks).toHaveLength(0);
+    expect(next.account.calls).toEqual([]);
+    // The session bridge reports the person after the first paint; the row is read then.
+    next.controller.setSession(A);
+    expect(next.account.calls).toEqual([{ kind: 'fetch', userId: A }]);
+  });
+
+  it('a first start cut short by the 4 s cap, whose read then failed, is still the only one that waits', async () => {
+    const cut = setup({}, { peek: A });
+    await cut.controller.hydrate();
+    cut.controller.giveUpWaiting();
+    await cut.account.release({ ok: false, reason: 'error' });
+    await cut.controller.flush();
+    const next = setup({}, { peek: A, storage: cut.storage });
+    await next.controller.hydrate();
+    expect(next.snap().ready).toBe(true);
+    expect(next.peeks).toHaveLength(0);
+  });
+
+  it('a phone signed out at its first start, signed in during that run, never waits at a later start', async () => {
+    const first = setup({}, { peek: null });
+    await first.controller.hydrate();
+    expect(first.snap().ready).toBe(true);
+    first.controller.setSession(A); // the sign-in screen
+    await first.account.release({ ok: true, row: null });
+    await first.controller.flush();
+    const next = setup({}, { peek: A, storage: first.storage });
+    await next.controller.hydrate();
+    expect(next.snap().ready).toBe(true);
+    expect(next.peeks).toHaveLength(0);
+  });
+
+  it('the session ending during the wait ends it at once: there is no row to wait for', async () => {
+    const { controller, snap, account } = setup({}, { peek: A });
+    await controller.hydrate();
+    expect(snap().ready).toBe(false);
+    // AuthProvider is mounted during the wait (finding 2): a refresh refused
+    // by the server signs the phone out, and the bridge says so.
+    controller.setSession(null);
+    expect(snap()).toMatchObject({ ready: true, style: 'liquid-glass' });
+    expect(snap().state.status).toBe('signed-out');
+    await account.release({ ok: true, row: row({ style: 'classic' }, '2026-11-02T10:00:00Z') });
+    expect(snap().style).toBe('liquid-glass');
+  });
+
+  it('the bridge reporting the person before the peek answers (AuthProvider mounts at font-ready): one read, and the first paint still waits for the row', async () => {
+    let answerPeek: (user: string | null) => void = () => undefined;
+    const before = setup(
+      {},
+      { peek: () => new Promise<string | null>((resolve) => (answerPeek = resolve)) },
+    );
+    const hydrating = before.controller.hydrate();
+    await settle();
+    expect(before.peeks).toHaveLength(1);
+    before.controller.setSession(A); // the bridge, while auth-js is still initialising
+    expect(before.account.calls).toEqual([{ kind: 'fetch', userId: A }]);
+    answerPeek(A);
+    await hydrating;
+    expect(before.snap().ready).toBe(false);
+    expect(before.account.calls).toHaveLength(1);
+    await before.account.release({
+      ok: true,
+      row: row({ style: 'classic' }, '2026-11-02T10:00:00Z'),
+    });
+    expect(before.snap()).toMatchObject({ ready: true, style: 'classic' });
+
+    // The row answering before the peek does: ready, in the row's Design, as the peek lands.
+    let answerLate: (user: string | null) => void = () => undefined;
+    const racing = setup(
+      {},
+      { peek: () => new Promise<string | null>((resolve) => (answerLate = resolve)) },
+    );
+    const hydrating2 = racing.controller.hydrate();
+    await settle();
+    racing.controller.setSession(A);
+    await racing.account.release({
+      ok: true,
+      row: row({ style: 'classic' }, '2026-11-02T10:00:00Z'),
+    });
+    expect(racing.snap().ready).toBe(false);
+    answerLate(A);
+    await hydrating2;
+    expect(racing.snap()).toMatchObject({ ready: true, style: 'classic' });
+    expect(racing.account.calls).toHaveLength(1);
   });
 
   it('a stored record, a signed-out phone, or the off rollout never waits for the account', async () => {
@@ -650,10 +749,28 @@ describe('a Design adopted later waits until the person is not in the middle of 
     expect(holds.subscribers).toBe(0);
   });
 
-  it('or at the next return to the app, held or not', async () => {
+  it('or at the next return to the app (background, then active), held or not', async () => {
     const { snap, controller } = await adoptedWhile(true);
-    controller.resumed();
+    controller.onAppState('background');
+    expect(snap()).toMatchObject({ style: 'liquid-glass', adoptionPending: true });
+    controller.onAppState('active');
     expect(snap()).toMatchObject({ style: 'classic', adoptionPending: false });
+  });
+
+  it('inactive to active is not a return (Control Center, Face ID, an alert, the app switcher): the scan keeps its look', async () => {
+    const { snap, controller } = await adoptedWhile(true);
+    controller.onAppState('inactive');
+    controller.onAppState('active');
+    expect(snap()).toMatchObject({ style: 'liquid-glass', adoptionPending: true });
+    // A real return after it still draws it.
+    controller.onAppState('inactive');
+    controller.onAppState('background');
+    controller.onAppState('active');
+    expect(snap()).toMatchObject({ style: 'classic', adoptionPending: false });
+    // And one return draws once: the next inactive to active changes nothing.
+    controller.onAppState('inactive');
+    controller.onAppState('active');
+    expect(snap().style).toBe('classic');
   });
 
   it('a choice made in Settings applies at once, held or not, and replaces a waiting one', async () => {
@@ -682,6 +799,83 @@ describe('a Design adopted later waits until the person is not in the middle of 
       row: row({ style: 'liquid-glass' }, '2026-11-01T10:00:00Z'),
     });
     expect(ctx.snap()).toMatchObject({ style: 'liquid-glass', adoptionPending: false });
+  });
+});
+
+describe('a read that failed is read again (rule 2; R9 "until it can read the row")', () => {
+  async function offlineFirstStart() {
+    const ctx = setup({}, { peek: A });
+    await ctx.controller.hydrate();
+    await ctx.account.release({ ok: false, reason: 'error' }); // offline, or a timeout
+    return ctx;
+  }
+
+  it('a Classic chooser whose first read failed gets Classic once the network is back', async () => {
+    const { controller, snap, account } = await offlineFirstStart();
+    expect(snap()).toMatchObject({ ready: true, style: 'liquid-glass', retryOwed: true });
+    controller.onNetwork(false);
+    controller.onNetwork(true);
+    expect(account.calls).toEqual([
+      { kind: 'fetch', userId: A },
+      { kind: 'fetch', userId: A },
+    ]);
+    await account.release({ ok: true, row: row({ style: 'classic' }, '2026-11-02T10:00:00Z') });
+    expect(snap()).toMatchObject({ style: 'classic', retryOwed: false });
+    expect(snap().state.status).toBe('synced');
+  });
+
+  it('the first network report after the failure counts: the listener is armed only once a retry is owed', async () => {
+    const { controller, account } = await offlineFirstStart();
+    controller.onNetwork(true);
+    expect(account.calls.filter((c) => c.kind === 'fetch')).toHaveLength(2);
+  });
+
+  it('the app coming to the foreground reads it again too, and so does Try again', async () => {
+    const foreground = await offlineFirstStart();
+    foreground.controller.onAppState('active');
+    expect(foreground.account.calls.filter((c) => c.kind === 'fetch')).toHaveLength(2);
+
+    const button = await offlineFirstStart();
+    button.controller.retry();
+    expect(button.account.calls.filter((c) => c.kind === 'fetch')).toHaveLength(2);
+  });
+
+  it('one read at a time, and none once a read answered', async () => {
+    const { controller, account, snap } = await offlineFirstStart();
+    controller.onNetwork(true);
+    controller.onNetwork(true); // another report while the read is out
+    controller.onAppState('active');
+    expect(account.calls.filter((c) => c.kind === 'fetch')).toHaveLength(2);
+    await account.release({ ok: true, row: null });
+    expect(snap().retryOwed).toBe(false);
+    controller.onNetwork(true);
+    controller.onAppState('active');
+    controller.retry();
+    expect(account.calls.filter((c) => c.kind === 'fetch')).toHaveLength(2);
+  });
+
+  it('a read that fails again stays owed; signing out owes nothing', async () => {
+    const { controller, account, snap } = await offlineFirstStart();
+    controller.onNetwork(true);
+    await account.release({ ok: false, reason: 'error' });
+    expect(snap().retryOwed).toBe(true);
+    controller.setSession(null);
+    expect(snap().retryOwed).toBe(false);
+    controller.onNetwork(true);
+    expect(account.calls.filter((c) => c.kind === 'fetch')).toHaveLength(2);
+  });
+
+  it('an unsaved choice is what is sent again, not a read: its answer is the row', async () => {
+    const { controller, account, snap } = await offlineFirstStart();
+    controller.chooseTheme('dark');
+    await account.release({ ok: false, reason: 'error' });
+    controller.onNetwork(true);
+    expect(account.calls.at(-1)).toEqual({ kind: 'save', userId: A, axes: { theme: 'dark' } });
+    await account.release({
+      ok: true,
+      row: row({ style: 'classic', theme: 'dark' }, '2026-11-02T10:00:00Z'),
+    });
+    expect(snap()).toMatchObject({ style: 'classic', theme: 'dark', retryOwed: false });
   });
 });
 

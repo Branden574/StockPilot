@@ -122,8 +122,9 @@ function RootLayout() {
   // of its own, also the signed-in person's row), all inside the same 4 s as
   // the fonts, then the rollout's default Design (Liquid Glass under
   // 'default'), so a Classic chooser or a fixed Dark/Light Theme never shows
-  // a frame of another look first. Only the ready flag: the sync status
-  // never re-renders RootLayout.
+  // a frame of another look first. It holds only what is drawn (below), never
+  // AuthProvider. Only the ready flag: the sync status never re-renders
+  // RootLayout.
   const appearanceReady = useAppearanceReady();
   const { mode, c } = useTheme();
 
@@ -147,40 +148,54 @@ function RootLayout() {
     // a dark-mode reload is not lit up by a light frame.
     return <View style={{ flex: 1, backgroundColor: isCold ? SPLASH_GROUND : c.paper }} />;
   }
-  if (!appearanceReady) {
-    // The same held page as the font gate, for the appearance read.
-    return <View style={{ flex: 1, backgroundColor: isCold ? SPLASH_GROUND : c.paper }} />;
-  }
 
+  // AuthProvider mounts here, the moment the fonts are ready, exactly as it
+  // did before the appearance layer, whatever the appearance read is doing.
+  // auth-js checks the stored session inside its own initialize() and
+  // announces a refresh the server refused as SIGNED_OUT to the listeners
+  // subscribed at that moment only; the first-start wait reads the session
+  // and the row, which both wait for that initialize(), so a listener mounted
+  // after the wait would miss it (and with it the sign-in routing and the
+  // order caches' cleanup). Until the appearance is ready the ground is the
+  // same held page as the font gate's (splashVisible is still isCold) and
+  // nothing else is drawn.
   return (
     <GestureHandlerRootView
       style={{ flex: 1, backgroundColor: splashVisible ? SPLASH_GROUND : c.paper }}
     >
       <AuthProvider>
         {/* Tells the appearance who is signed in (adopt the account's choice,
-            or save this phone's), after the first paint. Renders nothing. */}
+            or save this phone's). Renders nothing. */}
         <AppearanceSessionBridge />
-        <StatusBar style={splashVisible || mode === 'dark' ? 'light' : 'dark'} />
-        <ColdLaunchGateProvider splashActive={splashActive}>
-          <AppErrorBoundary>
-            <RootGate />
-          </AppErrorBoundary>
-        </ColdLaunchGateProvider>
+        {appearanceReady ? (
+          <>
+            <StatusBar style={splashVisible || mode === 'dark' ? 'light' : 'dark'} />
+            <ColdLaunchGateProvider splashActive={splashActive}>
+              <AppErrorBoundary>
+                <RootGate />
+              </AppErrorBoundary>
+            </ColdLaunchGateProvider>
+          </>
+        ) : null}
       </AuthProvider>
 
-      {/* After a crash in Liquid Glass this launch opened classic once
-          (plan 5.6): say so, and offer Liquid Glass back or the classic
-          design for good. Renders nothing otherwise. */}
-      <AppearanceFallbackNotice />
+      {appearanceReady ? (
+        <>
+          {/* After a crash in Liquid Glass this launch opened classic once
+              (plan 5.6): say so, and offer Liquid Glass back or the classic
+              design for good. Renders nothing otherwise. */}
+          <AppearanceFallbackNotice />
 
-      {/* Stacked ON TOP for a blank-frame-free crossfade: the splash fades its
-          own opacity to 0, revealing RootGate (incl. the Face-ID lock) which is
-          always rendered underneath. */}
-      {splashVisible ? (
-        <ColdLaunchSplash
-          onHandoff={() => setSplashActive(false)}
-          onDone={() => setSplashVisible(false)}
-        />
+          {/* Stacked ON TOP for a blank-frame-free crossfade: the splash fades its
+              own opacity to 0, revealing RootGate (incl. the Face-ID lock) which is
+              always rendered underneath. */}
+          {splashVisible ? (
+            <ColdLaunchSplash
+              onHandoff={() => setSplashActive(false)}
+              onDone={() => setSplashVisible(false)}
+            />
+          ) : null}
+        </>
       ) : null}
     </GestureHandlerRootView>
   );

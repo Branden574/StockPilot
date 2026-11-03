@@ -1,6 +1,5 @@
 import {
   INITIAL_APPEARANCE_STATE,
-  parseDeviceRecord,
   reduceAppearance,
   shownStyle,
   type AppearanceEffect,
@@ -49,17 +48,31 @@ import {
  * and the reducer drops any answer that a newer choice has overtaken.
  *
  * Two phone-only rules (round 2, finding 10):
- *   - First start of the new JS (item 31): a phone with no v2 record whose
- *     stored session names a person (who owes no authenticator code) keeps
- *     the first paint held until that person's row is read, inside the same
- *     4 s cap as the font gate (the provider's giveUpWaiting), so a Classic
- *     chooser opens in Classic.
+ *   - First start of the new JS (item 31): a phone with nothing of its own
+ *     yet (no Design or Theme stored, and no account sync record, which the
+ *     first start with someone signed in writes) whose stored session names
+ *     a person (who owes no authenticator code) keeps the first paint held
+ *     until that person's row is read, inside the same 4 s cap as the font
+ *     gate (the provider's giveUpWaiting), so a Classic chooser opens in
+ *     Classic. That start writes the sync record, so it is the only one that
+ *     waits, whatever the row said (R9): a person who never chose anything is
+ *     never held again.
  *   - Deferred adoption (item 32): a Design adopted from the account after
  *     the first paint that changes what is drawn is stored at once but drawn
  *     only when nothing holds it (the B44 update holds: open sheets, alerts,
  *     photo picks, drafts, writes in flight; and the Scan tab or a count entry
- *     screen in focus), or at the next return to the app. The person's own
- *     choices apply at once.
+ *     screen in focus), or at the next return to the app, which is B44's:
+ *     background, then active (inactive to active, from Control Center, Face
+ *     ID, an alert or the app switcher, is not one). The person's own choices
+ *     apply at once.
+ *
+ * Rule 2 on the phone: a save that failed, a read that found no account
+ * store, and a read that failed (offline, a timeout) are tried again when the
+ * app comes to the foreground, when the network reports itself online, and by
+ * Try again. A read that failed owes the row (R9: the rollout default only
+ * "until it can read the row"); the reducer keeps no trace of it (status stays
+ * 'idle'), so this controller remembers it and announces the session again,
+ * which reads the row exactly as at the start.
  */
 
 /** What holds a Design adopted from the account back from being drawn. */
@@ -87,6 +100,12 @@ export interface AppearanceSnapshot {
   readonly introVisible: boolean;
   /** A Design adopted from the account is stored and waits for the holds (item 32). */
   readonly adoptionPending: boolean;
+  /**
+   * Something is to be tried again (rule 2): a failed save, a read that found
+   * no account store, or a read that failed. The provider listens for the
+   * network only while this is true.
+   */
+  readonly retryOwed: boolean;
 }
 
 export interface AppearanceControllerDeps {
@@ -118,12 +137,24 @@ export interface AppearanceController {
   dismissIntro(): void;
   /** Try again: the button, the app coming to the foreground, the network coming back. */
   retry(): void;
-  /** The app came back to the foreground: a held adoption is drawn now. */
-  resumed(): void;
+  /**
+   * Every AppState change, and the state found when the provider subscribed.
+   * A return to the app (background, then active) draws a held adoption; any
+   * 'active' tries again what is owed.
+   */
+  onAppState(next: string): void;
+  /** A network report while a retry is owed: online tries again. */
+  onNetwork(online: boolean): void;
   /** The crash-fallback notice was answered: show Liquid Glass again, or choose Classic. */
   endFallback(choice: 'glass' | 'classic'): void;
   /** Resolves when every storage write asked for so far has finished (tests, recovery). */
   flush(): Promise<void>;
+  /**
+   * Resolves once no save is in flight and every write asked for so far has
+   * finished: "Use classic design" waits for it (capped) before the reload,
+   * which would cut the save.
+   */
+  settled(): Promise<void>;
 }
 
 export function createAppearanceController(deps: AppearanceControllerDeps): AppearanceController {
@@ -146,12 +177,21 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
   /** The first paint waits for the account row (item 31). */
   let waitingForAccount = false;
   let fetchesInFlight = 0;
+  /** The last read for the signed-in person failed: the row is still owed (rule 2, R9). */
+  let readOwed = false;
+  /** A background was seen since the last return to the app (B44's definition of a return). */
+  let sawBackground = false;
   let writes: Promise<void> = Promise.resolve();
   let reading: Promise<void> | null = null;
+  /** Waiting for the save in flight to answer (settled()). */
+  let saveWaiters: (() => void)[] = [];
   const listeners = new Set<() => void>();
 
   const drawn = (style: AppearanceStyle | null): AppearanceStyle =>
     shownStyle(style, rollout, fallbackActive);
+
+  const isRetryOwed = (): boolean =>
+    !inert && (state.status === 'failed' || state.status === 'unavailable' || readOwed);
 
   const build = (): AppearanceSnapshot => {
     const style = drawn(displayed);
@@ -171,6 +211,7 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
         state.style === null &&
         style === 'liquid-glass',
       adoptionPending: pending,
+      retryOwed: isRetryOwed(),
     };
   };
   let snapshot = build();
@@ -184,7 +225,8 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
       next.theme === snapshot.theme &&
       next.fallbackActive === snapshot.fallbackActive &&
       next.introVisible === snapshot.introVisible &&
-      next.adoptionPending === snapshot.adoptionPending
+      next.adoptionPending === snapshot.adoptionPending &&
+      next.retryOwed === snapshot.retryOwed
     ) {
       return;
     }
@@ -289,6 +331,12 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
             .catch(() => ({ ok: false as const, reason: 'error' as const }))
             .then((answer) => {
               fetchesInFlight -= 1;
+              // Only an answer the reducer takes counts (rule 3 drops one a
+              // newer choice overtook). A missing table is 'unavailable',
+              // owed through the status instead.
+              if (state.userId === userId && state.gen === gen) {
+                readOwed = !answer.ok && answer.reason === 'error';
+              }
               dispatch(
                 answer.ok
                   ? { type: 'fetch-succeeded', userId, gen, row: answer.row }
@@ -304,8 +352,17 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
 
   function dispatch(event: AppearanceEvent) {
     const transition = reduceAppearance(state, event);
+    // Another person, or nobody: an earlier person's read is owed to no one.
+    if (transition.state.userId !== state.userId) readOwed = false;
     state = transition.state;
+    // A save's answer echoes the whole row: synced means it was read.
+    if (state.status === 'synced') readOwed = false;
     run(transition.effects);
+    if (state.saving === null && saveWaiters.length > 0) {
+      const waiting = saveWaiters;
+      saveWaiters = [];
+      for (const resolve of waiting) resolve();
+    }
     emit();
   }
 
@@ -339,11 +396,50 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
     dispatch({ type: 'choose', axis: 'style', value: style, userId: session ?? null, now: now() });
   };
 
+  const flush = async () => {
+    // Writes may enqueue more writes (an answer that persists); wait them out.
+    let seen: Promise<void> | null = null;
+    while (seen !== writes) {
+      seen = writes;
+      await seen;
+    }
+  };
+
   /** Any Design choice answers the one-time card too. */
   const seeIntro = () => {
     if (introSeen) return;
     introSeen = true;
     enqueue(() => markIntroSeen(storage));
+  };
+
+  /**
+   * The signed-in person whose row is owed, when the read is all that is:
+   * nothing unsaved to send (its answer would be the row), no row check
+   * pending (the reducer's own retry reads for that), no read or save out.
+   */
+  const owedReadFor = (): string | null =>
+    readOwed &&
+    typeof session === 'string' &&
+    state.userId === session &&
+    state.saving === null &&
+    fetchesInFlight === 0 &&
+    state.dirtyAxes.length === 0 &&
+    state.uncheckedAxes.length === 0
+      ? session
+      : null;
+
+  const retry = () => {
+    if (inert) return;
+    const reread = owedReadFor();
+    if (reread !== null) {
+      // The reducer's own retry has nothing to resend: announce the session
+      // again, which reads the row (rules 4c, 4d) exactly as at the start.
+      dispatch({ type: 'authenticated', userId: reread, now: now() });
+      return;
+    }
+    // A read already out answers for this one.
+    if (readOwed && fetchesInFlight > 0) return;
+    dispatch({ type: 'retry', userId: session ?? null });
   };
 
   return {
@@ -366,9 +462,14 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
             return;
           }
           applyStored(stored);
-          if (!inert && !ready && parseDeviceRecord(stored.device, now()) === null) {
-            // Item 31: nothing of this phone's own, so the person's row decides
-            // the first look. Only this start waits; never a signed-out phone.
+          // Item 31: nothing of this phone's own (no Design or Theme stored, and
+          // no sync record: no start of this JS has had anyone signed in), so
+          // the person's row decides the first look. The 'authenticated' below
+          // writes the sync record, so only this start waits (R9), whatever
+          // the row says; never a signed-out phone.
+          const nothingOfItsOwn =
+            state.style === null && state.theme === null && state.userId === null;
+          if (!inert && !ready && nothingOfItsOwn) {
             if (session === undefined) {
               const peeked = await peekSignedInUser().catch(() => null);
               if (session === undefined && peeked !== null) session = peeked;
@@ -398,6 +499,9 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
       if (userId === session) return;
       session = userId;
       if (hydrated) applySession();
+      // The person the first paint waited for is gone (the session ended, or
+      // was refused at its refresh): there is no row to wait for.
+      endFirstStartWait();
     },
 
     chooseStyle,
@@ -427,13 +531,25 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
       emit();
     },
 
-    retry() {
-      if (inert) return;
-      dispatch({ type: 'retry', userId: session ?? null });
+    retry,
+
+    onAppState(next) {
+      if (next === 'background') sawBackground = true;
+      if (next !== 'active') return;
+      if (sawBackground) {
+        // A return to the app (B44, ota-update-prompt.ts onAppState): the
+        // held adoption is drawn now. Inactive to active is not one.
+        sawBackground = false;
+        drawStored();
+      }
+      if (isRetryOwed()) retry();
     },
 
-    resumed() {
-      drawStored();
+    onNetwork(online) {
+      // Any online report while something is owed (the provider listens only
+      // then), as use-sync.ts does: the first report after a failure may
+      // already be the network coming back.
+      if (online && isRetryOwed()) retry();
     },
 
     endFallback(choice) {
@@ -446,13 +562,13 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
       emit();
     },
 
-    flush: async () => {
-      // Writes may enqueue more writes (an answer that persists); wait them out.
-      let seen: Promise<void> | null = null;
-      while (seen !== writes) {
-        seen = writes;
-        await seen;
+    flush,
+
+    settled: async () => {
+      while (state.saving !== null) {
+        await new Promise<void>((resolve) => saveWaiters.push(resolve));
       }
+      await flush();
     },
   };
 }

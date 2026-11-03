@@ -7,6 +7,7 @@ import {
   type GlassRollout,
 } from '@stockpilot/core';
 
+import type { AppearanceController } from './controller';
 import {
   clearFallbackFlag,
   readDeviceRecord,
@@ -85,4 +86,58 @@ export async function recoverToClassicInStorage(
     await writeSyncRecord(storage, { ...sync, dirtyAxes });
   }
   await clearFallbackFlag(storage);
+}
+
+/** What "Use classic design" needs of the live controller, when one still answers. */
+export type LiveAppearance = Pick<AppearanceController, 'chooseStyle' | 'settled'>;
+
+/**
+ * How long "Use classic design" waits for the account save before the reload.
+ * A save usually answers in well under a second; past this (a captive portal,
+ * a dead network) the reload goes ahead, and the phone still opens classic
+ * from its own record.
+ */
+export const RECOVERY_SAVE_WAIT_MS = 3000;
+
+/**
+ * The error screen's "Use classic design", up to the reload (plan 5.6, R13).
+ * Storage first, which works when the appearance layer is what threw. Then
+ * the live controller, if it still answers, makes Classic an explicit choice
+ * in this session: shown at once, saved to the account. The reload waits for
+ * that save to answer (at most RECOVERY_SAVE_WAIT_MS), because the reload cuts
+ * it, and after a reload the stored unsaved Design is checked against the row
+ * first (SR1, round 2 finding 13): a Design saved on another device since
+ * this phone last synced would win, and put the person back into the glass
+ * that crashed. Offline the save cannot land: the phone still opens classic
+ * from its record, and the Design stays unsaved, handled after the reload as
+ * any choice whose save failed is (pushed when this phone has confirmed a
+ * sync with the account, otherwise checked against the row once it can be
+ * read). `wait` is the cap's timer (injectable for tests). Never throws.
+ */
+export async function recoverToClassic(
+  storage: AppearanceStorage,
+  now: number,
+  live: LiveAppearance | null,
+  wait?: (ms: number) => Promise<void>,
+): Promise<void> {
+  try {
+    await recoverToClassicInStorage(storage, now);
+  } catch {
+    // Storage refused: the live controller below still has the choice.
+  }
+  if (live === null) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    live.chooseStyle('classic');
+    const cap =
+      wait?.(RECOVERY_SAVE_WAIT_MS) ??
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, RECOVERY_SAVE_WAIT_MS);
+      });
+    await Promise.race([live.settled(), cap]);
+  } catch {
+    // The stored choice is classic already; the reload reads it.
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }

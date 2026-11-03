@@ -5,7 +5,7 @@ import { Pressable, Text, View } from 'react-native';
 
 import { glassRollout } from '@/lib/appearance/flag';
 import { RECOVERY_ACTION_LABEL } from '@/lib/appearance/labels';
-import { markCrashFallback, recoverToClassicInStorage } from '@/lib/appearance/recovery';
+import { markCrashFallback, recoverToClassic } from '@/lib/appearance/recovery';
 import { peekAppearanceController } from '@/lib/appearance/singleton';
 import { asyncStorageAppearance } from '@/lib/appearance/store';
 import { Sentry } from '@/lib/sentry';
@@ -55,20 +55,18 @@ const SCREEN = palette('dark');
  * back into a glass layer that throws, so whenever Liquid Glass is shown
  * (under the 'default' rollout that includes a phone that never chose) this
  * screen also offers "Use classic design" (the Design becomes Classic, the
- * Theme stays, saved to their account after the reload), and the crash owes
- * the next launch one classic start with a notice (markCrashFallback). Both
- * talk to AsyncStorage directly, never through the appearance provider, which
- * may be what threw. In classic nothing here changes: the action is not shown
- * and the look is the same fixed dark screen.
+ * Theme stays, and the reload waits a moment for the account to have it),
+ * and the crash owes the next launch one classic start with a notice
+ * (markCrashFallback). Both talk to AsyncStorage directly, never through the
+ * appearance provider, which may be what threw. In classic nothing here
+ * changes: the action is not shown and the look is the same fixed dark
+ * screen.
  *
  * Scope note: this catches RENDER-phase throws only. A MODULE-INIT throw (e.g.
  * a build shipped without EXPO_PUBLIC_SUPABASE_* inlined) happens before React
  * mounts and cannot be caught here — supabase.ts is made fail-soft separately.
  */
-export class AppErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  State
-> {
+export class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
   state: State = { error: null, glass: false };
 
   static getDerivedStateFromError(error: Error): Partial<State> {
@@ -95,19 +93,11 @@ export class AppErrorBoundary extends React.Component<
   }
 
   private handleUseClassic = async () => {
-    try {
-      await recoverToClassicInStorage(asyncStorageAppearance, Date.now());
-      // The live controller, if it still answers, shows classic at once (and
-      // saves it) in case the reload below cannot run.
-      try {
-        peekAppearanceController()?.chooseStyle('classic');
-      } catch {
-        // The stored choice is classic already; the reload reads it.
-      }
-    } catch {
-      // Storage refused: Reload still runs; the notice path covers the rest.
-    }
+    // Answered: the action goes at once, so it is not pressed twice while the
+    // Design reaches the account (recoverToClassic waits for that save, at
+    // most RECOVERY_SAVE_WAIT_MS, because the reload would cut it).
     this.setState({ glass: false });
+    await recoverToClassic(asyncStorageAppearance, Date.now(), peekAppearanceController());
     await this.handleReload();
   };
 
