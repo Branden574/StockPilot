@@ -65,3 +65,56 @@ export function classicDom(root: Element): string {
 export function glassOnlyCount(root: Element): number {
   return root.querySelectorAll('[data-glass-only]').length;
 }
+
+/**
+ * The structural pseudo-classes a Classic rule can select by: the place of an
+ * element among its siblings and whether it is empty (Tailwind's first:,
+ * last:, only:, empty:, *-of-type: and the space-* and divide-* utilities,
+ * which select :not(:last-child), are written with these).
+ */
+const STRUCTURAL = [
+  ':first-child',
+  ':last-child',
+  ':only-child',
+  ':first-of-type',
+  ':last-of-type',
+  ':only-of-type',
+] as const;
+
+/** :empty as browsers match it (no child but comments; text, even white space, counts).
+ *  Computed here: happy-dom's :empty ignores text nodes. */
+const isEmpty = (el: Element) => [...el.childNodes].every((n) => n.nodeType === 8);
+
+/**
+ * Where each element the classic proof keeps stands among its siblings, as
+ * the browser sees it: the structural pseudo-classes it matches in the REAL
+ * tree, glass-only elements included. classicDom() drops a glass-only element
+ * before comparing, so it cannot see that a hidden glass-only sibling still
+ * counts for :last-child (display:none changes no selector match): a
+ * glass-only element added after a Classic element's last child takes that
+ * child's :last-child, and with it any Classic rule written on it. Under
+ * `off` no glass-only element renders, so the `off` structure is today's;
+ * the `default` structure must be the same, element for element.
+ *
+ * One line per kept element: its path (tag and position among the kept
+ * siblings, from the root) and the pseudo-classes it matches ("-" for none).
+ */
+export function classicStructure(root: Element): string {
+  const lines: string[] = [];
+  const walk = (parent: Element, prefix: string) => {
+    let position = 0;
+    for (const child of parent.children) {
+      if (child.hasAttribute('data-glass-only')) continue;
+      position += 1;
+      const path = `${prefix}${child.tagName.toLowerCase()}[${position}]`;
+      const flags = [
+        ...STRUCTURAL.filter((pseudo) => child.matches(pseudo)),
+        ...(isEmpty(child) ? [':empty'] : []),
+      ].join('');
+      lines.push(`${path} ${flags || '-'}`);
+      walk(child, `${path}/`);
+    }
+  };
+  walk(root, '');
+  return `${lines.join('\n')}\n`;
+}

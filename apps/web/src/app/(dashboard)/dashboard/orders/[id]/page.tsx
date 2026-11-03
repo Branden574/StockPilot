@@ -19,6 +19,7 @@ import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
 import { OrderFulfilmentBadge } from '@/components/orders/order-fulfilment-badge';
+import { OrderRequesterNoteAside } from '@/components/orders/order-requester-note-aside';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReplacementBanner } from '@/components/orders/replacement-banner';
@@ -1344,13 +1345,20 @@ export default async function OrderDetailPage({
           </>
         }
         titleAside={
-          <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
-            <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
+          <>
             {/* Liquid Glass draws the fulfilment beside the status (glass-only
-                words; nothing under the off rollout). */}
+                words; nothing under the off rollout). Between the title and
+                the status in the DOM, where it moves no Classic element among
+                its siblings; glass shows it after the status. */}
             <OrderFulfilmentBadge fulfillmentType={request.fulfillment_type} />
-            {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
-          </span>
+            <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
+              <OrderStatusBadge
+                status={request.status}
+                fulfillmentType={request.fulfillment_type}
+              />
+              {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
+            </span>
+          </>
         }
         subline={
           <>
@@ -1956,11 +1964,15 @@ export default async function OrderDetailPage({
               </DetailSection>
             )}
 
+            {/* Liquid Glass shows the note in the side column instead
+                (OrderRequesterNoteAside, a glass-only copy: the note is words
+                only), so this one is Classic-only. */}
             {request.notes && (
               <DetailSection
                 title="Requester note"
                 data-testid="order-requester-note"
                 data-glass-role="order-requester-note"
+                data-classic-only=""
               >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.notes}</p>
               </DetailSection>
@@ -2133,6 +2145,12 @@ export default async function OrderDetailPage({
                 })}
               </KeyValueList>
             </DetailSection>
+
+            {/* Liquid Glass draws the requester note here, after Details
+                (glass-only; order-detail.css orders it last). Between Dates
+                and Details in the DOM, so no Classic element moves among its
+                siblings. */}
+            <OrderRequesterNoteAside notes={request.notes} />
 
             <DetailSection title="Details" flush>
               <KeyValueList>

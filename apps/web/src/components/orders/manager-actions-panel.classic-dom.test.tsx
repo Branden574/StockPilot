@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 import { ManagerActionsPanel } from './manager-actions-panel';
 
@@ -132,7 +132,11 @@ async function renderUnder(rollout: 'off' | 'default', state: (typeof STATES)[nu
     expect(screen.getByRole('dialog', { name: 'Deny this request?' })).toBeInTheDocument();
   }
   // The dialog is portalled to body, so the whole body is read.
-  return { dom: classicDom(document.body), glassOnly: glassOnlyCount(document.body) };
+  return {
+    dom: classicDom(document.body),
+    structure: classicStructure(document.body),
+    glassOnly: glassOnlyCount(document.body),
+  };
 }
 
 describe('Manager actions card, Classic DOM', () => {
@@ -142,6 +146,8 @@ describe('Manager actions card, Classic DOM', () => {
       expect(off.glassOnly).toBe(0);
       const glass = await renderUnder('default', state);
       expect(glass.dom).toBe(off.dom);
+      // No Classic element changes its place among its siblings (classicStructure).
+      expect(glass.structure).toBe(off.structure);
       await expect(off.dom).toMatchFileSnapshot(
         `./__classic__/manager-actions-panel.${state.name}.txt`,
       );

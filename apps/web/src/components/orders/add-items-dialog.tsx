@@ -421,7 +421,9 @@ function AddItemsBody({
   }
 
   return (
-    <div className="space-y-3">
+    // add-items-body: an inert hook, so Liquid Glass can reach the foot inside
+    // this wrapper (order-detail.css).
+    <div data-glass="add-items-body" className="space-y-3">
       {/* The segmented look (DESIGN-SPEC 6.5) on the same aria-pressed
           toggles. */}
       <div className="border-border bg-sunk inline-flex gap-0.5 rounded-lg border p-[3px] text-[13px]">

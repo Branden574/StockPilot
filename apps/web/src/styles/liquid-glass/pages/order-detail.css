@@ -5,25 +5,30 @@
    (app/(dashboard)/dashboard/orders/[id]/page.tsx and .../[id]/pick/page.tsx),
    never globally (plan 4.1).
 
-   Same DOM as Classic (plan M1): every rule restyles the classic markup
-   through the inert hooks the pages carry (the page roots
-   data-glass-page="order-detail" and "order-pick"; data-glass="panel" on
-   every card; data-glass-role="order-lines", "order-manager-actions", ...),
-   and every rule is scoped to :root[data-appearance="liquid-glass"] inside
-   @media screen, so Classic Dark and Light never match one and printing
-   never gets one (glass-scope.guard.test.ts reads this folder too). App
+   Same DOM as Classic (plan M1), apart from the requester's note (below):
+   every rule restyles the classic markup through the inert hooks the pages
+   carry (the page roots data-glass-page="order-detail" and "order-pick";
+   data-glass="panel" on every card; data-glass-role="order-lines",
+   "order-manager-actions", ...), and every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen, so Classic
+   Dark and Light never match one and printing never gets one
+   (glass-scope.guard.test.ts reads this folder too). App
    Router keeps a route's stylesheet after a client navigation, so every
    selector also names its page root: nothing here reaches another page. The
    dialogs the pages open are portalled out of them, so their rules name the
    page root through :root:has(...) and the dialog's own part hooks
    (data-glass="dialog-header", "dialog-body", "dialog-footer").
 
-   What the board draws that the order page cannot (recorded in
-   stage3/orders-rows.md): Review by category and its Override dialog
-   ([Proposed], not built), line photos (the page does not load them), the
-   phone's bottom next-step bar, and Manager actions and the requester's note
-   in the side column (moving them needs a different DOM; Classic keeps
-   today's order, so glass keeps it too).
+   The requester's note is in the side column, as the board draws it (plan
+   4.6, a stateless block): a glass-only copy there
+   (OrderRequesterNoteAside), and the main column's note is Classic-only.
+   What the board draws that the order page does not (recorded in
+   stage3/orders-rows.md; the two layout ones proposed for DECISIONS.md):
+   Review by category and its Override dialog ([Proposed], not built), line
+   photos (the page does not load them), the phone's bottom next-step bar,
+   and Manager actions at the top of the side column (a stateful block: its
+   notes field and dialogs render once, plan 4.6, and no rule on today's DOM
+   lifts it out of the main column).
 
    The layer order statement is insurance: it is the order globals.css already
    declares (Tailwind's four layers, then lg from styles/liquid-glass/index.css),
@@ -68,11 +73,13 @@
       div:has(> h1) {
       column-gap: 10px;
     }
+    /* The status aside (h1 ~ span: the glass-only fulfilment badge sits
+       between the two in the DOM). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='order-detail']
       [data-glass='page-header']
       h1
-      + span {
+      ~ span {
       column-gap: 10px;
     }
     :root[data-appearance='liquid-glass']
@@ -143,10 +150,13 @@
       color: var(--lg-ink-2);
     }
     /* The fulfilment beside the status (glass-only words, .badge.b-outline
-       with the 13 px icon). */
+       with the 13 px icon). In the DOM it comes before the status aside, so
+       no Classic element changes its place among its siblings; `order`
+       draws it after the status, as the board does. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='order-detail']
       [data-glass='order-fulfilment'] {
+      order: 1;
       display: inline-flex;
       flex: none;
       align-items: center;
@@ -198,17 +208,20 @@
     }
 
     /* ── The two columns (.cols-side: the main column beside a 300-360 px
-          side column, 16 between; one column below the classic width) ──── */
+          side column, 16 between; one column in a window 1100 px wide or
+          narrower, sp.css:292, where Classic's own switch is its 856 px
+          container) ───────────────────────────────────────────────────── */
     :root[data-appearance='liquid-glass']
       [data-glass-page='order-detail']
       [data-glass='order-detail-columns'] {
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
       gap: 16px;
     }
-    @container (min-width: 856px) {
+    @media (max-width: 1100px) {
       :root[data-appearance='liquid-glass']
         [data-glass-page='order-detail']
         [data-glass='order-detail-columns'] {
-        grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+        grid-template-columns: minmax(0, 1fr);
       }
     }
 
@@ -260,6 +273,16 @@
       color: var(--lg-ink-2);
       font-size: 13px;
       line-height: 18px;
+    }
+    /* The requester's note in the side column (the glass-only copy between
+       Dates and Details in the DOM): drawn last, after Details, where the
+       board's aside ends with it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass='order-detail-aside']
+      > [data-glass='order-requester-note-aside'] {
+      order: 1;
+      min-width: 0;
     }
     /* The exchange note under the head and the requester's own return
        requests: content glass, as the cards around them. */
@@ -323,6 +346,19 @@
       tr {
       border-bottom: 1px solid var(--lg-line);
       background: var(--lg-card-fill-2);
+    }
+    /* The header band (.dt .hd): sticky in its scroll box and frosted
+       (sp.css:277, :985); the rows scroll under it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      thead {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='order-detail']
@@ -444,17 +480,46 @@
       color: var(--lg-danger);
     }
     /* The notes under the actions (why a step is held) as the board's
-       alert: the inset tile on the card, the words keep their warning ink. */
+       warning alert (Order-Detail.dc.html .alert.a-warn, padding 10 / 12;
+       sp.css .alert, .a-warn): the warning wash and hairline, the words in
+       ink at 13 / 18 (.sm), and the 18 px alert icon in the warning tone in
+       its own column, so the words and a Try again under them line up. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='order-detail']
       [data-glass-role='order-manager-actions']
       [data-glass='order-notice'] {
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      align-items: start;
+      gap: 8px 12px;
       padding: 10px 12px;
-      border: var(--lg-b-w) solid var(--lg-card-line);
+      border: var(--lg-b-w) solid var(--lg-warn-line);
       border-radius: 12px;
-      background-color: var(--lg-card-fill-2);
+      background-color: var(--lg-warn-wash);
+      color: var(--lg-ink);
       font-size: 13px;
       line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-glass='order-notice']::before {
+      content: '';
+      width: 18px;
+      height: 18px;
+      background-color: var(--lg-warn);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3'/%3E%3Cpath d='M12 9v4'/%3E%3Cpath d='M12 17h.01'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-manager-actions']
+      [data-glass='order-notice']
+      > [data-glass='button'] {
+      grid-column: 2;
+      justify-self: start;
     }
 
     /* ── Dates and Details (.kv: the label column, the value in ink 500) ── */
@@ -542,6 +607,195 @@
       [data-glass-role='order-timeline']
       [data-slot='timeline-marker'] {
       box-shadow: 0 0 0 3px rgba(30, 35, 33, 0.9);
+    }
+    /* The event's tone and 14 px icon (.tl-dot.ok / .warn / .info / .acc,
+       .tl-dot .ic): the entry names them in its hooks
+       (components/orders/order-timeline-marker.ts); the icon replaces the
+       classic dot. An entry without hooks keeps the neutral fill and dot. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon]
+      > [data-slot='timeline-marker'] {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon]
+      > [data-slot='timeline-marker']
+      > span {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon]
+      > [data-slot='timeline-marker']::before {
+      content: '';
+      width: 14px;
+      height: 14px;
+      background-color: currentColor;
+      -webkit-mask: var(--glass-marker-icon) center / contain no-repeat;
+      mask: var(--glass-marker-icon) center / contain no-repeat;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-tone='ok']
+      > [data-slot='timeline-marker'] {
+      background-color: var(--lg-ok-wash);
+      color: var(--lg-ok);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-tone='warn']
+      > [data-slot='timeline-marker'] {
+      background-color: var(--lg-warn-wash);
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-tone='info']
+      > [data-slot='timeline-marker'] {
+      background-color: var(--lg-info-wash);
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-tone='acc']
+      > [data-slot='timeline-marker'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='send']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z'/%3E%3Cpath d='m21.854 2.147-10.94 10.939'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='circle-check']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m16 9-5.5 5.5L8 12'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='circle-x']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='10'/%3E%3Cpath d='m15 9-6 6'/%3E%3Cpath d='m9 9 6 6'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='clipboard-list']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='8' height='4' x='8' y='2' rx='1' ry='1'/%3E%3Cpath d='M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2'/%3E%3Cpath d='M12 11h4'/%3E%3Cpath d='M12 16h4'/%3E%3Cpath d='M8 11h.01'/%3E%3Cpath d='M8 16h.01'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='mail']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m22 7-8.991 5.727a2 2 0 0 1-2.009 0L2 7'/%3E%3Crect x='2' y='4' width='20' height='16' rx='2'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='check']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='users']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2'/%3E%3Cpath d='M16 3.128a4 4 0 0 1 0 7.744'/%3E%3Cpath d='M22 21v-2a4 4 0 0 0-3-3.87'/%3E%3Ccircle cx='9' cy='7' r='4'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='user']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2'/%3E%3Ccircle cx='12' cy='7' r='4'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='truck']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2'/%3E%3Cpath d='M15 18H9'/%3E%3Cpath d='M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14'/%3E%3Ccircle cx='17' cy='18' r='2'/%3E%3Ccircle cx='7' cy='18' r='2'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='package']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z'/%3E%3Cpath d='M12 22V12'/%3E%3Cpolyline points='3.29 7 12 12 20.71 7'/%3E%3Cpath d='m7.5 4.27 9 5.15'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='pen-line']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13 21h8'/%3E%3Cpath d='M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='link']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71'/%3E%3Cpath d='M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='lock']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='11' x='3' y='11' rx='2' ry='2'/%3E%3Cpath d='M7 11V7a5 5 0 0 1 10 0v4'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='rotate-ccw']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8'/%3E%3Cpath d='M3 3v5h5'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='key']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 21 9.6-9.6'/%3E%3Cpath d='m7.5 15.5 2.3 2.3a1 1 0 0 1 0 1.4l-2.1 2.1a1 1 0 0 1-1.4 0L4 19'/%3E%3Ccircle cx='15.5' cy='7.5' r='5.5'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='calendar-clock']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M16 14v2.2l1.6 1'/%3E%3Cpath d='M16 2v3'/%3E%3Cpath d='M21 7.338V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h2.338'/%3E%3Cpath d='M3 9h5.859'/%3E%3Cpath d='M8 2v3'/%3E%3Ccircle cx='16' cy='16' r='6'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='file-plus']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z'/%3E%3Cpath d='M14 2v5a1 1 0 0 0 1 1h5'/%3E%3Cpath d='M9 15h6'/%3E%3Cpath d='M12 18v-6'/%3E%3C/svg%3E");
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-timeline']
+      [data-glass-icon='printer']
+      > [data-slot='timeline-marker'] {
+      --glass-marker-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2'/%3E%3Cpath d='M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6'/%3E%3Crect x='6' y='14' width='12' height='8' rx='1'/%3E%3C/svg%3E");
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='order-detail']
@@ -769,7 +1023,7 @@
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-header']
       > h2 {
-      font-family: var(--lg-font-display);
+      font-family: var(--font-display);
       font-size: 20px;
       font-weight: 650;
       line-height: 26px;
@@ -783,6 +1037,16 @@
       > :not(h2) {
       font-size: 13px;
       line-height: 18px;
+    }
+    /* The description in ink 2 (the Deny dialog's .sm.ink2); a warning in
+       the head (Add items after picking) keeps its warn ink. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      > [data-glass='dialog-header']
+      > [class~='text-muted-foreground'] {
+      color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
@@ -803,14 +1067,43 @@
         [data-glass='dialog-header'],
         [data-glass='dialog-body'],
         [data-glass='dialog-footer'],
+        [data-glass='add-items-body'],
         button
       ) {
       margin: 0 24px 14px;
     }
+    /* Add items to this order keeps its picker and its foot in one wrapper
+       (add-items-dialog.tsx AddItemsBody, hooked add-items-body), so its
+       foot is the dialog's grandchild: the wrapper's parts take the head's
+       24 px inset, the foot takes the board's foot below (the :is() lists of
+       the two foot rules name the wrapper), and the 12 px the wrapper's
+       space-y-3 puts above the foot is dropped, so the foot's own 14 px is
+       the space above it, as in every other dialog here. */
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
       )
-      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      [data-glass='dialog']
+      > [data-glass='add-items-body']
+      > :not([data-glass='dialog-footer']) {
+      margin-right: 24px;
+      margin-left: 24px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
+      [data-glass='dialog']
+      > [data-glass='add-items-body']
+      > :has(+ [data-glass='dialog-footer']) {
+      margin-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
+      :is(
+        [data-glass='dialog'],
+        [data-glass='dialog'] > form,
+        [data-glass='dialog'] > [data-glass='add-items-body']
+      )
       > [data-glass='dialog-footer'] {
       gap: 10px;
       padding: 14px 16px 16px 24px;
@@ -818,7 +1111,11 @@
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
       )
-      :is([data-glass='dialog'], [data-glass='dialog'] > form)
+      :is(
+        [data-glass='dialog'],
+        [data-glass='dialog'] > form,
+        [data-glass='dialog'] > [data-glass='add-items-body']
+      )
       > [data-glass='dialog-footer']
       > [data-glass='button']:is([data-glass-size='default'], [data-glass-size='sm']) {
       height: 36px;
@@ -826,6 +1123,28 @@
       padding: 0 14px;
       font-size: 14px;
       font-weight: 600;
+    }
+
+    /* ── Reduce Transparency, Increase Contrast: nothing is blurred (the
+          tokens are already opaque there) ──────────────────────────────── */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-detail']
+        [data-glass-role='order-lines']
+        [data-glass='table']
+        thead {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='order-detail']
+      [data-glass-role='order-lines']
+      [data-glass='table']
+      thead {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
     }
   }
 }

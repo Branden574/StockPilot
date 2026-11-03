@@ -4,7 +4,10 @@
     "duplicate action": "Goes where an existing classic element on the same route goes, behind the same permission gate; classicTwin names that element.",
     "appearance control (no data action)": "The header appearance menu (Design and Theme). No classic twin on the route; no permission gate; touches only the viewer's own appearance (device record, Design cookie, own user_appearance row).",
     "renamed action": "The classic element itself, with the same role, target, position and permission gate, under another accessible name (and tooltip) while <html> carries data-appearance=\"liquid-glass\". name is its glass name and classicTwin its classic name: the 8.5 check counts the two as one action, so walkers find it by either name and the classic name missing in glass is not a missing action.",
-    "decoration (no action)": "Glass-only icons or words inside an element Classic already has, holding no link, button or field of their own: the element keeps its role, accessible name, target and permission gate in both designs. The 8.5 check has no action to pair; the classic proof drops them under default and they are not rendered under off."
+    "decoration (no action)": "Glass-only icons or words inside an element Classic already has, holding no link, button or field of their own: the element keeps its role, accessible name, target and permission gate in both designs. The 8.5 check has no action to pair; the classic proof drops them under default and they are not rendered under off.",
+    "replaced below a width": "A glass-only element that glass shows only in windows maxWidth px wide or narrower, where it hides the classic elements listed in replaces; each goes to the same target (href) behind the same permission gate. At those widths the 8.5 check counts a replaced classic action as present in glass when a glass element of the same role goes to the same target, and at wider sizes it expects the classic elements as they are (the glass-only one is hidden there).",
+    "hidden in a width band (target on screen)": "A classic control (not glass-only) that glass does not draw in windows from minWidth to maxWidth px wide, because what it reaches is already on screen there and the board draws no such control at those widths. The 8.5 check skips it in glass in that band only and expects it at every other width.",
+    "moved block (no action)": "A stateless block (words only: no link, button or field) that glass draws in another place on the page (plan 4.6): this glass-only copy, while the classic block carries data-classic-only and is hidden in glass, so exactly one of the two is shown in either design and the page holds the block, and its heading, once. The 8.5 check has no action to pair; the classic proof drops the copy under default and it is not rendered under off."
   },
   "entries": [
     {
@@ -61,10 +64,26 @@
       "source": "apps/web/src/components/orders/order-phone-cards.tsx",
       "selector": "[data-glass=\"orders-phone-cards\"] a",
       "role": "link",
-      "kind": "duplicate action",
+      "kind": "replaced below a width",
       "routes": ["/dashboard/orders"],
-      "$comment": "Orders.dc.html's phone cards (.mob-f, 760 px and under). Each card links to /dashboard/orders/<id>, where the same row's order number and requester links in the Orders table go, behind the same page gate (the Orders module; orders:approve lists every order, otherwise the viewer's own requests). Glass shows the cards and hides the table only at 760 px and under (styles/liquid-glass/pages/orders.css); above that the cards are hidden and the table is the same as Classic's. A card prints every column of its row, so no column is lost on a phone. Not rendered under off.",
-      "classicTwin": "the row's order number link in the Orders table (href /dashboard/orders/<id>)",
+      "$comment": "Orders.dc.html's phone cards (.mob-f, 760 px and under). Each card links to /dashboard/orders/<id>, where the same row's order number and requester links in the Orders table go, behind the same page gate (the Orders module; orders:approve lists every order, otherwise the viewer's own requests). Glass shows the cards and hides the table's scroll box (both links on every row) only at 760 px and under (styles/liquid-glass/pages/orders.css); above that the cards are hidden and the table is the same as Classic's. A card's accessible name is its whole text (the order number, status, requester and every other column), so the check pairs by role and target, not by name. A card prints every column of its row, so no column is lost on a phone. Not rendered under off.",
+      "maxWidth": 760,
+      "href": "/dashboard/orders/<id>",
+      "replaces": [
+        {
+          "role": "link",
+          "selector": "[data-glass='table-scroll'] tbody td:first-child a",
+          "name": "the row's order number (SO-000231)",
+          "href": "/dashboard/orders/<id>"
+        },
+        {
+          "role": "link",
+          "selector": "[data-glass='table-scroll'] tbody td:nth-child(2) a",
+          "name": "the row's requester label",
+          "href": "/dashboard/orders/<id>"
+        }
+      ],
+      "classicTwin": "the row's order number and requester links in the Orders table (href /dashboard/orders/<id>), hidden in glass at 760 px and under",
       "gate": "the Orders page's own gate"
     },
     {
@@ -86,6 +105,30 @@
       "$comment": "Order-Detail.dc.html's outline badge beside the status in the page head: a truck and \"Delivery\", or a box and \"Pickup\", from the order's own fulfillment_type, which the page already loads. Words and a decorative icon on the head's title line, which Classic already has; no link, button or field. Not rendered under off.",
       "classicTwin": null,
       "gate": null
+    },
+    {
+      "id": "order-requester-note-aside",
+      "source": "apps/web/src/components/orders/order-requester-note-aside.tsx",
+      "selector": "[data-glass=\"order-requester-note-aside\"]",
+      "kind": "moved block (no action)",
+      "routes": ["/dashboard/orders/[id]"],
+      "$comment": "Order-Detail.dc.html's aside ends with the requester's note. The order page renders this copy in the side column, between Dates and Details in the DOM (order-detail.css draws it last), when the order has notes; the main column's note (data-testid order-requester-note) carries data-classic-only. The note is the order's own notes, words only, which the page already loads for every viewer of the order. Not rendered under off.",
+      "classicTwin": "the main column's Requester note section (data-classic-only, hidden in glass)",
+      "gate": null
+    },
+    {
+      "id": "storefront-cart-fab",
+      "source": "apps/web/src/components/orders/storefront/storefront-cart.tsx",
+      "selector": ".sp-storefront:not(.sf-public) .sf-fab",
+      "role": "button",
+      "name": "Scroll to cart, <n> units",
+      "kind": "hidden in a width band (target on screen)",
+      "routes": ["/dashboard/orders/new"],
+      "$comment": "Place an order's floating cart button (CartFab), which only scrolls the page down to the cart when the cart is stacked under the catalog. Classic stacks the cart and shows the button (with units in the cart) in windows 1280 px wide or narrower; glass keeps the cart beside the catalog, sticky and on screen, down to 1101 px (Order-New.dc.html .cols-side, sp.css:291-292) and does not draw the button there (styles/liquid-glass/storefront.glass.css). At 1100 px and narrower glass stacks the cart and shows the button as Classic does.",
+      "minWidth": 1101,
+      "maxWidth": 1280,
+      "classicTwin": null,
+      "gate": "Place an order's own gate"
     }
   ]
 }

@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import type * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 /**
  * CLASSIC IS SACRED (Liquid Glass stage 3, orders lane). Place an order draws
@@ -80,7 +80,11 @@ afterEach(() => {
 async function renderUnder(rollout: 'off' | 'default') {
   vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
   const view = render(await NewOrderPage({ searchParams: Promise.resolve({}) }));
-  const out = { dom: classicDom(view.container), glassOnly: glassOnlyCount(view.container) };
+  const out = {
+    dom: classicDom(view.container),
+    structure: classicStructure(view.container),
+    glassOnly: glassOnlyCount(view.container),
+  };
   view.unmount();
   return out;
 }
@@ -91,6 +95,8 @@ describe('Place an order, Classic DOM (no warehouse set up)', () => {
     expect(off.glassOnly).toBe(0);
     const glass = await renderUnder('default');
     expect(glass.dom).toBe(off.dom);
+    // No Classic element changes its place among its siblings (classicStructure).
+    expect(glass.structure).toBe(off.structure);
     await expect(off.dom).toMatchFileSnapshot('./__classic__/order-new.no-warehouse.txt');
   });
 });

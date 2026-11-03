@@ -2,7 +2,7 @@ import { render } from '@testing-library/react';
 import type * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 /**
  * CLASSIC IS SACRED (Liquid Glass stage 3, orders lane). The Orders list's
@@ -13,7 +13,13 @@ import { classicDom, glassOnlyCount } from '@/test/classic-dom';
  * render exactly the pinned DOM:
  *   - under the `off` rollout, with no glass-only element rendered at all;
  *   - under `default` (the Classic chooser's page: same tree, the glass-only
- *     parts present but hidden), once those are dropped.
+ *     parts present but hidden), once those are dropped;
+ *   - and under `default` every Classic element keeps its place among its
+ *     siblings (classicStructure: :first-child, :last-child, :only-child,
+ *     :empty and the *-of-type ones), because a hidden glass-only sibling
+ *     still counts for those selectors (the phone cards once took the table
+ *     scroll wrapper's :last-child, and with it its rounded bottom corners,
+ *     for a requester, whose card has no pager).
  * A failure here means a change touched Classic: fix the change, never the
  * snapshot (regenerate only from a commit whose Classic output is the
  * accepted baseline).
@@ -152,7 +158,11 @@ async function classicOf(rollout: 'off' | 'default', params: Record<string, stri
   vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
   seq = 0;
   const view = render(await OrdersPage({ searchParams: Promise.resolve(params) }));
-  const out = { dom: classicDom(view.container), glassOnly: glassOnlyCount(view.container) };
+  const out = {
+    dom: classicDom(view.container),
+    structure: classicStructure(view.container),
+    glassOnly: glassOnlyCount(view.container),
+  };
   view.unmount();
   return out;
 }
@@ -179,7 +189,7 @@ const SCENARIOS: Array<[string, Record<string, string>, () => void]> = [
 
 describe('Orders list: the Classic DOM is the pinned one', () => {
   for (const [name, params, setup] of SCENARIOS) {
-    it(`${name}: off renders no glass-only part, and off and default normalise to the pinned DOM`, async () => {
+    it(`${name}: off renders no glass-only part, off and default normalise to the pinned DOM, and default moves no Classic element among its siblings`, async () => {
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
       setup();
       const off = await classicOf('off', params);
@@ -188,6 +198,7 @@ describe('Orders list: the Classic DOM is the pinned one', () => {
       spy.mockRestore();
       expect(off.glassOnly).toBe(0);
       expect(glassBuild.dom).toBe(off.dom);
+      expect(glassBuild.structure).toBe(off.structure);
       await expect(off.dom).toMatchFileSnapshot(`./__classic__/orders-page.${name}.txt`);
     });
   }

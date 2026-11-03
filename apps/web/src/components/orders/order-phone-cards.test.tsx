@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { render, within } from '@testing-library/react';
+import postcss, { type AtRule, type Rule } from 'postcss';
 import type * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -145,5 +149,66 @@ describe('OrderPhoneCards', () => {
     expect(card).toHaveTextContent('1 line · 1 unit');
     expect(card).toHaveTextContent('Pickup');
     expect(card).toHaveTextContent('Picker —');
+  });
+
+  // Plan 8.5: glass hides the Orders table (both links on every row) at
+  // phone width, so the allowlist declares the cards as replacing those two
+  // links there, to the same target, at the width orders.css switches at.
+  it('is declared as replacing the table’s two row links at the width where glass swaps them', () => {
+    const web = join(__dirname, '..', '..', '..');
+    const allowlist = JSON.parse(
+      readFileSync(join(web, 'tests', 'e2e', 'appearance', 'glass-only-allowlist.json'), 'utf8'),
+    ) as {
+      kinds: Record<string, string>;
+      entries: {
+        id: string;
+        kind: string;
+        role?: string;
+        href?: string;
+        maxWidth?: number;
+        replaces?: { role: string; selector: string; href: string }[];
+      }[];
+    };
+    const entry = allowlist.entries.find((e) => e.id === 'orders-phone-cards')!;
+    expect(entry.kind).toBe('replaced below a width');
+    expect(Object.keys(allowlist.kinds)).toContain(entry.kind);
+    expect(entry.role).toBe('link');
+    expect(entry.href).toBe('/dashboard/orders/<id>');
+    expect(entry.replaces?.map((r) => [r.role, r.selector, r.href])).toEqual([
+      ['link', "[data-glass='table-scroll'] tbody td:first-child a", '/dashboard/orders/<id>'],
+      ['link', "[data-glass='table-scroll'] tbody td:nth-child(2) a", '/dashboard/orders/<id>'],
+    ]);
+
+    // The card goes where the row's own links go.
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const card = render(<OrderPhoneCards rows={[row({ id: 'o7' })]} />).getByRole('link');
+    expect(card).toHaveAttribute('href', entry.href!.replace('<id>', 'o7'));
+
+    // orders.css swaps them at exactly entry.maxWidth: in that media block
+    // the table's scroll box is hidden and the card list is shown.
+    const css = postcss.parse(
+      readFileSync(join(web, 'src', 'styles', 'liquid-glass', 'pages', 'orders.css'), 'utf8'),
+    );
+    const swaps: { media: string; selector: string; display: string }[] = [];
+    css.walkDecls('display', (decl) => {
+      const rule = decl.parent as Rule;
+      const media = (rule.parent as AtRule).params ?? '';
+      const selector = rule.selector.replace(/\s+/g, ' ');
+      if (/> \[data-glass='(table-scroll|orders-phone-cards)'\]$/.test(selector)) {
+        swaps.push({ media, selector: selector.split(' > ').at(-1)!, display: decl.value });
+      }
+    });
+    expect(swaps).toEqual([
+      {
+        media: `(max-width: ${entry.maxWidth}px)`,
+        selector: "[data-glass='table-scroll']",
+        display: 'none',
+      },
+      {
+        media: `(max-width: ${entry.maxWidth}px)`,
+        selector: "[data-glass='orders-phone-cards']",
+        display: 'flex',
+      },
+    ]);
   });
 });

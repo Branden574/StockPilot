@@ -125,9 +125,9 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['current stage tab (ink) on the pane', '--lg-ink', ['--lg-pane'], 4.5],
   ['stage underline (accent) on the pane', '--lg-accent', ['--lg-pane'], 3],
   [
-    'filter chip (accent text) on its wash',
+    'filter chip (accent text) on the selection fill',
     '--lg-accent-text',
-    ['--lg-pane', '--lg-accent-wash'],
+    ['--lg-pane', '--lg-sel-fill'],
     4.5,
   ],
   ['table header (ink 3) on the header band', '--lg-ink-3', [...CARD, '--lg-card-fill-2'], 4.5],
@@ -159,6 +159,12 @@ const PAIRS: Array<[string, string, string[], number]> = [
     '--lg-ink-3',
     ['--lg-pane', '--lg-glass-strong'],
     4.5,
+  ],
+  [
+    'Export menu icon (ink 3) on the overlay glass',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-glass-strong'],
+    3,
   ],
   // Place an order (Order-New.dc.html)
   ['setup step (ink 2) on the card', '--lg-ink-2', CARD, 4.5],
@@ -196,7 +202,13 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['date and detail label (ink 3) on the card', '--lg-ink-3', CARD, 4.5],
   ['date and detail value (ink) on the card', '--lg-ink', CARD, 4.5],
   ['requester note (ink 2) on the card', '--lg-ink-2', CARD, 4.5],
-  ['held step note (warn) on its tile', '--lg-warn', [...CARD, '--lg-card-fill-2'], 4.5],
+  ['held step note (ink) on the warning wash', '--lg-ink', [...CARD, '--lg-warn-wash'], 4.5],
+  ['held step icon (warn) on the warning wash', '--lg-warn', [...CARD, '--lg-warn-wash'], 3],
+  ['timeline icon (ink 3) on surface 3', '--lg-ink-3', [...CARD, '--lg-surface-3'], 3],
+  ['timeline icon (ok) on its wash', '--lg-ok', [...CARD, '--lg-ok-wash'], 3],
+  ['timeline icon (warn) on its wash', '--lg-warn', [...CARD, '--lg-warn-wash'], 3],
+  ['timeline icon (info) on its wash', '--lg-info', [...CARD, '--lg-info-wash'], 3],
+  ['timeline icon (on accent) on the accent', '--lg-on-accent', [...CARD, '--lg-accent'], 3],
   ['Deny (danger) on the field frost', '--lg-danger', [...CARD, '--lg-field-fill'], 4.5],
   ['dialog title (ink) on the overlay glass', '--lg-ink', OVERLAY, 4.5],
   ['dialog words (ink 2) on the overlay glass', '--lg-ink-2', OVERLAY, 4.5],
@@ -206,13 +218,7 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['pick line (ink) on the card', '--lg-ink', CARD, 4.5],
   ['of N (ink 2) on the card', '--lg-ink-2', CARD, 4.5],
   ['picked figure (ink) on the field frost', '--lg-ink', [...CARD, '--lg-field-fill'], 4.5],
-  // Manage order items (Manage-Items.dc.html)
-  [
-    'segment count (ink 3) on the segment track',
-    '--lg-ink-3',
-    ['--lg-pane', '--lg-surface-3'],
-    4.5,
-  ],
+  // Manage order items (Manage-Items.dc.html; no segment counts: the page has none)
   [
     'Select family (accent text) on its wash',
     '--lg-accent-text',
@@ -220,6 +226,12 @@ const PAIRS: Array<[string, string, string[], number]> = [
     4.5,
   ],
   ['selection count (ink) on the floating glass', '--lg-ink', ['--lg-pane', '--lg-glass'], 4.5],
+  [
+    'Select family Add (on accent) on the accent',
+    '--lg-on-accent',
+    [...OVERLAY, '--lg-accent'],
+    4.5,
+  ],
   ['refusal title (ink) on the card', '--lg-ink', CARD, 4.5],
   ['refusal lock (ink 3) on the neutral wash', '--lg-ink-3', [...CARD, '--lg-neutral-wash'], 3],
   ['drawer row (ink) in the reading area', '--lg-ink', [...OVERLAY, '--lg-field-fill'], 4.5],

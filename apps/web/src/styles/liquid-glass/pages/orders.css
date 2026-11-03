@@ -117,6 +117,11 @@
       > span:first-child,
     :root[data-appearance='liquid-glass']
       [data-glass-page='orders']
+      [data-slot='stat-strip-link']:hover
+      > span:first-child
+      span,
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
       [data-slot='stat-strip-link'][aria-current='page']
       > span:first-child,
     :root[data-appearance='liquid-glass']
@@ -145,7 +150,8 @@
       border-radius: 2px;
     }
 
-    /* A filter that is not a tab ("Waiting for signature"): the scope chip. */
+    /* A filter that is not a tab ("Waiting for signature"): the scope chip
+       (glass .chip.scope: the selection fill, no edge, accent words). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='orders']
       [data-glass='orders-filter-note']
@@ -154,7 +160,7 @@
       padding: 0 12px;
       border-color: transparent;
       border-radius: 999px;
-      background: var(--lg-accent-wash);
+      background: var(--lg-sel-fill);
       color: var(--lg-accent-text);
       font-size: 13px;
       font-weight: 600;
@@ -167,6 +173,31 @@
     :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] thead tr {
       border-bottom: 1px solid var(--lg-line);
       background: var(--lg-card-fill-2);
+    }
+    /* The header band (.dt .hd): sticky in its scroll box and frosted
+       (sp.css:277, :985); the rows scroll under it. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] thead {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
+    }
+    /* Reduce Transparency, Increase Contrast: no frost (the tokens are
+       already opaque there). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] thead {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='orders']
+      [data-glass='table']
+      thead {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='table'] th {
       height: 38px;
@@ -409,7 +440,7 @@
       grid-row: span 2;
       width: 18px;
       height: 18px;
-      color: var(--lg-ink-2);
+      color: var(--lg-ink-3);
     }
     /* " · Needs approval": the tab's name after the format, its leading
        space kept (a grid item would drop it). */
@@ -428,7 +459,12 @@
       line-height: 16px;
     }
 
-    /* ── Phone (760 px and under): the rows as cards (.mob-f) ─────────── */
+    /* ── Phone (760 px and under): the rows as cards (.mob-f) ─────────────
+       The card list is the page box's own child, just before the table card
+       (never inside it: a hidden sibling there took the scroll wrapper's
+       :last-child in Classic). On a phone the table card keeps only its
+       pager, under the cards; a card with no pager (a requester's) is not
+       drawn at all. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='orders']
       [data-glass='orders-phone-cards'] {
@@ -448,7 +484,7 @@
       }
       :root[data-appearance='liquid-glass'] [data-glass-page='orders'] > [data-glass='card'] {
         overflow: visible;
-        border-color: transparent;
+        border-width: 0;
         border-radius: 0;
         background: transparent;
         box-shadow: none;
@@ -461,7 +497,12 @@
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='orders']
-        [data-glass='orders-phone-cards'] {
+        > [data-glass='card']:not(:has(> [data-glass='orders-pager'])) {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='orders']
+        > [data-glass='orders-phone-cards'] {
         display: flex;
         flex-direction: column;
         gap: 10px;
@@ -470,7 +511,6 @@
         list-style: none;
       }
       :root[data-appearance='liquid-glass'] [data-glass-page='orders'] [data-glass='orders-pager'] {
-        margin-top: 10px;
         padding: 0;
         border-top-width: 0;
       }
@@ -496,6 +536,15 @@
       box-shadow:
         inset 0 0 0 1.5px var(--lg-accent),
         var(--lg-sh-1);
+    }
+    /* Keyboard focus: the card's material shadow above replaces the classic
+       box-shadow ring (layer lg), so the card draws the board's outline
+       ring (sp.css :focus-visible: --lg-focus-w in --lg-focus, 2 px off). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='orders']
+      [data-glass='orders-phone-card']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='orders']
@@ -599,7 +648,7 @@
 
     /* ══ Manage order items (Manage-Items.dc.html) ═════════════════════════
        The page box and head as the list's; the toolbar's 36 px controls and
-       segments with their counts; the table card; Select family as the
+       segments; the table card; Select family as the
        board's tinted button; the selection bar floating on glass; the
        Review selection drawer and the Select family dialog with the board's
        head, inset reading area and foot. The Hide and Show confirm is the
@@ -634,27 +683,15 @@
       line-height: 18px;
     }
 
-    /* The toolbar (.toolbar: 8 between; .seg with its counts; 36 px fields
-       from the small breakpoint, the 44 px phone fields below it). */
+    /* The toolbar (.toolbar: 8 between; 36 px fields from the small
+       breakpoint, the 44 px phone fields below it). The board's segment
+       counts (.seg .ct) are not drawn: the page has no per-visibility
+       figure, and a count would be a new read and a new Classic figure
+       (owner decision O2); recorded in stage3/orders-rows.md. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='manage-items']
       [data-glass='filter-bar'] {
       gap: 8px;
-    }
-    :root[data-appearance='liquid-glass']
-      [data-glass-page='manage-items']
-      [data-glass='seg']
-      [data-slot='segmented-tab-count'] {
-      color: var(--lg-ink-3);
-      font-size: 12px;
-      font-weight: 600;
-    }
-    :root[data-appearance='liquid-glass']
-      [data-glass-page='manage-items']
-      [data-glass='seg']
-      [aria-current='page']
-      [data-slot='segmented-tab-count'] {
-      color: var(--lg-accent-text);
     }
     @media (min-width: 640px) {
       :root[data-appearance='liquid-glass']
@@ -681,6 +718,20 @@
       tr {
       border-bottom: 1px solid var(--lg-line);
       background: var(--lg-card-fill-2);
+    }
+    /* The header band, sticky and frosted as the Orders table's (its
+       Reduce Transparency and low-power twins are with the selection bar's
+       below). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      thead {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='manage-items']
@@ -824,11 +875,27 @@
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
       }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='manage-items']
+        [data-glass='card']
+        [data-glass='table']
+        thead {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
     }
     /* The same on weak Chromium browsers (data-lg-material="reduced"). */
     :root[data-appearance='liquid-glass'][data-lg-material='reduced']
       [data-glass-page='manage-items']
       [data-glass='order-items-selbar'] {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      thead {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
@@ -846,7 +913,7 @@
       [data-glass-page='manage-items']
       [data-glass='state-panel'][data-state-kind='forbidden']
       > :is(h1, h2, h3):not([data-slot]) {
-      font-family: var(--lg-font-display);
+      font-family: var(--font-display);
       font-size: 20px;
       font-weight: 650;
       line-height: 26px;
@@ -860,6 +927,29 @@
       gap: 0;
       padding: 0;
     }
+    /* The Review selection drawer (.scrim.to-end, 10 px padding, and .drawer:
+       420 px wide, every corner 24): inset from the window's right, top and
+       bottom edges instead of the classic sheet's flush 576 px panel, as the
+       storefront's quick view drawer is (storefront.glass.css). */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='sheet'][data-glass-role='order-items-review'] {
+      top: 10px;
+      right: 10px;
+      bottom: 10px;
+      height: auto;
+      width: min(420px, calc(100vw - 20px));
+      max-width: none;
+      border-radius: 24px;
+    }
+    @media (max-width: 639.98px) {
+      :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+        [data-glass='sheet'][data-glass-role='order-items-review'] {
+        top: 6px;
+        right: 6px;
+        bottom: 6px;
+        width: calc(100vw - 12px);
+      }
+    }
     :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
       :is([data-glass='dialog'], [data-glass='sheet'])
       > [data-glass='dialog-header'] {
@@ -872,7 +962,7 @@
       :is([data-glass='dialog'], [data-glass='sheet'])
       > [data-glass='dialog-header']
       > h2 {
-      font-family: var(--lg-font-display);
+      font-family: var(--font-display);
       font-size: 20px;
       font-weight: 650;
       line-height: 26px;
@@ -884,6 +974,13 @@
       > :not(h2) {
       font-size: 13px;
       line-height: 18px;
+    }
+    /* The description in ink 2 (the board's .sm.ink2 under the title). */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-header']
+      > [class~='text-muted-foreground'] {
+      color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
       :is([data-glass='dialog'], [data-glass='sheet'])
@@ -953,6 +1050,29 @@
       padding: 0 14px;
       font-size: 14px;
       font-weight: 600;
+    }
+    /* Select family's Add is the board's primary (Manage-Items.dc.html
+       .btn.btn-primary): the accent fill with its words on the accent, and
+       the accent button's glow (primitives.css) while it can be pressed; the
+       classic default (ink) button underneath keeps its role and gate. */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='button'][data-glass-role='order-items-family-add'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='button'][data-glass-role='order-items-family-add']:not(:disabled) {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='button'][data-glass-role='order-items-family-add']:not(:disabled):hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='button'][data-glass-role='order-items-family-add']:not(:disabled):active {
+      background-color: var(--lg-accent-press);
     }
 
     /* The phone (≤ 760: 4 / 16 / 96 padding, 16 between, title 24 / 30). */

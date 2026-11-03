@@ -27,7 +27,9 @@ describe('OrderFulfilmentBadge', () => {
       vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
       const { container } = render(<OrderFulfilmentBadge fulfillmentType="delivery" />);
       const badge = container.firstElementChild!;
-      expect(badge.tagName).toBe('SPAN');
+      // A div: it sits between the title and the status aside span in the
+      // head's row, so it takes no Classic element's *-of-type place.
+      expect(badge.tagName).toBe('DIV');
       expect(badge).toHaveAttribute('data-glass-only', '');
       expect(badge).toHaveAttribute('data-glass', 'order-fulfilment');
       expect(badge).toHaveTextContent(/^Delivery$/);

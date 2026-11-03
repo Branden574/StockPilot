@@ -595,6 +595,15 @@
     font-weight: 600;
   }
 
+  /* ── The two columns (.cols-side: the catalog beside a 300-360 px cart,
+       16 between, Order-New.dc.html:40, sp.css:291). Classic's cart is
+       372 px and stacks under the catalog from a 1280 px window; glass keeps
+       it beside the catalog, sticky, down to a 1101 px window and stacks it
+       at 1100 px and narrower, as the board does (Smaller screens, below). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-shell {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  }
+
   /* ── The cart (card, radius 20; glass head; .li lines; card-f) ───────── */
   :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart {
     border-color: var(--lg-card-line);
@@ -914,9 +923,32 @@
   }
 
   /* ── Smaller screens ─────────────────────────────────────────────────── */
-  /* Under 1280 px the cart stacks below and the floating button returns:
-     the page keeps Classic's room for it. */
-  @media (max-width: 1280px) {
+  /* From a 1101 to a 1280 px window, where Classic stacks the cart, glass
+     keeps the two columns: the cart stays sticky beside the catalog (with
+     Classic's own height, and its room for the What's New notice), so the
+     floating cart button, which only scrolls down to a stacked cart, is not
+     drawn (the board draws none at these widths; declared in
+     tests/e2e/appearance/glass-only-allowlist.json). */
+  @media (min-width: 1100.02px) and (max-width: 1280px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rail {
+      position: sticky;
+      max-height: calc(100dvh - var(--sf-topbar-h) - 40px);
+    }
+    :root[data-appearance='liquid-glass'][data-sp-update-card]
+      .sp-storefront:not(.sf-public)
+      .sf-rail {
+      max-height: calc(100dvh - var(--sf-topbar-h) - 40px - var(--sp-update-card-offset, 0px));
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fab {
+      display: none;
+    }
+  }
+  /* At 1100 px and narrower the cart stacks below the catalog (sp.css:292)
+     and the floating button returns: the page keeps Classic's room for it. */
+  @media (max-width: 1100px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
     :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page {
       padding-bottom: 90px;
     }

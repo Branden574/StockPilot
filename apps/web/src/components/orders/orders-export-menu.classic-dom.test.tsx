@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 import { OrdersExportMenu } from './orders-export-menu';
 
@@ -24,6 +24,7 @@ async function openMenu(rollout: 'off' | 'default') {
   const out = {
     trigger: classicDom(view.container),
     menu: classicDom(menu.parentElement!),
+    structure: classicStructure(menu.parentElement!) + classicStructure(view.container),
     glassOnly: glassOnlyCount(menu) + glassOnlyCount(view.container),
   };
   view.unmount();
@@ -37,6 +38,8 @@ describe('Export menu: the Classic DOM is the pinned one', () => {
     expect(off.glassOnly).toBe(0);
     expect(glassBuild.trigger).toBe(off.trigger);
     expect(glassBuild.menu).toBe(off.menu);
+    // No Classic element changes its place among its siblings (classicStructure).
+    expect(glassBuild.structure).toBe(off.structure);
     await expect(off.trigger).toMatchFileSnapshot('./__classic__/orders-export-menu.trigger.txt');
     await expect(off.menu).toMatchFileSnapshot('./__classic__/orders-export-menu.open.txt');
   });

@@ -174,6 +174,51 @@ describe('appearance render guard', () => {
     expect(allowlist.kinds).toHaveProperty(['appearance control (no data action)']);
   });
 
+  it('every width-bound entry of the 8.5 allowlist names its widths, and what it replaces or hides', () => {
+    const allowlist = JSON.parse(
+      readFileSync(
+        join(SRC, '..', 'tests', 'e2e', 'appearance', 'glass-only-allowlist.json'),
+        'utf8',
+      ),
+    ) as {
+      entries: {
+        id: string;
+        kind: string;
+        role?: string;
+        name?: string;
+        href?: string;
+        minWidth?: number;
+        maxWidth?: number;
+        replaces?: { role?: string; selector?: string; name?: string; href?: string }[];
+      }[];
+    };
+    const replaced = allowlist.entries.filter((e) => e.kind === 'replaced below a width');
+    const hidden = allowlist.entries.filter(
+      (e) => e.kind === 'hidden in a width band (target on screen)',
+    );
+    expect(replaced.map((e) => e.id)).toEqual(['orders-phone-cards']);
+    expect(hidden.map((e) => e.id)).toEqual(['storefront-cart-fab']);
+    for (const entry of replaced) {
+      expect(entry.maxWidth, entry.id).toEqual(expect.any(Number));
+      expect(entry.href, entry.id).toEqual(expect.any(String));
+      expect(entry.replaces?.length, entry.id).toBeGreaterThan(0);
+      for (const classic of entry.replaces ?? []) {
+        // The check pairs a replaced action with the glass element by role
+        // and target: each names both, and the target is the glass element's.
+        expect(classic.role, entry.id).toBe(entry.role);
+        expect(classic.href, entry.id).toBe(entry.href);
+        expect(classic.selector, entry.id).toEqual(expect.any(String));
+        expect(classic.name, entry.id).toEqual(expect.any(String));
+      }
+    }
+    for (const entry of hidden) {
+      expect(entry.role, entry.id).toEqual(expect.any(String));
+      expect(entry.name, entry.id).toEqual(expect.any(String));
+      expect(entry.minWidth, entry.id).toEqual(expect.any(Number));
+      expect(entry.maxWidth, entry.id).toBeGreaterThan(entry.minWidth ?? Infinity);
+    }
+  });
+
   it('the one-time intro notice and its two actions live only in the provider', () => {
     const owners = FILES.filter(({ text }) =>
       /switch back to the classic design at any time/.test(text),

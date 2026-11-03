@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OrderReadinessResult } from '@stockpilot/core';
 
 import { READINESS_FAILED } from '@/test/order-readiness-facts';
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 /**
  * CLASSIC IS SACRED (Liquid Glass stage 3, orders lane). The order page's own
@@ -490,7 +490,11 @@ const SCENARIOS: Array<{ name: string; setup: () => void }> = [
 async function renderUnder(rollout: 'off' | 'default') {
   vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
   const view = render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
-  const out = { dom: classicDom(view.container), glassOnly: glassOnlyCount(view.container) };
+  const out = {
+    dom: classicDom(view.container),
+    structure: classicStructure(view.container),
+    glassOnly: glassOnlyCount(view.container),
+  };
   view.unmount();
   return out;
 }
@@ -504,6 +508,8 @@ describe('Order page, Classic DOM', () => {
       scenario.setup();
       const glass = await renderUnder('default');
       expect(glass.dom).toBe(off.dom);
+      // No Classic element changes its place among its siblings (classicStructure).
+      expect(glass.structure).toBe(off.structure);
       await expect(off.dom).toMatchFileSnapshot(`./__classic__/order-detail.${scenario.name}.txt`);
     });
   }

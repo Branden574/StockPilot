@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { OrderReadinessResult } from '@stockpilot/core';
 
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 /**
  * CLASSIC IS SACRED (Liquid Glass stage 3, orders lane). The digital pick
@@ -176,7 +176,11 @@ async function renderUnder(rollout: 'off' | 'default', scenario: (typeof SCENARI
     expect(screen.getByTestId('completion-confirm')).toBeInTheDocument();
   }
   // The confirm is portalled to body, so the whole body is read.
-  return { dom: classicDom(document.body), glassOnly: glassOnlyCount(document.body) };
+  return {
+    dom: classicDom(document.body),
+    structure: classicStructure(document.body),
+    glassOnly: glassOnlyCount(document.body),
+  };
 }
 
 describe('Digital pick page, Classic DOM', () => {
@@ -186,6 +190,8 @@ describe('Digital pick page, Classic DOM', () => {
       expect(off.glassOnly).toBe(0);
       const glass = await renderUnder('default', scenario);
       expect(glass.dom).toBe(off.dom);
+      // No Classic element changes its place among its siblings (classicStructure).
+      expect(glass.structure).toBe(off.structure);
       await expect(off.dom).toMatchFileSnapshot(`./__classic__/order-pick.${scenario.name}.txt`);
     });
   }

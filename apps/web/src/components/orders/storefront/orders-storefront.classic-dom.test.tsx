@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { classicDom, glassOnlyCount } from '@/test/classic-dom';
+import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 import type { CatalogItem } from '../v2/types';
 
@@ -89,6 +89,8 @@ interface States {
   browse: string;
   cart: string;
   review: string;
+  /** classicStructure of the catalog, the cart and the review, in that order. */
+  structure: string[];
   glassOnly: number;
 }
 
@@ -122,12 +124,14 @@ async function renderUnder(rollout: 'off' | 'default'): Promise<States> {
     );
   });
   const browse = classicDom(view.container);
+  const browseStructure = classicStructure(view.container);
   for (const add of screen.getAllByRole('button', { name: /Add to cart/ }).slice(0, 3)) {
     await act(async () => {
       fireEvent.click(add);
     });
   }
   const cart = classicDom(view.container);
+  const cartStructure = classicStructure(view.container);
   const reviewButton = view.container.querySelector('.sf-submit');
   if (!(reviewButton instanceof HTMLButtonElement)) throw new Error('no Review button');
   await act(async () => {
@@ -135,9 +139,10 @@ async function renderUnder(rollout: 'off' | 'default'): Promise<States> {
   });
   // The review sheet sits in the page (an in-tree overlay), so body holds it.
   const review = classicDom(document.body);
+  const structure = [browseStructure, cartStructure, classicStructure(document.body)];
   const glassOnly = glassOnlyCount(document.body);
   cleanup();
-  return { browse, cart, review, glassOnly };
+  return { browse, cart, review, structure, glassOnly };
 }
 
 describe('Place an order storefront, Classic DOM', () => {
@@ -148,6 +153,8 @@ describe('Place an order storefront, Classic DOM', () => {
     expect(glass.browse).toBe(off.browse);
     expect(glass.cart).toBe(off.cart);
     expect(glass.review).toBe(off.review);
+    // No Classic element changes its place among its siblings (classicStructure).
+    expect(glass.structure).toEqual(off.structure);
     await expect(off.browse).toMatchFileSnapshot('./__classic__/storefront.browse.txt');
     await expect(off.cart).toMatchFileSnapshot('./__classic__/storefront.cart.txt');
     await expect(off.review).toMatchFileSnapshot('./__classic__/storefront.review.txt');

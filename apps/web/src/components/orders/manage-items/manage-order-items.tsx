@@ -892,7 +892,11 @@ export function ManageOrderItems({
 
       {/* Review selection: every selected record, off-page ones included. */}
       <Sheet open={reviewOpen && count > 0} onOpenChange={(open) => !busy && setReviewOpen(open)}>
-        <SheetContent side="right" className="flex flex-col p-0 sm:max-w-md">
+        <SheetContent
+          side="right"
+          className="flex flex-col p-0 sm:max-w-md"
+          data-glass-role="order-items-review"
+        >
           <SheetHeader data-glass="dialog-header">
             <SheetTitle>{ORDER_ITEMS_REVIEW_SELECTION_COPY}</SheetTitle>
             <SheetDescription>{orderItemsSelectedCopy(count)}</SheetDescription>
@@ -1038,6 +1042,7 @@ export function ManageOrderItems({
             <Button
               disabled={family?.status !== 'ready' || family.checked.size === 0}
               onClick={confirmFamily}
+              data-glass-role="order-items-family-add"
             >
               {FAMILY_ADD_COPY}
             </Button>
