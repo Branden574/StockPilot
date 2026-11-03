@@ -52,7 +52,7 @@ import 'server-only';
 //   • rows+placement   (org, warehouseKey, view)  'inventory-list-v7'
 //     (page 1 + its placement; on Items under the instant cap page 1 is
 //      PLANNED with the instant derivation, see loadInventoryRowsUncached)
-//   • lookup tables    (org)                      'inventory-lookups-v1'
+//   • lookup tables    (org)                      'inventory-lookups-v2'
 //   • valueOnHand      (org, warehouseKey, view)  'inventory-value-v1'
 //   • trend buckets    (org)                      'inventory-trend-buckets-v2'
 //   • INSTANT dataset  (org, warehouseKey, view)  'inventory-dataset-v3'
@@ -405,6 +405,15 @@ export interface InventoryListLookups {
   suppliers: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
+  /** The archived and inactive charters, by name, for the Charter cell only
+   *  (B97): a record tagged to one was called "Generic". Never offered in the
+   *  Charter filter, which lists `charters`. */
+  unlistedCharters: Array<{
+    id: string;
+    name: string;
+    code: string | null;
+    status: 'inactive' | 'archived';
+  }>;
 }
 
 export interface InventoryListPayload extends InventoryListLookups {
@@ -1327,9 +1336,12 @@ const DATASET_ID_BATCH_CONCURRENCY = 20;
  *                (module off → [] fail-closed, see loadSuppliersIfEnabled)
  *   tags       → TagsService.list()
  *   charters   → ChartersService.list()               (status=active)
+ *   unlisted   → ChartersService.listLabels({ exceptActive: true })
+ *                (archived and inactive: names for the Charter cell, B97)
  */
 export async function loadInventoryLookups(organizationId: string): Promise<InventoryListLookups> {
-  const cached = unstable_cache(loadInventoryLookupsUncached, ['inventory-lookups-v1'], {
+  // v2: the payload gained unlistedCharters (B97).
+  const cached = unstable_cache(loadInventoryLookupsUncached, ['inventory-lookups-v2'], {
     revalidate: LIST_TTL_SEC,
     tags: [inventoryListTag(organizationId)],
   });
@@ -1367,7 +1379,7 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
   // Every list page by page, by name and then id, as its live service reads
   // it (B47; the locations since small fixes slice 8). Any failed page throws,
   // so a partial list is never cached.
-  const [categoryRows, locationRows, suppliers, tagRows, charterRows] = await Promise.all([
+  const [categoryRows, locationRows, suppliers, tagRows, charterRows, others] = await Promise.all([
     fetchAllRows(
       (from, to) =>
         admin
@@ -1426,6 +1438,21 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
       (rows) => noteLookupCeiling('charters', organizationId, rows),
       lookupReadFailed('charters'),
     ),
+    fetchAllRows(
+      (from, to) =>
+        admin
+          .from('charters')
+          .select('id, name, code, status')
+          .eq('organization_id', organizationId)
+          .neq('status', 'active')
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    ).then(
+      (rows) => noteLookupCeiling('unlisted_charters', organizationId, rows),
+      lookupReadFailed('unlisted charters'),
+    ),
   ]);
 
   return {
@@ -1447,6 +1474,12 @@ async function loadInventoryLookupsUncached(organizationId: string): Promise<Inv
       id: c.id as string,
       name: c.name as string,
       code: (c.code as string | null) ?? null,
+    })),
+    unlistedCharters: others.map((c) => ({
+      id: c.id as string,
+      name: c.name as string,
+      code: (c.code as string | null) ?? null,
+      status: c.status as 'inactive' | 'archived',
     })),
   };
 }

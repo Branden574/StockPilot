@@ -74,6 +74,7 @@ const m = vi.hoisted(() => ({
   tableProps: vi.fn(),
   emptyStateProps: vi.fn(),
   noticeProps: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -211,7 +212,11 @@ vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: lookupSvc('listForLookups'),
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: async () => ({ list: async () => [], listLabels: m.charterLabels }),
+  },
+}));
 
 import { effectivePermissions, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
@@ -228,7 +233,14 @@ const ROW = {
   quantity_on_hand: 5,
   awaiting_first_receipt: false,
 };
-const LOOKUPS = { categories: [], locations: [], suppliers: [], tags: [], charters: [] };
+const LOOKUPS = {
+  categories: [],
+  locations: [],
+  suppliers: [],
+  tags: [],
+  charters: [],
+  unlistedCharters: [],
+};
 
 function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
   events.push(`${name}:start`);
@@ -297,6 +309,7 @@ beforeEach(() => {
     logged('dataset', async () => (h.datasetGate ? h.datasetGate : null)),
   );
   m.loadInventoryLookups.mockImplementation(async () => LOOKUPS);
+  m.charterLabels.mockImplementation(async () => []);
   m.loadInventoryTrendBuckets.mockImplementation(async () => ({}));
   m.inventoryList.mockImplementation(() =>
     logged('liveList', async () => ({
@@ -343,6 +356,72 @@ afterEach(() => {
 function callPage(params: Record<string, string> = {}) {
   return InventoryPage({ searchParams: Promise.resolve(params) });
 }
+
+/**
+ * B97 part 1: the table's charter lookup also names the archived and inactive
+ * charters (marked with their status), so a record tagged to one is no longer
+ * called "Generic"; the Charter filter (`charters`) keeps the active ones.
+ */
+describe('Items page: the Charter cell names archived charters (B97)', () => {
+  const ACTIVE = { id: 'ch-1', name: 'North Campus', code: 'NC' };
+  const ARCHIVED = { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' as const };
+  const charterLookup = () =>
+    (m.tableProps.mock.calls[0]![0] as { lookups: { charters: Map<string, unknown> } }).lookups
+      .charters;
+
+  it('manager, default view: from the cached lookups', async () => {
+    const withCharters = { ...LOOKUPS, charters: [ACTIVE], unlistedCharters: [ARCHIVED] };
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [ROW],
+      total: 1,
+      valueOnHand: 10,
+      ...withCharters,
+      trends: {},
+      placement: {},
+      expectedCount: 0,
+    }));
+    render(await callPage());
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(charterLookup().get('ch-1')).toEqual({ name: 'North Campus', code: 'NC' });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it('a deep link (the awaited instant table): from the cached lookups', async () => {
+    m.loadInventoryLookups.mockImplementation(async () => ({
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+    }));
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(charterLookup().get('ch-9')).toMatchObject({ status: 'archived' });
+    // The Charter filter keeps offering active charters only.
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it("staff, live path: from the member's own read of the archived and inactive charters", async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => [ARCHIVED]);
+    render(await callPage());
+    expect(m.charterLabels).toHaveBeenCalledWith({ exceptActive: true });
+    expect(charterLookup().get('ch-9')).toMatchObject({ name: 'Old Campus', status: 'archived' });
+  });
+
+  it('staff, live path: a failed label read names none, and the page still renders', async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => {
+      throw new Error('statement timeout');
+    });
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(charterLookup().has('ch-9')).toBe(false);
+  });
+});
 
 describe('Items page: the table starts with the header, not after it', () => {
   it('manager, default view: saved views, the cached list and image signing start while the racks read is still open', async () => {
