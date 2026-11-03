@@ -1,6 +1,12 @@
 'use client';
 
 import * as React from 'react';
+import { isLiquidGlassEnabled } from '@/components/theme/appearance-flag';
+import {
+  holdClassicForThisTab,
+  isLiquidGlassStored,
+  switchToClassicOnThisDevice,
+} from '@/components/theme/appearance-recovery-plain';
 import { listenForPurges, purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { isSharePath } from '@/lib/share-paths';
 
@@ -42,6 +48,9 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * route's path is written out above: lib/auth/session-ended.ts imports
  * next/navigation.
  */
+/** The stored appearance never changes while this page shows: nothing to subscribe to. */
+const subscribeToNothing = () => () => {};
+
 function signOutAndBackIn(): void {
   purgeInterruptedRuns();
   // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- deliberate full page load: the sign-out route is a route handler, not a page, and this page cannot rely on the router.
@@ -57,6 +66,20 @@ export default function GlobalError({
 }) {
   // A sign-out in another tab of this browser clears this tab too (see above).
   React.useEffect(() => listenForPurges(), []);
+
+  // "Use classic appearance" (Liquid Glass plan 5.6): offered only while this
+  // device's stored choice is Liquid Glass, read after mount, so the classic
+  // page is unchanged. This document is already classic; the next load would
+  // not be, so this tab is held in classic once and the button makes it
+  // permanent.
+  const glassStored = React.useSyncExternalStore(
+    subscribeToNothing,
+    () => isLiquidGlassEnabled() && isLiquidGlassStored(),
+    () => false,
+  );
+  React.useEffect(() => {
+    if (glassStored) holdClassicForThisTab();
+  }, [glassStored]);
 
   React.useEffect(() => {
     // Best-effort report; we don't bring in the error-reporter module
@@ -93,8 +116,7 @@ export default function GlobalError({
           justifyContent: 'center',
           background: '#0c0d0a',
           color: '#f0efe8',
-          fontFamily:
-            "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
+          fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif",
           padding: '24px',
         }}
       >
@@ -130,9 +152,8 @@ export default function GlobalError({
               lineHeight: 1.6,
             }}
           >
-            Try again. If it keeps happening, fully refresh (Cmd/Ctrl+Shift+R)
-            or sign out and back in. Your data is safe — this is a render
-            error, not a data error.
+            Try again. If it keeps happening, fully refresh (Cmd/Ctrl+Shift+R) or sign out and back
+            in. Your data is safe — this is a render error, not a data error.
           </p>
           {error?.digest && (
             <p
@@ -203,6 +224,28 @@ export default function GlobalError({
             >
               Sign out and back in
             </button>
+            {glassStored ? (
+              <button
+                type="button"
+                onClick={() => {
+                  switchToClassicOnThisDevice();
+                  window.location.reload();
+                }}
+                style={{
+                  background: 'transparent',
+                  color: '#d8d6cc',
+                  border: '1px solid #1f201b',
+                  borderRadius: 6,
+                  padding: '7px 12px',
+                  fontFamily: 'inherit',
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: 'pointer',
+                }}
+              >
+                Use classic appearance
+              </button>
+            ) : null}
           </div>
         </div>
       </body>

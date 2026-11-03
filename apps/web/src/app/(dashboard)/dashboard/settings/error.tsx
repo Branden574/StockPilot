@@ -12,6 +12,7 @@ import {
   SETTINGS_NAV_GROUPS,
   SettingsPage,
 } from '@/components/settings/settings-nav';
+import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
 // The isomorphic reporter: this module is in a browser bundle, and
 // @/lib/error-reporter is server-only (see error-reporter-core.ts).
@@ -80,9 +81,13 @@ export default function SettingsError({
           </>
         }
         action={
-          <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
-            <RefreshCw aria-hidden /> Try again
-          </Button>
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
+              <RefreshCw aria-hidden /> Try again
+            </Button>
+            {/* Only while Liquid Glass is selected; nothing in the classic looks. */}
+            <AppearanceRecovery size="sm" />
+          </>
         }
       />
     </SettingsPage>
