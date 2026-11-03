@@ -15,9 +15,12 @@
         "/p/items/[id]",
         "/m/[token]",
         "/returns/request/[token]",
-        "/orders/sign/[token]"
+        "/orders/sign/[token]",
+        "/r/[token]",
+        "/r/track",
+        "/r/confirm"
       ],
-      "$comment": "ExternalShell draws the corner only in its page frame when the page passes no top bar. /invite/[token] and /onboarding pass a top bar that already holds the menu; /r/[token], /r/track and /r/confirm render frame=\"column\" inside app/r/layout.tsx, so the corner does not reach them.",
+      "$comment": "ExternalAppearanceCorner. ExternalShell draws it in its page frame when the page passes no top bar; app/r/layout.tsx draws it for /r/[token], /r/track and /r/confirm, whose columns use frame=\"column\" inside that layout. /invite/[token] and /onboarding pass a top bar that already holds the menu.",
       "classicTwin": null,
       "gate": null
     }

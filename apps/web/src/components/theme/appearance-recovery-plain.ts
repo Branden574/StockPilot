@@ -73,12 +73,23 @@ export function isGlassShown(
 /**
  * Set this device's Design to Classic and keep its Theme: the device record
  * (v2) and the Design cookie, then the server route that re-issues the cookie
- * for 400 days (fire-and-forget). For the signed-in person (a v2 sync record
- * naming them), the Design is marked dirty so the account is updated after
- * the reload. The crash fallback is cleared and the glass attributes come off
- * <html>. The caller reloads. Never throws.
+ * for 400 days (fire-and-forget). The crash fallback is cleared and the glass
+ * attributes come off <html>. The caller reloads. Never throws.
+ *
+ * The account (R4, SR1, SR4; item 12). `signedInUserId` is the person the
+ * caller knows to be signed in: the provider's, which a page named
+ * (<AppearanceAccountSync>), or null when the caller cannot know
+ * (global-error.tsx, a signed-out page). A sync record naming that person gets
+ * the Design marked dirty, so their account is updated after the reload. A
+ * sync record naming anyone else is no proof that they are signed in: it
+ * outlives every session end that does not forget the account (the error
+ * card's Sign out and back in, an expired session), and its person's next
+ * sign-in pushes a dirty axis without reading the row. So it is never marked
+ * dirty here, and a Design flag it had is dropped, because the Design on this
+ * device is no longer that person's choice. Its Theme flag stays (the Theme is
+ * kept).
  */
-export function switchToClassicOnThisDevice(): void {
+export function switchToClassicOnThisDevice(signedInUserId: string | null = null): void {
   // The record: Classic, the Theme kept. A signed-out stamp is dropped: this
   // is a recovery, not a choice to carry into a sign-in.
   try {
@@ -122,8 +133,13 @@ export function switchToClassicOnThisDevice(): void {
     const sync = readJson(window.localStorage, SYNC);
     if (sync && sync.v === 2 && typeof sync.userId === 'string' && UUID.test(sync.userId)) {
       const axes = Array.isArray(sync.dirtyAxes) ? sync.dirtyAxes : [];
-      const dirtyAxes = ['style', 'theme'].filter((a) => a === 'style' || axes.includes(a));
-      window.localStorage.setItem(SYNC, JSON.stringify({ ...sync, dirtyAxes }));
+      if (sync.userId === signedInUserId) {
+        const dirtyAxes = ['style', 'theme'].filter((a) => a === 'style' || axes.includes(a));
+        window.localStorage.setItem(SYNC, JSON.stringify({ ...sync, dirtyAxes }));
+      } else if (axes.includes('style')) {
+        const dirtyAxes = ['theme'].filter((a) => axes.includes(a));
+        window.localStorage.setItem(SYNC, JSON.stringify({ ...sync, dirtyAxes }));
+      }
     }
   } catch {
     // Storage blocked: the device record and cookie carry the choice.
@@ -139,6 +155,24 @@ export function switchToClassicOnThisDevice(): void {
   } catch {
     // Nothing to remove.
   }
+}
+
+/**
+ * Whether an error boundary's error came from a server render: Next stamps a
+ * `digest` on every error thrown while rendering on the server (React Server
+ * Components and the HTML render alike, next/dist/server/app-render/
+ * create-error-handler.js); an error a component throws in the browser has
+ * none (the browser's own digests mark Next's redirect and not-found signals,
+ * which its boundaries rethrow before an error page renders). No server code
+ * reads the appearance (appearance-render.guard.test.ts), so a server render
+ * is the same in every design and its error was never caused by Liquid Glass:
+ * it does not hold the tab in classic (the one-time crash fallback, plan 5.6).
+ * Use classic design is still offered.
+ */
+export function isServerRenderError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const digest = (error as { digest?: unknown }).digest;
+  return typeof digest === 'string' && digest !== '';
 }
 
 /**

@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { isLiquidGlassEnabled } from '@/components/theme/appearance-flag';
+
 /**
  * Imperative handle exposed to the form wrapper. `isEmpty()` lets the
  * parent validate before submit; `toDataURL()` extracts the PNG payload;
@@ -336,7 +338,9 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
         data-slot="signature-pad"
         // Liquid Glass leaves the pad as it is: its classic tokens are declared
         // again inside it (tokens.generated.css, plans/REVISION-DEFAULT.md R6).
-        data-appearance-exempt=""
+        // Only in a build with Liquid Glass: under `off` the pad is today's
+        // markup (R5).
+        data-appearance-exempt={isLiquidGlassEnabled() ? '' : undefined}
         className={['w-full', className ?? ''].filter(Boolean).join(' ')}
       >
         <div

@@ -320,14 +320,15 @@ export function noteGlassCrash(): boolean {
 
 /**
  * The "Use classic design" recovery action (plan 5.6, R13): the Design
- * becomes Classic on this device and the Theme is kept; the account sync
- * record marks the Design dirty so the account is updated after the reload;
- * the crash fallback is cleared and the glass attributes come off <html>. One
+ * becomes Classic on this device and the Theme is kept; for the signed-in
+ * person the caller names (and only for them), the account sync record marks
+ * the Design dirty so the account is updated after the reload; the crash
+ * fallback is cleared and the glass attributes come off <html>. One
  * implementation, in appearance-recovery-plain.ts, which imports nothing so
  * app/global-error.tsx can use it too. The caller reloads.
  */
-export function chooseClassicFromRecovery(): void {
-  switchToClassicOnThisDevice();
+export function chooseClassicFromRecovery(signedInUserId: string | null = null): void {
+  switchToClassicOnThisDevice(signedInUserId);
 }
 
 /**

@@ -24,7 +24,9 @@ import { cn } from '@/lib/utils';
  *   no top bar gets the header appearance menu in a small corner that exists
  *   only in glass (`data-glass-only`, hidden in classic by
  *   styles/liquid-glass/visibility.css). Under the `off` rollout it is not
- *   rendered at all, so the frame is today's markup.
+ *   rendered at all, so the frame is today's markup. A layout that draws the
+ *   page itself around `frame="column"` pages (app/r/layout.tsx) renders the
+ *   same corner (ExternalAppearanceCorner).
  */
 
 const WIDTH = {
@@ -103,11 +105,22 @@ export function ExternalShell({
       ) : null}
       {column}
       {poweredBy ? <ExternalFooter className={WIDTH[width]} /> : null}
-      {!topBar && liquidGlassRollout() !== 'off' ? (
-        <div data-slot="external-appearance" data-glass-only="" className="absolute right-3 top-3">
-          <ThemeToggle />
-        </div>
-      ) : null}
+      {topBar ? null : <ExternalAppearanceCorner />}
+    </div>
+  );
+}
+
+/**
+ * The header appearance menu (Design and Theme) in a small top-right corner
+ * that exists only in glass (R13): the way back to Classic on a page with no
+ * header menu of its own. Nothing at all under the `off` rollout. Listed in
+ * tests/e2e/appearance/glass-only-allowlist.json ("appearance control").
+ */
+export function ExternalAppearanceCorner() {
+  if (liquidGlassRollout() === 'off') return null;
+  return (
+    <div data-slot="external-appearance" data-glass-only="" className="absolute right-3 top-3">
+      <ThemeToggle />
     </div>
   );
 }

@@ -7,11 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The header appearance menu (plans/REVISION-DEFAULT.md R1, R5, R13; section 9
- * items 17, 18, 40): with Liquid Glass in the build, "Appearance" with the
- * Design group (Liquid Glass, Classic) and the Theme group (Light, Dark,
- * System), every option a word, the one in use announced as checked, operable
- * from the keyboard, the Theme through the provider. Under `off`: origin/main's
- * three items, byte for byte.
+ * items 17, 18, 40): with Liquid Glass in the build, the Design group (Liquid
+ * Glass, Classic; the Design in use announced as checked) in front of
+ * origin/main's three Theme items, which keep their words and markup and go
+ * through the provider (R13, round 2 finding 9). The Design group is the
+ * menu's only difference from today (R5, item 46a), so a Classic chooser's
+ * menu is origin/main's apart from it. Operable from the keyboard. Under
+ * `off`: origin/main's three items, byte for byte.
  */
 
 vi.mock('@/server/actions/appearance', () => ({
@@ -116,26 +118,52 @@ describe('the options', () => {
   });
 });
 
+/** Open the menu of `node` and return its trigger and menu, Radix ids normalised. */
+async function openMenu(node: React.ReactNode) {
+  const user = userEvent.setup();
+  const view = render(<Header>{node}</Header>);
+  const trigger = screen.getByRole('button', { name: 'Toggle theme' });
+  await user.click(trigger);
+  const menu = (await screen.findByRole('menu')).cloneNode(true) as HTMLElement;
+  const triggerHtml = trigger.outerHTML.replace(/radix-[^"\s]+/gu, 'radix-id');
+  view.unmount();
+  return { trigger: triggerHtml, menu };
+}
+const markup = (el: Element) => el.outerHTML.replace(/radix-[^"\s]+/gu, 'radix-id');
+
 describe('the header appearance menu', () => {
-  it('keeps its trigger; lists the Design group, then the Theme group, as words, the ones in use checked', async () => {
+  it('keeps its trigger; lists the Design group, as words with the one in use checked, then the three Theme items', async () => {
     localStorage.setItem('theme', 'dark');
     const user = userEvent.setup();
     render(<Header />);
     await user.click(screen.getByRole('button', { name: 'Toggle theme' }));
     const design = await screen.findByRole('group', { name: 'Design' });
-    const theme = screen.getByRole('group', { name: 'Theme' });
     expect(radios(design)).toEqual([
       ['Liquid Glass', 'true'],
       ['Classic', 'false'],
     ]);
-    expect(radios(theme)).toEqual([
-      ['Light', 'false'],
-      ['Dark', 'true'],
-      ['System', 'false'],
-    ]);
-    expect(screen.getByText('Appearance')).toBeInTheDocument();
-    expect(design.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const themes = screen.getAllByRole('menuitem').map((i) => i.textContent);
+    expect(themes).toEqual(['Light', 'Dark', 'System']);
+    const light = screen.getByRole('menuitem', { name: 'Light' });
+    expect(design.compareDocumentPosition(light) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
+
+  it.each(['default', 'opt-in'])(
+    '%s: the open menu is origin/main’s, with only the Design group (its label, its two radios, a separator) in front (R5, R13)',
+    async (rollout) => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      const current = await openMenu(<ThemeToggle />);
+      const origin = await openMenu(<OriginThemeToggle />);
+      expect(current.trigger).toBe(origin.trigger);
+      const [label, group, separator] = Array.from(current.menu.children);
+      expect(label?.textContent).toBe('Design');
+      expect(group?.getAttribute('role')).toBe('group');
+      expect(group?.getAttribute('aria-label')).toBe('Design');
+      expect(separator?.getAttribute('role')).toBe('separator');
+      for (const el of [label, group, separator]) el?.remove();
+      expect(markup(current.menu)).toBe(markup(origin.menu));
+    },
+  );
 
   it('chooses Classic from the keyboard, and the Theme stays', async () => {
     localStorage.setItem('theme', 'dark');
@@ -163,7 +191,7 @@ describe('the header appearance menu', () => {
     const user = userEvent.setup();
     render(<Header />);
     await user.click(screen.getByRole('button', { name: 'Toggle theme' }));
-    await user.click(await screen.findByRole('menuitemradio', { name: 'Light' }));
+    await user.click(await screen.findByRole('menuitem', { name: 'Light' }));
     await waitFor(() => expect(localStorage.getItem('theme')).toBe('light'));
     expect(JSON.parse(localStorage.getItem('sp-appearance')!)).toMatchObject({ theme: 'light' });
   });

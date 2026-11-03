@@ -59,7 +59,7 @@ export default function BookOrderTotalsError({
               <RefreshCw aria-hidden /> {BOOK_REPORT_UI.tryAgain}
             </Button>
             {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
-            <AppearanceRecovery size="sm" />
+            <AppearanceRecovery error={error} size="sm" />
           </>
         }
       />

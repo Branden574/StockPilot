@@ -55,7 +55,7 @@ export default function GlobalError({
         Try again
       </Button>
       {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
-      <AppearanceRecovery />
+      <AppearanceRecovery error={error} />
     </div>
   );
 }

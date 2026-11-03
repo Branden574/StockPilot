@@ -4,6 +4,7 @@ import { Printer } from 'lucide-react';
 import * as React from 'react';
 
 import { StatePanel } from '@/components/patterns/state-panel';
+import { isLiquidGlassEnabled } from '@/components/theme/appearance-flag';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -228,7 +229,9 @@ function PreviewWell({ children }: { children: React.ReactNode }) {
       data-slot="label-sheet-preview"
       // Liquid Glass leaves the sheet as it is: its classic tokens are
       // declared again inside it (tokens.generated.css, REVISION-DEFAULT R6).
-      data-appearance-exempt=""
+      // Only in a build with Liquid Glass: under `off` the sheet is today's
+      // markup (R5).
+      data-appearance-exempt={isLiquidGlassEnabled() ? '' : undefined}
       role={overflows ? 'region' : undefined}
       aria-label={overflows ? 'Label sheet preview' : undefined}
       tabIndex={stop ? 0 : undefined}

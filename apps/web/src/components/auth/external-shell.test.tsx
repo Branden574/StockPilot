@@ -128,7 +128,7 @@ describe('ExternalShell: the way back to Classic (plans/REVISION-DEFAULT.md R13,
     expect(slot(container)).toBeNull();
   });
 
-  it('a column inside a layout that draws the page gets no corner', () => {
+  it('a column inside a layout that draws the page gets no corner of its own (that layout draws it: app/r/layout.tsx)', () => {
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
     const { container } = render(
       <ExternalShell frame="column" as="div">

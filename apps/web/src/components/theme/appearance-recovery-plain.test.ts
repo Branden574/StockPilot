@@ -3,12 +3,18 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { APPEARANCE_STORAGE_KEYS, GLASS_ROLLOUTS } from '@stockpilot/core';
+import {
+  APPEARANCE_STORAGE_KEYS,
+  GLASS_ROLLOUTS,
+  INITIAL_APPEARANCE_STATE,
+  reduceAppearance,
+} from '@stockpilot/core';
 
 import { EXEMPT_PATHS } from './appearance-flag';
 import {
   holdClassicForThisTab,
   isGlassShown,
+  isServerRenderError,
   readStyleCookie,
   switchToClassicOnThisDevice,
 } from './appearance-recovery-plain';
@@ -17,7 +23,9 @@ import {
  * "Use classic design" with no imports (plans/REVISION-DEFAULT.md R13, item
  * 12), shared by every error boundary, global-error.tsx included. It sets the
  * Design to Classic (record, cookie, then the server route), keeps the Theme,
- * marks the Design dirty for the signed-in person, and clears the fallback.
+ * marks the Design dirty only for the signed-in person its caller names (never
+ * for whoever a leftover sync record names: R4, SR1, SR4), and clears the
+ * fallback.
  * Its written-out keys and its print-route pattern must stay core's and the
  * flag module's (read from the file's text, since it may import nothing).
  */
@@ -126,7 +134,7 @@ describe('appearance-recovery-plain', () => {
     expect(JSON.parse(localStorage.getItem('sp-appearance')!)).toEqual({ v: 2, style: 'classic' });
   });
 
-  it('marks the Design dirty for the signed-in person, keeping what the record already said', () => {
+  it('marks the Design dirty for the signed-in person its caller names, keeping what the record already said', () => {
     localStorage.setItem(
       'sp-appearance-sync',
       JSON.stringify({
@@ -136,12 +144,61 @@ describe('appearance-recovery-plain', () => {
         syncedAt: '2026-11-02T10:00:00.000001+00:00',
       }),
     );
-    switchToClassicOnThisDevice();
+    switchToClassicOnThisDevice(USER);
     expect(JSON.parse(localStorage.getItem('sp-appearance-sync')!)).toEqual({
       v: 2,
       userId: USER,
       dirtyAxes: ['style', 'theme'],
       syncedAt: '2026-11-02T10:00:00.000001+00:00',
+    });
+  });
+
+  describe('a sync record its caller did not name (it can outlive its session: R4, SR1, SR4)', () => {
+    const SYNCED = '2026-11-02T10:00:00.000001+00:00';
+    const OTHER = '22222222-2222-4222-8222-222222222222';
+    const lingering = (dirtyAxes: string[]) =>
+      JSON.stringify({ v: 2, userId: USER, dirtyAxes, syncedAt: SYNCED });
+
+    it('is never marked dirty when the caller names nobody (a signed-out page, global-error) or someone else', () => {
+      for (const named of [undefined, null, OTHER]) {
+        localStorage.setItem('sp-appearance-sync', lingering([]));
+        switchToClassicOnThisDevice(named);
+        expect(localStorage.getItem('sp-appearance-sync')).toBe(lingering([]));
+      }
+    });
+
+    it('loses its Design flag (the Design on this device is no longer that person’s choice) and keeps its Theme flag', () => {
+      localStorage.setItem('sp-appearance-sync', lingering(['style', 'theme']));
+      switchToClassicOnThisDevice();
+      expect(JSON.parse(localStorage.getItem('sp-appearance-sync')!)).toEqual({
+        v: 2,
+        userId: USER,
+        dirtyAxes: ['theme'],
+        syncedAt: SYNCED,
+      });
+    });
+
+    it('so the person it names never has this device’s Classic pushed to their account unread at their next sign-in', () => {
+      // Person A synced here; their session then ended without a sign-out
+      // that forgets the account (the error card's "Sign out and back in",
+      // an expired session). Someone else, signed out, presses Use classic
+      // design on an error page.
+      localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'liquid-glass' }));
+      localStorage.setItem('sp-appearance-sync', lingering([]));
+      switchToClassicOnThisDevice();
+      // A signs in on this browser later: the provider hydrates, then the
+      // dashboard shell names A.
+      const now = Date.parse('2026-11-03T12:00:00Z');
+      const hydrated = reduceAppearance(INITIAL_APPEARANCE_STATE, {
+        type: 'hydrate',
+        device: localStorage.getItem('sp-appearance'),
+        sync: localStorage.getItem('sp-appearance-sync'),
+        anonFlow: null,
+        now,
+      });
+      const signIn = reduceAppearance(hydrated.state, { type: 'authenticated', userId: USER, now });
+      expect(signIn.effects.filter((e) => e.type === 'save')).toEqual([]);
+      expect(signIn.effects).toContainEqual({ type: 'fetch', userId: USER, gen: 0 });
     });
   });
 
@@ -170,6 +227,16 @@ describe('appearance-recovery-plain', () => {
     switchToClassicOnThisDevice();
     expect(real.getItem('sp-appearance')).toBeNull();
     expect(readStyleCookie()).toBe('classic');
+  });
+
+  it('tells a server render error (Next stamps a digest on it) from one thrown in the browser', () => {
+    expect(isServerRenderError(Object.assign(new Error('x'), { digest: '2938471' }))).toBe(true);
+    expect(isServerRenderError(new Error('x'))).toBe(false);
+    expect(isServerRenderError(Object.assign(new Error('x'), { digest: '' }))).toBe(false);
+    expect(isServerRenderError(Object.assign(new Error('x'), { digest: 42 }))).toBe(false);
+    expect(isServerRenderError('boom')).toBe(false);
+    expect(isServerRenderError(null)).toBe(false);
+    expect(isServerRenderError(undefined)).toBe(false);
   });
 
   it('holds the tab in classic once without touching the stored choice', () => {

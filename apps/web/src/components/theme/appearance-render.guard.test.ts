@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
  * the appearance. A page that rendered one tree in classic and another in glass
  * would unmount every stateful leaf (typed values, selection, open dialogs) on
  * a switch, and a server read of the cookie would make static pages dynamic.
- * So useAppearance() may be imported only by the appearance modules, the
+ * So useAppearance(), and the selectors' useAppearanceChoice() (which returns
+ * the Design on screen), may be used only by the appearance modules, the
  * selectors and the error-boundary recovery; no file outside
  * components/theme reads the sp_style cookie or the data-appearance
  * attribute, except the dashboard's own sidebar breakpoint helper when it
@@ -44,9 +45,19 @@ const FILES = walk(SRC).map((f) => ({
   text: withoutComments(readFileSync(f, 'utf8')),
 }));
 
+/** Either appearance hook: the provider's own, or the selectors' (appearance-select.tsx). */
+const USES_APPEARANCE = /\buseAppearance(?:Choice)?\b/u;
+
 const MAY_USE_APPEARANCE = new Set([
+  // The appearance modules.
   'components/theme/appearance-provider.tsx',
   'components/theme/appearance-select.tsx',
+  // The selectors: they read the choices to mark the one in use, and branch
+  // nothing else on them.
+  'components/theme/theme-toggle.tsx',
+  'components/dashboard/user-menu.tsx',
+  'components/settings/appearance-panel.tsx',
+  // The error boundaries' Use classic design.
   'components/theme/appearance-recovery.tsx',
 ]);
 
@@ -55,8 +66,18 @@ describe('appearance render guard', () => {
     expect(FILES.length).toBeGreaterThan(500);
   });
 
-  it('useAppearance() is used only by the appearance modules, the selectors and the recovery', () => {
-    const users = FILES.filter(({ text }) => /\buseAppearance\b/.test(text)).map((f) => f.file);
+  it('the hook check sees both hooks: useAppearance() and the selectors’ useAppearanceChoice()', () => {
+    // useAppearanceChoice() returns the Design on screen (`style`): a page
+    // that branched its tree on it would remount every stateful leaf on a
+    // switch, exactly what this guard exists to stop.
+    expect(USES_APPEARANCE.test('const a = useAppearance();')).toBe(true);
+    expect(USES_APPEARANCE.test('const { style } = useAppearanceChoice();')).toBe(true);
+    expect(USES_APPEARANCE.test('import { useAppearanceChoice } from "x";')).toBe(true);
+    expect(USES_APPEARANCE.test('const a = useAppearances();')).toBe(false);
+  });
+
+  it('useAppearance() and useAppearanceChoice() are used only by the appearance modules, the selectors and the recovery', () => {
+    const users = FILES.filter(({ text }) => USES_APPEARANCE.test(text)).map((f) => f.file);
     expect(users.filter((f) => !MAY_USE_APPEARANCE.has(f))).toEqual([]);
   });
 

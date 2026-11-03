@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 
-import { ExternalFooter } from '@/components/auth/external-shell';
+import { ExternalAppearanceCorner, ExternalFooter } from '@/components/auth/external-shell';
 
 // P4: /r/<token> shares the internal storefront's design system.
 // storefront.css scopes every rule under .sp-storefront and the sfp-*
@@ -20,6 +20,12 @@ import '@/components/orders/public-v2/public-orders.css';
  *
  * The root layout still wraps this in <html>/<body> + theme provider +
  * Toaster, so toasts surface and dark mode just works.
+ *
+ * The way back to Classic (plans/REVISION-DEFAULT.md R13): these pages draw
+ * their column inside this layout (ExternalShell frame="column"), which never
+ * reaches the external shell's own corner, so the layout renders the same
+ * glass-only appearance corner. It exists only in glass; under the `off`
+ * rollout nothing is rendered.
  */
 export default function PublicOrderRequestLayout({ children }: { children: ReactNode }) {
   return (
@@ -39,6 +45,7 @@ export default function PublicOrderRequestLayout({ children }: { children: React
           own md column (the ExternalShell column). */}
       <main className="mx-auto w-full max-w-[1480px] px-4 py-8 sm:px-6 sm:py-10">{children}</main>
       <ExternalFooter className="max-w-[1480px]" />
+      <ExternalAppearanceCorner />
     </div>
   );
 }

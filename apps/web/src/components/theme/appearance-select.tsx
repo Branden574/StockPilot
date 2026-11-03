@@ -13,12 +13,7 @@ import {
   type ThemeSetting,
 } from '@stockpilot/core';
 
-import {
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-} from '@/components/ui/dropdown-menu';
+import { DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
 
 import { liquidGlassRollout } from './appearance-flag';
 import { useAppearance } from './appearance-provider';
@@ -26,17 +21,19 @@ import { useAppearance } from './appearance-provider';
 /**
  * The appearance selector (plans/REVISION-DEFAULT.md R1, R13; brief section
  * 4) in its places: the account menu (user-menu.tsx), the header icon menu
- * (theme-toggle.tsx), the external pages' corner menu (external-shell.tsx)
+ * (theme-toggle.tsx, also in the external pages' corner: external-shell.tsx)
  * and Settings > Profile (components/settings/appearance-panel.tsx). Two
- * groups, everywhere, Design first:
+ * choices, everywhere, Design first:
  *
  *   Design   Liquid Glass, Classic
  *   Theme    Light, Dark, System
  *
  * Switching the Design never changes the Theme. Every Theme control goes
  * through the provider's chooseTheme (round 2, finding 9), so a Theme picked
- * anywhere is the person's own and is saved. Every option is a word, never an
- * icon alone; the choice in use is announced as checked.
+ * anywhere is the person's own and is saved. In the two menus the Theme
+ * controls keep origin/main's words and markup, so a Classic chooser's menu
+ * differs from today only by the Design group (R5). Every option is a word,
+ * never an icon alone; the Design in use is announced as checked.
  *
  * Under the `off` rollout none of this renders: the menus show origin/main's
  * Theme-only markup verbatim (theme-toggle.tsx, user-menu.tsx) and Settings >
@@ -169,48 +166,5 @@ export function AppearanceDesignRadioGroup({ itemClassName, withIcons = false }:
         </DropdownMenuRadioItem>
       ))}
     </DropdownMenuRadioGroup>
-  );
-}
-
-/** The Theme radio items for a dropdown menu, through the provider's chooseTheme. */
-export function AppearanceThemeRadioGroup({ itemClassName, withIcons = false }: RadioGroupProps) {
-  const { theme, chooseTheme } = useAppearanceChoice();
-  return (
-    <DropdownMenuRadioGroup
-      aria-label="Theme"
-      value={theme}
-      onValueChange={(next) => {
-        const value = parseThemeSetting(next);
-        if (value) chooseTheme(value);
-      }}
-    >
-      {THEME_OPTIONS.map(({ value, label, icon: Icon }) => (
-        <DropdownMenuRadioItem key={value} value={value} className={itemClassName}>
-          {withIcons ? <Icon className="mr-2 h-4 w-4" aria-hidden="true" /> : null}
-          {label}
-        </DropdownMenuRadioItem>
-      ))}
-    </DropdownMenuRadioGroup>
-  );
-}
-
-/**
- * Both groups for a dropdown menu: "Design", a separator, "Theme". Renders
- * nothing under the `off` rollout (the menus keep origin/main's markup then).
- */
-export function AppearanceMenuGroups({
-  itemClassName,
-  labelClassName,
-  withIcons = false,
-}: RadioGroupProps & { labelClassName?: string }) {
-  if (liquidGlassRollout() === 'off') return null;
-  return (
-    <>
-      <DropdownMenuLabel className={labelClassName}>Design</DropdownMenuLabel>
-      <AppearanceDesignRadioGroup itemClassName={itemClassName} withIcons={withIcons} />
-      <DropdownMenuSeparator />
-      <DropdownMenuLabel className={labelClassName}>Theme</DropdownMenuLabel>
-      <AppearanceThemeRadioGroup itemClassName={itemClassName} withIcons={withIcons} />
-    </>
   );
 }

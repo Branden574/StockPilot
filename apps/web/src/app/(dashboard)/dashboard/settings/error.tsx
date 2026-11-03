@@ -86,7 +86,7 @@ export default function SettingsError({
               <RefreshCw aria-hidden /> Try again
             </Button>
             {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
-            <AppearanceRecovery size="sm" />
+            <AppearanceRecovery error={error} size="sm" />
           </>
         }
       />

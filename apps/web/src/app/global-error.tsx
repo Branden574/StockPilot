@@ -5,6 +5,7 @@ import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import {
   holdClassicForThisTab,
   isGlassShown,
+  isServerRenderError,
   readStyleCookie,
   switchToClassicOnThisDevice,
 } from '@/components/theme/appearance-recovery-plain';
@@ -72,16 +73,20 @@ export default function GlobalError({
   // offered when the next load would paint glass, from the inlined rollout,
   // the Design cookie and the path (never the print route), read after mount
   // so the classic page is unchanged. This document is already classic; the
-  // next load would not be, so this tab is held in classic once and the
-  // button sets the Design to Classic for good (the Theme is kept).
+  // next load would not be, so this tab is held in classic once (unless the
+  // root layout failed on the server, which renders the same in every design)
+  // and the button sets the Design to Classic for good (the Theme is kept).
+  // This page sits outside every provider and cannot know who is signed in,
+  // so the account is not marked (appearance-recovery-plain.ts).
   const glassShown = React.useSyncExternalStore(
     subscribeToNothing,
     () => isGlassShown(liquidGlassRollout(), readStyleCookie(), window.location.pathname),
     () => false,
   );
+  const fromServer = isServerRenderError(error);
   React.useEffect(() => {
-    if (glassShown) holdClassicForThisTab();
-  }, [glassShown]);
+    if (glassShown && !fromServer) holdClassicForThisTab();
+  }, [glassShown, fromServer]);
 
   React.useEffect(() => {
     // Best-effort report; we don't bring in the error-reporter module
@@ -230,7 +235,7 @@ export default function GlobalError({
               <button
                 type="button"
                 onClick={() => {
-                  switchToClassicOnThisDevice();
+                  switchToClassicOnThisDevice(null);
                   window.location.reload();
                 }}
                 style={{

@@ -99,7 +99,7 @@ export default function DashboardError({
             Sign out and back in
           </Button>
           {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
-          <AppearanceRecovery />
+          <AppearanceRecovery error={error} />
         </div>
       </div>
     </div>

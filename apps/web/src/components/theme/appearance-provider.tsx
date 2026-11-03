@@ -124,6 +124,13 @@ export interface AppearanceContextValue {
   status: AppearanceSyncStatus;
   /** Try the account save again. */
   retry: () => void;
+  /**
+   * The signed-in person a page named (<AppearanceAccountSync>: the dashboard
+   * shell, the portal), or null when none did. Read when needed: the error
+   * boundaries' Use classic design marks the Design dirty for this person
+   * only, never for whoever a leftover sync record names (R4, SR1, SR4).
+   */
+  signedInUserId: () => string | null;
 }
 
 const AppearanceContext = React.createContext<AppearanceContextValue | null>(null);
@@ -437,6 +444,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     dispatch({ type: 'retry', userId: userIdRef.current });
   }, [dispatch]);
 
+  const signedInUserId = React.useCallback(() => (inert ? null : userIdRef.current), [inert]);
+
   const account = React.useMemo<AccountApi>(
     () => ({
       authenticate: (userId) => {
@@ -555,6 +564,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
             keepGlass: noop,
             status: 'signed-out',
             retry: noop,
+            signedInUserId,
           }
         : {
             hydrated,
@@ -567,6 +577,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
             keepGlass,
             status: snapshot.status,
             retry,
+            signedInUserId,
           },
     [
       inert,
@@ -580,6 +591,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       chooseTheme,
       keepGlass,
       retry,
+      signedInUserId,
     ],
   );
 
