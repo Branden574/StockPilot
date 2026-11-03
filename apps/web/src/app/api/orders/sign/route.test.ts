@@ -79,6 +79,7 @@ vi.mock('@/server/services/order-requests', () => ({
 }));
 
 import { reportError } from '@/lib/error-reporter';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { dispatchEvent } from '@/server/services/integration-events';
 
 import { POST } from './route';
@@ -629,5 +630,34 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
     };
     expect(args.unitsShipped).toBeNull();
     expect(reportedTags()).toContain('orders.sign.line_totals_read');
+  });
+});
+
+// S31: without the service-role key the route answered the setting's name
+// ("Server is missing SUPABASE_SERVICE_ROLE_KEY ..."), to the public signing
+// page and the phone. It says the feature is not set up now, and the report
+// names the setting.
+describe('POST /api/orders/sign — a server without the service-role key (S31)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('answers 500 with the not-set-up sentence, never the setting, reported as a warning', async () => {
+    const missing = new Error('SUPABASE_SERVICE_ROLE_KEY is not configured');
+    vi.mocked(createAdminClient).mockImplementationOnce(() => {
+      throw missing;
+    });
+    const res = await POST(request());
+    expect(res.status).toBe(500);
+    const text = await res.text();
+    expect(JSON.parse(text)).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'This feature is not set up yet.' },
+    });
+    expect(text).not.toMatch(/SUPABASE|KEY/);
+    expect(reportError).toHaveBeenCalledWith(missing, {
+      tag: 'orders.sign.admin_client',
+      level: 'warning',
+    });
   });
 });

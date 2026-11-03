@@ -50,7 +50,12 @@ vi.mock('@/lib/auth/warehouse', () => ({
   getWarehouseAccess: vi.fn(async () => ({ hasAllAccess: true, writableIds: [] })),
 }));
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async () => ({ enabled: false, canManage: false })),
+  // Orders, the page's own module, is on (the page checks it before it reads,
+  // B66); Lots and serials is off.
+  checkModuleAccess: vi.fn(async (moduleId: string) => ({
+    enabled: moduleId === 'orders',
+    canManage: false,
+  })),
 }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => {

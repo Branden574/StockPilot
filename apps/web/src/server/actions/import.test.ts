@@ -10,6 +10,7 @@ vi.mock('next/cache', () => ({
 vi.mock('@/server/loaders/inventory-list', () => ({
   revalidateInventoryListForCurrentOrg: vi.fn(async () => {}),
 }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 const WAREHOUSE_A = '11111111-1111-4111-8111-111111111111';
 const WAREHOUSE_B = '22222222-2222-4222-8222-222222222222';
@@ -110,6 +111,8 @@ vi.mock('@/server/services/item-imports', async (importOriginal) => {
   };
 });
 
+import { reportError } from '@/lib/error-reporter';
+import { ServiceError } from '@/server/services/context';
 import { ItemImportBatchesService } from '@/server/services/item-imports';
 
 import { importItemsAction, prepareItemImportAction } from './import';
@@ -881,5 +884,48 @@ describe('importItemsAction — the plan limit survives concurrency', () => {
     if (!res.ok) return;
     expect(res.data.created).toBe(12);
     expect(orgItemCount).toBe(22);
+  });
+});
+
+// S31: a row that failed for a reason the app did not write showed the
+// error's own text on the import screen (Postgres text, a TypeError), and
+// nothing was reported. Each such row says the fixed sentence now, and the
+// run sends one report.
+describe("importItemsAction — a failed row never shows the error's text (S31)", () => {
+  it('three unexpected failures: the fixed sentence on each, ONE report; a refusal keeps its words', async () => {
+    const first = new Error('null value in column "unit_of_measure" of relation "inventory_items"');
+    mockCreate.mockImplementation(async (input: Record<string, unknown>) => {
+      switch (input.name) {
+        case 'Item 1':
+          throw first;
+        case 'Item 2':
+          throw new TypeError("Cannot read properties of undefined (reading 'id')");
+        case 'Item 3':
+          throw new Error('canceling statement due to statement timeout');
+        case 'Item 4':
+          throw new ServiceError('conflict', 'An item with that SKU already exists.');
+        default:
+          return { id: 'itm-1' };
+      }
+    });
+    const res = await importItemsAction({
+      rows: [1, 2, 3, 4, 5].map((n) => ({ name: `Item ${n}`, sku: `SKU-${n}` })),
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.data.created).toBe(1);
+    expect(res.data.errors).toEqual([
+      { row: 2, message: 'Could not import this row.' },
+      { row: 3, message: 'Could not import this row.' },
+      { row: 4, message: 'Could not import this row.' },
+      { row: 5, message: 'An item with that SKU already exists.' },
+    ]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(first, {
+      tag: 'actions.import.rows',
+      organizationId: 'org-1',
+      extra: { failed: 3 },
+    });
   });
 });

@@ -10,8 +10,14 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
+import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { ServiceError } from '@/server/services/context';
 import { SESSION_CHANGED } from '@/server/services/step-up-held';
+import {
+  actionErrorResult,
+  NOT_SET_UP_MESSAGE,
+  unexpectedActionError,
+} from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -59,12 +65,18 @@ export async function generateMfaRecoveryCodesAction(): Promise<
     );
     if (error) throw new ServiceError('internal_error', error.message);
     const codes = ((data ?? []) as Array<{ code: string }>).map((r) => r.code);
+    // How many codes, never which.
+    const { organizationId } = await resolveDefaultOrgAndRole(session.userId);
+    await emitAuthAudit({
+      event: 'mfa.recovery.generated',
+      userId: session.userId,
+      organizationId,
+      extra: { count: codes.length },
+    });
     revalidatePath('/dashboard/settings/security');
     return ok({ codes });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.mfa_recovery.generate_mfa_recovery_codes');
   }
 }
 
@@ -169,17 +181,31 @@ export async function consumeMfaRecoveryCodeAction(input: {
       { p_code: input.code },
     );
     if (error) throw new ServiceError('internal_error', error.message);
-    if (!ok_) return err('validation_error', 'That recovery code is invalid or already used.');
+    if (!ok_) {
+      // No organization, like a refused authenticator code (mfa.code_refused):
+      // not shown to the organization's admins, never the person's own last
+      // action. Never the code.
+      await emitAuthAudit({
+        event: 'mfa.recovery.failed',
+        userId: session.userId,
+        organizationId: null,
+      });
+      return err('validation_error', 'That recovery code is invalid or already used.');
+    }
 
     // Unenroll every TOTP factor for this user via the admin client.
     let admin;
     try {
       admin = createAdminClient();
-    } catch {
-      return err(
-        'internal_error',
-        'Server is missing SUPABASE_SERVICE_ROLE_KEY. Recovery cannot complete without it.',
-      );
+    } catch (e) {
+      // Only a server without the service-role key throws here. On such a
+      // server the closed limiter above (it needs the same client) refuses
+      // before any code is checked, so no code is spent. Never the setting's
+      // name to the person (S31).
+      return unexpectedActionError(e, 'actions.mfa_recovery.consume', {
+        message: NOT_SET_UP_MESSAGE,
+        level: 'warning',
+      });
     }
 
     const { data: factors } = await admin.auth.admin.mfa.listFactors({
@@ -197,11 +223,18 @@ export async function consumeMfaRecoveryCodeAction(input: {
       if (!r.error) unenrolled += 1;
     }
 
+    // A used code removes every authenticator of the account: the person's
+    // own act, recorded in their default organization. Never the code.
+    const { organizationId } = await resolveDefaultOrgAndRole(session.userId);
+    await emitAuthAudit({
+      event: 'mfa.recovery.consumed',
+      userId: session.userId,
+      organizationId,
+      extra: { unenrolled },
+    });
     revalidatePath('/dashboard', 'layout');
     return ok({ unenrolled });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.mfa_recovery.consume_mfa_recovery_code');
   }
 }

@@ -28,39 +28,191 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
-    id: 'mobile-app-asks-before-restarting',
+    id: 'web-fixes-2026-11-02',
     revision: 1,
-    // B44 (fix/b44-update-restart-prompt; no migration, phone only: one
-    // over-the-air update, runtime 1.4.0). Held as a DRAFT until phones have
-    // the update (update:insights shows iOS launches of its group); the
-    // docs(releases) follow-up that publishes it sets the real publishedAt,
-    // and adds its tests: the title, the entry, and the quoted message equal
-    // to UPDATE_PROMPT_MESSAGE in apps/mobile/src/lib/ota-update-prompt.ts. A
-    // draft at the top, dated after every release (newest first).
-    //
-    // Every "waits" claim is the design: the work routes (scan, count and new
-    // records), the photo and file flows, the keyboard and a focused field,
-    // the draft holds (a note, a pick, a receipt), and every sheet and alert.
-    // No link and no audience: every member with the phone app sees it.
-    status: 'draft',
-    title: 'The mobile app asks before it restarts for an update',
+    // Two web fixes, published together at the top, the newest release:
+    // - B20a, #455 (squash 1ce98c290, live 2026-11-02 18:23:56Z; no phone
+    //   change, no migration), the entry from #455's What's New section;
+    // - S45, #468 (squash 3549b480d, live 20:20:50Z, web build b38578d2d81b;
+    //   no phone update, no migration), the entry from #468's draft.
+    // Claims checked against the code at 3549b480d (apps/web/src):
+    // - rental-cart-per-person: New rental's cart is saved under
+    //   rentalDraftPrefixFor(viewerUserId), 'rental-draft:v2:<user>:'
+    //   (components/orders/v2/cart-context.tsx:49-51; the form,
+    //   components/rentals/rental-create-form.tsx:544-549; the viewer,
+    //   app/(dashboard)/dashboard/rentals/new/page.tsx:363); before, the key
+    //   was 'rental-draft:<warehouse>' for whoever used the browser
+    //   (cart-context.tsx:33-35). The cart is restored from its own key when
+    //   New rental opens (cart-context.tsx:151-158). The old key is removed,
+    //   unread, each time New rental opens for a warehouse
+    //   (rental-create-form.tsx:532-538), so a cart started before #455 is
+    //   cleared. Only items and quantities were ever saved: the borrower,
+    //   return date and notes are the form's own state
+    //   (rental-create-form.tsx:159-166). Audience: New rental checks
+    //   rentals:create, then the Rentals module (rentals/new/page.tsx:69-71,
+    //   :81-84).
+    // - logo-too-large-to-print: setOrgLogoUrlAction refuses a PNG, JPEG or
+    //   WebP logo over DECODE_MAX_INPUT_PIXELS (50 million, lib/image-decode.ts
+    //   :54-60), removes the object and returns before the organization row
+    //   is changed, with the sentence the production check saw
+    //   (server/actions/profile.ts:488-508); owners and admins only
+    //   (profile.ts:424-426; settings/organization/page.tsx:17-19). The PDF
+    //   side refuses the same files (image-decode.ts:647-651), and
+    //   prefetchPdfLogo then gives no logo (lib/pdf/image-prefetch.ts:416-428),
+    //   so the header shows the organization name alone
+    //   (lib/pdf/branding.tsx:52-58). The six branded PDFs that print the logo
+    //   include purchase orders, cycle count sheets and reports
+    //   (app/api/purchase-orders/[id]/pdf, cycle-counts/[id]/pdf,
+    //   reports/[slug]/pdf).
+    // Checks: production check batch-1830 (New rental: the cart saved under
+    // the v2 per-person key and removed cleanly); production checks s45-logo
+    // and s45-pdf (a 10000 by 6000 PNG refused with the sentence; a 6000 by
+    // 1200 wordmark accepted and printed at 512 by 102 on a purchase order).
+    // Changed from the drafts: logo-too-large-to-print's howItAffectsYou said
+    // ordinary logos "upload and print as before": a logo over 1024 px now
+    // prints from a 512 px copy (image-prefetch.ts:226-247), so it says they
+    // are accepted as before and print. The summary is new.
+    // Changed in the review of this publish: howItAffectsYou said "Logos
+    // under that size ... are accepted as before and print", which covered
+    // every format. Only a PNG, JPEG or WebP is sized at upload
+    // (profile.ts:494); an AVIF is held to 4096 by 4096 on the PDF side
+    // (DECODE_MAX_INPUT_PIXELS.avif, image-decode.ts:59), so a 5000 by 5000
+    // AVIF is accepted and prints no logo, and an AVIF logo never printed
+    // before #468 (image-prefetch.ts:404-407). The sentence now names PNG, JPG
+    // and WebP. An SVG logo, possible only for one uploaded from 2026-05-05 to
+    // 2026-05-09, prints no logo; it stays out, as the export fixes release
+    // records for #414 (its "an SVG logo no longer prints" note).
+    // Not announced (each PR's own reasons): #455's tracking-key rule, photo
+    // route gate and retired route; #468's photo and export changes, and the
+    // WebP and AVIF logos that now print (B48's entry, the integrator's call).
+    // No phone update ships with this release.
+    status: 'published',
+    title: "New rental keeps each person's cart, and Settings refuses a logo too large to print",
     summary:
-      'In the mobile app, after the latest update, the app opens once and no longer restarts by itself a moment later. A new update now downloads while you use the app, and a message says when it is ready. The app restarts only when you tap Restart now.',
-    publishedAt: '2026-11-02T17:00:00Z',
+      'On the web, the items you add on New rental are now saved for your account only, so the next person to sign in on the same computer no longer sees them. Under Settings, Organization, a logo too large to print is now refused with its size, and your current logo stays.',
+    publishedAt: '2026-11-02T20:42:00Z',
     entries: [
       {
-        id: 'update-ready-message',
-        category: 'improved',
-        area: 'Mobile app',
-        title: 'A message says when an update is ready',
+        id: 'rental-cart-per-person',
+        category: 'fixed',
+        area: 'Rentals',
+        title: "New rental keeps each person's cart to themselves",
         whatChanged:
-          'In the mobile app, after the latest update, opening the app shows the launch screen once. Before, the app could open, restart by itself a moment later and show the launch screen again. Now a new update downloads while you use the app. When it is ready, a message says “An update for StockPilot is ready. The app will restart to finish installing it.” with two buttons, Restart now and Later.',
+          'On the web, the items you add on New rental are now saved for your account only. Before, someone else who signed in on the same computer and opened New rental for the same warehouse saw the items and quantities you had added.',
         whyItMatters:
-          'The second launch screen came with no reason, so it could look like the app had crashed. Now you know when an update is ready, and the app restarts only when you choose.',
+          "On a shared computer, the next person could check out a rental with someone else's items without noticing.",
         howItAffectsYou:
-          'Tap Restart now and the app restarts once and opens the new version. Tap Later to carry on: the message comes back the next time you return to the app, and the update finishes by itself the next time you close the app completely and open it again. The message waits while you scan, count, add a photo or a file, or type, while you create an item, a request or an order, while a note, a pick or a receipt is not saved yet, and while another message or sheet is open.',
+          'Items you added and did not check out are still there when you come back to New rental on the same computer. A cart started before this change is not kept: it is cleared the first time New rental opens for its warehouse, so add those items again.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'logo-too-large-to-print',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Settings tells you when a logo is too large to print',
+        whatChanged:
+          'Under Settings, Organization, Logo, a PNG, JPG or WebP image of more than 50 million pixels, such as one 8000 by 8000 pixels, is no longer accepted. Settings says the image is too large to print and gives its size, removes the file, and keeps your current logo.',
+        whyItMatters:
+          'Your logo prints at the top of PDFs such as purchase orders, cycle count sheets and reports. A logo that large is now left out of those PDFs, because preparing it takes too much time and memory. Settings tells you when you upload it, instead of the PDFs quietly showing only your organization name.',
+        howItAffectsYou:
+          'PNG, JPG and WebP logos under that size, including wide wordmarks, are accepted as before and print at the top of those PDFs. If the logo you have now is larger than this, your PDFs show only your organization name until you upload a smaller copy.',
         whatToDo:
-          'Close the app completely and open it again to load the latest update. This one time the app may restart by itself once. After that, when the message appears, tap Restart now, or Later if you are busy.',
+          'No action needed. If Settings says your logo is too large, save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.',
+        audience: { roles: ['owner', 'admin'] },
+      },
+    ],
+  },
+  {
+    id: 'archived-charters-2026-11',
+    revision: 1,
+    // S44, #467 (squash c4323b76a, live 2026-11-02 18:29:46Z, web build
+    // 34b6ea9ad5d0; web only, no migration, no phone code), from the draft
+    // release in #467's description, published as its own release below the
+    // web fixes release, which is dated later.
+    // Claims checked against the code at 3549b480d (apps/web/src):
+    // - team-charters-archived-kept: the member Charters dialog lists every
+    //   charter the member holds that the active list lacks, named
+    //   '(archived)' or '(inactive)' (components/team/team-manager.tsx
+    //   :884-906, listed after the active rows at :947), and seeds its ticks
+    //   from every held id, never pruned (:908-914), so a Save with no change
+    //   sends the same set (:921-923). Before, the ticks were only the active
+    //   charters the warehouse links (team-manager.tsx at c4323b76a^,
+    //   :853-857), and Save sent those (:866). The dialog shows to owners and
+    //   admins (canManage, team-manager.tsx:310-311, :327); the Team page
+    //   checks members:invite (team/page.tsx:31-32).
+    // - item-form-archived-charter-named: new picks are the linked active
+    //   charters only (components/inventory/item-form.tsx:1130-1146); the
+    //   record's own charter is kept on its own warehouse and on any warehouse
+    //   that links it (:1149-1181), named '(archived)' or '(inactive)'
+    //   (:1186-1222), read by id on the edit pages
+    //   (inventory/[id]/edit/page.tsx:132-143, books/[id]/edit/page.tsx
+    //   :139-150). Before, every linked charter was offered, named
+    //   `charterById.get(id) ?? id` (item-form.tsx at c4323b76a^, :1123).
+    //   Restore: Admin, Charters, Archived view (components/admin/
+    //   charters-manager.tsx:301-316, :346-348). Duplicate keeps the
+    //   original's charter (server/services/inventory.ts:3826), and Add sizes
+    //   sends the source's (components/inventory/add-sized-variants-button.tsx
+    //   :121). The edit pages check items:update, the new pages items:create.
+    // Checks: the lab walk (walk-s44, synthetic data, PASS) for the archived
+    // and inactive cases; the production check batch-1830 (names only, never
+    // an id, in the Team dialog, New item and Edit; the demo workspace has no
+    // archived charter). The read-only production counts were not run, so no
+    // line says who was affected before this change.
+    // Changed from the draft: the summary said "instead of a long code" for
+    // both places: the Team dialog did not list such a charter at all, so the
+    // summary names each. item-form-archived-charter-named's whyItMatters
+    // said "picking it put new stock under the archived charter": it now
+    // says it could be picked for an item or book (the form offered it,
+    // item-form.tsx at c4323b76a^:1123). Its whatChanged last sentence says
+    // "as a new choice", as the record's own charter is still offered back.
+    // Its whatChanged also says "shows that charter by name, marked
+    // (archived)" for "shows that charter's name marked (archived)", "move the
+    // item or book" for "move it", and its whyItMatters "while a warehouse
+    // still served it" for "while its warehouse still served it"; none
+    // changes the meaning.
+    // Changed in the review of this publish: the summary and whatChanged said
+    // "saving keeps it" for the item and book forms as if that were new.
+    // Before #467 the form offered every charter the warehouse links,
+    // archived ones included, by id (item-form.tsx at c4323b76a^:1109-1126),
+    // so a save, or a move to a warehouse that links it, already kept it.
+    // They now say saving still keeps it there; keeping it on a save is new
+    // only in the Team dialog.
+    status: 'published',
+    title: 'On the web, archived charters show by name and are kept when you save',
+    summary:
+      "On the web, a charter that has been archived now shows by its name, marked (archived): on the item and book forms, where it showed as a long code and saving still keeps it, and for owners and admins in a member's Charters dialog on Team, where it was not listed and saving now keeps it. The web no longer offers an archived charter as a new choice.",
+    publishedAt: '2026-11-02T19:00:00Z',
+    entries: [
+      {
+        id: 'team-charters-archived-kept',
+        category: 'fixed',
+        area: 'Team',
+        title: "Saving a member's charter access keeps their archived charters",
+        whatChanged:
+          "On Team, the Charters dialog in a member's menu now also lists any of their charters that has been archived, ticked and marked (archived). Saving keeps it unless you untick it.",
+        whyItMatters:
+          'An archived charter was not listed in the dialog, so a save did not keep it.',
+        howItAffectsYou: 'Saving changes only the charters you tick or untick.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/team', label: 'Open Team' },
+        audience: { roles: ['owner', 'admin'], anyPermission: ['members:invite'] },
+      },
+      {
+        id: 'item-form-archived-charter-named',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Item and book forms name an archived charter instead of showing a long code',
+        whatChanged:
+          'On the web, when you edit an item or book whose charter has been archived, the Charter list now shows that charter by name, marked (archived). Saving still keeps it, as before, also when you move the item or book to another warehouse that still serves that charter. The web no longer offers an archived charter as a new choice for an item or book.',
+        whyItMatters:
+          'A charter archived while a warehouse still served it showed in the Charter list as a long code, and it could be picked for an item or book.',
+        howItAffectsYou:
+          "To use an archived charter for new stock again, an admin restores it from the Archived view in Admin, Charters. A copy or a new size made from a record keeps that record's charter.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:create', 'items:update'] },
       },
     ],
   },
@@ -70,9 +222,11 @@ export const RELEASES: Release[] = [
     // S43a, #447 (squash dd7cc1458, merged 2026-11-02 06:49Z; web only, no
     // migration), release 1 of S43, from the draft in #447's description. Live
     // in production web build 2f1ae1d0e877. It is the newest published
-    // release and sits directly below the B44 phone update draft, which is
-    // left as it is for its own release: that draft is dated later, and
-    // releaseRegistrySchema keeps dates from increasing down the list.
+    // release, at the top. It was written directly below the B44 phone update
+    // draft; docs/whats-new-2026-11-02 folded that draft into
+    // update-ready-and-fixes-2026-11, published at 04:21Z and so placed below
+    // lists-delivery-sites-and-fixes-2026-11, as releaseRegistrySchema keeps
+    // dates from increasing down the list.
     // Phone: NO phone update ships with this release, and no line says the
     // app was or needs to be updated. Every phone sentence is how the app
     // already installed answers the server's new 401 (read at 472fca631):
@@ -314,10 +468,12 @@ export const RELEASES: Release[] = [
     id: 'lists-delivery-sites-and-fixes-2026-11',
     revision: 1,
     // The web changes merged on 2026-11-02 from 04:12Z to 05:28Z, and S4
-    // (merged 02:00Z), in one release, the newest published one. It sits
-    // directly below the B44 phone update draft, which is left as it is for
-    // its own release: that draft is dated later, and releaseRegistrySchema
-    // keeps dates from increasing down the list. Every line is live in
+    // (merged 02:00Z), in one release, the newest published one when it was
+    // written, directly below the B44 phone update draft. The S43a and
+    // integration retries releases are above it now, and the B44 draft is
+    // folded into update-ready-and-fixes-2026-11, published at 04:21Z and so
+    // directly below this one: releaseRegistrySchema keeps dates from
+    // increasing down the list. Every line is live in
     // production web build a16bcfe6d994 (90f4f354b, #437's squash, answering
     // /api/version from 05:29:49Z), the main this release was written and
     // checked against:
@@ -779,6 +935,577 @@ export const RELEASES: Release[] = [
         audience: {
           anyPermission: ['maintenance_requests:submit'],
           modules: ['maintenance_requests'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'update-ready-and-fixes-2026-11',
+    revision: 1,
+    // Tonight's phone update and the web changes live since the last What's
+    // New, all on main at f584141ba, live in production web build
+    // 66b26fd665c1 (2026-11-02 02:52:02Z). This release needs a web deploy
+    // only.
+    // Phone: ONE over-the-air update for runtime 1.4.0, EAS update group
+    // c5b4d663-7c84-4ad2-bbfd-b3a0307b6eff, published 2026-11-02 04:02Z from
+    // f584141ba. Its served iOS bundle hashes the same as the local export,
+    // and its source map holds the B44, B60, B10 and S17 code. It carries:
+    // - B10 #403, c0700f80d (2026-10-31 08:55:49Z): six of the phone entries
+    //   below. Its web part (the two v1 Integrations routes send the MFA
+    //   gate's details, api/v1/integrations/connections/[provider]/route.ts:48
+    //   and account-mapping/route.ts:82) went live with that merge and shows
+    //   nothing on the web; app-integrations-access-denied tells what it gives
+    //   the phone;
+    // - B60 #420, 3cdf5a633 (2026-10-31 11:36:31Z): an open item's header and
+    //   tabs after a live text size change, and the Deny and Reopen picking
+    //   box after a refusal;
+    // - B44 #418, 9e667ca99 (2026-11-02 02:43:12Z; phone code as at its head
+    //   8bfd5dd2b): update-ready-message. Its draft release,
+    //   mobile-app-asks-before-restarting, is folded into this one and
+    //   removed: a draft never leaves the server, so no reader's state names
+    //   it, and its id is not reused;
+    // - S17 #416, 984eb320b: example words only (left out, below).
+    // Phones have it: the integrator merges this release only once EAS
+    // update:insights shows iOS launches of the group. Opened from closed, a
+    // phone still on the older bundle checks for the update, loads it and
+    // restarts by itself once (64054fb3d use-ota-updates.ts:18-28,
+    // useOtaAutoReload), so B44's message is first shown with the update
+    // after this one, and each phone entry says to close the app completely
+    // and open it again.
+    // Web:
+    // - B11 Part 1 #422, 8126072fe (2026-10-31 12:58:42Z, build 02ec7854bf68):
+    //   overview-approvals-follow-permission;
+    // - S16 #421, 7c28c3a9c (2026-11-01 03:16:46Z, build 8de1f2ee2828):
+    //   web-unexpected-failure-plain-sentence, bulk-isbn-unreadable-file and
+    //   ai-assistant-web-message-too-long, each on the web only;
+    // - S27a #431, f584141ba (2026-11-02 02:50:14Z, build 66b26fd665c1):
+    //   integrations-unsaved-changes-say-so, #431's fallback entry. #431's
+    //   body and its plan (section 7) publish it "if part b has not deployed
+    //   by the next What's New batch after this deploy or within 7 days".
+    //   This is that batch, and part b is not built, so it is here; part b's
+    //   release tells the rest. Its sentences were checked at f584141ba
+    //   before publishing (its comment).
+    // Every other entry is the 2026-11-01 fact-check's, with every finding
+    // and every skeptic's fix applied: the B44 summary note and the "crashed"
+    // clause gone; the tabs "when they do not fit" (a full-screen iPad never
+    // stacks them) and only the lists named, each back at its top; Release
+    // before return is received, the button's own words; a refused Create
+    // return's cap; the workspace refusal only when the previous account did
+    // not use Sign out, and the offline advice; the Integrations why and its
+    // audience (the screen's own check, owner or admin); Viewers on Overview;
+    // S16 split in two (Bulk ISBN import's readers differ), Separate POs, and
+    // the AI line's "on the web", "after typing" and its note's own words.
+    // Added: the count scanner keeps a typed number it could not save (the
+    // phone skeptic's miss), and "or pull down to refresh" for the open tab's
+    // rows (tonight's walk). "Settings > Integrations" is "Integrations in
+    // Settings": the schema refuses < and >.
+    // Review of 2026-11-02, before the merge: the release title and the
+    // Overview line's title say the web, as the phone has an Overview screen
+    // of its own with no approvals row (core modules/registry.ts:115,
+    // apps/mobile/app/(drawer)/(tabs)/index.tsx); the Separate POs clause is
+    // gone, as B80 (#436, b3abc74be, live 2026-11-02 04:27:19Z, before this
+    // release can deploy) changed what that mode says for a page that is not
+    // a purchase order; and #431's fallback entry was added (above).
+    // Walks:
+    // - c11-simwalk-1102, 2026-11-02 to 03:59Z, on EAS simulator build
+    //   9711b737 of f584141ba, in Demo Co, PASS. w1 (iPhone 17 Pro and Pro
+    //   Max): B44's launch smoke signed in and signed out; B60 walk 2, a Deny
+    //   refused on a stale screen closes its box and the order shows
+    //   Approved; S17 walks 1-3. B60 walk 3 (Reopen picking) was skipped by
+    //   rule, as it has no clean reversal; it runs walk 2's code path, and its
+    //   unit tests. w2 (iPhone SE and iPad): B44 cold launches; B60 walk 1, a
+    //   live text size change from Large to AX5 with an item open keeps its
+    //   header and tabs whole, the open tab and the scroll kept; B10 walks 7
+    //   and 9. No new finding (B61, known, below).
+    // - A plain simulator build has no update channel, so it shows no pop-up:
+    //   B44's message, Later and Restart now were proven on 2026-10-31 on a
+    //   test-channel simulator build of 1c98e7289 (iPhone and iPad), which
+    //   holds no B60. The holds on the merged item and order screens are code
+    //   only: update-prompt-wiring.test.ts.
+    // - simwalk-1031, on a simulator build of c0700f80d, in Demo Co: B10 walks
+    //   1 (Access denied on Integrations), 3 (the purchase order words), 5 (a
+    //   refused Deny read again), 7 (the tabs on fresh opens) and 9 (the list
+    //   rows after a live change), PASS.
+    // - walk-422, 2026-10-31 14:08Z, Demo Co as its admin, read-only: the
+    //   Needs attention row with #422's note, and its link to the same list.
+    // Code only, as each entry says: B10's save refusals and the workspace
+    // sentence (walks 13-18 need two accounts in different organizations),
+    // the cache clear tried again, the Integrations authenticator sentences
+    // (no QuickBooks connection there), the Release and Create return
+    // refusals, the three S16 lines, and the Integrations page's refusal and
+    // its opening for a member who can manage only shipping (Demo Co has both
+    // modules off, so #431's read-only check after its deploy saw only the
+    // module-off notice).
+    // Left out:
+    // - S4 #379 (3d458cff4, migration 0415; live): its entry
+    //   (bundle-required-component) is HELD until the lab walk proves its
+    //   Schedule completion claim. When it is published it also needs the
+    //   2026-11-01 skeptic's fixes: "Completing an event that names a bundle
+    //   hands it out once, as before" is false after 0415 for a bundle with
+    //   no required component and too few pre-assembled kits (the event is
+    //   saved Completed, then distribute_bundle refuses: schedule.ts,
+    //   autoDistFailed), and its audience adds roles owner, admin and manager
+    //   (every action in it needs the manager role in the database, while
+    //   staff hold bundles:distribute by default).
+    // - S16's phone side, live since 2026-11-01 03:17Z through the server's
+    //   answers with no phone code: a queued count line refused for its
+    //   warehouse moves to Unsent work, "Something went wrong. Please try
+    //   again." on screens that show the server's message and on Scan PO, and
+    //   Photo ID's new sentence. Both 2026-11-01 checks ask for a simulator
+    //   walk before a phone line, and tonight's walk did not cover it, so it is
+    //   told after one. The phone's AI chat shows the sentences inside the raw
+    //   answer until B75.
+    // - S20 #424 (af3445211), S22 #428 (8517b8518) and S34 #432 (8ac9f4862):
+    //   no member sees a change (S20 and S22 by owner decision; for S22 the
+    //   owner reported no PostHog surveys, tours or flags, and the code draws
+    //   nothing on screen; S34 changes only what leaves our server).
+    // - S27a's other parts change nothing while the database answers normally
+    //   (the S19 precedent): the readers that now refuse an answer that is not
+    //   a list, and the export retried after a failed supplier mapping read.
+    // - S19 #419 (5c6b4074b) and S17 #416: recorded exceptions (nothing
+    //   changes while the database answers; example text only). Their
+    //   packages/core changes, and #379's, show nothing on the phone.
+    // - #403's invisible parts: the order screen's shipping read where Shipping
+    //   is off, the refused requests just after a sign-in, the workspace named
+    //   by PO scan, AI shelf scan and chat, the team's error reports, the AI
+    //   shelf scan's recorded count, and the review rounds' fixes to B10's own
+    //   unshipped regressions; the edit order steppers were already fixed.
+    // - B61, not fixed: an item's open tab can keep its rows at the old text
+    //   size until another tab is opened or the screen is pulled to refresh;
+    //   app-text-size-tabs-lists-buttons says so as a limit.
+    // - Merged after f584141ba (from 2026-11-02 04:12Z), so not here: #423
+    //   (B41, B42, B45), #406 (B23), #426 (B50), #425 (B62), #427 (B63), #436
+    //   (B80) and the other section 4 PRs, whose entries go in the next web
+    //   batch, and #435 (B75), whose phone part is in no phone update yet.
+    // The summary says "In the app" and "On the web", as a phone shows only
+    // the title and the summary; it carries B44's first message with the next
+    // update, and the load step with a connection (B10's refusal at a first
+    // open offline). One entry links, integrations-unsaved-changes-say-so, so
+    // the old phone builds' list (logic.ts legacyAnnouncementsFor) carries
+    // Open Integrations only for a reader that entry reaches, and every phone
+    // build with What's New hides it: a /dashboard/settings path opens no
+    // screen of its own there (apps/mobile/src/components/onboarding/
+    // whats-new.tsx:158, and web-path-rewrite.ts:176 sends it home).
+    // Who is told: every member, as update-ready-message and
+    // app-text-size-tabs-lists-buttons have no audience: it is each member's
+    // notice once the newer releases that reach them are read, and stays
+    // unread until it is read. Where it sits: merged with main after #461 and
+    // #471, it is dated 04:21Z, so it is fourth, below
+    // authenticator-code-requests-2026-11 (15:43Z),
+    // integration-retries-2026-11 (15:42Z) and
+    // lists-delivery-sites-and-fixes-2026-11 (05:53Z), and directly above
+    // export-fixes-2026-10: releaseRegistrySchema keeps dates from increasing
+    // down the list. Each other entry names the
+    // permission, role or module its screen or action checks, quoted in its
+    // comment. If the phone update is rolled back while the web stays, the
+    // phone entries are no longer true: withdraw this release (status
+    // 'withdrawn' and a withdrawnNote).
+    status: 'published',
+    title:
+      'The mobile app asks before restarting for an update and stacks item tabs that do not fit; web Overview counts approvals',
+    summary:
+      'After the latest update, the mobile app opens once instead of restarting by itself, and from the next update on a message says when one is ready. In the app, item tabs stack when they do not fit at larger text sizes, an order shows its current status after a refused action, and the app says why a count was not saved. On the web, Overview counts the order requests you can approve. Close the app completely and open it again with a connection to load the update; it may restart by itself once.',
+    publishedAt: '2026-11-02T04:21:00Z',
+    entries: [
+      {
+        // platform: phone. From: B44 #418. Checked at f584141ba: the words,
+        // apps/mobile/src/lib/ota-update-prompt.ts:31-36 (UPDATE_PROMPT_TITLE
+        // Update ready, the message, Later, Restart now), shown by
+        // use-ota-updates.ts:146-148, with the only reload at :90; Later,
+        // ota-update-prompt.ts:707 and :715, until the next return to the app
+        // (:863); the holds, WORK_ROUTES (:93: the scan, count and new record
+        // screens), app/item/[id].tsx:573, :1633-1634 and :2904,
+        // app/order/[id].tsx:505, app/po/[id].tsx:150,
+        // app/maintenance/[id].tsx:475, src/components/ui/modal.tsx:19 and
+        // src/lib/alert-holds.ts:6. Before, on phones: 64054fb3d
+        // use-ota-updates.ts:18-28 reloaded by itself at every open from
+        // closed with an update waiting. "Could confuse people" is the owner's
+        // report; the draft's "look like the app had crashed" rested on
+        // nothing (2026-11-01 check). The quoted message is pinned to
+        // UPDATE_PROMPT_MESSAGE by registry.update-ready-and-fixes.test.ts.
+        // Walked: one launch screen at cold launches, signed in and out, on
+        // the merged code (c11-simwalk-1102); the message, Later and Restart
+        // now on the 1c98e7289 test channel. No audience: every member.
+        id: 'update-ready-message',
+        category: 'improved',
+        area: 'Mobile app',
+        title: 'The mobile app opens once and asks before it restarts for an update',
+        whatChanged:
+          'In the mobile app, after the latest update, opening the app shows the launch screen once. Before, the app could open, restart by itself a moment later and show the launch screen again. Now a new update downloads while you use the app. When it is ready, a message titled Update ready says “An update for StockPilot is ready. The app will restart to finish installing it.” with two buttons, Restart now and Later.',
+        whyItMatters:
+          'The app restarted with no reason given and showed its launch screen twice, which could confuse people. Now you know when an update is ready, and the app restarts for it only when you choose.',
+        howItAffectsYou:
+          'Tap Restart now and the app restarts once and opens the new version. Tap Later to carry on: the message comes back the next time you return to the app, and the update finishes by itself the next time you close the app completely and open it again. The message waits while you scan, count, add a photo or a file, or type, while you create an item, a request or an order, while a note, a pick or a receipt is not saved yet, and while another message or sheet is open. You first see it with the update after this one.',
+        whatToDo:
+          'Close the app completely and open it again to load the latest update. This one time the app may restart by itself once. From then on, when Update ready appears, tap Restart now, or Later if you are busy.',
+      },
+      {
+        // platform: phone. From: B10 #403 and B60 #420. Checked at f584141ba:
+        // apps/mobile/app/item/[id].tsx:509 (shouldStackItemTabs,
+        // src/lib/dynamic-type-layout.ts:201-206: at the largest sizes they
+        // stack on every phone and stay side by side on a full-screen iPad;
+        // the rule reads the window's width, and an iPad window in Split View
+        // or Slide Over can be narrow (app.config.ts:65 supportsTablet, with
+        // no requireFullScreen), hence "when Movements does not fit"); :518
+        // with :1737, :1860, :1905 and :1939 (the header, Tap to add photo,
+        // Replace and the tabs laid out again at a new text size);
+        // src/components/data-list-screen.tsx:108, :123
+        // and :142 (the head and the rows, so each list goes back to its top),
+        // used by the lists named; src/components/ui/button.tsx:136 (wrap),
+        // used by the four returns components, and core
+        // returns/return-actions.ts:371 (the RMA's Release replacement before
+        // return is received). Before, on phones: 64054fb3d shrank the tab
+        // labels to fit (adjustsFontSizeToFit, TAB_MIN_FONT_SCALE 0.55). The
+        // open tab's rows are not laid out again (B61), said as a limit.
+        // Walked: tonight's B60 walk 1 on the SE and the iPad, and B10 walks 7
+        // and 9. No audience: every member.
+        id: 'app-text-size-tabs-lists-buttons',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          'In the mobile app, item tabs stack when they do not fit, and returns buttons and many list rows are no longer cut short',
+        whatChanged:
+          "In the mobile app, at larger text sizes an item's Overview, Movements and Activity tabs now stack one per line when Movements does not fit beside the others. When you change the text size with an item open, its SKU, name, category, Replace or Tap to add photo and its tabs are laid out again at the new size. After a text size change, the rows of the lists named below are laid out again too. Long returns buttons, such as Release replacement before return is received, now wrap onto more lines.",
+        whyItMatters:
+          "Before, Movements was shrunk to fit beside the other tabs, below the text size you chose. After a text size change, an item's header and these lists' rows could stay cut off at the old size until you opened the screen again, and long returns buttons were cut short.",
+        howItAffectsYou:
+          'The lists are Notifications, Orders, Movements, Purchase orders, PO imports, Recurring POs, Rentals, Categories, Tags, Locations, Suppliers, Procedures, Accounts, Team, Schedule and the lists under Admin; each goes back to its top after a text size change. On an item, the open tab and your place stay, but the rows in that tab may keep the old size until you open another tab or pull down to refresh.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: web. From: B11 Part 1 #422. Checked at f584141ba:
+        // (dashboard)/dashboard/page.tsx:212 and :220 (orders:approve, never a
+        // viewer), :296 (approvablePendingCount), :469-471 (the row, its note
+        // and its link); server/services/order-requests.ts:1360-1377 (0 for a
+        // viewer or without the permission; a role that does not see every
+        // warehouse counts the warehouses it works in). Before (98f6e8128):
+        // page.tsx:205 and :453 (isManagerOrAbove). The link opens Order
+        // requests (orders/page.tsx:156) on Needs approval (:92), which lists
+        // every warehouse. Walked: walk-422. Audience: page.tsx:212 and :220
+        // (the permission, every role but viewer) and the Orders module the
+        // row's link checks (orders/page.tsx:85-87). The title says the web:
+        // the phone's menu has an Overview screen too, with no approvals row
+        // (core modules/registry.ts:115; apps/mobile/app/(drawer)/(tabs)/
+        // index.tsx).
+        id: 'overview-approvals-follow-permission',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'On the web, Overview counts the order requests you can approve',
+        whatChanged:
+          "On the web, the Needs attention card on Overview has a row for the order requests awaiting your approval. It used to show to owners, admins and managers by role. It now follows the Approve / fulfill orders permission: a staff member who has it now gets the row, which counts the requests waiting in the warehouses they work in, and an admin or manager who had it removed no longer gets it. Viewers do not get it. The row's note now reads “Requests are blocked until someone who can approve orders moves them forward.”",
+        whyItMatters:
+          'A staff member who could approve requests was not told on Overview that any were waiting, and an admin or manager who could not approve them saw a count whose link opened only their own requests.',
+        howItAffectsYou:
+          'Owners, and admins and managers who keep the permission, see the same count as before. Selecting the row opens Order requests on the Needs approval tab. If you work in only some warehouses, that tab can list more requests than the row counts.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager', 'staff'],
+          anyPermission: ['orders:approve'],
+          modules: ['orders'],
+        },
+      },
+      {
+        // platform: phone. From: B10 #403. Checked at f584141ba:
+        // apps/mobile/app/po/[id].tsx:736 with src/lib/po-status.ts:15-16 (the
+        // web badge's words, held to them by po-status.test.ts). Before, on
+        // phones, the header named four statuses and printed the rest as
+        // stored. Walked: simwalk-1031 walk 3. Audience: the phone's Purchase
+        // orders, core modules/registry.ts:466 (purchase_orders:read), in its
+        // module (:452).
+        id: 'app-po-received-cancelled-words',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title:
+          'In the mobile app, a received or cancelled purchase order says Received or Cancelled',
+        whatChanged:
+          "In the mobile app, the top of a purchase order's screen now reads Received beside its supplier when it has been received, and Cancelled when it was cancelled, the words the web uses.",
+        whyItMatters:
+          'Those two statuses showed as they are stored, in lower case: received and cancelled.',
+        howItAffectsYou: 'Draft, Expected, Ordered and Partial read as before.',
+        whatToDo:
+          'No action needed. Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // platform: phone. From: B10 #403 and B60 #420. Checked at f584141ba:
+        // apps/mobile/app/order/[id].tsx:1884 (runAction reads the order again
+        // after a refusal), :1240 (Release before return is received) and
+        // :1346 (Create return), with src/lib/order-action-refusal.ts:21-22
+        // (only an answer: never a timeout or a dropped connection); the Deny
+        // and Reopen picking boxes, order/[id].tsx:1931 and :1956, settled at
+        // :2275-2289 by src/lib/order-reason-dialog.ts:24-25 (kept while the
+        // order still offers the action or could not be read), closed with
+        // the reason cleared (:1905-1908, :1936-1939). The order's button and
+        // the sheet's confirm read Release before return is received (core
+        // returns/returns-copy.ts:171), as the published returns release names
+        // it; the Create return caps follow the order read again. Walked:
+        // tonight's B60 walk 2 and simwalk-1031 walk 5 (a refused Deny). Code
+        // only: Reopen picking (B60 walk 3, skipped by rule) and the two
+        // return sheets (order-action-refusal.test.ts). Audience: the Orders
+        // module (core modules/registry.ts:407 and :418).
+        id: 'app-order-current-after-refusal',
+        category: 'fixed',
+        area: 'Orders',
+        title:
+          'In the mobile app, an order shows its current status after an action on it is refused',
+        whatChanged:
+          'In the mobile app, when an action on an order is refused because the order has changed, for example someone else approved it a moment ago, the order screen now reads the order again, so behind the message it shows the current status and buttons. When Release before return is received or Create return is refused, the sheet still says why, and the order behind it is read again. When Deny or Reopen picking is refused because the order has moved on, its box closes by itself and clears your reason.',
+        whyItMatters:
+          'Before, the screen kept the old status and buttons until you pulled to refresh, so the next tap was refused the same way, and the Deny box stayed open over an order that could no longer be denied.',
+        howItAffectsYou:
+          'Close the message to see the order as it is now. If the order still offers Deny or Reopen picking, or could not be read again, the box stays open with your reason so you can try again. After a refused Create return, its quantities stop at what can still be returned now. A timeout or a lost connection leaves the order as it was shown.',
+        whatToDo:
+          'No action needed. Close the app completely and open it again to load the latest update.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        // platform: phone. From: B10 #403. Checked at f584141ba: the titles,
+        // apps/mobile/src/lib/count-save-refusal.ts:30 and :41, and
+        // bundle-distribute-attempt.ts:64, only after the server could not be
+        // reached (app/bundles/[id].tsx:254-279); Try again,
+        // app/cycle-count/[id].tsx:327 and :360; the scanner's one alert,
+        // app/cycle-count/scan/[id].tsx:150, and the typed number kept,
+        // :221-223; the workspace sentence, src/lib/outbox-scope.ts:151,
+        // refused while the previous account's workspace is saved
+        // (src/lib/session-scope.ts:107-109), which Sign out removes
+        // (src/lib/auth-context.tsx:491-492), so a change made after it waits
+        // instead; the same request again, app/bundles/[id].tsx:229. At a
+        // first offline open after the update the older app's saved workspace
+        // refuses until a load records its owner, and an offline load saves
+        // nothing (src/lib/use-workspace.ts:274-285), hence the advice to
+        // load the update with a connection. Code only: walks 13-18 were not
+        // run (they need two accounts in different organizations), so
+        // count-save-refusal.test.ts, bundle-distribute-attempt.test.ts and
+        // use-workspace.owner.test.ts. Audience: the count screen's
+        // showWriteCta(perms, 'stock:adjust') (app/cycle-count/[id].tsx:207)
+        // and Distribute's canDistributeBundles (core permissions.ts:276).
+        id: 'app-says-why-a-save-failed',
+        category: 'fixed',
+        area: 'Counts and offline changes',
+        title: 'In the mobile app, a count or distribution the phone could not save now says why',
+        whatChanged:
+          'In the mobile app, when the phone cannot save a count, clear an emptied count box, or save a distribution while the server cannot be reached, it now says why, in a message titled Count not saved, Count not cleared or Could not save offline. The count screen offers Try again, and the count scanner shows one message, in Burst too, and takes the next scan once you answer it. Right after a different account signs in, unless the previous account used Sign out, these and offline stock changes are refused with “Your workspace is still loading. Try again in a moment.” until its workspace loads.',
+        whyItMatters:
+          "Before, the count screen showed the number as if it were saved, the scanner stopped taking scans, and Distribute said nothing. A change made right after another account signed in was sent under the previous account's organization, where it was refused and lost, or landed in a workspace you had not chosen.",
+        howItAffectsYou:
+          'If you open the app without a connection right after this update, counts, offline stock changes and distributions are refused with that sentence until the app has been online once; enter them again then. Changes already waiting to be sent are kept. A change saved on a phone that had never loaded your workspace now waits and goes to your own workspace, not your default organization. After Could not save offline, distributing the same quantity again from the same screen sends the same request, so the kits are handed out once. A number typed in the count scanner stays until it is saved.',
+        whatToDo:
+          'Close the app completely and open it again, with a connection, to load the latest update before you count offline. If a message says your workspace is still loading, wait a moment and try again; without a connection, try again once you are back online.',
+        audience: { anyPermission: ['stock:adjust', 'bundles:distribute'] },
+      },
+      {
+        // platform: web. From: S16 #421. Checked at f584141ba: the sentence,
+        // server/lib/api-error-response.ts:16; the export,
+        // app/api/inventory/export/route.tsx:303 (a ServiceError keeps its own
+        // words, :300), shown inside the Customize export dialog
+        // (export-builder-dialog.tsx:406); the scan,
+        // app/api/po-imports/scan/route.ts:348, for one file or files
+        // combined. Separate POs, the form's default for two or more files
+        // (components/po-imports/po-scan-form.tsx:47 and :133), is not quoted:
+        // at f584141ba it kept "Could not read this file as a purchase order."
+        // (route.ts:293-296), but B80 (#436, b3abc74be, live 2026-11-02
+        // 04:27:19Z, before this release can deploy) makes a page that is not
+        // a purchase order say the extractor's own sentence in both modes
+        // (lib/po-scan/extract.ts), and B80's entry tells that. The last
+        // sentence says what this change leaves alone, so it holds with B80
+        // (2026-11-02 review). Before (98f6e8128) each showed the error's own
+        // text, and each was reported then too, hence "still recorded". Code
+        // only: an unexpected failure cannot be brought about safely on
+        // production (the route tests). Audience: the export's items:export
+        // (route.tsx:77) and the scan's purchase_orders:manage
+        // (services/po-imports.ts:985); Bulk ISBN import has its own entry, as
+        // its readers differ (2026-11-01 skeptic).
+        id: 'web-unexpected-failure-plain-sentence',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Plain words on the web when an export or a PO scan fails unexpectedly',
+        whatChanged:
+          'On the web, when an export from the Customize export dialog fails in a way that used to show technical text, the message now reads “Something went wrong. Please try again.” So does Scan with AI on the New PO import page, for one file or for files combined as pages of a single PO.',
+        whyItMatters:
+          "These messages showed the error's own technical text, which was written for developers and did not say what to do.",
+        howItAffectsYou:
+          'You see a plain sentence, and the details are still recorded for us to look into. This does not change the messages about problems StockPilot expects, such as a missing permission or a file type it does not accept.',
+        whatToDo: 'If you see the message, try again.',
+        audience: { anyPermission: ['items:export', 'purchase_orders:manage'] },
+      },
+      {
+        // platform: web. From: S16 #421. Checked at f584141ba:
+        // app/api/books/extract-isbns/route.ts:90-94 (a file reader's failure
+        // is reported and answered with the sentence) and :86-87 (an
+        // unsupported type keeps its own sentence, lib/books/isbn-extract.ts:139,
+        // as before), shown by components/books/bulk-isbn-import.tsx:115,
+        // beside its box for pasted ISBNs. Before (98f6e8128): the file
+        // library's own text. Code only (no damaged file was walked).
+        // Audience: the import page's items:import
+        // ((dashboard)/dashboard/books/import/page.tsx:28) and the Books
+        // module of the Books page that links to it (books/page.tsx:154 and
+        // :225), as the published Books entries carry it.
+        id: 'bulk-isbn-unreadable-file',
+        category: 'fixed',
+        area: 'Books',
+        title: 'Bulk ISBN import says plainly when it cannot read a file',
+        whatChanged:
+          'On the web, in Bulk ISBN import, a file that Extract from file cannot read now says “Could not read this file. Try a different file.”',
+        whyItMatters:
+          "The message showed the file reader's own technical text, which was written for developers and did not say what to do.",
+        howItAffectsYou:
+          'A file type it does not accept still names the types it accepts, as before. The details of a file it cannot read are still recorded for us to look into.',
+        whatToDo: 'If you see the message, choose a different file, or paste the ISBNs instead.',
+        audience: { anyPermission: ['items:import'], modules: ['books'] },
+      },
+      {
+        // platform: web. From: S16 #421. Checked at f584141ba:
+        // app/api/ai/chat/route.ts:55 (the limit, unchanged), :72-76 and
+        // :197-201 (the sentence), shown by components/ai/chat-panel.tsx:474-479
+        // in a passing notice and in the reply; the attached file's note,
+        // lib/books/isbn-ai-extract.ts:86-87 with :343-355, sent at
+        // chat-panel.tsx:387-390 for a Word, Excel, CSV or text file with ISBNs
+        // found. Before (98f6e8128): zod's issue list as JSON. On the phone
+        // the same refusal shows inside the raw answer (apps/mobile/app/ai/
+        // chat.tsx), so the title, whatChanged and howItAffectsYou say on the
+        // web; B75 changes the phone's chat later. An attached file's ISBN
+        // list can pass the limit too, which the person did not type, hence
+        // "after typing" (B76 changes that, not merged). The 2,000 is left to
+        // the app's own sentence.
+        // Code only: route.refusals.test.ts:90-94; no walk was recorded, and
+        // the AI module is never switched on in Demo Co for one. Audience: the
+        // AI Assistant page's checks ((dashboard)/dashboard/ai/page.tsx:19 and
+        // :27), as the published AI entries carry them.
+        id: 'ai-assistant-web-message-too-long',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'The AI Assistant on the web says in plain words when a message is too long',
+        whatChanged:
+          "In the AI Assistant on the web, a message that is too long now gets a plain sentence saying so and how long a message can be, shown in the reply and in a passing notice. Before, both showed a block of technical text. When you attach a Word, Excel, CSV or text file there and the AI service fails, the message sent with the ISBNs found in the file now says only that AI extraction was unavailable and that the ISBNs were found without it, instead of the AI service's own error.",
+        whyItMatters:
+          "The reason was buried in technical text written for developers, and a failed file could put the AI service's own error into your chat.",
+        howItAffectsYou:
+          'Messages are refused at the same length as before. On the web, the reply now says to shorten them.',
+        whatToDo: 'If you see the message after typing, shorten your message and send it again.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // platform: phone; its web part went live with #403's merge. From:
+        // B10 #403. Checked at f584141ba:
+        // apps/mobile/app/(drawer)/settings/integrations.tsx:69 (owners and
+        // admins, where Integrations is on), :103, :154 and :181 (a refusal of
+        // access is the Access denied state, :236), :159 and :186 (the
+        // authenticator sentences, src/lib/integrations-api.ts:90-93, told
+        // apart by the 403's details, :125-131); the buttons, :273 and :437;
+        // Admins only, :223. Before: the phone tested the message for "API
+        // 403" and never matched, so the server's sentence showed
+        // ("Re-authenticate with MFA before performing this action.", which
+        // does not say how in the app). Walked: simwalk-1031 walk 1 (Access
+        // denied after Integrations was turned off on the web). Code only:
+        // the authenticator sentences, which need a QuickBooks connection
+        // (integrations-api.test.ts). Audience: the screen's own check,
+        // integrations.tsx:69 (owner or admin, and the module), so an admin
+        // whose Manage integrations was removed, who is the one now shown
+        // Access denied, is told, and a manager given it, who still sees
+        // Admins only, is not (2026-11-01 skeptic).
+        id: 'app-integrations-access-denied',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'In the mobile app, Integrations says Access denied when the server refuses it',
+        whatChanged:
+          "In the mobile app, when the server refuses Integrations in Settings for an owner or admin, for example because Integrations was turned off on the web while the screen was open, the screen now shows Access denied instead of the server's own message. When Save mapping or Disconnect QuickBooks needs you to sign in again with your authenticator code, or to set one up first, a message now says so and the screen stays open.",
+        whyItMatters:
+          "Before, the screen showed the server's own wording instead, which did not say how to sign in again in the mobile app, and its Access denied state never appeared.",
+        howItAffectsYou:
+          'Nothing is changed when either message appears. Members who are not owners or admins still see Admins only, as before.',
+        whatToDo:
+          'If the message asks for your authenticator code, sign out and sign back in with it, then try again. If it asks you to set one up, do that on the web, then sign in again. Close the app completely and open it again to load the latest update.',
+        audience: { roles: ['owner', 'admin'], modules: ['integrations'] },
+      },
+      {
+        // platform: phone. From: B10 #403 (its round c10). Checked at
+        // f584141ba: apps/mobile/src/lib/use-workspace.ts:348 (the clear
+        // recorded as owed before the save), :403-410 (a failed clear stays
+        // owed for the next load: any screen that opens, the next launch) and
+        // :427 (recorded done only once a clear worked);
+        // src/lib/workspace-keys.ts:173. Before (64054fb3d) the save came
+        // first and a failed clear only warned. The list is Bundles
+        // (app/bundles/index.tsx), and Clear under Offline cache is in
+        // Settings ((drawer)/settings.tsx:489 and :499). Code only: a failed
+        // clear cannot be brought about on a phone
+        // (use-workspace.owner.test.ts, cache-owner.sqlite.test.ts).
+        // Audience: the phone's Bundles, core modules/registry.ts:403
+        // (bundles:read or bundles:distribute), in its module (:392).
+        id: 'app-clears-other-workspace-again',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          "In the mobile app, another workspace's offline lists are cleared even when the first try fails",
+        whatChanged:
+          'In the mobile app, when the app changes workspace, for example when you switch workspace or a different account signs in on the phone, it clears what it keeps offline for the previous workspace and loads the new one in full. If that clear failed, or the app was closed before it ran, the app now clears again the next time you open a screen or the app.',
+        whyItMatters:
+          "Before, the app forgot that it still had to clear, so the previous workspace's kits could stay in your Bundles list until you switched workspace again or chose Clear under Offline cache in Settings.",
+        howItAffectsYou: 'Nothing changes when the clear works the first time.',
+        whatToDo:
+          'No action needed. Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['bundles:read', 'bundles:distribute'], modules: ['bundles'] },
+      },
+      {
+        // platform: web. From: S27a #431, its fallback entry (#431's body and
+        // its plan, section 7: published with the next What's New batch after
+        // S27a's deploy if part b has not deployed; part b is not built).
+        // Checked at f584141ba: the sentence,
+        // server/services/integration-events.ts:649-650
+        // (INTEGRATION_WRITE_REFUSED), thrown for a disconnect the row rule
+        // refused (services/connections.ts:770: QuickBooks Online, Sage
+        // Intacct and EasyPost) and for the QuickBooks account mapping and the
+        // Sage Intacct settings (:835 and :895), passed on as written by
+        // server/actions/connections.ts:53-58 and shown by the page's cards
+        // (components/settings/integrations-panel.tsx:160, :178 and :486;
+        // sage-intacct-card.tsx:121 and :140). The row rule is admin-only
+        // (migration 0146_connector_framework.sql:115-119), while the services
+        // check Manage integrations or Manage shipping, so a member given one
+        // who is not an admin is refused. Before (8ac9f4862 connections.ts:
+        // 703-708 with :714-716, :764-769 and :820-825) those updates asked for
+        // no row: a refused one changed 0 rows with no error, the card said
+        // QuickBooks disconnected, Account mapping saved, EasyPost
+        // disconnected, Sage Intacct disconnected or Sage Intacct settings
+        // saved (integrations-panel.tsx:158, :176 and :484;
+        // sage-intacct-card.tsx:119 and :138; neither card changed in #431),
+        // and a disconnect deleted the stored secret anyway, hence "a
+        // connection that no longer worked". The plan's sentence ("if a change
+        // on the Integrations page is not saved, for example disconnecting
+        // QuickBooks Online or rotating a webhook secret") is narrowed to the
+        // changes checked: no page offers a webhook secret rotation (its
+        // server action in server/actions/integration-endpoints.ts has no
+        // caller: actions-are-reachable.test.ts:79-82 lists it, and the action
+        // is not named here, as that guard counts any mention in a source file
+        // as a caller), and a refused connect, webhook or replay, which now
+        // says the same sentence, showed an error before, not a change done.
+        // The title says the web, as the phone's Integrations screen
+        // (app-integrations-access-denied) is for owners and admins, whom the
+        // row rule does not refuse. The page opening: connections.ts:200-205
+        // takes the manage key of each module that is on; 8ac9f4862
+        // connections.ts:186-208 picked it by the
+        // static role, so with both modules on the page's failed-sync list
+        // (settings/integrations/page.tsx:98) failed for a manager given
+        // Manage shipping and for an admin whose Manage integrations was
+        // removed (page.test.tsx:141-166); with only Shipping on, such a
+        // member could already open it (#431's review, finding 5). Code only:
+        // connections.test.ts:782 on, and page.test.tsx; Demo Co has both
+        // modules off. Audience: the page's checks, settings/integrations/
+        // page.tsx:61-63 (Manage integrations or Manage shipping) and :71-73
+        // (the integrations or the shipping module, else the module-off
+        // notice), as #431's body gives it.
+        id: 'integrations-unsaved-changes-say-so',
+        category: 'fixed',
+        area: 'Integrations',
+        title: 'On the web, Integrations says when a change was not saved',
+        whatChanged:
+          'On the web, when disconnecting QuickBooks Online, Sage Intacct or EasyPost, or saving the QuickBooks account mapping or the Sage Intacct settings, is refused because your access does not allow it, the Integrations page now says “This change was not saved: your access does not allow it. Ask an owner or an admin.” Before, it showed as done. A member who can manage only shipping can now open the Integrations page when Integrations is also switched on.',
+        whyItMatters:
+          'A change that only looked saved could leave a connection that no longer worked.',
+        howItAffectsYou: 'If a change is not saved, ask an owner or an admin to make it.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: {
+          anyPermission: ['integrations:manage', 'shipping:manage'],
+          modules: ['integrations', 'shipping'],
         },
       },
     ],

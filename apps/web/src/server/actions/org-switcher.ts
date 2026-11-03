@@ -4,9 +4,9 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { requireSession } from '@/lib/auth/session';
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -51,8 +51,6 @@ export async function switchOrganizationAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.org_switcher.switch_organization');
   }
 }

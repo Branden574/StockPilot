@@ -125,11 +125,21 @@ export default async function NewMaintenanceRequestPage({
 
   const assignment = assignmentRow.data as { charter_id: string | null; warehouse_id: string | null } | null;
   const launchCharterId = readUuidParam(sp.charterId);
+  // The Site defaults to the launch link's site, else the member's own. Only
+  // one the select offers (active charters): the select is controlled by the
+  // form's value, so an archived or inactive site matched no option and read
+  // "Select a site" while the form still held it, and saved the request under
+  // it (B97). The server still keeps any site of the organization a request
+  // names; this is only what the form starts with.
+  const offeredSiteIds = new Set(sites.map((s) => s.id));
+  const defaultCharterId = [launchCharterId, assignment?.charter_id].find(
+    (id): id is string => !!id && offeredSiteIds.has(id),
+  );
   // Every related id is a deep-link HINT: create() re-derives each against
   // this organization and drops one that does not belong to it.
   const defaults: Partial<MaintenanceRequestFormValues> = {
     subject: sp.subject?.trim().slice(0, 120) || undefined,
-    charterId: launchCharterId ?? assignment?.charter_id ?? undefined,
+    charterId: defaultCharterId,
     warehouseId: assignment?.warehouse_id ?? undefined,
     relatedItemId: readUuidParam(sp.itemId),
     relatedOrderRequestId: readUuidParam(sp.orderRequestId),

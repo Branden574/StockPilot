@@ -402,7 +402,7 @@ async function attemptDelivery(
     // host): don't retry a poisoned URL. A failed lookup of the host is a
     // network failure like any other and retries with backoff, up to
     // MAX_ATTEMPTS (docket B49).
-    errorMsg = e instanceof Error ? e.message : 'delivery failed';
+    errorMsg = deliveryFailureText(e, endpoint.type);
     if (isSsrfRefusal(e)) {
       await finalize(admin, endpoint, delivery, { ok: false, code: null, error: errorMsg, dead: true }, attempts);
       return { claimed: true, ok: false };
@@ -758,8 +758,37 @@ export async function sendTest(endpoint: {
     const ok = res.status >= 200 && res.status < 300;
     return { ok, status: res.status, error: ok ? null : `HTTP ${res.status}` };
   } catch (e) {
-    return { ok: false, status: null, error: e instanceof Error ? e.message : 'delivery failed' };
+    return { ok: false, status: null, error: deliveryFailureText(e, endpoint.type) };
   }
+}
+
+/**
+ * What a failed send says, on the Test button and in the stored outcome the
+ * Integrations page shows (S31). Never the guard's or fetch's own words: the
+ * guard's name the address a host resolved to ("<host> resolves to private
+ * IPv4 <address>"), so an admin could map the private network one webhook URL
+ * at a time. Not reported: it is the admin's own endpoint, and the outcome is
+ * stored for them.
+ */
+function deliveryFailureText(e: unknown, type: EndpointType): string {
+  if (isSsrfRefusal(e)) {
+    const reason = (e as SsrfBlockedError).reason;
+    if (/\bprivate\b/.test(reason)) {
+      return 'That address is not allowed: it points to a private or local network.';
+    }
+    if (type === 'slack') {
+      return 'That address is not a Slack webhook address. Use the one Slack gave you, on hooks.slack.com.';
+    }
+    if (type === 'teams') {
+      return 'That address is not a Microsoft Teams webhook address. Use the one Teams gave you, on webhook.office.com.';
+    }
+    return 'That address is not allowed.';
+  }
+  // AbortSignal.timeout's reason, which fetch and the guard's lookup reject with.
+  if ((e as { name?: unknown } | null)?.name === 'TimeoutError') {
+    return 'The endpoint did not answer in time.';
+  }
+  return 'Could not reach the endpoint.';
 }
 
 // ── Admin-managed endpoint CRUD ──────────────────────────────────────────────

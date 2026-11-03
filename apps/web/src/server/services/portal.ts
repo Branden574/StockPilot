@@ -16,6 +16,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { reportError } from '@/lib/error-reporter';
+import { ServiceError } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { pendingReturnQuantitiesByLine } from '@/server/services/returns';
@@ -46,7 +47,7 @@ async function fetchAllAdmin<T>(
     if (error) {
       const message = (error as { message?: string } | null)?.message ?? 'read failed';
       void reportError(new Error(message), { tag });
-      throw new Error('Catalog could not be loaded. Please try again.');
+      throw new ServiceError('validation_error', 'Catalog could not be loaded. Please try again.');
     }
     const rows = (data ?? []) as T[];
     out.push(...rows);
@@ -225,7 +226,9 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
       .maybeSingle(),
   ]);
   if (!moduleRow) return null;
-  if (!planAllowsB2bPortal(((org as OrgBillingState | null) ?? { plan: null }) as OrgBillingState)) {
+  if (
+    !planAllowsB2bPortal(((org as OrgBillingState | null) ?? { plan: null }) as OrgBillingState)
+  ) {
     return null;
   }
 
@@ -283,13 +286,15 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
     ),
     noCharge || !ctx.priceListId
       ? Promise.resolve([] as Array<{ item_id: string; unit_price: number }>)
-      : fetchAllAdmin<{ item_id: string; unit_price: number }>('portal.catalog.prices', (from, to) =>
-          admin
-            .from('price_list_items')
-            .select('item_id, unit_price')
-            .eq('price_list_id', ctx.priceListId as string)
-            .order('item_id', { ascending: true })
-            .range(from, to),
+      : fetchAllAdmin<{ item_id: string; unit_price: number }>(
+          'portal.catalog.prices',
+          (from, to) =>
+            admin
+              .from('price_list_items')
+              .select('item_id, unit_price')
+              .eq('price_list_id', ctx.priceListId as string)
+              .order('item_id', { ascending: true })
+              .range(from, to),
         ),
   ]);
   const prices = new Map(priceRows.map((r) => [r.item_id, Number(r.unit_price) || 0]));
@@ -336,7 +341,7 @@ export async function portalCatalog(ctx: PortalContext): Promise<PortalCatalogIt
     );
   } catch (err) {
     void reportError(new Error(rawErrorText(err)), { tag: 'portal.catalog.items' });
-    throw new Error('Catalog could not be loaded. Please try again.');
+    throw new ServiceError('validation_error', 'Catalog could not be loaded. Please try again.');
   }
 
   return items.map((i) => ({
@@ -379,12 +384,25 @@ export async function portalSubmitOrder(
   ctx: PortalContext,
   input: PortalSubmitInput,
 ): Promise<{ id: string }> {
-  const parsed = submitSchema.parse(input);
+  // A cart the schema refuses is the customer's to fix: its first issue's
+  // words, as a refusal (the action answers a ServiceError's words and the
+  // fixed sentence for anything else, S31).
+  const result = submitSchema.safeParse(input);
+  if (!result.success) {
+    throw new ServiceError(
+      'validation_error',
+      result.error.issues[0]?.message ?? 'Order could not be submitted. Please try again.',
+    );
+  }
+  const parsed = result.data;
   const catalog = await portalCatalog(ctx);
   const byId = new Map(catalog.map((c) => [c.itemId, c]));
   for (const line of parsed.lines) {
     if (!byId.has(line.itemId)) {
-      throw new Error('One of the items is no longer available to order.');
+      throw new ServiceError(
+        'validation_error',
+        'One of the items is no longer available to order.',
+      );
     }
   }
 
@@ -406,7 +424,7 @@ export async function portalSubmitOrder(
   // D2): placement's per-item cap, after the per-item sum. The database
   // refuses the same line (order_lines_invalid), mapped below.
   if (mergedLines.some((l) => l.quantity > ORDER_MAX_UNITS_PER_LINE)) {
-    throw new Error(PORTAL_LINE_TOO_LARGE_COPY);
+    throw new ServiceError('validation_error', PORTAL_LINE_TOO_LARGE_COPY);
   }
 
   const admin = createAdminClient();
@@ -426,7 +444,7 @@ export async function portalSubmitOrder(
   // used to read as "no warehouse" and cost 0.
   if (itemErr) {
     void reportError(new Error(itemErr.message), { tag: 'portal.submit.items' });
-    throw new Error('Order could not be submitted. Please try again.');
+    throw new ServiceError('validation_error', 'Order could not be submitted. Please try again.');
   }
   type ItemMeta = {
     id: string;
@@ -446,7 +464,8 @@ export async function portalSubmitOrder(
   for (const id of itemIds) {
     const row = itemMeta.get(id);
     if (row?.is_bundle === true) {
-      throw new Error(
+      throw new ServiceError(
+        'validation_error',
         `${row.name?.trim() || 'One of the items'} is a pre-assembled kit and can't be put on an order. Order the kit's items instead.`,
       );
     }
@@ -456,9 +475,11 @@ export async function portalSubmitOrder(
     const wh = itemMeta.get(id)?.warehouse_id;
     if (wh) warehouses.add(wh);
   }
-  if (warehouses.size === 0) throw new Error('Could not resolve a warehouse for this order.');
+  if (warehouses.size === 0)
+    throw new ServiceError('validation_error', 'Could not resolve a warehouse for this order.');
   if (warehouses.size > 1) {
-    throw new Error(
+    throw new ServiceError(
+      'validation_error',
       'These items ship from different warehouses — please place a separate order per warehouse.',
     );
   }
@@ -505,15 +526,18 @@ export async function portalSubmitOrder(
     // The ordering-visibility gate (0413): an item hidden after the catalog
     // read above. The customer hears what the pre-check says, never why.
     if ((writeErr as { hint?: string | null } | null)?.hint === 'order_item_hidden') {
-      throw new Error('One of the items is no longer available to order.');
+      throw new ServiceError(
+        'validation_error',
+        'One of the items is no longer available to order.',
+      );
     }
     if ((writeErr as { hint?: string | null } | null)?.hint === 'order_lines_invalid') {
-      throw new Error(PORTAL_LINE_TOO_LARGE_COPY);
+      throw new ServiceError('validation_error', PORTAL_LINE_TOO_LARGE_COPY);
     }
     void reportError(new Error(writeErr?.message ?? 'order write answered no row'), {
       tag: 'portal.submit.write',
     });
-    throw new Error('Order could not be submitted. Please try again.');
+    throw new ServiceError('validation_error', 'Order could not be submitted. Please try again.');
   }
 
   // Feed the org's integration/audit surfaces like any other new order.
@@ -575,7 +599,7 @@ export async function portalOrders(ctx: PortalContext): Promise<PortalOrder[]> {
   let pendingByLine = new Map<string, number>();
   try {
     const allLineIds = rows.flatMap((r) =>
-      (((r.lines as Array<Record<string, unknown>>) ?? []).map((l) => l.id as string)),
+      ((r.lines as Array<Record<string, unknown>>) ?? []).map((l) => l.id as string),
     );
     pendingByLine = await pendingReturnQuantitiesByLine(admin, ctx.organizationId, allLineIds);
   } catch (err) {

@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   endSession,
   runSignOutFlow,
+  SIGN_OUT_DEVICE_STEP_TIMEOUT_MS,
   unsyncedPrompt,
   type SignOutFlowDeps,
   type UnsyncedChoice,
@@ -302,6 +303,111 @@ describe('a sign-out forgets the saved workspace, once the session is gone', () 
   });
 });
 
+// S5 (plans/S5.md 3.3 step 3): a signed-out phone kept the account's push
+// token row, so it kept showing that account's notifications to whoever held
+// it next. The phone's own steps (hold registration, delete this phone's row,
+// tell the server) run while the session still exists, and the hold is
+// released once endSession has answered. Bounded, and a failure is only
+// warned: they never decide whether the person is signed out.
+describe('runSignOutFlow — this phone’s own steps around the session’s end (S5)', () => {
+  function withSteps(state: Partial<Harness['state']> = {}) {
+    const h = harness(state);
+    const before = vi.fn(async () => {
+      h.log.push('before');
+    });
+    const after = vi.fn(async (ended: boolean) => {
+      h.log.push(`after:${ended}`);
+    });
+    h.deps.beforeSessionEnds = before;
+    h.deps.afterSessionEnd = after;
+    return { h, before, after };
+  }
+
+  it('beforeSessionEnds runs after the hold for this account and before signOut("global"); afterSessionEnd right after it answers', async () => {
+    const { h } = withSteps();
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.log).toEqual(['count', 'hold', 'before', 'signOut:global', 'after:true', 'wipe']);
+  });
+
+  it('afterSessionEnd hears false when the session survived and true when it ended', async () => {
+    const kept = withSteps({ globalError: OFFLINE, localError: OFFLINE });
+    expect(await runSignOutFlow(kept.h.deps)).toBe('still-signed-in');
+    expect(kept.after).toHaveBeenCalledTimes(1);
+    expect(kept.after).toHaveBeenCalledWith(false);
+    expect(kept.h.log).toEqual([
+      'count',
+      'hold',
+      'before',
+      'signOut:global',
+      'signOut:local',
+      'after:false',
+    ]);
+
+    const ended = withSteps();
+    expect(await runSignOutFlow(ended.h.deps)).toBe('signed-out');
+    expect(ended.after).toHaveBeenCalledWith(true);
+  });
+
+  it('a step that never answers holds the sign-out no longer than its cap', async () => {
+    const { h, before, after } = withSteps();
+    before.mockImplementation(() => new Promise<void>(() => undefined));
+    after.mockImplementation(() => new Promise<void>(() => undefined));
+    expect(await runSignOutFlow(h.deps, { deviceStepTimeoutMs: 20 })).toBe('signed-out');
+    expect(h.log).toEqual(['count', 'hold', 'signOut:global', 'wipe']);
+  });
+
+  it('the cap is 6 s by default', async () => {
+    expect(SIGN_OUT_DEVICE_STEP_TIMEOUT_MS).toBe(6_000);
+    vi.useFakeTimers();
+    try {
+      const { h, before } = withSteps();
+      before.mockImplementation(() => new Promise<void>(() => undefined));
+      const run = runSignOutFlow(h.deps);
+      await vi.advanceTimersByTimeAsync(5_999);
+      expect(h.deps.signOut).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await run).toBe('signed-out');
+      expect(h.deps.signOut).toHaveBeenCalledWith('global');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a step that fails, or throws before it returns a promise, never stops the sign-out, and is warned', async () => {
+    const { h, before, after } = withSteps();
+    const warn = vi.fn();
+    h.deps.warn = warn;
+    before.mockRejectedValueOnce(new Error('offline'));
+    after.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    expect(await runSignOutFlow(h.deps)).toBe('signed-out');
+    expect(h.deps.wipeCache).toHaveBeenCalledTimes(1);
+    expect(h.deps.clearAccountStorage).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      '[auth] this phone could not finish its steps before signing out',
+      expect.any(Error),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      '[auth] this phone could not finish its steps after signing out',
+      expect.any(Error),
+    );
+  });
+
+  it('"Stay signed in" runs neither step; neither does the sign-out after an account deletion', async () => {
+    const stayed = withSteps({ unsynced: 2, afterDrain: 2, choice: 'stay' });
+    expect(await runSignOutFlow(stayed.h.deps)).toBe('stayed');
+    expect(stayed.before).not.toHaveBeenCalled();
+    expect(stayed.after).not.toHaveBeenCalled();
+
+    const deleted = withSteps({ unsynced: 3 });
+    expect(await runSignOutFlow(deleted.h.deps, { discardWithoutAsking: true })).toBe('signed-out');
+    expect(deleted.before).not.toHaveBeenCalled();
+    expect(deleted.after).not.toHaveBeenCalled();
+    expect(deleted.h.log).toEqual(['hold', 'signOut:global', 'discard', 'wipe']);
+  });
+});
+
 describe('auth-context wiring', () => {
   const src = readFileSync(path.resolve(__dirname, './auth-context.tsx'), 'utf8');
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
@@ -349,6 +455,60 @@ describe('auth-context wiring', () => {
       expect(screen, rel).not.toMatch(/onPress=\{signOut\}/);
       expect(screen, rel).toContain('onPress={() => void signOut()}');
     }
+  });
+
+  // S5: the phone's own steps (push-unbind.ts deviceSignOutSteps).
+  it('signOut: unbinds and notes the sign-out before the session ends, releases the hold after, and clears Notification Center once signed out', () => {
+    const body = fn('signOut');
+    expect(body).toMatch(
+      /const deviceSteps = deviceSignOutSteps\(\{\s*user: session\?\.user \?\? null,\s*unbindTimeoutMs: SIGN_OUT_UNBIND_TIMEOUT_MS,\s*note: sendSignedOutNote,\s*\}\);/,
+    );
+    expect(body).toMatch(
+      /beforeSessionEnds: deviceSteps\.beforeSessionEnds,\s*afterSessionEnd: deviceSteps\.afterSessionEnd,/,
+    );
+    expect(body).toContain("if (outcome === 'signed-out') await clearDeliveredNotifications();");
+    // The backstop: the finally releases a hold the flow did not.
+    const fin = body.indexOf('} finally {');
+    expect(fin).toBeGreaterThan(-1);
+    expect(body.indexOf('deviceSteps.release();')).toBeGreaterThan(fin);
+  });
+
+  it('the sign-out after an account deletion runs neither step (its token rows went with the account)', () => {
+    const body = fn('signOut');
+    expect(body).toContain('const afterAccountDeleted = opts?.afterAccountDeleted === true;');
+    expect(body).toMatch(
+      /\.\.\.\(afterAccountDeleted\s*\?\s*\{\}\s*:\s*\{\s*beforeSessionEnds: deviceSteps\.beforeSessionEnds,/,
+    );
+    expect(body).toContain('{ discardWithoutAsking: afterAccountDeleted }');
+  });
+
+  it('signOutToFallback unbinds before endSession("local"), registers again when the session survives, and writes no Audit log row', () => {
+    const body = fn('signOutToFallback');
+    expect(body).toMatch(
+      /const deviceSteps = deviceSignOutSteps\(\{\s*user: session\?\.user \?\? null,\s*unbindTimeoutMs: FALLBACK_UNBIND_TIMEOUT_MS,\s*\}\);/,
+    );
+    const before = body.indexOf('await deviceSteps.beforeSessionEnds();');
+    const end = body.indexOf('endSession(');
+    const after = body.indexOf('await deviceSteps.afterSessionEnd(ended);');
+    const kept = body.indexOf('if (!ended)');
+    expect(before).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(before);
+    expect(after).toBeGreaterThan(end);
+    expect(kept).toBeGreaterThan(after);
+    expect(body).not.toContain('sendSignedOutNote');
+    expect(body.indexOf('deviceSteps.release();')).toBeGreaterThan(body.indexOf('} finally {'));
+  });
+
+  it('signIn sends the signed-in note detached, and only once the password grant succeeded', () => {
+    const body = fn('signIn');
+    const refused = body.indexOf('return { error: error.message };');
+    const note = body.indexOf('void sendSignedInNote();');
+    const code = body.indexOf('await checkMfa();');
+    expect(refused).toBeGreaterThan(-1);
+    expect(note).toBeGreaterThan(refused);
+    expect(code).toBeGreaterThan(note);
+    expect(body.split('sendSignedInNote').length - 1).toBe(1);
+    expect(body).not.toMatch(/await sendSignedInNote/);
   });
 });
 

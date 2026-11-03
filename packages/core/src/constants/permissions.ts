@@ -592,8 +592,8 @@ export const PERMISSION_META: Record<Permission, PermissionMeta> = {
   },
   'items:export': {
     group: 'Items',
-    label: 'Export CSV',
-    description: 'Download the inventory list as a CSV file.',
+    label: 'Export items',
+    description: 'Download Items and Books as PDF, Excel or CSV files.',
   },
 
   'stock:adjust': {

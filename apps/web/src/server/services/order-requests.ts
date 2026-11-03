@@ -430,12 +430,6 @@ export interface PlaceOrderInput {
   body: unknown;
   surface: 'web' | 'app';
   /**
-   * The web action's legacy branch only (one release, for tabs opened before
-   * the deploy): the needed-by such a tab sent as an instant, passed through
-   * unconverted. The body's neededByLocal is then null.
-   */
-  legacyNeededBy?: string | null;
-  /**
    * The organization the page was opened in (the web action passes it; a
    * route answers for the X-Organization-Id it was sent, so it passes none).
    * The web's organization is the account's default one, which a workspace
@@ -1412,18 +1406,55 @@ export class OrderRequestsService {
   }
 
   /**
-   * Orders that have reached the signable stage but not yet been signed.
-   * Powers the dashboard "N orders waiting for signature" attention card.
+   * Orders that have reached the signable stage but not yet been signed, that
+   * this caller could hand over. Powers the dashboard "N orders waiting for
+   * signature" attention card.
    *
    * staged_for_pickup → waiting on the customer to come in and sign.
    * in_transit         → out for delivery, waiting for sign-on-arrival.
+   *
+   * Counted by the hand-over rule (server/lib/order-secrets handOverAllowed,
+   * the sign route's member path), so the card never counts an order its
+   * reader cannot complete (B72):
+   *   - an approver (orders:approve) of manager rank: the organization's,
+   *     and no access is read;
+   *   - any other approver who is not a viewer: those in the warehouses they
+   *     can write to (every warehouse with the all-warehouses flag; an order
+   *     with no warehouse is in none), and those they are the assigned driver
+   *     of;
+   *   - anyone else, a viewer granted orders:approve included: only those
+   *     they are the assigned driver of.
+   * Access that could not be read lists no warehouse (getWarehouseAccess), so
+   * that caller is counted only what they drive, as the rule then allows. The
+   * Orders module is the caller's to ask. A failed count read throws, as
+   * pendingCount()'s does.
    */
   async awaitingSignatureCount(): Promise<number> {
-    const { count, error } = await this.ctx.supabase
+    const approves = can(this.ctx, 'orders:approve') && this.ctx.role !== 'viewer';
+    // null: every waiting order; 'any': every one with a warehouse; else these.
+    let warehouses: readonly string[] | 'any' | null = null;
+    if (!approves) {
+      warehouses = [];
+    } else if (!isManagerOrAbove(this.ctx.role)) {
+      const access = await getWarehouseAccess(this.ctx);
+      warehouses = access.hasAllAccess ? 'any' : access.writableIds;
+    }
+    let query = this.ctx.supabase
       .from('order_requests')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', this.ctx.organizationId)
       .in('status', ['staged_for_pickup', 'in_transit']);
+    // The caller's own id and assigned warehouses (uuids), never typed input.
+    const driver = `assigned_delivery_user_id.eq.${this.ctx.userId}`;
+    if (warehouses === 'any') {
+      query = query.or(`${driver},warehouse_id.not.is.null`);
+    } else if (warehouses && warehouses.length === 0) {
+      query = query.eq('assigned_delivery_user_id', this.ctx.userId);
+    } else if (warehouses) {
+      // in-list-bound: the caller's assigned warehouses (an org's handful of sites)
+      query = query.or(`${driver},warehouse_id.in.(${warehouses.join(',')})`);
+    }
+    const { count, error } = await query;
     if (error) throw new ServiceError('internal_error', error.message);
     return count ?? 0;
   }
@@ -1809,14 +1840,6 @@ export class OrderRequestsService {
       const timeZone = await this.readOrgTimeZoneForOrder();
       const ms = wallClockToInstant(body.neededByLocal, timeZone);
       if (ms === null) {
-        throw new ServiceError('validation_error', ORDER_NEEDED_BY_INVALID_TIME_COPY, {
-          reason: 'needed_by_invalid_time',
-        });
-      }
-      neededBy = new Date(ms).toISOString();
-    } else if (input.legacyNeededBy) {
-      const ms = Date.parse(input.legacyNeededBy);
-      if (!Number.isFinite(ms)) {
         throw new ServiceError('validation_error', ORDER_NEEDED_BY_INVALID_TIME_COPY, {
           reason: 'needed_by_invalid_time',
         });

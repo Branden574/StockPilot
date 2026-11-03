@@ -3,9 +3,8 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { ConnectionsService } from '@/server/services/connections';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -34,9 +33,7 @@ export async function connectZendeskAction(
     revalidatePath('/dashboard/zendesk');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.zendesk.connect_zendesk');
   }
 }
 
@@ -60,9 +57,7 @@ export async function setZendeskSubdomainAction(
     revalidatePath('/dashboard/zendesk');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.zendesk.set_zendesk_subdomain');
   }
 }
 
@@ -74,8 +69,6 @@ export async function disconnectZendeskAction(): Promise<ActionResult> {
     revalidatePath('/dashboard/zendesk');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.zendesk.disconnect_zendesk');
   }
 }

@@ -8,6 +8,7 @@ import type { ModuleId } from '@stockpilot/core';
 vi.mock('@/server/services/audit', () => ({
   audit: vi.fn(async () => undefined),
 }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
 
 // The Vault key read goes through the service-role admin client + the
 // connector secret RPCs. Stub getConnectionSecret to return a fake EasyPost
@@ -63,6 +64,7 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => adminClientHolder.client),
 }));
 
+import { reportError } from '@/lib/error-reporter';
 import { EasyPostApiError } from '@/server/connectors/easypost/client';
 import { ShippingService } from './shipping';
 import { ServiceError } from './context';
@@ -1232,5 +1234,131 @@ describe('module + permission gating', () => {
       makeServiceContext(stub.client, { role: 'staff', enabledModules: SHIPPING_MODULES }),
     );
     await expect(svc.getRates('order-1', PARCEL)).rejects.toMatchObject({ code: 'forbidden' });
+  });
+});
+
+// S31: the carrier's own text (its response body snippet, or a network
+// error's words) went into a validation ServiceError, which the return-label
+// action and the label route answer as they are. The words are chosen by the
+// carrier's status now, and its text is only in the report.
+describe("ShippingService: the carrier's text never reaches the answer (S31)", () => {
+  const CARRIER_TEXT = 'EasyPost buyShipment failed (status 422): {"error":{"code":"ADDRESS.VERIFY.FAILURE"}}';
+
+  async function buyFailing(err: unknown) {
+    const draftRow = {
+      id: 'ship-1',
+      organization_id: 'org-test',
+      order_request_id: 'order-1',
+      status: 'draft',
+      easypost_shipment_id: 'shp_easypost_1',
+      currency: 'USD',
+      purchased_by: null,
+    };
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1 ? { data: [], error: null } : { data: [draftRow], error: null };
+      },
+      'carrier_shipments.update': { data: [{ id: 'ship-1' }], error: null },
+    });
+    adminClientHolder.client = stub.client;
+    buyShipmentSpy.mockRejectedValueOnce(err);
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+    try {
+      await svc.buyLabel('order-1', 'rate_1');
+    } catch (e) {
+      return e as ServiceError;
+    }
+    throw new Error('expected the buy to fail');
+  }
+
+  it('a buy the carrier refused (4xx): nothing was charged, check the details; the text only in the report', async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new EasyPostApiError(CARRIER_TEXT, 422);
+    const e = await buyFailing(err);
+    expect(e).toMatchObject({
+      code: 'validation_error',
+      message:
+        'The carrier refused the label purchase. Nothing was charged. Check the shipment details and try again.',
+    });
+    expect(e.message).not.toContain('ADDRESS');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'shipping.buy_failed',
+      organizationId: 'org-test',
+      level: 'warning',
+      extra: { status: 422 },
+    });
+  });
+
+  it('a buy that failed otherwise and was confirmed uncharged: nothing was charged, try again', async () => {
+    vi.mocked(reportError).mockClear();
+    const e = await buyFailing(new EasyPostApiError('EasyPost buyShipment failed (status 503)', 503));
+    expect(e).toMatchObject({
+      code: 'validation_error',
+      message: 'The label could not be bought. Nothing was charged. Try again.',
+    });
+    expect(reportError).toHaveBeenCalledTimes(1);
+  });
+
+  async function returnFailing(err: unknown) {
+    let selectCall = 0;
+    const stub = makeDeliveryStub({
+      'returns.select': {
+        data: [{ id: 'ret-1', organization_id: 'org-test', order_request_id: 'order-1', status: 'approved' }],
+        error: null,
+      },
+      'carrier_shipments.select': () => {
+        selectCall += 1;
+        return selectCall === 1
+          ? { data: [], error: null }
+          : { data: [{ parcel: { weight: 32, length: 10, width: 8, height: 4 } }], error: null };
+      },
+      'carrier_shipments.insert': { data: [{ id: 'ret-ship-1' }], error: null },
+      'carrier_shipments.update': { data: [{ id: 'ret-ship-1' }], error: null },
+    });
+    createShipmentSpy.mockRejectedValueOnce(err);
+    const svc = new ShippingService(
+      makeServiceContext(stub.client, { role: 'admin', enabledModules: SHIPPING_MODULES }),
+    );
+    try {
+      await svc.buyReturnLabel('ret-1');
+    } catch (e) {
+      return e as ServiceError;
+    }
+    throw new Error('expected the return shipment to fail');
+  }
+
+  it("a return shipment the carrier refused (4xx): check the addresses; the carrier's text only in the report", async () => {
+    vi.mocked(reportError).mockClear();
+    const err = new EasyPostApiError(CARRIER_TEXT, 422);
+    const e = await returnFailing(err);
+    expect(e).toMatchObject({
+      code: 'validation_error',
+      message:
+        "The carrier refused the return shipment. Check the order's shipping address and your organization's address, then try again.",
+    });
+    expect(e.message).not.toContain('ADDRESS.VERIFY');
+    expect(reportError).toHaveBeenCalledWith(err, {
+      tag: 'shipping.return_shipment_failed',
+      organizationId: 'org-test',
+      level: 'warning',
+      extra: { status: 422 },
+    });
+  });
+
+  it('a return shipment that got no answer (503 or a network error): the carrier could not be reached', async () => {
+    for (const err of [
+      new EasyPostApiError('EasyPost createShipment failed (status 503)', 503),
+      new TypeError('fetch failed'),
+    ]) {
+      const e = await returnFailing(err);
+      expect(e).toMatchObject({
+        code: 'validation_error',
+        message: 'The carrier could not be reached. Try again in a few minutes.',
+      });
+    }
   });
 });

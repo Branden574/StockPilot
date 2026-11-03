@@ -7,6 +7,7 @@ import { reportError } from '@/lib/error-reporter';
 import { OVERDUE_PO_STATUSES } from '@/lib/purchase-orders/tabs';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
+import { RowFailures } from '@/server/lib/action-error-result';
 import { createNotification } from './notifications';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -2088,6 +2089,7 @@ export class PurchaseOrdersService {
       supplierName: string;
       error: string;
     }> = [];
+    const failures = draftFailures('po.drafts_from_items', this.ctx.organizationId);
 
     for (const [supplierId, group] of bySupplier) {
       const lines = group.map((r) => {
@@ -2109,19 +2111,14 @@ export class PurchaseOrdersService {
           for (const r of group) if (openItemIds.has(r.id)) alreadyOnOpenPo++;
         }
       } catch (e) {
-        const msg =
-          e instanceof ServiceError
-            ? e.message
-            : e instanceof Error
-              ? e.message
-              : 'Unknown error';
         supplierFailures.push({
           supplierId,
           supplierName: supplierName.get(supplierId) ?? 'Unknown supplier',
-          error: msg,
+          error: failures.message(e),
         });
       }
     }
+    failures.report();
 
     return {
       createdPoIds,
@@ -2265,6 +2262,7 @@ export class PurchaseOrdersService {
       supplierName: string;
       error: string;
     }> = [];
+    const failures = draftFailures('po.drafts_from_reorder', this.ctx.organizationId);
     let skipped = 0;
 
     // One draft per supplier. The save re-checks the open set in the
@@ -2281,7 +2279,7 @@ export class PurchaseOrdersService {
         supplierFailures.push({
           supplierId,
           supplierName: supplierName.get(supplierId) ?? 'Unknown supplier',
-          error: errMessage(e),
+          error: failures.message(e),
         });
       }
     }
@@ -2306,10 +2304,11 @@ export class PurchaseOrdersService {
         supplierFailures.push({
           supplierId: null,
           supplierName: 'Unassigned (no supplier)',
-          error: errMessage(e),
+          error: failures.message(e),
         });
       }
     }
+    failures.report();
 
     return {
       createdPoIds,
@@ -2469,8 +2468,15 @@ export class PurchaseOrdersService {
   }
 }
 
-function errMessage(e: unknown): string {
-  if (e instanceof ServiceError) return e.message;
-  if (e instanceof Error) return e.message;
-  return 'Unknown error';
+/**
+ * A draft run's failed suppliers (S31). supplierFailures reaches the person
+ * (the Server Actions return it, the reorder toast shows it), so a supplier's
+ * words are a refusal the app wrote, else the fixed sentence; the unexpected
+ * failures are reported once for the run.
+ */
+function draftFailures(tag: string, organizationId: string): RowFailures {
+  return new RowFailures(tag, {
+    organizationId,
+    message: 'Could not create the draft for this supplier.',
+  });
 }

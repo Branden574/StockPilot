@@ -25,6 +25,11 @@ import { RELEASES } from './registry';
  * Added by docs/whats-new-s43a-2026-11 (2026-11-02): two releases published
  * together, directly below the B44 phone update draft, which is dated later
  * and stays a draft.
+ * Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: below the B44
+ * phone update draft at RELEASES[0]): that draft is folded into
+ * update-ready-and-fixes-2026-11, published at 04:21Z and so placed below the
+ * lists-delivery-sites-and-fixes release, so these two are at the top and no
+ * draft is left.
  *
  * - authenticator-code-requests-2026-11: S43a, #447 (squash dd7cc1458,
  *   merged 06:49:05Z; web build 2f1ae1d0e877). No phone update ships with
@@ -56,6 +61,18 @@ const integrator: ReleaseViewer = {
   permissions: ['integrations:manage'],
   enabledModules: ['integrations'],
 };
+
+/**
+ * Added by docs/whats-new-2026-11-02c (2026-11-02): the web fixes and archived
+ * charters releases, published later at the top, read or seen. They reach an
+ * owner and an admin, so a test that expects this file's releases to be such a
+ * reader's notice reads or sees them first (a read of a release a reader is
+ * not told changes nothing).
+ */
+const WEB_FIXES_ID = 'web-fixes-2026-11-02';
+const CHARTERS_ID = 'archived-charters-2026-11';
+const laterReads = () => [WEB_FIXES_ID, CHARTERS_ID].map((id) => read(id));
+const laterSeen = (): Record<string, boolean> => ({ [WEB_FIXES_ID]: true, [CHARTERS_ID]: true });
 
 const read = (id: string) => ({
   release_id: id,
@@ -131,28 +148,34 @@ function expectLinksReachable(r: Release): void {
 describe('the authenticator code release (S43a, release 1)', () => {
   const release = () => byId(AUTH_CODE_ID);
 
-  it('is published once, as revision 1, directly below the B44 phone update draft, the newest published release, above the integration retries release', () => {
+  // Renamed by docs/whats-new-2026-11-02 (2026-11-02; was: "is published once, as revision 1, directly below the B44 phone update draft, the newest published release, above the integration retries release", with the draft at RELEASES[0], this release at RELEASES[1] and the integration retries release at RELEASES[2]): the draft is folded into the update-ready-and-fixes release, published at 04:21Z below the lists-delivery-sites-and-fixes release, so this one is at the top. Claim kept: the newest published release, directly above the integration retries release.
+  // Renamed by docs/whats-new-2026-11-02c (2026-11-02; was: "is published once, as revision 1, at the top, the newest published release, above the integration retries release", with this release at RELEASES[0] and the newest published): the web fixes and archived charters releases are published later, at the top, so this one is at 2 and the web fixes release is the newest published. Claim kept: directly above the integration retries release.
+  it('is published once, as revision 1, directly below the web fixes and archived charters releases (published later), above the integration retries release', () => {
     expect(RELEASES.filter((r) => r.id === AUTH_CODE_ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
-    expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[2]?.id).toBe(RETRIES_ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft at 0, a draft, this release at 1 and the integration retries release at 2): each moves up one place, and the lists-delivery-sites-and-fixes release is at 2.
+    expect(RELEASES[2]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[2]?.status).toBe('published');
+    expect(RELEASES[3]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[4]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: AUTH_CODE_ID): the web fixes release is published later, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(WEB_FIXES_ID);
   });
 
   it('is dated in the past on a whole minute, after #447 merged and #454 went live, and after every release below it', () => {
     const at = Date.parse(release().publishedAt);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(at).toBeLessThanOrEqual(Date.now());
-    // #447 merged at 06:49:05Z; this release is written below the B44 draft
-    // and above the integration retries release, which merged at 15:33:44Z.
+    // #447 merged at 06:49:05Z; this release is written above the integration
+    // retries release, which merged at 15:33:44Z.
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T06:49:05Z'));
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T15:33:44Z'));
     expect(at).toBeLessThanOrEqual(Date.parse('2026-11-03T00:00:00Z'));
-    expect(at).toBeLessThan(Date.parse(RELEASES[0]!.publishedAt));
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: dated before RELEASES[0], the B44 phone update draft, and after RELEASES.slice(2)): the draft is folded into the update-ready-and-fixes release, dated 04:21Z, so no release is dated later than this one, the newest, at 0, and every release from 1 on is dated earlier.
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: RELEASES): the two releases at 0 and 1 are published later, so the newest from 2 on.
+    expect(at).toBe(Math.max(...RELEASES.slice(2).map((r) => Date.parse(r.publishedAt))));
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -183,8 +206,11 @@ describe('the authenticator code release (S43a, release 1)', () => {
           ?.entries.map((e) => e.id),
         v.role,
       ).toEqual(release().entries.map((e) => e.id));
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(AUTH_CODE_ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: nothing read or seen): the web fixes and archived charters releases are published later and reach an owner and an admin, so they are read or seen first.
+      expect(buildReleaseList(RELEASES, v, laterReads(), null).latestUnread?.id, v.role).toBe(
+        AUTH_CODE_ID,
+      );
+      expect(legacyAnnouncementsFor(RELEASES, v, laterSeen())[0], v.role).toEqual({
         id: AUTH_CODE_ID,
         date: '2026-11-02',
         title: release().title,
@@ -310,9 +336,10 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     expect(RELEASES.filter((r) => r.id === RETRIES_ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(RELEASES[1]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[2]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[3]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES[1] to [3], below the B44 phone update draft at 0): the draft is folded into the update-ready-and-fixes release, published below the lists-delivery-sites-and-fixes release, so each moves up one place.
+    expect(RELEASES[2]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[3]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[4]?.id).toBe(LISTS_ID);
   });
 
   it('is dated in the past on a whole minute, a minute before the authenticator code release, after #454 merged, and after every release below it', () => {
@@ -321,7 +348,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     expect(at).toBeLessThanOrEqual(Date.now());
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T15:33:44Z'));
     expect(Date.parse(byId(AUTH_CODE_ID).publishedAt) - at).toBe(60_000);
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES.slice(3)): this release is at 1 now, so every release from 2 on is below it.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -361,12 +389,18 @@ describe('the integration retries release (B49, B81 and B82)', () => {
         visibleReleases(RELEASES, v).map((r) => r.id),
         v.role,
       ).toContain(RETRIES_ID);
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(AUTH_CODE_ID);
+      // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: nothing read or seen first): the web fixes and archived charters releases are published later and reach these readers, so they are read or seen first.
+      expect(buildReleaseList(RELEASES, v, laterReads(), null).latestUnread?.id, v.role).toBe(
+        AUTH_CODE_ID,
+      );
       expect(
-        buildReleaseList(RELEASES, v, [read(AUTH_CODE_ID)], null).latestUnread?.id,
+        buildReleaseList(RELEASES, v, [...laterReads(), read(AUTH_CODE_ID)], null).latestUnread?.id,
         v.role,
       ).toBe(RETRIES_ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, { [AUTH_CODE_ID]: true })[0], v.role).toEqual({
+      expect(
+        legacyAnnouncementsFor(RELEASES, v, { ...laterSeen(), [AUTH_CODE_ID]: true })[0],
+        v.role,
+      ).toEqual({
         id: RETRIES_ID,
         date: '2026-11-02',
         title: release().title,

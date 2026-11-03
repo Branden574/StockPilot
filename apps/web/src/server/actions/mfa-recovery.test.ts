@@ -50,10 +50,16 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(() => stubHolder.stub!.client),
 }));
 
+vi.mock('@/server/services/auth-audit', () => ({
+  emitAuthAudit: vi.fn(async () => {}),
+  resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-1', role: 'admin' })),
+}));
+
 import { revalidatePath } from 'next/cache';
 
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
+import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
 
@@ -318,5 +324,80 @@ describe('consumeMfaRecoveryCodeAction', () => {
       false,
     );
     expect(deleteFactor).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The three recovery-code events audit.ts declares are written: a refused
+ * code (no organization, like a refused authenticator code), a used code that
+ * removed the authenticators, and new codes. Never the codes themselves.
+ */
+describe('consumeMfaRecoveryCodeAction — audit rows', () => {
+  const SUBMITTED = 'abcd-efgh-ijkl';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stubHolder.stub = null;
+    // The held read's verified session names the validated account again: a
+    // test above leaves it naming another account, or unreadable, and the
+    // action then refuses before the code is checked and writes no row.
+    cookie.session = { sub: 'user-1', aal: 'aal1' };
+  });
+
+  it('a refused recovery code writes mfa.recovery.failed with no organization, never the code', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: false, error: null },
+    });
+
+    const result = await consumeMfaRecoveryCodeAction({ code: SUBMITTED, password: PW });
+
+    expect(result.ok).toBe(false);
+    expect(emitAuthAudit).toHaveBeenCalledTimes(1);
+    expect(emitAuthAudit).toHaveBeenCalledWith({
+      event: 'mfa.recovery.failed',
+      userId: 'user-1',
+      organizationId: null,
+    });
+    expect(JSON.stringify(vi.mocked(emitAuthAudit).mock.calls)).not.toContain(SUBMITTED);
+  });
+
+  it('a used recovery code writes mfa.recovery.consumed with the default organization and the count removed', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: true, error: null },
+    });
+    attachAdminMfa(stubHolder.stub, [
+      { id: 'f1', factor_type: 'totp' },
+      { id: 'f2', factor_type: 'totp' },
+    ]);
+
+    const result = await consumeMfaRecoveryCodeAction({ code: SUBMITTED, password: PW });
+
+    expect(result.ok).toBe(true);
+    expect(emitAuthAudit).toHaveBeenCalledTimes(1);
+    expect(emitAuthAudit).toHaveBeenCalledWith({
+      event: 'mfa.recovery.consumed',
+      userId: 'user-1',
+      organizationId: 'org-1',
+      extra: { unenrolled: 2 },
+    });
+    expect(JSON.stringify(vi.mocked(emitAuthAudit).mock.calls)).not.toContain(SUBMITTED);
+  });
+
+  it('writes no row when the code was never checked', async () => {
+    vi.mocked(verifyPasswordSideChannel).mockResolvedValueOnce({
+      ok: false,
+      reason: 'invalid_password',
+      message: 'Incorrect password.',
+    } as Awaited<ReturnType<typeof verifyPasswordSideChannel>>);
+    stubHolder.stub = makeSupabaseStub({
+      ...LIMITER_OK,
+      'rpc:consume_mfa_recovery_code': { data: false, error: null },
+    });
+
+    await consumeMfaRecoveryCodeAction({ code: SUBMITTED, password: PW });
+
+    expect(emitAuthAudit).not.toHaveBeenCalled();
   });
 });

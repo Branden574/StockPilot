@@ -42,7 +42,9 @@ import {
   type InventoryListLookups,
 } from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
+import { charterCellLookup } from '@/lib/charter-display';
 import { ChartersService } from '@/server/services/charters';
+import { readCharterCellLabels } from '@/server/services/lib/unoffered-choices';
 import { InventoryService } from '@/server/services/inventory';
 import { createClient } from '@/lib/supabase/server';
 import { ItemImagesService } from '@/server/services/item-images';
@@ -289,6 +291,7 @@ type SectionData = {
   suppliers: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
+  unlistedCharters: InventoryListLookups['unlistedCharters'];
   trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   /** ACTIVE books awaiting first receipt (mig 0277) — the "Expected"
    *  chip's count badge (server mode; instant mode derives locally). */
@@ -365,6 +368,8 @@ async function booksTableSection({
   // sports:manage with the sports module on; the page asked the module gate
   // with the others).
   const canUnlinkFamilies = canUngroup && can(sessionCtx, 'sports:manage') && sportsEnabled;
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
   // The bulk "Cycle count" shortcut (B42): only for someone who can start a
   // count, by the server's floors (core countStartAllowed: a manager with
   // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
@@ -472,13 +477,14 @@ async function booksTableSection({
             lookups.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
           ),
           locations: new Map(lookups.locations.map((l) => [l.id, { name: l.name }])),
-          charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+          charters: charterCellLookup(lookups.charters, lookups.unlistedCharters),
         }}
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
         canUngroup={canUngroup}
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
+        canExport={canExport}
         canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -525,6 +531,7 @@ async function booksTableSection({
         suppliers: payload.suppliers,
         tags: payload.tags,
         charters: payload.charters,
+        unlistedCharters: payload.unlistedCharters,
         trends: new Map(Object.entries(payload.trends)),
         expectedCount: payload.expectedCount,
       };
@@ -563,13 +570,19 @@ async function booksTableSection({
         TagsService.forCurrentUser(),
         ChartersService.forCurrentUser(),
       ]);
-      const [categories, locations, suppliers, tags, charters] = await Promise.all([
-        categoriesSvc.list(),
-        locationsSvc.list({ sitesOnly: true }),
-        suppliersSvc.listForLookups(),
-        tagsSvc.list(),
-        chartersSvc.list(),
-      ]);
+      const [categories, locations, suppliers, tags, charters, unlistedCharters] =
+        await Promise.all([
+          categoriesSvc.list(),
+          locationsSvc.list({ sitesOnly: true }),
+          suppliersSvc.listForLookups(),
+          tagsSvc.list(),
+          chartersSvc.list(),
+          // Names only, for the Charter cell: an archived charter's records (B97).
+          readCharterCellLabels(
+            () => chartersSvc.listLabels({ exceptActive: true }),
+            'books.charter_cell_labels',
+          ),
+        ]);
       return {
         categories: categories.map((c) => ({
           id: c.id as string,
@@ -580,6 +593,9 @@ async function booksTableSection({
         suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
         tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
         charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+        unlistedCharters: unlistedCharters.flatMap((c) =>
+          c.status === 'active' ? [] : [{ ...c, status: c.status }],
+        ),
       };
     };
 
@@ -728,7 +744,7 @@ async function booksTableSection({
   const lookups = {
     categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
     locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
-    charters: new Map(data.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+    charters: charterCellLookup(data.charters, data.unlistedCharters),
   };
 
   const emptyState = booksEmptyState({
@@ -752,6 +768,7 @@ async function booksTableSection({
       canUngroup={canUngroup}
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
+      canExport={canExport}
       canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}

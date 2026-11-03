@@ -144,15 +144,27 @@ describe('the dates fixes release is published', () => {
     // nothing), so every slice below takes two more, and the member's seen sets below include them. Claim kept: a
     // member the public link release does not reach is told this one once the newer releases that reach them are
     // read.
-    const newerReads = ['authenticator-code-requests-2026-11', 'integration-retries-2026-11'].map(
-      (id) => ({
-        release_id: id,
-        revision: 1,
-        dismissed_at: null,
-        opened_at: '2026-11-02T15:50:00Z',
-        read_at: '2026-11-02T15:50:00Z',
-      }),
-    );
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: export-fixes-2026-10 for the owner and
+    // small-fixes-8-2026-10 for the member once the three newer releases are read, the reads and seen sets below
+    // without the update-ready-and-fixes release, and every slice below from 4 on one shorter): the
+    // update-ready-and-fixes release, which folds in the B44 phone update draft, is published directly below the
+    // lists-delivery-sites-and-fixes release and reaches every member, so once the three newer releases are read both
+    // are told it, and once it is read too they are told what they were told before. Its read sits fourth in
+    // redesignRead, so every slice below that reaches past it takes one more, and the member's seen sets below
+    // include it. Claim kept: a member the public link release does not reach is told this one once the newer
+    // releases that reach them are read.
+    const newerReads = [
+      'web-fixes-2026-11-02',
+      'archived-charters-2026-11',
+      'authenticator-code-requests-2026-11',
+      'integration-retries-2026-11',
+    ].map((id) => ({
+      release_id: id,
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-02T15:50:00Z',
+      read_at: '2026-11-02T15:50:00Z',
+    }));
     const listsRead = {
       release_id: 'lists-delivery-sites-and-fixes-2026-11',
       revision: 1,
@@ -160,16 +172,35 @@ describe('the dates fixes release is published', () => {
       opened_at: '2026-11-02T06:10:00Z',
       read_at: '2026-11-02T06:10:00Z',
     };
+    const updateReadyRead = {
+      release_id: 'update-ready-and-fixes-2026-11',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-02T17:40:00Z',
+      read_at: '2026-11-02T17:40:00Z',
+    };
     expect(
       buildReleaseList(RELEASES, everyone, [...newerReads, listsRead], null).latestUnread?.id,
-    ).toBe('export-fixes-2026-10');
+    ).toBe('update-ready-and-fixes-2026-11');
     expect(
       buildReleaseList(RELEASES, member, [...newerReads, listsRead], null).latestUnread?.id,
+    ).toBe('update-ready-and-fixes-2026-11');
+    expect(
+      buildReleaseList(RELEASES, everyone, [...newerReads, listsRead, updateReadyRead], null)
+        .latestUnread?.id,
+    ).toBe('export-fixes-2026-10');
+    expect(
+      buildReleaseList(RELEASES, member, [...newerReads, listsRead, updateReadyRead], null)
+        .latestUnread?.id,
     ).toBe('small-fixes-8-2026-10');
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: the reads from the authenticator code release): the web fixes and archived charters releases are published later, at the top, and reach an owner, so their reads sit first and every slice below takes two more.
     const redesignRead = [
+      'web-fixes-2026-11-02',
+      'archived-charters-2026-11',
       'authenticator-code-requests-2026-11',
       'integration-retries-2026-11',
       'lists-delivery-sites-and-fixes-2026-11',
+      'update-ready-and-fixes-2026-11',
       'export-fixes-2026-10',
       'small-fixes-8-2026-10',
       'manage-order-items-and-app-fixes-2026-10',
@@ -186,14 +217,25 @@ describe('the dates fixes release is published', () => {
       read_at: '2026-10-20T13:00:00Z',
     }));
     const redesignSeen = Object.fromEntries(redesignRead.map((r) => [r.release_id, true]));
+    // Added by docs/whats-new-2026-11-02 (2026-11-02): once the update-ready-and-fixes release (its read sits fourth
+    // in redesignRead, below the three newer releases' reads) is read with them, the owner is told the export fixes
+    // release and the member the small-fixes-8 release, the notices these two were told before it.
+    expect(
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 6), null).latestUnread?.id,
+    ).toBe('export-fixes-2026-10');
+    expect(
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 6), null).latestUnread?.id,
+    ).toBe('small-fixes-8-2026-10');
     // Added by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31): once the release at the top
     // (its read sits first in redesignRead) is read, the owner is told the small-fixes-8 release.
     // Re-pinned by docs/whats-new-2026-11-02b (2026-11-02; was: redesignRead.slice(0, 1)):
     // the lists-delivery-sites-and-fixes release's read now sits first in redesignRead, above it, and both are read.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: redesignRead.slice(0, 2)): the reads of the
     // authenticator code and integration retries releases now sit first in redesignRead, above them, and all four are read.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: redesignRead.slice(0, 4)): the read of the
+    // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all five are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 4), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 7), null).latestUnread?.id,
     ).toBe('small-fixes-8-2026-10');
     // Added by docs/whats-new-small-fixes-8 (2026-10-31): once the release at the top (its read sits first in
     // redesignRead) is read, both are told the manage-order-items-and-app-fixes release.
@@ -203,11 +245,13 @@ describe('the dates fixes release is published', () => {
     // the lists-delivery-sites-and-fixes release's read now sits first in redesignRead, above them, and all three are read.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: redesignRead.slice(0, 3)): the reads of the
     // authenticator code and integration retries releases now sit first in redesignRead, above them, and all five are read.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: redesignRead.slice(0, 5)): the read of the
+    // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all six are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 5), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 8), null).latestUnread?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 5), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 8), null).latestUnread?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     // Added by docs/whats-new-2026-10-30 (2026-10-30): once the release at the top (its read sits first in
     // redesignRead) is read, both are told the ended-session-group-page-fixes release.
@@ -219,11 +263,13 @@ describe('the dates fixes release is published', () => {
     // the lists-delivery-sites-and-fixes release's read now sits first in redesignRead, above them, and all four are read.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: redesignRead.slice(0, 4)): the reads of the
     // authenticator code and integration retries releases now sit first in redesignRead, above them, and all six are read.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: redesignRead.slice(0, 6)): the read of the
+    // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all seven are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 6), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 9), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 6), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 9), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     // Once the release at the top (its read sits first in redesignRead) is read, both are told
     // the unsubscribe-rack-question-fixes release.
@@ -237,11 +283,13 @@ describe('the dates fixes release is published', () => {
     // the lists-delivery-sites-and-fixes release's read now sits first in redesignRead, above them, and all five are read.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: redesignRead.slice(0, 5)): the reads of the
     // authenticator code and integration retries releases now sit first in redesignRead, above them, and all seven are read.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: redesignRead.slice(0, 7)): the read of the
+    // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all eight are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 7), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 10), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 7), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 10), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Once the newest release (its read sits first in redesignRead) is read, both are told
     // redesign-2026-10, as before.
@@ -257,11 +305,13 @@ describe('the dates fixes release is published', () => {
     // above the redesign ones now sit first in redesignRead, and all six are read.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: redesignRead.slice(0, 6)): the eight releases
     // above the redesign ones now sit first in redesignRead, and all eight are read.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: redesignRead.slice(0, 8)): the read of the
+    // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all nine are read.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 8), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 11), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 8), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 11), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(buildReleaseList(RELEASES, member, redesignRead, null).latestUnread?.id).toBe(
       'group-selected-2026-10',
@@ -299,35 +349,66 @@ describe('the dates fixes release is published', () => {
     // with nothing seen, and the seen sets below without the release at the top): the small-fixes-8 release,
     // published at the top, comes first until it is seen too, then the manage-order-items-and-app-fixes release,
     // and the seen sets below include it.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: small-fixes-8-2026-10 first once the three newer
+    // releases are seen, and the seen sets below without the update-ready-and-fixes release): the
+    // update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, comes
+    // first once they are seen, until it is seen too, then the small-fixes-8 release, and the seen sets below
+    // include it.
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without them): the web fixes and archived charters releases are published later, at the top.
+        'web-fixes-2026-11-02': true,
+        'archived-charters-2026-11': true,
         'authenticator-code-requests-2026-11': true,
         'integration-retries-2026-11': true,
         'lists-delivery-sites-and-fixes-2026-11': true,
       })[0]?.id,
-    ).toBe('small-fixes-8-2026-10');
+    ).toBe('update-ready-and-fixes-2026-11');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without them): the web fixes and archived charters releases are published later, at the top.
+        'web-fixes-2026-11-02': true,
+        'archived-charters-2026-11': true,
         'authenticator-code-requests-2026-11': true,
         'integration-retries-2026-11': true,
         'lists-delivery-sites-and-fixes-2026-11': true,
+        'update-ready-and-fixes-2026-11': true,
+      })[0]?.id,
+    ).toBe('small-fixes-8-2026-10');
+    expect(
+      legacyAnnouncementsFor(RELEASES, member, {
+        // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without them): the web fixes and archived charters releases are published later, at the top.
+        'web-fixes-2026-11-02': true,
+        'archived-charters-2026-11': true,
+        'authenticator-code-requests-2026-11': true,
+        'integration-retries-2026-11': true,
+        'lists-delivery-sites-and-fixes-2026-11': true,
+        'update-ready-and-fixes-2026-11': true,
         'small-fixes-8-2026-10': true,
       })[0]?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without them): the web fixes and archived charters releases are published later, at the top.
+        'web-fixes-2026-11-02': true,
+        'archived-charters-2026-11': true,
         'authenticator-code-requests-2026-11': true,
         'integration-retries-2026-11': true,
         'lists-delivery-sites-and-fixes-2026-11': true,
+        'update-ready-and-fixes-2026-11': true,
         'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
       })[0]?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without them): the web fixes and archived charters releases are published later, at the top.
+        'web-fixes-2026-11-02': true,
+        'archived-charters-2026-11': true,
         'authenticator-code-requests-2026-11': true,
         'integration-retries-2026-11': true,
         'lists-delivery-sites-and-fixes-2026-11': true,
+        'update-ready-and-fixes-2026-11': true,
         'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
         'ended-session-group-page-fixes-2026-10': true,
@@ -335,9 +416,13 @@ describe('the dates fixes release is published', () => {
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     expect(
       legacyAnnouncementsFor(RELEASES, member, {
+        // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: without them): the web fixes and archived charters releases are published later, at the top.
+        'web-fixes-2026-11-02': true,
+        'archived-charters-2026-11': true,
         'authenticator-code-requests-2026-11': true,
         'integration-retries-2026-11': true,
         'lists-delivery-sites-and-fixes-2026-11': true,
+        'update-ready-and-fixes-2026-11': true,
         'small-fixes-8-2026-10': true,
         'manage-order-items-and-app-fixes-2026-10': true,
         'ended-session-group-page-fixes-2026-10': true,
@@ -427,7 +512,8 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: 17): the export fixes release is published after it, at the top, so it sits one place lower.
     // Re-pinned by docs/whats-new-2026-11-02b (2026-11-02; was: 19): the lists-delivery-sites-and-fixes release is published after it, directly below the B44 phone update draft, so it sits one place lower.
     // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: 20): the authenticator code and integration retries releases are published after it, directly below the B44 phone update draft, so it sits two places lower.
-    expect(at).toBe(22);
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: 22): the web fixes and archived charters releases are published after it, at the top, so it sits two places lower.
+    expect(at).toBe(24);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: the pages-keep-groups-whole release at 0, the public link release at 8): the three redesign releases and the parked ai-search-finds-every-item release (#367) are published at the top, above the pages-keep-groups-whole release, so every position below them moves down by four.
@@ -436,49 +522,53 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-2026-10-30 (2026-10-30; was: the ended-session-group-page-fixes release at 0, slice(2, 6), the public link release at 14): the manage-order-items-and-app-fixes release is published at the top, above it, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-small-fixes-8 (2026-10-31; was: the slice 8 draft at 0): it is published in the same place, at the top, the newest release.
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: the small-fixes-8 release at 0): the export fixes release is published at the top, the newest release, directly above it.
-    expect(RELEASES[1]?.id).toBe('authenticator-code-requests-2026-11');
-    expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe('integration-retries-2026-11');
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES[1] to [3], below the B44 phone update draft at 0): the draft is folded into the update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, so these three move up one place and it takes [3]; every position from [4] down stays.
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0 and the public link release at 21): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
+    expect(RELEASES[2]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[3]?.id).toBe('integration-retries-2026-11');
     expect(RELEASES[3]?.status).toBe('published');
-    expect(RELEASES[4]?.id).toBe('export-fixes-2026-10');
+    expect(RELEASES[4]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
     expect(RELEASES[4]?.status).toBe('published');
-    // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
-    expect(RELEASES[5]?.id).toBe('small-fixes-8-2026-10');
+    expect(RELEASES[5]?.id).toBe('update-ready-and-fixes-2026-11');
     expect(RELEASES[5]?.status).toBe('published');
-    expect(RELEASES[6]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
+    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES[6]?.status).toBe('published');
-    expect(RELEASES[7]?.id).toBe('ended-session-group-page-fixes-2026-10');
+    // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
+    expect(RELEASES[7]?.id).toBe('small-fixes-8-2026-10');
     expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    expect(RELEASES[8]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES.slice(9, 13).map((r) => [r.id, r.status])).toEqual([
+    expect(RELEASES[9]?.id).toBe('ended-session-group-page-fixes-2026-10');
+    expect(RELEASES[9]?.status).toBe('published');
+    expect(RELEASES[10]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    expect(RELEASES[10]?.status).toBe('published');
+    expect(RELEASES.slice(11, 15).map((r) => [r.id, r.status])).toEqual([
       ['redesign-2026-10', 'published'],
       ['redesign-mobile-app-2026-10', 'published'],
       ['redesign-web-fixes-2026-10', 'published'],
       ['ai-search-finds-every-item-2026-10', 'published'],
     ]);
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
-    expect(RELEASES[13]?.id).toBe('pages-keep-groups-whole-2026-10');
-    expect(RELEASES[13]?.status).toBe('published');
-    expect(RELEASES[14]?.id).toBe('ungroup-follow-ups-2026-10');
-    expect(RELEASES[14]?.status).toBe('published');
-    expect(RELEASES[15]?.id).toBe('group-selected-2026-10');
+    expect(RELEASES[15]?.id).toBe('pages-keep-groups-whole-2026-10');
     expect(RELEASES[15]?.status).toBe('published');
-    expect(RELEASES[16]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[16]?.id).toBe('ungroup-follow-ups-2026-10');
     expect(RELEASES[16]?.status).toBe('published');
-    expect(RELEASES[17]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[17]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[17]?.status).toBe('published');
-    expect(RELEASES[18]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[18]?.id).toBe('ungroup-2026-10');
     expect(RELEASES[18]?.status).toBe('published');
-    expect(RELEASES[19]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[19]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[19]?.status).toBe('published');
-    expect(RELEASES[20]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[20]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[20]?.status).toBe('published');
-    expect(RELEASES[21]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[21]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[21]?.status).toBe('published');
-    expect(Date.parse(RELEASES[21]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[22]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[22]?.status).toBe('published');
+    expect(RELEASES[23]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[23]?.status).toBe('published');
+    expect(Date.parse(RELEASES[23]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }

@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import { resolvePortalContext, portalSubmitOrder, type PortalSubmitInput } from '@/server/services/portal';
 import { createPortalReturn } from '@/server/services/returns';
 import { exchangeOptionsForPortal, loadPortalReturnSheet } from '@/server/services/returns-requester';
@@ -35,7 +36,12 @@ export async function submitPortalOrderAction(
     revalidatePath('/portal');
     return ok(created);
   } catch (e) {
-    return err('validation_error', e instanceof Error ? e.message : 'Order could not be submitted.');
+    // The service's refusals are ServiceErrors with their words (an item no
+    // longer orderable, a line too large); anything else is the fixed
+    // sentence, reported (S31).
+    return actionErrorResult(e, 'actions.portal.submit_portal_order', {
+      organizationId: ctx.organizationId,
+    });
   }
 }
 

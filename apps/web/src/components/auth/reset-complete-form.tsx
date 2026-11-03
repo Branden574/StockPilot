@@ -87,7 +87,8 @@ export function ResetCompleteForm() {
       if (res.error.details?.reason === 'aal2_required') {
         // The account has an authenticator. Both passwords stay as typed.
         if (codeSent) {
-          // The code was refused, or could not be checked: a new one is needed.
+          // The code was refused, could not be checked, or the code step
+          // asked for a pause (too many code attempts): a new one is needed.
           setCode('');
           setError(res.error.message);
         } else {
@@ -98,9 +99,10 @@ export function ResetCompleteForm() {
         setFocusCode((n) => n + 1);
         return;
       }
-      // Anything else (a refused password, too many attempts, an expired
-      // link) keeps the box and its code: once a code is accepted the session
-      // is AAL2, and the server skips the code on the next press.
+      // Anything else (a refused password, too many presses from this
+      // address, an expired link) keeps the box and its code: once a code is
+      // accepted the session is AAL2, and the server skips the code on the
+      // next press.
       toast.error(res.error.message);
       setError(res.error.message);
       return;

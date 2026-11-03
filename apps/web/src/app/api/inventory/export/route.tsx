@@ -19,6 +19,7 @@ import {
   EXPORT_TOO_MANY_IMAGES_MESSAGE,
   type FetchExportImageBytesResult,
 } from '@/lib/exports/export-images';
+import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { buildExportFilename } from '@/lib/exports/filename';
 import {
   exportItemTypeKind,
@@ -75,7 +76,12 @@ export async function POST(request: NextRequest) {
     const ctx = await withApiContext(request);
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     if (!can(ctx, 'items:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+      // Words with the code (B68): the export dialog and a link opened in the
+      // browser say which permission to ask for, never "forbidden" alone.
+      return NextResponse.json(
+        { error: 'forbidden', message: EXPORT_FORBIDDEN_COPY },
+        { status: 403 },
+      );
     }
     // Compute-heavy (up to 10k rows -> in-memory xlsx/pdf render). Cap like
     // every other export route so one account can't sustain a serverless-cost

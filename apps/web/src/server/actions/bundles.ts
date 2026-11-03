@@ -5,7 +5,6 @@ import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
 import {
   BUNDLE_DUPLICATE_COMPONENT,
   BUNDLE_NO_REQUIRED_COMPONENT,
@@ -13,13 +12,13 @@ import {
   componentsHaveRequired,
 } from '@/lib/bundles/component-set';
 import { BundlesService } from '@/server/services/bundles';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.bundles');
 }
 
 const componentInputSchema = z.object({

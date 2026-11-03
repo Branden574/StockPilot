@@ -44,6 +44,10 @@ vi.mock('@/lib/env', () => ({
   },
 }));
 
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+
+import { reportError } from '@/lib/error-reporter';
+
 import { verifyPasswordSideChannel } from './verify-password';
 
 describe('verifyPasswordSideChannel', () => {
@@ -102,15 +106,20 @@ describe('verifyPasswordSideChannel', () => {
     await expect(verifyPasswordSideChannel('u@example.test', 'pw')).resolves.toEqual({ ok: true });
   });
 
-  it('reports internal_error (not invalid_password) when the client throws', async () => {
-    refs.signInWithPassword.mockRejectedValue(new Error('network down'));
+  // S31: the message used to be the thrown error's own text, and the MFA,
+  // recovery-code, ownership-transfer and email-change actions answer it as
+  // it is. It is the fixed sentence now, and the error goes to the report.
+  it('reports internal_error (not invalid_password) when the client throws, in plain words', async () => {
+    const thrown = new Error('getaddrinfo ENOTFOUND example.supabase.co');
+    refs.signInWithPassword.mockRejectedValue(thrown);
 
     const res = await verifyPasswordSideChannel('u@example.test', 'pw');
 
     expect(res).toEqual({
       ok: false,
       reason: 'internal_error',
-      message: 'network down',
+      message: 'Could not verify your current password. Please try again.',
     });
+    expect(reportError).toHaveBeenCalledWith(thrown, { tag: 'auth.verify_password' });
   });
 });

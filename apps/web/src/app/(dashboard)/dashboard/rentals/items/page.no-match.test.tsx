@@ -106,6 +106,9 @@ vi.mock('@/server/services/suppliers', () => ({
 vi.mock('@/server/services/tags', () => ({
   TagsService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
 }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: { forCurrentUser: vi.fn(async () => ({ listLabels: vi.fn(async () => []) })) },
+}));
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: {
     forCurrentUser: vi.fn(async () => ({

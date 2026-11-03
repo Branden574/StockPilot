@@ -3,9 +3,9 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderRequestsService } from '@/server/services/order-requests';
@@ -14,7 +14,6 @@ import {
   err,
   formatWallClock,
   HOLD_FAILED_COPY,
-  mintOrderSubmissionKey,
   NEEDED_BY_FAILED_COPY,
   NEEDED_BY_SUGGESTION_REASON,
   ok,
@@ -27,7 +26,6 @@ import {
   type HoldOutcome,
   type NeededByRevisionOutcome,
   type OrderCreateRequestInput,
-  type OrderPlaceAnswer,
   type OrderSubmissionStatus,
   type OrderSummary,
 } from '@stockpilot/core';
@@ -45,14 +43,19 @@ function toResult<T>(error: unknown): ActionResult<T> {
       ? err(error.code, error.message, error.details)
       : err(error.code, error.message);
   }
-  // The order service refuses a change outside the caller's warehouses with
-  // assertWarehouseAccess's ForbiddenError (every route answers it 403), not a
-  // ServiceError. It is a refusal with a sentence for people, never a fault:
-  // as 'internal_error' the Approve partial and Resume dialog said "Try again"
-  // (small fixes slice 2 review). The cycle-count and attachment actions
-  // already answer it this way.
-  if (error instanceof ForbiddenError) return err('forbidden', error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  // The rest is the shared answer (S31), which keeps every order action in
+  // step with the others:
+  //   - the order service refuses a change outside the caller's warehouses
+  //     with assertWarehouseAccess's ForbiddenError (every route answers it
+  //     403), not a ServiceError. It is a refusal with a sentence for people,
+  //     never a fault: as 'internal_error' the Approve partial and Resume
+  //     dialog said "Try again" (small fixes slice 2 review), so it is
+  //     'forbidden' with its words;
+  //   - a permission or account-status read that failed in withContext says
+  //     its own "could not be checked" sentence, reported as a warning, never
+  //     the generic sentence at error level (S31 review);
+  //   - anything else: the generic sentence, reported under this tag.
+  return actionErrorResult(error, 'actions.order_requests');
 }
 
 /**
@@ -70,53 +73,6 @@ function toResult<T>(error: unknown): ActionResult<T> {
 function revalidateOrdersCatalog() {
   revalidateTag('orders-new-v2-catalog', 'max');
 }
-
-/**
- * The body a New order tab opened BEFORE the PO-2 deploy still sends (no
- * submission key; needed-by as an instant). Read for ONE release by the
- * legacy branch below, then removed (phone ordering plan, follow-up 9). Such
- * a tab has no retry protection, the same as before the deploy.
- *
- * When it can arrive (review round 1, checked in next 16.3.5): a server
- * action's id is a hash salted with the build's encryption key, which `next
- * build` keeps in `.next/cache/.rscinfo` for 14 days and reuses while the
- * build cache is restored (NEXT_SERVER_ACTIONS_ENCRYPTION_KEY is not set).
- * Under Vercel Skew Protection (on, 12 hours) a tab from the previous
- * deployment is pinned to THAT deployment, so for up to 12 hours an old tab
- * runs the OLD action, which calls create_order_request directly and writes
- * no order_submissions row. After that, an old tab reaches this branch only
- * while the build key is unchanged; otherwise it gets "Failed to find Server
- * Action" (it was never protected, and nothing is placed).
- */
-const legacyCreateSchema = z.object({
-  warehouseId: z.string().uuid(),
-  notes: z.string().max(2000).nullable().optional(),
-  neededBy: z.string().datetime({ offset: true }).nullish(),
-  fulfillmentType: z.enum(['pickup', 'delivery']).default('pickup'),
-  requesterPhone: z.string().trim().max(40).nullish(),
-  deliveryCharterId: z.string().uuid().nullish(),
-  pickupLocationNotes: z.string().trim().max(2000).nullish(),
-  onBehalfOf: z
-    .object({
-      name: z.string().trim().min(1).max(120),
-      email: z.string().trim().email().max(254),
-    })
-    .nullish(),
-  lines: z
-    .array(
-      z.object({
-        itemId: z.string().uuid(),
-        quantity: z.coerce.number(),
-        notes: z.string().max(500).nullable().optional(),
-      }),
-    )
-    .min(1)
-    .max(100),
-  kits: z
-    .array(z.object({ bundleId: z.string().uuid(), count: z.number().int().positive().max(10_000) }))
-    .max(100)
-    .optional(),
-});
 
 /** An action error from the order submission service: the service's code,
  *  core's sentence and its details (reason, settled, replay, items...), so
@@ -163,56 +119,37 @@ const pageOrganizationSchema = z.object({ organizationId: z.string().trim().min(
  * recorded, never settled), and every refusal names the organization that
  * answered (review round 1).
  *
- * LEGACY BRANCH (one release): a body without a key comes from a tab opened
- * before the deploy (see legacyCreateSchema for when one can arrive). It gets
- * a server-minted key and the session as placer, and its needed-by instant
- * passes through unconverted. No pending record exists for it, so it has no
- * retry protection, as before; it names no organization.
+ * A body without a submission key is refused as unreadable before anything is
+ * read (B20a). A one-release legacy branch used to place such a body, from a
+ * New order tab opened before the PO-2 deploy of 2026-10-04, under a key it
+ * minted on every call (so a resend placed a second order). Such a tab runs
+ * its own deployment's action under Skew Protection, and after that reaches
+ * this one only while the build's action key is unchanged, at most 14 days
+ * (`.next/cache/.rscinfo`); both have long passed.
  */
 export async function createOrderRequestAction(
-  input: OrderCreateRequestInput | z.input<typeof legacyCreateSchema>,
+  input: OrderCreateRequestInput,
   page?: z.input<typeof pageOrganizationSchema>,
 ): Promise<ActionResult<{ organizationId: string; result: { replay: boolean; order: OrderSummary } }>> {
   let organizationId: string | null = null;
   try {
-    const keyed = !!input && typeof input === 'object' && 'idempotencyKey' in input;
-    const scope = keyed ? pageOrganizationSchema.safeParse(page) : null;
-    if (scope && !scope.success) {
+    if (!input || typeof input !== 'object' || !('idempotencyKey' in input)) {
+      return err('validation_error', ORDER_BODY_UNREADABLE_COPY, {
+        reason: 'invalid',
+        field: 'idempotencyKey',
+      });
+    }
+    const scope = pageOrganizationSchema.safeParse(page);
+    if (!scope.success) {
       return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'organizationId' });
     }
     const svc = await OrderRequestsService.forCurrentUser();
     organizationId = svc.organizationId;
-    let answer: OrderPlaceAnswer;
-    if (keyed && scope?.success) {
-      answer = await svc.create({
-        body: input,
-        surface: 'web',
-        expectedOrganizationId: scope.data.organizationId,
-      });
-    } else {
-      const legacy = legacyCreateSchema.safeParse(input);
-      if (!legacy.success) {
-        return err('validation_error', ORDER_BODY_UNREADABLE_COPY, { reason: 'invalid', field: 'body' });
-      }
-      const ctx = await withContext();
-      const l = legacy.data;
-      answer = await svc.create({
-        body: {
-          idempotencyKey: mintOrderSubmissionKey(),
-          placerUserId: ctx.userId,
-          warehouseId: l.warehouseId,
-          fulfillmentType: l.fulfillmentType,
-          deliveryCharterId: l.fulfillmentType === 'delivery' ? (l.deliveryCharterId ?? null) : null,
-          onBehalfOf: l.onBehalfOf ?? null,
-          notes: l.notes ?? null,
-          neededByLocal: null,
-          lines: l.lines.map((line) => ({ itemId: line.itemId, quantity: line.quantity })),
-          ...(l.kits && l.kits.length > 0 ? { kits: l.kits } : {}),
-        },
-        surface: 'web',
-        legacyNeededBy: l.neededBy ?? null,
-      });
-    }
+    const answer = await svc.create({
+      body: input,
+      surface: 'web',
+      expectedOrganizationId: scope.data.organizationId,
+    });
     revalidatePath('/dashboard/orders');
     return ok({ organizationId: answer.organizationId, result: { replay: answer.replay, order: answer.order } });
   } catch (e) {

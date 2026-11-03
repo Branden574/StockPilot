@@ -14,6 +14,7 @@ import { createClient } from '@/lib/supabase/server';
 import { fetchAllRowsByIds, rawErrorText } from '@/server/services/lib/fetch-by-ids';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from '@/server/services/lib/lookup-ceiling';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { readCharterLabels } from '@/server/services/lib/unoffered-choices';
 import { env } from '@/lib/env';
 
 import { can, resolveOrgTimezone, resolveTerminology, type Role } from '@stockpilot/core';
@@ -68,8 +69,19 @@ export default async function TeamPage() {
     .filter((m) => m.role === 'viewer')
     .map((m) => m.user_id);
 
+  // Charters members hold that the active list lacks: an archived or inactive
+  // charter keeps its warehouse links and members' assignments, so the member
+  // Charters dialog lists it, named '(archived)' or '(inactive)', and its Save
+  // keeps it unless it is unticked (S44). Their names are read by id, only when
+  // a member holds one. A LABEL read: the dialog keeps every held id whatever
+  // it answers, and a failed read names them neutrally (reported, no error page).
+  const activeCharterIds = new Set(chartersList.map((c) => c.id));
+  const unlistedCharterIds = [...new Set(members.flatMap((m) => m.charter_ids))].filter(
+    (id) => !activeCharterIds.has(id),
+  );
+
   type GrantRow = { user_id: string; category_id: string };
-  const [categoryRows, grants] = await Promise.all([
+  const [categoryRows, grants, unlistedCharters] = await Promise.all([
     // All active categories in this org — populates the viewer
     // category-access dialog. Sorted alphabetically for predictable UI.
     //
@@ -125,6 +137,11 @@ export default async function TeamPage() {
         .order('id', { ascending: true })
         .range(from, to),
     ),
+    readCharterLabels(
+      (ids) => charterSvc.namesByIds(ids),
+      unlistedCharterIds,
+      'team.member_charters.labels',
+    ),
   ]);
 
   const allCategories = categoryRows.map((c) => ({ id: c.id, name: c.name }));
@@ -178,6 +195,7 @@ export default async function TeamPage() {
           acceptUrl: `${env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')}/i/${i.token as string}`,
         }))}
         charters={chartersList.map((c) => ({ id: c.id, name: c.name }))}
+        unlistedCharters={unlistedCharters}
         warehouses={warehousesList.map((w) => ({ id: w.id, name: w.name }))}
         warehouseCharters={warehouseCharters}
         allCategories={allCategories}

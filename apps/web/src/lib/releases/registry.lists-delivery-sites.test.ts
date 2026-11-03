@@ -27,6 +27,10 @@ import { RELEASES } from './registry';
  * 05:29:49Z) and S4 (#379, merged 02:00Z), in one release. No phone update
  * ships with it. It is the newest published release and sits directly below
  * the B44 phone update draft, which is dated later and stays a draft.
+ * Re-pinned by docs/whats-new-2026-11-02 (2026-11-02): the B44 draft is folded
+ * into update-ready-and-fixes-2026-11, published at 04:21Z, so that release
+ * sits directly below this one, above the export fixes release, and no draft
+ * is left.
  *
  * Its own file, so the release tests other open branches edit stay as they
  * are. These tests pin what a published release must hold: its id, status,
@@ -80,32 +84,43 @@ function readerText(r: Release): string[] {
  */
 const AUTH_CODE_ID = 'authenticator-code-requests-2026-11';
 const RETRIES_ID = 'integration-retries-2026-11';
-const newerReads = [AUTH_CODE_ID, RETRIES_ID].map((id) => ({
+// Added by docs/whats-new-2026-11-02c (2026-11-02): the web fixes and archived charters releases, published later, at the top; read and seen with the newer releases below.
+const WEB_FIXES_ID = 'web-fixes-2026-11-02';
+const CHARTERS_ID = 'archived-charters-2026-11';
+const newerReads = [WEB_FIXES_ID, CHARTERS_ID, AUTH_CODE_ID, RETRIES_ID].map((id) => ({
   release_id: id,
   revision: 1,
   dismissed_at: null,
   opened_at: '2026-11-02T15:50:00Z',
   read_at: '2026-11-02T15:50:00Z',
 }));
-const newerSeen: Record<string, boolean> = { [AUTH_CODE_ID]: true, [RETRIES_ID]: true };
+const newerSeen: Record<string, boolean> = {
+  [WEB_FIXES_ID]: true,
+  [CHARTERS_ID]: true,
+  [AUTH_CODE_ID]: true,
+  [RETRIES_ID]: true,
+};
 
 describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
   // Renamed by docs/whats-new-s43a-2026-11 (2026-11-02; was: "is published once, as revision 1, directly below the B44 phone update draft and above the export fixes release", with ID at RELEASES[1], the export fixes release at RELEASES[2] and ID the first published release): the authenticator code and integration retries releases are published later, directly below the B44 phone update draft and above this one, so it and the export fixes release move down by two, and it is the third published release. Claim kept: published once, as revision 1, below the B44 phone update draft and directly above the export fixes release.
-  it('is published once, as revision 1, directly below the authenticator code and integration retries releases (published later, below the B44 phone update draft) and above the export fixes release', () => {
+  // Renamed by docs/whats-new-2026-11-02 (2026-11-02; was: "... (published later, below the B44 phone update draft) and above the export fixes release", with the draft at RELEASES[0], ID at RELEASES[3] and the export fixes release at RELEASES[4]): the draft is folded into the update-ready-and-fixes release, published at 04:21Z, directly below this one and above the export fixes release. Claim kept: directly below the authenticator code and integration retries releases.
+  it('is published once, as revision 1, directly below the authenticator code and integration retries releases (published later, at the top) and above the update-ready-and-fixes release, which is above the export fixes release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
-    expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[1]?.status).toBe('published');
-    expect(RELEASES[2]?.id).toBe(RETRIES_ID);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft at 0, a draft, the two newer releases at 1 and 2, ID at 3 and the export fixes release at 4): the two newer releases and ID each move up one place, the update-ready-and-fixes release takes 3, and the export fixes release stays at 4.
+    expect(RELEASES[2]?.id).toBe(AUTH_CODE_ID);
     expect(RELEASES[2]?.status).toBe('published');
-    expect(RELEASES[3]?.id).toBe(ID);
-    expect(RELEASES[4]?.id).toBe('export-fixes-2026-10');
+    expect(RELEASES[3]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[3]?.status).toBe('published');
+    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES[4]?.status).toBe('published');
+    expect(RELEASES[5]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
     expect(
+      // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: slice(0, 3)): the web fixes and archived charters releases are published later, at the top.
       RELEASES.filter((r) => r.status === 'published')
-        .slice(0, 3)
+        .slice(2, 5)
         .map((r) => r.id),
     ).toEqual([AUTH_CODE_ID, RETRIES_ID, ID]);
   });

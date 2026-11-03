@@ -12,12 +12,15 @@ import { ElsewhereUnavailableNotice } from '@/components/inventory/elsewhere-una
 import { Button } from '@/components/ui/button';
 import { can, isRentalItemRow } from '@stockpilot/core';
 import { CategoriesService } from '@/server/services/categories';
+import { ChartersService } from '@/server/services/charters';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import { LocationsService } from '@/server/services/locations';
 import { getItemTrends } from '@/server/services/movements';
 import { SuppliersService } from '@/server/services/suppliers';
 import { TagsService } from '@/server/services/tags';
+import { readCharterCellLabels } from '@/server/services/lib/unoffered-choices';
+import { charterCellLookup } from '@/lib/charter-display';
 import { requireOrgContext } from '@/lib/auth/session';
 import { listFilterActive } from '@/lib/inventory/list-filter-active';
 
@@ -79,6 +82,7 @@ export default async function RentalItemsPage({
     locationsSvc,
     suppliersSvc,
     tagsSvc,
+    chartersSvc,
     imagesSvc,
     sessionCtx,
     cookieStore,
@@ -88,6 +92,7 @@ export default async function RentalItemsPage({
     LocationsService.forCurrentUser(),
     SuppliersService.forCurrentUser(),
     TagsService.forCurrentUser(),
+    ChartersService.forCurrentUser(),
     ItemImagesService.forCurrentUser(),
     requireOrgContext(),
     cookies(),
@@ -142,11 +147,15 @@ export default async function RentalItemsPage({
   );
   const rentalTotal = inventory.total;
 
-  const [categories, locations, suppliers, tags] = await Promise.all([
+  const [categories, locations, suppliers, tags, charterLabels] = await Promise.all([
     categoriesSvc.list(),
     locationsSvc.list({ sitesOnly: true }),
     suppliersSvc.listForLookups(),
     tagsSvc.list(),
+    // The Charter column is always shown: name every charter a rental item
+    // can carry, active or not. Without them every tagged item read
+    // "Generic" (B97). This page offers no Charter filter.
+    readCharterCellLabels(() => chartersSvc.listLabels(), 'rentals.charter_cell_labels'),
   ]);
 
   const itemIdList = rentalItems.map((i) => i.id);
@@ -182,6 +191,7 @@ export default async function RentalItemsPage({
       ]),
     ),
     locations: new Map(locations.map((l) => [l.id as string, { name: l.name as string }])),
+    charters: charterCellLookup([], charterLabels),
   };
 
   const canCreate = can(sessionCtx, 'items:create');
@@ -257,6 +267,9 @@ export default async function RentalItemsPage({
           />
         ) : (
           <ElsewhereUnavailableNotice unavailable={inventory.elsewhereUnavailable}>
+            {/* No canExport, so no Export here for anyone (B68): every export
+                reads only non-rental items, so it saved items from the Items
+                list, or a file with no rows. */}
             <InventoryTable
               items={itemsWithImages}
               total={rentalTotal}

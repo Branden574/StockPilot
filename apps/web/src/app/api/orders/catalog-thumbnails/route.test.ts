@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { DEFAULT_MODULE_IDS, type ModuleId } from '@stockpilot/core';
+
 import {
   callArgs,
   makeServiceContext,
@@ -501,5 +503,68 @@ describe('GET /api/orders/catalog-thumbnails: rate limit', () => {
     expect(stub.fromCalls).toEqual([]);
     expect(createSignedUrlsMock).not.toHaveBeenCalled();
     expect(createSignedUrlMock).not.toHaveBeenCalled();
+  });
+});
+
+// B20a: the route checked a session, two parameters and a rate limit, then
+// signed every rental photo of the warehouse. Its one caller, New rental, is
+// behind the Rentals module and rentals:create (rentals/new/page.tsx), so a
+// member without either could still sign the rental photos of any warehouse
+// they read. Both are checked right after the session, before the parameters,
+// the rate limit and any read, as New rental checks them; a refused caller
+// spends none of the limit (api/orders/export.csv's rule).
+describe('GET /api/orders/catalog-thumbnails: the New rental gates', () => {
+  const withoutRentals = new Set<ModuleId>(DEFAULT_MODULE_IDS.filter((m) => m !== 'rentals'));
+
+  // Mutation caught: no module check, or one after the rate limit or a read.
+  it('the Rentals module off: 403 module_disabled, before the parameters, the rate limit and any read', async () => {
+    for (const query of [`warehouseId=${WH}&rentalsOnly=1`, 'rentalsOnly=1', `warehouseId=${WH}`]) {
+      const { stub } = setup('j');
+      apiCtx.current = makeServiceContext(stub.client, {
+        organizationId: ORG,
+        enabledModules: withoutRentals,
+      });
+      const { status, body } = await get(query);
+      expect([status, body], query).toEqual([403, { error: 'module_disabled' }]);
+      expect(stub.fromCalls, query).toEqual([]);
+    }
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
+  });
+
+  // Mutation caught: no permission check, or one after the rate limit or a
+  // read. A member who reads rentals but cannot create one is refused too.
+  it('without rentals:create: 403 forbidden, before the parameters, the rate limit and any read', async () => {
+    for (const query of [`warehouseId=${WH}&rentalsOnly=1`, 'rentalsOnly=1', `warehouseId=${WH}`]) {
+      const { stub } = setup('k');
+      apiCtx.current = makeServiceContext(stub.client, {
+        organizationId: ORG,
+        role: 'staff',
+        permissions: new Set(['items:read', 'rentals:read']),
+      });
+      const { status, body } = await get(query);
+      expect([status, body], query).toEqual([403, { error: 'forbidden' }]);
+      expect(stub.fromCalls, query).toEqual([]);
+    }
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(createSignedUrlsMock).not.toHaveBeenCalled();
+    expect(createSignedUrlMock).not.toHaveBeenCalled();
+  });
+
+  it('with the Rentals module and rentals:create: 200 with the rental photos, as before', async () => {
+    // A hex prefix: the photo paths must pass the signable-path shape check.
+    const { stub, rentals } = setup('c');
+    apiCtx.current = makeServiceContext(stub.client, {
+      organizationId: ORG,
+      role: 'staff',
+      permissions: new Set(['items:read', 'rentals:read', 'rentals:create']),
+    });
+    const { status, body } = await get(`warehouseId=${WH}&rentalsOnly=1`);
+    expect(status).toBe(200);
+    expect(Object.keys(body.urls!).sort()).toEqual(
+      rentals.filter((id) => id !== rentals[5]).sort(),
+    );
+    expect(checkRateLimit).toHaveBeenCalledTimes(1);
   });
 });

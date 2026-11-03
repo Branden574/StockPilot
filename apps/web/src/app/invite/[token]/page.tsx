@@ -11,7 +11,11 @@ import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { AcceptInviteButton } from './accept-button';
-import { inviteExpiredDescription } from './invite-copy';
+import {
+  INVITE_SIGN_IN_LINK,
+  INVITE_SIGN_IN_PROMPT,
+  inviteExpiredDescription,
+} from './invite-copy';
 import { InviteSignupForm } from './signup-form';
 
 /**
@@ -152,12 +156,12 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         footer={
           signupOpen ? (
             <>
-              Already have an account?{' '}
+              {INVITE_SIGN_IN_PROMPT}{' '}
               <Link
                 href={`/signin?redirect=/invite/${token}`}
                 className="text-foreground font-medium hover:underline"
               >
-                Sign in
+                {INVITE_SIGN_IN_LINK}
               </Link>
             </>
           ) : undefined

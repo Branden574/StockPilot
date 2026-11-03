@@ -252,7 +252,12 @@ vi.mock('@/lib/auth/warehouse', async (importOriginal) => ({
 }));
 
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: (...args: unknown[]) => checkModuleAccessMock(...args),
+  // Orders, the page's own module, is on: the page checks it before it reads
+  // (B66). The mock answers every other module.
+  checkModuleAccess: (...args: unknown[]) =>
+    args[0] === 'orders'
+      ? Promise.resolve({ enabled: true, canManage: false })
+      : checkModuleAccessMock(...args),
 }));
 
 vi.mock('@/lib/supabase/server', () => ({

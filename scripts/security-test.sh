@@ -968,7 +968,7 @@ WEB_TESTS=(
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
   # read (the route's own 401); the phone's snapshot end to end; the client
-  # crash beacon, the one route on the AAL1 allowlist; the two OAuth callbacks
+  # crash beacon, on the AAL1 allowlist; the two OAuth callbacks
   # that build their own principal ask the same question; and the sweep that
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
@@ -980,6 +980,13 @@ WEB_TESTS=(
   src/lib/auth/api-context.refresh-swap.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
+  # The phone's sign-in and sign-out notes (S5a), the other two routes on the
+  # AAL1 allowlist: an aal1 session of an account with an authenticator writes
+  # the sign-in row (code owed) and the device note, and its sign-out revokes
+  # and names the other sessions, through the REAL withApiContext; the same
+  # session still gets 401 from the push registration beside them, and
+  # withApiContext without the opt-out still answers it null.
+  src/app/api/v1/auth/step-up-pending.test.ts
   src/app/api/integrations/quickbooks/callback/route.test.ts
   src/app/api/integrations/sage_intacct/callback/route.test.ts
   src/test/api-step-up.guard.test.ts
@@ -1072,6 +1079,27 @@ WEB_TESTS=(
   src/server/actions/mfa-recovery.held-reads.test.ts
   src/server/actions/profile.held-reads.test.ts
   src/server/actions/email-change.held-reads.test.ts
+  # S5a: the phone's sign-in and sign-out reach the server. Each is one Audit
+  # log row per session, with a hashed session reference and never the session
+  # id, written only for a verified bearer token of the account itself; the
+  # phone's sign-out revokes the account's other sessions and names them on
+  # the sessions channel only after the revoke answered. That channel is
+  # public, so no path names a live session on it: "Sign out all other devices",
+  # Change password and the phone name the sessions they ended, never the one
+  # that stays (the guard holds every server keepId to the literal null), and
+  # "Sign out all other devices" names them only after its revoke answered
+  # without error. The new-device email goes out only for a device the call
+  # itself recorded (one per phone install) and its webhook event reaches
+  # accepted, non-act-as memberships only. The phone's device name comes from
+  # the allowlisted fields alone, never its User-Agent, and the sign-in note
+  # keeps only the device family in the Audit row and the organization's
+  # activity. The auth audit helpers are server code, never Server Actions.
+  src/app/api/v1/auth/signed-in/route.test.ts
+  src/app/api/v1/auth/signed-in/route.device-feed.test.ts
+  src/app/api/v1/auth/signed-out/route.test.ts
+  src/lib/auth/login-device.test.ts
+  src/test/session-revoked-payload.guard.test.ts
+  src/server/services/auth-audit.guard.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
@@ -1152,6 +1180,12 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S31: a Server Action answers a failure it did not expect with a fixed
+  # sentence, never the error's own text, and reports it with the action's
+  # tag (server/lib/action-error-result.ts). The same census reads every
+  # Server Action and service and their imports. The file carries the
+  # "Security invariant" marker.
+  src/server/lib/action-error-result.test.ts
   # S34: a member's session never leaves with an analytics request. PostHog's
   # SDK sends to /ingest on our own origin, so the browser attaches every
   # cookie of this host. app/ingest/[...path]/route.ts builds each request to
@@ -1607,9 +1641,9 @@ WEB_TESTS=(
   # { expire: 0 } (never 'max' or the global tag). No requester surface offers
   # a hidden item: the storefront loader filters and overlays recent hides, the
   # public link page overlays every render, the legacy public thumbnails answer
-  # an empty map, Frequently ordered filters and the picker thumbnails' set is
-  # refused outright (both thumbnail suites are listed once, with the catalog
-  # photo maps' rate limits above); Add items is one atomic database call, and
+  # an empty map, and the picker thumbnails' set is refused outright (both
+  # thumbnail suites are listed once, with the catalog photo maps' rate limits
+  # above); Add items is one atomic database call, and
   # a raise, the portal and the public form refuse a hidden item; PO-import
   # charter siblings and restore points keep a hidden choice.
   src/server/services/order-catalog-visibility.test.ts
@@ -1620,7 +1654,6 @@ WEB_TESTS=(
   src/server/services/portal.pricing-mode.test.ts
   src/app/api/v1/public/order-requests/route.order-visibility.test.ts
   src/server/services/public-catalog.order-visibility.test.ts
-  src/app/api/orders/freq/route.test.ts
   src/server/services/po-imports.charter-decoupling.test.ts
   src/server/services/po-imports-lines.charter-sibling.test.ts
   src/server/services/restore-points.test.ts
@@ -1721,6 +1754,27 @@ MOBILE_TESTS=(
   src/lib/session-scope.test.ts
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
+
+  # S5a: a signed-out phone stops showing the account's notifications. Every
+  # deliberate sign-out deletes this phone's push token row while the session
+  # still exists (awaited, bounded, by the token it registered), and so does a
+  # sign-out from another device; registration is held for the whole sign-out
+  # (a token refresh re-running it binds nothing) and never runs while the
+  # session still owes its authenticator code. The registration goes through
+  # register_push_token (SP-073). The phone's install id lives in the Keychain
+  # only, outlives every sign-out, and is never made up when the Keychain
+  # refuses. A "signed out from another device" message on the public sessions
+  # channel is a claim: the phone asks the Auth server about its own session
+  # first, outside auth-js, and a message about a live session, or one it gets
+  # no answer for, deletes no push row, signs nothing out and clears nothing.
+  src/lib/push-unbind.test.ts
+  src/lib/use-push-notifications.test.ts
+  src/lib/push-register-wiring.test.ts
+  src/lib/use-session-revocation.test.ts
+  src/lib/use-session-revocation.forged.test.ts
+  src/lib/session-check.test.ts
+  src/lib/supabase.fetch-auth-user.test.ts
+  src/lib/install-id.test.ts
 
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another

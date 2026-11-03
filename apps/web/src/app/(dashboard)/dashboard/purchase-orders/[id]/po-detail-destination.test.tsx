@@ -33,6 +33,10 @@ const attachmentsList = vi.fn(async () => []);
 const inventoryByIds = vi.fn(async () => []);
 const loadSizeRunGroups = vi.fn(async () => ({}));
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => ({
     organizationId: 'org-1',
