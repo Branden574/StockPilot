@@ -894,39 +894,37 @@
       border-radius: 16px;
       background-color: var(--lg-field-fill);
     }
-    /* The checked and selected lists (.chk-list: 52 px rows on hairlines). */
+    /* The checked and selected lists (.chk-list: 52 px rows on hairlines):
+       the list inside the drawer's reading area, or the Select family
+       dialog's list that is its reading area. One selector each, the two
+       places inside one :is() of equal specificity: the production minifier
+       folds a selector list holding :has() into one :is(), which would start
+       outside the glass root (compiled-css.guard.test.ts). */
     :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
-      :is([data-glass='dialog'], [data-glass='sheet'])
-      [data-glass='dialog-body']
-      > ul,
-    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
-      [data-glass='dialog']
-      > ul[data-glass='dialog-body'] {
+      :is(
+        :is([data-glass='dialog'], [data-glass='sheet']) [data-glass='dialog-body'] > ul,
+        [data-glass='dialog'] > ul[data-glass='dialog-body']
+      ) {
       gap: 0;
     }
     :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
-      :is([data-glass='dialog'], [data-glass='sheet'])
-      [data-glass='dialog-body']
-      > ul
-      > li,
-    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
-      [data-glass='dialog']
-      > ul[data-glass='dialog-body']
-      > li {
+      :is(
+        :is([data-glass='dialog'], [data-glass='sheet']) [data-glass='dialog-body'] > ul > li,
+        [data-glass='dialog'] > ul[data-glass='dialog-body'] > li
+      ) {
       align-items: center;
       min-height: 52px;
       padding: 10px 4px;
       border-bottom: 1px solid var(--lg-line);
     }
     :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
-      :is([data-glass='dialog'], [data-glass='sheet'])
-      [data-glass='dialog-body']
-      > ul
-      > li:last-child,
-    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
-      [data-glass='dialog']
-      > ul[data-glass='dialog-body']
-      > li:last-child {
+      :is(
+        :is([data-glass='dialog'], [data-glass='sheet'])
+          [data-glass='dialog-body']
+          > ul
+          > li:last-child,
+        [data-glass='dialog'] > ul[data-glass='dialog-body'] > li:last-child
+      ) {
       border-bottom: 0;
     }
     :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
