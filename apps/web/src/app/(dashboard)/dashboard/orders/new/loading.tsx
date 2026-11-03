@@ -1,4 +1,6 @@
 import { StorefrontPageSkeleton } from '@/components/orders/storefront/storefront-skeleton';
+// Liquid Glass page composition (layered half), as the page imports it.
+import '@/styles/liquid-glass/pages/order-new.css';
 
 /**
  * Route-level loading state for /dashboard/orders/new (perf plan P5).

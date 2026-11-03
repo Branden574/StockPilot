@@ -12,6 +12,8 @@
 import * as React from 'react';
 
 import './storefront.css';
+// Liquid Glass: the unlayered companion, on the next line (plan 4.1).
+import '@/styles/liquid-glass/storefront.glass.css';
 
 /** Grid-card placeholder matching ProductCard's proportions. */
 export function SkeletonCard() {

@@ -137,6 +137,8 @@ import { QuickViewDrawer, ReviewModal, SfPopover } from './storefront-overlays';
 import { toFreqEntries, useStreamed } from './frequently-ordered';
 
 import './storefront.css';
+// Liquid Glass: the unlayered companion, on the next line (plan 4.1).
+import '@/styles/liquid-glass/storefront.glass.css';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';

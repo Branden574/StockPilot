@@ -16,6 +16,9 @@ import {
   loadChartersForWarehouse,
 } from '@/server/loaders/orders-new-catalog';
 import { canManageOrderItems } from '@/server/services/order-catalog-visibility';
+// Liquid Glass page composition (layered half; the storefront's unlayered
+// half is imported by the storefront itself): scoped, inert in Classic.
+import '@/styles/liquid-glass/pages/order-new.css';
 
 // NOTE (perf plan P3): the cached data loaders deliberately live in
 // src/server/loaders/orders-new-catalog.ts, NOT here. unstable_cache's
@@ -126,7 +129,10 @@ export default async function NewOrderPage({
     // The redesign's page frame: the shared page header and the shared empty
     // state, with the words this state has always had.
     return (
-      <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <div
+        data-glass="order-new-page"
+        className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      >
         <PageHeader
           back={<PageHeaderBackLink href="/dashboard/orders">← Back to orders</PageHeaderBackLink>}
           title={STOREFRONT_TITLE_COPY}

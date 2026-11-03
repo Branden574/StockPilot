@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/dialog';
 
 import '@/components/orders/storefront/storefront.css';
+// Liquid Glass: the unlayered companion, on the next line (plan 4.1).
+import '@/styles/liquid-glass/storefront.glass.css';
 
 /** One order line, flattened to exactly what the assistant's draft needs.
  *  Plain objects only — this crosses the RSC boundary from the order detail
