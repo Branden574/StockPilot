@@ -68,6 +68,18 @@ const NEWER_IDS = [
   'lists-delivery-sites-and-fixes-2026-11',
 ];
 /**
+ * Added by docs/whats-new-2026-11-02d (2026-11-02): the Export items, phone
+ * update, clearer web messages and QW1 releases, published later still, at
+ * the top. Three reach every member and the fourth an owner, so they are read
+ * or seen with the releases below them.
+ */
+const NIGHT_IDS = [
+  'export-items-permission-2026-11',
+  'mobile-app-fixes-2026-11-02',
+  'clearer-web-messages-2026-11',
+  'invites-calendar-record-pages-2026-11',
+];
+/**
  * Added by docs/whats-new-2026-11-02c (2026-11-02): the web fixes and archived
  * charters releases, published later that evening, sit above NEWER_IDS and
  * reach an owner. They are read with NEWER_IDS (newerReads), so the web notice
@@ -77,7 +89,8 @@ const NEWER_IDS = [
  * seen in every phone state).
  */
 const LATER_IDS = ['web-fixes-2026-11-02', 'archived-charters-2026-11'];
-const newerReads = [...LATER_IDS, ...NEWER_IDS].map((id) => ({
+// Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: LATER_IDS and NEWER_IDS): the releases in NIGHT_IDS are published later still, at the top, reach both readers here, and are read with them.
+const newerReads = [...NIGHT_IDS, ...LATER_IDS, ...NEWER_IDS].map((id) => ({
   release_id: id,
   revision: 1,
   dismissed_at: null,
@@ -99,7 +112,9 @@ const phoneSeen = (ids: readonly string[]): Record<string, unknown> =>
   Object.fromEntries(ids.map((id) => [id, { at: '2026-11-02T00:00:00Z', outcome: 'seen' }]));
 /** The published releases below this one. */
 const OLDER_IDS = PUBLISHED_IDS.filter(
-  (id) => id !== ID && !NEWER_IDS.includes(id) && !LATER_IDS.includes(id),
+  // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without NIGHT_IDS): the releases in NIGHT_IDS are published later, at the top.
+  (id) =>
+    id !== ID && !NEWER_IDS.includes(id) && !LATER_IDS.includes(id) && !NIGHT_IDS.includes(id),
 );
 /** Closed What's New before #461 went live (about 15:33Z): only the older releases. */
 const closedBefore461 = phoneSeen(OLDER_IDS);
@@ -113,7 +128,16 @@ const closedAfter471 = phoneSeen([...OLDER_IDS, ...NEWER_IDS]);
  * it after the releases in LATER_IDS were published (20:42Z): every published
  * release but this one.
  */
-const closedAfterLater = phoneSeen(PUBLISHED_IDS.filter((id) => id !== ID));
+// Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every published release but this one): the releases in NIGHT_IDS were published after this phone closed (from 22:29Z), so they are unseen; closedAfterNight is the phone that has seen every release but this one.
+const closedAfterLater = phoneSeen(
+  PUBLISHED_IDS.filter((id) => id !== ID && !NIGHT_IDS.includes(id)),
+);
+/**
+ * Added by docs/whats-new-2026-11-02d (2026-11-02): closed it after the
+ * releases in NIGHT_IDS were published (from 23:46Z): every published release
+ * but this one.
+ */
+const closedAfterNight = phoneSeen(PUBLISHED_IDS.filter((id) => id !== ID));
 
 /** A file in the repository, as written. */
 const REPO = resolve(__dirname, '../../../../..');
@@ -178,9 +202,10 @@ describe('the update-ready-and-fixes release', () => {
   // Renamed when main was merged in after #461 and #471 (2026-11-02; was: "is published once, at the top, ...", with ID at RELEASES[0]): the three releases in NEWER_IDS are dated later and sit above it. Claim kept: published once, at revision 1, with the B44 draft folded in and no draft left.
   it('is published once, directly below the lists-delivery-sites-and-fixes release and above the export fixes release, at revision 1, with the B44 draft folded in and no draft left', () => {
     // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES[0]): the three newer releases take 0 to 2, so this one is at 3.
-    expect(RELEASES[5]?.id).toBe(ID);
-    expect(RELEASES.slice(2, 5).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[6]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
+    expect(RELEASES[9]?.id).toBe(ID);
+    expect(RELEASES.slice(6, 9).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[10]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -200,10 +225,11 @@ describe('the update-ready-and-fixes release', () => {
     expect(at).toBeGreaterThan(Date.parse('2026-11-02T04:02:00Z'));
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES.slice(1)): this release is at 3, so the releases below it start at 4; the three above it are dated later.
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
+    for (const r of RELEASES.slice(10)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    for (const r of RELEASES.slice(2, 5)) {
+    for (const r of RELEASES.slice(6, 9)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
@@ -260,7 +286,8 @@ describe('the update-ready-and-fixes release', () => {
     // The phone's list takes its button from the first line with a link that
     // the reader is told.
     // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: closedAfter471): the phone that has seen every newer release is now closedAfterLater.
-    expect(legacyAnnouncementsFor(RELEASES, everyone, closedAfterLater)).toEqual([
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: closedAfterLater): the phone that has seen every newer release is now closedAfterNight.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, closedAfterNight)).toEqual([
       {
         id: ID,
         date: '2026-11-02',
@@ -269,7 +296,7 @@ describe('the update-ready-and-fixes release', () => {
         cta: INTEGRATIONS_LINK,
       },
     ]);
-    expect(legacyAnnouncementsFor(RELEASES, member, closedAfterLater)).toEqual([
+    expect(legacyAnnouncementsFor(RELEASES, member, closedAfterNight)).toEqual([
       {
         id: ID,
         date: '2026-11-02',
@@ -330,7 +357,8 @@ describe('the update-ready-and-fixes release', () => {
         PUBLISHED_IDS,
         '2026-11-02T19:00:00Z',
       );
-    const [authenticator, retries, lists] = NEWER_IDS as [string, string, string];
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: authenticator, retries and lists): the phone lists below are the releases in NIGHT_IDS, so only retries is named.
+    const [, retries] = NEWER_IDS as [string, string, string];
 
     // A member all three reach (whoever manages integrations with the
     // Integrations module on, here an owner with every permission and module).
@@ -338,39 +366,59 @@ describe('the update-ready-and-fixes release', () => {
     expect(
       visibleReleases(RELEASES, everyone)
         .map((r) => r.id)
-        .slice(2, 6),
+        // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: slice(2, 6)): the releases in NIGHT_IDS are published later, at the top.
+        .slice(6, 10),
     ).toEqual([...NEWER_IDS, ID]);
     // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: NEWER_IDS before #461, [authenticator, retries, ID] before #471, [ID] after #471): the two releases in LATER_IDS, published later and unseen on each of these phones, reach this member and come first.
     const [webFixes, charters] = LATER_IDS as [string, string];
     // Phone last closed before #461 went live (about 15:33Z): the two later
     // releases and the authenticator code release fill the list, and the
     // close stamps this one, never shown.
-    expect(listed(everyone, closedBefore461)).toEqual([webFixes, charters, authenticator]);
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [webFixes, charters, authenticator]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(everyone, closedBefore461)).toEqual(NIGHT_IDS.slice(0, 3));
     expect(close(everyone, closedBefore461)[ID]).toBeTruthy();
     expect(listed(everyone, close(everyone, closedBefore461))).toEqual([]);
     // Last closed between #461 and #471 (about 17:33Z): never shown either.
-    expect(listed(everyone, closedBefore471)).toEqual([webFixes, charters, authenticator]);
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [webFixes, charters, authenticator]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(everyone, closedBefore471)).toEqual(NIGHT_IDS.slice(0, 3));
     // Last closed after #471 went live, before 20:42Z: the third slide.
-    expect(listed(everyone, closedAfter471)).toEqual([webFixes, charters, ID]);
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [webFixes, charters, ID]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(everyone, closedAfter471)).toEqual(NIGHT_IDS.slice(0, 3));
     // Last closed after the two later releases: the only slide (the test above).
-    expect(listed(everyone, closedAfterLater)).toEqual([ID]);
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [ID]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(everyone, closedAfterLater)).toEqual(NIGHT_IDS.slice(0, 3));
+    // Added by docs/whats-new-2026-11-02d (2026-11-02): closed after the releases in NIGHT_IDS too: the only slide.
+    expect(listed(everyone, closedAfterNight)).toEqual([ID]);
 
     // A member the retries release does not reach (here a viewer with no
     // permission and no module): the third slide, then the second.
     expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(retries);
-    expect(listed(member, closedBefore461)).toEqual([authenticator, lists, ID]);
-    expect(listed(member, closedBefore471)).toEqual([authenticator, ID]);
-    expect(listed(member, closedAfter471)).toEqual([ID]);
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [authenticator, lists, ID]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(member, closedBefore461)).toEqual(NIGHT_IDS.slice(0, 3));
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [authenticator, ID]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(member, closedBefore471)).toEqual(NIGHT_IDS.slice(0, 3));
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [ID]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(member, closedAfter471)).toEqual(NIGHT_IDS.slice(0, 3));
     // Added in the review round of docs/whats-new-2026-11-02c (2026-11-02): neither release in LATER_IDS reaches this member, so seeing them changes nothing.
     expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(webFixes);
     expect(visibleReleases(RELEASES, member).map((r) => r.id)).not.toContain(charters);
-    expect(listed(member, closedAfterLater)).toEqual([ID]);
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: [ID]): the releases in NIGHT_IDS, published from 22:29Z and unseen on this phone, reach this reader and fill its list of three; the close still stamps this one.
+    expect(listed(member, closedAfterLater)).toEqual(NIGHT_IDS.slice(0, 3));
+    // Added by docs/whats-new-2026-11-02d (2026-11-02): closed after the releases in NIGHT_IDS too: the only slide.
+    expect(listed(member, closedAfterNight)).toEqual([ID]);
 
     // Whichever slide is open when the phone closes What's New, the close
     // stamps this release, so a phone that closes before reaching it does not
     // show it again.
     for (const v of [everyone, member]) {
-      for (const seen of [closedBefore461, closedBefore471, closedAfter471, closedAfterLater]) {
+      // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without closedAfterNight): the phone that closed after the releases in NIGHT_IDS too.
+      for (const seen of [
+        closedBefore461,
+        closedBefore471,
+        closedAfter471,
+        closedAfterLater,
+        closedAfterNight,
+      ]) {
         const after = close(v, seen);
         expect(after[ID], v.role).toBeTruthy();
         expect(listed(v, after), v.role).toEqual([]);
