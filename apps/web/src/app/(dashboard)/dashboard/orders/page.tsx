@@ -15,6 +15,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { OrdersExportMenu } from '@/components/orders/orders-export-menu';
+import { OrderPhoneCards } from '@/components/orders/order-phone-cards';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -38,6 +39,8 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { ORDERS_TOUR } from '@/lib/onboarding/tours';
+// Liquid Glass's composition of this page (scoped to the glass root; plan 4.1).
+import '@/styles/liquid-glass/pages/orders.css';
 import {
   ORDER_EXPORT_STATUS_TABS as TAB_FILTERS,
   ORDER_EXPORT_TAB_LABELS as TAB_LABELS,
@@ -148,7 +151,7 @@ export default async function OrdersPage({
   const pager = canApprove ? <OrdersPager tab={tab} page={page} hasNext={hasNext} /> : null;
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass="orders-page">
       {/* Performance marker. This page has no Suspense split: by the time any
           of it renders, the order rows above have been awaited, so the page
           itself IS the real data (its skeleton is drawn elsewhere and never
@@ -217,7 +220,10 @@ export default async function OrdersPage({
       {/* A filter that is not a tab (the dashboard's "waiting for signature"
           card, L88): say what the list shows, and the way back. */}
       {canApprove && !TAB_ORDER.includes(tab) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+        <div
+          data-glass="orders-filter-note"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]"
+        >
           <span className="border-line-strong bg-sunk text-foreground inline-flex h-7 items-center whitespace-nowrap rounded-full border px-2.5 text-[12.5px] font-medium">
             {TAB_LABELS[tab]}
           </span>
@@ -274,7 +280,7 @@ export default async function OrdersPage({
         // 8): picker and driver names wrap, the requester's floor is 8rem and
         // an exchange's state wraps beside its pill. With those on one line
         // the table needed 1320 px of the 1146 px card on All active (FX3).
-        <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <div data-glass="card" className="border-border bg-card overflow-hidden rounded-lg border">
           <Table scrollLabelledBy="orders-title" className="min-w-[860px]">
             <TableHeader>
               <TableRow className="hover:bg-transparent">
@@ -394,7 +400,16 @@ export default async function OrdersPage({
               ))}
             </TableBody>
           </Table>
-          {pager ? <div className="border-border border-t px-4 py-2.5">{pager}</div> : null}
+          {/* Liquid Glass on a phone (Orders.dc.html, 760 px and under): the
+              rows as cards, with every column's words. Glass-only and
+              stateless (links to the rows' own targets); not rendered at all
+              under the `off` rollout. */}
+          <OrderPhoneCards rows={visible} />
+          {pager ? (
+            <div data-glass="orders-pager" className="border-border border-t px-4 py-2.5">
+              {pager}
+            </div>
+          ) : null}
         </div>
       )}
       {!showTable && pager}
@@ -450,7 +465,10 @@ const PAGER_DISABLED =
  */
 function OrdersPager({ tab, page, hasNext }: { tab: StatusTab; page: number; hasNext: boolean }) {
   return (
-    <div className="text-muted-foreground flex items-center justify-end gap-2 text-[12.5px]">
+    <div
+      data-glass="orders-pager-row"
+      className="text-muted-foreground flex items-center justify-end gap-2 text-[12.5px]"
+    >
       <PagerControl href={page <= 1 ? null : `/dashboard/orders?status=${tab}&page=${page - 1}`}>
         ← Newer
       </PagerControl>
