@@ -1,174 +1,289 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  effectiveAppearance,
   isLaterTimestamp,
   isMissingAppearanceTableError,
-  legacyAppearance,
+  isUserId,
+  legacyTheme,
   parseAccountRow,
-  parseAppearance,
-  parseClassicAppearance,
+  parseAnonFlowRecord,
   parseDeviceRecord,
+  parseRollout,
+  parseStyle,
   parseSyncRecord,
+  parseThemeSetting,
   resolveScheme,
-  schemeSettingOf,
-  styleOf,
+  shownStyle,
   timestampMicros,
 } from './parse';
-import { APPEARANCE_MODES, APPEARANCE_STORAGE_KEYS, DEFAULT_APPEARANCE } from './types';
+import {
+  APPEARANCE_STORAGE_KEYS,
+  APPEARANCE_STYLES,
+  GLASS_ROLLOUTS,
+  THEME_SETTINGS,
+  defaultStyle,
+} from './types';
 
-describe('parseAppearance', () => {
-  it('accepts exactly the four words', () => {
-    for (const mode of APPEARANCE_MODES) expect(parseAppearance(mode)).toBe(mode);
+const NOW = Date.UTC(2026, 10, 3, 10, 0, 0);
+const A = 'a0000000-0000-4000-8000-0000000000a1';
+
+describe('parseStyle and parseThemeSetting', () => {
+  it('accept exactly the known words', () => {
+    expect(APPEARANCE_STYLES).toEqual(['liquid-glass', 'classic']);
+    expect(THEME_SETTINGS).toEqual(['light', 'dark', 'system']);
+    for (const style of APPEARANCE_STYLES) expect(parseStyle(style)).toBe(style);
+    for (const theme of THEME_SETTINGS) expect(parseThemeSetting(theme)).toBe(theme);
   });
 
-  it('drops everything else: labels, case, spacing, other types', () => {
+  it('drop everything else: labels, case, spacing, the other axis, other types', () => {
     for (const bad of [
       'Liquid Glass',
       'liquid glass',
       'liquid_glass',
       'LIQUID-GLASS',
-      'Dark',
-      ' dark',
-      'dark ',
+      'Classic',
+      ' classic',
+      'dark',
+      'system',
       '',
-      'auto',
       'glass',
       null,
       undefined,
       1,
       true,
       {},
-      ['dark'],
-      { mode: 'dark' },
+      ['classic'],
     ]) {
-      expect(parseAppearance(bad)).toBeNull();
+      expect(parseStyle(bad)).toBeNull();
     }
-  });
-
-  it('classic parsing never admits Liquid Glass', () => {
-    expect(parseClassicAppearance('liquid-glass')).toBeNull();
-    expect(parseClassicAppearance('dark')).toBe('dark');
-    expect(parseClassicAppearance('light')).toBe('light');
-    expect(parseClassicAppearance('system')).toBe('system');
-  });
-
-  it('the default is System, today’s default, never Liquid Glass', () => {
-    expect(DEFAULT_APPEARANCE).toBe('system');
+    for (const bad of [
+      'Dark',
+      ' dark',
+      'dark ',
+      'auto',
+      'liquid-glass',
+      'classic',
+      '',
+      null,
+      0,
+      ['dark'],
+    ]) {
+      expect(parseThemeSetting(bad)).toBeNull();
+    }
   });
 });
 
-describe('style and scheme', () => {
-  it('only liquid-glass is the glass style', () => {
-    expect(styleOf('liquid-glass')).toBe('liquid-glass');
-    expect(styleOf('dark')).toBe('classic');
-    expect(styleOf('light')).toBe('classic');
-    expect(styleOf('system')).toBe('classic');
-  });
-
-  it('a light/dark/system API never receives liquid-glass', () => {
-    expect(schemeSettingOf('liquid-glass')).toBe('system');
-    expect(schemeSettingOf('dark')).toBe('dark');
-    expect(schemeSettingOf('light')).toBe('light');
-    expect(schemeSettingOf('system')).toBe('system');
-    for (const mode of APPEARANCE_MODES) {
-      expect(['light', 'dark', 'system']).toContain(schemeSettingOf(mode));
+describe('rollout', () => {
+  it('reads exactly opt-in and default; anything else, the stage 2 value 1 included, is off', () => {
+    expect(GLASS_ROLLOUTS).toEqual(['off', 'opt-in', 'default']);
+    expect(parseRollout('opt-in')).toBe('opt-in');
+    expect(parseRollout('default')).toBe('default');
+    expect(parseRollout('off')).toBe('off');
+    for (const bad of [
+      undefined,
+      null,
+      '',
+      '1',
+      1,
+      'true',
+      'on',
+      'Default',
+      ' default',
+      'opt_in',
+      'optin',
+    ]) {
+      expect(parseRollout(bad)).toBe('off');
     }
   });
 
-  it('resolveScheme: Dark and Light are fixed; System and Liquid Glass follow the device', () => {
+  it('the default style is the rollout’s: Liquid Glass only under default', () => {
+    expect(defaultStyle('default')).toBe('liquid-glass');
+    expect(defaultStyle('opt-in')).toBe('classic');
+    expect(defaultStyle('off')).toBe('classic');
+  });
+
+  it('shownStyle follows the kill switch truth table (revision R5)', () => {
+    // [style, rollout, crash fallback] -> shown
+    const table: [
+      Parameters<typeof shownStyle>[0],
+      Parameters<typeof shownStyle>[1],
+      boolean,
+      string,
+    ][] = [
+      [null, 'off', false, 'classic'],
+      ['classic', 'off', false, 'classic'],
+      ['liquid-glass', 'off', false, 'classic'],
+      [null, 'opt-in', false, 'classic'],
+      ['classic', 'opt-in', false, 'classic'],
+      ['liquid-glass', 'opt-in', false, 'liquid-glass'],
+      [null, 'default', false, 'liquid-glass'],
+      ['classic', 'default', false, 'classic'],
+      ['liquid-glass', 'default', false, 'liquid-glass'],
+    ];
+    for (const [style, rollout, fallback, shown] of table) {
+      expect(shownStyle(style, rollout, fallback)).toBe(shown);
+    }
+  });
+
+  it('the crash fallback shows Classic under every rollout and for every choice', () => {
+    for (const rollout of GLASS_ROLLOUTS) {
+      for (const style of [null, 'classic', 'liquid-glass'] as const) {
+        expect(shownStyle(style, rollout, true)).toBe('classic');
+      }
+    }
+  });
+
+  it('a malformed stored Design means never chose: the rollout default applies', () => {
+    expect(shownStyle(parseStyle('Liquid Glass'), 'default', false)).toBe('liquid-glass');
+    expect(shownStyle(parseStyle('garbage'), 'opt-in', false)).toBe('classic');
+  });
+});
+
+describe('scheme', () => {
+  it('resolveScheme: Light and Dark are fixed; System or nothing follows the device', () => {
     expect(resolveScheme('dark', false)).toBe('dark');
     expect(resolveScheme('dark', true)).toBe('dark');
     expect(resolveScheme('light', false)).toBe('light');
     expect(resolveScheme('light', true)).toBe('light');
     expect(resolveScheme('system', false)).toBe('light');
     expect(resolveScheme('system', true)).toBe('dark');
-    expect(resolveScheme('liquid-glass', false)).toBe('light');
-    expect(resolveScheme('liquid-glass', true)).toBe('dark');
+    expect(resolveScheme(null, false)).toBe('light');
+    expect(resolveScheme(null, true)).toBe('dark');
   });
 
-  it('the kill switch renders a stored Liquid Glass as classic System and leaves the rest alone', () => {
-    expect(effectiveAppearance('liquid-glass', false)).toBe('system');
-    expect(effectiveAppearance('liquid-glass', true)).toBe('liquid-glass');
-    for (const mode of ['dark', 'light', 'system'] as const) {
-      expect(effectiveAppearance(mode, false)).toBe(mode);
-      expect(effectiveAppearance(mode, true)).toBe(mode);
-    }
-  });
-
-  it('a legacy next-themes value keeps its classic look; anything else is System', () => {
-    expect(legacyAppearance('dark')).toBe('dark');
-    expect(legacyAppearance('light')).toBe('light');
-    expect(legacyAppearance('system')).toBe('system');
-    expect(legacyAppearance(null)).toBe('system');
-    expect(legacyAppearance(undefined)).toBe('system');
-    expect(legacyAppearance('liquid-glass')).toBe('system');
-    expect(legacyAppearance('"dark"')).toBe('system');
+  it('a legacy next-themes value is read as it is; anything else is null (follow the device)', () => {
+    expect(legacyTheme('dark')).toBe('dark');
+    expect(legacyTheme('light')).toBe('light');
+    expect(legacyTheme('system')).toBe('system');
+    expect(legacyTheme(null)).toBeNull();
+    expect(legacyTheme(undefined)).toBeNull();
+    expect(legacyTheme('liquid-glass')).toBeNull();
+    expect(legacyTheme('"dark"')).toBeNull();
   });
 });
 
 describe('parseDeviceRecord', () => {
-  it('reads a full record, as an object or as JSON text', () => {
-    const record = { v: 1, mode: 'liquid-glass', lastClassic: 'dark', anonAt: 1_700_000_000_000 };
-    expect(parseDeviceRecord(record)).toEqual(record);
-    expect(parseDeviceRecord(JSON.stringify(record))).toEqual(record);
+  it('reads a full version 2 record, as an object or as JSON text', () => {
+    const record = { v: 2, style: 'classic', theme: 'dark', anonAt: NOW - 1000 };
+    expect(parseDeviceRecord(record, NOW)).toEqual(record);
+    expect(parseDeviceRecord(JSON.stringify(record), NOW)).toEqual(record);
   });
 
-  it('reads the bare cookie value', () => {
-    expect(parseDeviceRecord('dark')).toEqual({ v: 1, mode: 'dark', lastClassic: 'dark' });
-    expect(parseDeviceRecord('liquid-glass')).toEqual({
-      v: 1,
-      mode: 'liquid-glass',
-      lastClassic: 'system',
+  it('reads one axis without the other', () => {
+    expect(parseDeviceRecord({ v: 2, style: 'liquid-glass' }, NOW)).toEqual({
+      v: 2,
+      style: 'liquid-glass',
+    });
+    expect(parseDeviceRecord({ v: 2, theme: 'system' }, NOW)).toEqual({ v: 2, theme: 'system' });
+  });
+
+  it('drops a bad axis but keeps the good one', () => {
+    expect(parseDeviceRecord({ v: 2, style: 'Liquid Glass', theme: 'dark' }, NOW)).toEqual({
+      v: 2,
+      theme: 'dark',
+    });
+    expect(parseDeviceRecord({ v: 2, style: 'classic', theme: 'auto' }, NOW)).toEqual({
+      v: 2,
+      style: 'classic',
     });
   });
 
-  it('drops a record with an unknown or missing mode, an unknown version, or broken JSON', () => {
-    expect(parseDeviceRecord({ v: 1, mode: 'Liquid Glass', lastClassic: 'dark' })).toBeNull();
-    expect(parseDeviceRecord({ v: 1, lastClassic: 'dark' })).toBeNull();
-    expect(parseDeviceRecord({ v: 2, mode: 'dark', lastClassic: 'dark' })).toBeNull();
-    expect(parseDeviceRecord({ mode: 'dark' })).toBeNull();
-    expect(parseDeviceRecord('{"v":1,"mode":')).toBeNull();
-    expect(parseDeviceRecord('')).toBeNull();
-    expect(parseDeviceRecord(null)).toBeNull();
-    expect(parseDeviceRecord([])).toBeNull();
+  it('ignores the stage 2 version 1 record and its bare cookie word', () => {
+    expect(parseDeviceRecord({ v: 1, mode: 'dark', lastClassic: 'dark' }, NOW)).toBeNull();
+    expect(parseDeviceRecord({ v: 1, style: 'classic' }, NOW)).toBeNull();
+    expect(parseDeviceRecord('liquid-glass', NOW)).toBeNull();
+    expect(parseDeviceRecord('classic', NOW)).toBeNull();
+    expect(parseDeviceRecord('dark', NOW)).toBeNull();
   });
 
-  it('repairs a bad lastClassic and drops a bad anonAt instead of failing the whole record', () => {
-    expect(parseDeviceRecord({ v: 1, mode: 'light', lastClassic: 'liquid-glass' })).toEqual({
-      v: 1,
-      mode: 'light',
-      lastClassic: 'light',
-    });
-    expect(parseDeviceRecord({ v: 1, mode: 'liquid-glass', lastClassic: 'nope' })).toEqual({
-      v: 1,
-      mode: 'liquid-glass',
-      lastClassic: 'system',
-    });
-    for (const anonAt of ['1700000000000', Number.NaN, Number.POSITIVE_INFINITY, -5, 0, null]) {
-      expect(parseDeviceRecord({ v: 1, mode: 'dark', lastClassic: 'dark', anonAt })).toEqual({
-        v: 1,
-        mode: 'dark',
-        lastClassic: 'dark',
+  it('drops a record with no known axis, an unknown version, or broken JSON', () => {
+    expect(parseDeviceRecord({ v: 2 }, NOW)).toBeNull();
+    expect(parseDeviceRecord({ v: 2, anonAt: NOW }, NOW)).toBeNull();
+    expect(parseDeviceRecord({ v: 3, style: 'classic' }, NOW)).toBeNull();
+    expect(parseDeviceRecord({ style: 'classic' }, NOW)).toBeNull();
+    expect(parseDeviceRecord('{"v":2,"style":', NOW)).toBeNull();
+    expect(parseDeviceRecord('', NOW)).toBeNull();
+    expect(parseDeviceRecord(null, NOW)).toBeNull();
+    expect(parseDeviceRecord([], NOW)).toBeNull();
+  });
+
+  it('drops a bad anonAt instead of failing the whole record', () => {
+    for (const anonAt of [String(NOW), Number.NaN, Number.POSITIVE_INFINITY, -5, 0, null]) {
+      expect(parseDeviceRecord({ v: 2, style: 'classic', anonAt }, NOW)).toEqual({
+        v: 2,
+        style: 'classic',
       });
     }
+  });
+
+  it('SR2: drops an anonAt more than 60 s in the future, keeps one within 60 s', () => {
+    expect(parseDeviceRecord({ v: 2, style: 'classic', anonAt: NOW + 60_001 }, NOW)).toEqual({
+      v: 2,
+      style: 'classic',
+    });
+    expect(
+      parseDeviceRecord({ v: 2, style: 'classic', anonAt: NOW + 365 * 24 * 3600_000 }, NOW),
+    ).toEqual({ v: 2, style: 'classic' });
+    expect(parseDeviceRecord({ v: 2, style: 'classic', anonAt: NOW + 60_000 }, NOW)).toEqual({
+      v: 2,
+      style: 'classic',
+      anonAt: NOW + 60_000,
+    });
+    expect(parseDeviceRecord({ v: 2, style: 'classic', anonAt: NOW - 3600_000 }, NOW)).toEqual({
+      v: 2,
+      style: 'classic',
+      anonAt: NOW - 3600_000,
+    });
   });
 });
 
 describe('parseSyncRecord', () => {
-  const good = { v: 1, userId: 'u-1', dirty: true, syncedAt: '2026-11-02T10:00:00.123456+00:00' };
+  const good = {
+    v: 2,
+    userId: A,
+    dirtyAxes: ['style'],
+    syncedAt: '2026-11-02T10:00:00.123456+00:00',
+  };
 
   it('reads a well-formed record, as an object or as JSON text', () => {
     expect(parseSyncRecord(good)).toEqual(good);
     expect(parseSyncRecord(JSON.stringify(good))).toEqual(good);
     expect(parseSyncRecord({ ...good, syncedAt: null })).toEqual({ ...good, syncedAt: null });
+    expect(parseSyncRecord({ ...good, dirtyAxes: [] })).toEqual({ ...good, dirtyAxes: [] });
   });
 
-  it('drops anything malformed', () => {
-    expect(parseSyncRecord({ ...good, v: 2 })).toBeNull();
-    expect(parseSyncRecord({ ...good, userId: '' })).toBeNull();
-    expect(parseSyncRecord({ ...good, userId: 7 })).toBeNull();
-    expect(parseSyncRecord({ ...good, dirty: 'true' })).toBeNull();
+  it('puts the dirty axes in the canonical order', () => {
+    expect(parseSyncRecord({ ...good, dirtyAxes: ['theme', 'style'] })?.dirtyAxes).toEqual([
+      'style',
+      'theme',
+    ]);
+  });
+
+  it('SR1: the userId must be a UUID', () => {
+    for (const userId of [
+      '',
+      'u-1',
+      7,
+      null,
+      `${A} `,
+      'a0000000-0000-4000-8000-0000000000a',
+      '../x',
+    ]) {
+      expect(parseSyncRecord({ ...good, userId })).toBeNull();
+    }
+    expect(isUserId(A)).toBe(true);
+    expect(isUserId(A.toUpperCase())).toBe(true);
+  });
+
+  it('SR1: dirtyAxes must be a subset of the two axes', () => {
+    for (const dirtyAxes of [['mode'], ['style', 'style'], 'style', true, null, undefined, [1]]) {
+      expect(parseSyncRecord({ ...good, dirtyAxes })).toBeNull();
+    }
+  });
+
+  it('drops the stage 2 version 1 record and anything else malformed', () => {
+    expect(parseSyncRecord({ v: 1, userId: A, dirty: true, syncedAt: null })).toBeNull();
+    expect(parseSyncRecord({ ...good, v: 3 })).toBeNull();
     expect(parseSyncRecord({ ...good, syncedAt: 'yesterday' })).toBeNull();
     expect(parseSyncRecord({ ...good, syncedAt: undefined })).toBeNull();
     expect(parseSyncRecord('not json')).toBeNull();
@@ -176,24 +291,62 @@ describe('parseSyncRecord', () => {
   });
 });
 
-describe('parseAccountRow', () => {
-  it('reads the row as PostgREST returns it', () => {
-    expect(
-      parseAccountRow({ appearance: 'liquid-glass', updated_at: '2026-11-02T10:00:00.5+00:00' }),
-    ).toEqual({ mode: 'liquid-glass', updatedAt: '2026-11-02T10:00:00.5+00:00' });
+describe('parseAnonFlowRecord', () => {
+  it('reads the stamp, as an object or JSON text', () => {
+    const stamp = { v: 1, anonAt: NOW, axes: ['theme'] };
+    expect(parseAnonFlowRecord(stamp)).toEqual(stamp);
+    expect(parseAnonFlowRecord(JSON.stringify(stamp))).toEqual(stamp);
   });
 
-  it('treats a missing, unknown or malformed row as no row', () => {
+  it('drops a stamp with no axes, unknown axes, a bad time or another version', () => {
+    expect(parseAnonFlowRecord({ v: 1, anonAt: NOW, axes: [] })).toBeNull();
+    expect(parseAnonFlowRecord({ v: 1, anonAt: NOW, axes: ['mode'] })).toBeNull();
+    expect(parseAnonFlowRecord({ v: 1, anonAt: 'now', axes: ['style'] })).toBeNull();
+    expect(parseAnonFlowRecord({ v: 2, anonAt: NOW, axes: ['style'] })).toBeNull();
+    expect(parseAnonFlowRecord(null)).toBeNull();
+    expect(parseAnonFlowRecord('1')).toBeNull();
+  });
+});
+
+describe('parseAccountRow', () => {
+  it('reads the two columns as PostgREST returns them', () => {
+    expect(
+      parseAccountRow({
+        style: 'liquid-glass',
+        theme: 'dark',
+        updated_at: '2026-11-02T10:00:00.5+00:00',
+      }),
+    ).toEqual({ style: 'liquid-glass', theme: 'dark', updatedAt: '2026-11-02T10:00:00.5+00:00' });
+  });
+
+  it('a null or unknown column is not chosen; the other is still read', () => {
+    expect(
+      parseAccountRow({ style: null, theme: 'light', updated_at: '2026-11-02T10:00:00Z' }),
+    ).toEqual({
+      style: null,
+      theme: 'light',
+      updatedAt: '2026-11-02T10:00:00Z',
+    });
+    expect(
+      parseAccountRow({ style: 'classic', theme: 'Dark', updated_at: '2026-11-02T10:00:00Z' }),
+    ).toEqual({ style: 'classic', theme: null, updatedAt: '2026-11-02T10:00:00Z' });
+  });
+
+  it('treats a missing, empty, stage 2 shaped or malformed row as no row', () => {
     expect(parseAccountRow(null)).toBeNull();
     expect(parseAccountRow(undefined)).toBeNull();
     expect(
-      parseAccountRow({ appearance: 'Liquid Glass', updated_at: '2026-11-02T10:00:00Z' }),
+      parseAccountRow({ style: null, theme: null, updated_at: '2026-11-02T10:00:00Z' }),
     ).toBeNull();
-    expect(parseAccountRow({ appearance: 'dark' })).toBeNull();
-    expect(parseAccountRow({ appearance: 'dark', updated_at: 'soon' })).toBeNull();
     expect(
-      parseAccountRow([{ appearance: 'dark', updated_at: '2026-11-02T10:00:00Z' }]),
+      parseAccountRow({ appearance: 'liquid-glass', updated_at: '2026-11-02T10:00:00Z' }),
     ).toBeNull();
+    expect(
+      parseAccountRow({ style: 'Liquid Glass', updated_at: '2026-11-02T10:00:00Z' }),
+    ).toBeNull();
+    expect(parseAccountRow({ style: 'classic' })).toBeNull();
+    expect(parseAccountRow({ style: 'classic', updated_at: 'soon' })).toBeNull();
+    expect(parseAccountRow([{ style: 'classic', updated_at: '2026-11-02T10:00:00Z' }])).toBeNull();
   });
 });
 
@@ -246,7 +399,23 @@ describe('storage keys', () => {
   it('the device records survive sign-out; the sync record on the phone is a workspace key', () => {
     expect(APPEARANCE_STORAGE_KEYS.phoneDevice.startsWith('workspace.')).toBe(false);
     expect(APPEARANCE_STORAGE_KEYS.phoneFallback.startsWith('workspace.')).toBe(false);
+    expect(APPEARANCE_STORAGE_KEYS.phoneIntroSeen.startsWith('workspace.')).toBe(false);
     expect(APPEARANCE_STORAGE_KEYS.phoneSync.startsWith('workspace.')).toBe(true);
-    expect(APPEARANCE_STORAGE_KEYS.webCookie).toBe('sp_appearance');
+  });
+
+  it('uses the revision names, none of the stage 2 ones (revision R2)', () => {
+    expect(APPEARANCE_STORAGE_KEYS).toEqual({
+      webCookie: 'sp_style',
+      webDevice: 'sp-appearance',
+      webSync: 'sp-appearance-sync',
+      webFallback: 'sp-lg-fallback',
+      webAnonFlow: 'sp-appearance-anon',
+      webIntroSeen: 'sp-lg-intro-seen',
+      webServerCookieAt: 'sp-style-server-at',
+      phoneDevice: 'stockpilot.appearance.v2',
+      phoneSync: 'workspace.appearance-sync',
+      phoneFallback: 'stockpilot.appearance.fallback',
+      phoneIntroSeen: 'stockpilot.appearance.intro.v1',
+    });
   });
 });

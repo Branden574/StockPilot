@@ -1,85 +1,89 @@
 import { z } from 'zod';
 
 import {
-  APPEARANCE_MODES,
-  CLASSIC_APPEARANCE_MODES,
+  APPEARANCE_AXES,
+  APPEARANCE_STYLES,
+  PRE_SIGN_IN_CLOCK_SKEW_MS,
+  THEME_SETTINGS,
+  defaultStyle,
   type AccountAppearanceRow,
   type AccountSyncRecord,
-  type AppearanceMode,
+  type AnonFlowRecord,
+  type AppearanceAxis,
   type AppearanceStyle,
-  type ClassicAppearanceMode,
   type ColorScheme,
-  type ColorSchemeSetting,
   type DeviceAppearanceRecord,
+  type GlassRollout,
+  type ThemeSetting,
 } from './types';
 
 /**
  * Reading and resolving appearances. Every value that comes from storage, a
- * cookie, the account row or a form goes through one of these parsers, and
- * anything that is not exactly one of the known words is dropped (null), so a
- * malformed value can never turn Liquid Glass on.
+ * cookie, the account row, an environment variable or a form goes through one
+ * of these parsers, and anything that is not exactly one of the known words is
+ * dropped (null). A dropped Design means "never chose", so the rollout's
+ * default applies (revision R2): under the 'default' rollout that is Liquid
+ * Glass, under 'opt-in' and 'off' Classic.
  */
 
-export const appearanceModeSchema = z.enum(APPEARANCE_MODES);
-export const classicAppearanceModeSchema = z.enum(CLASSIC_APPEARANCE_MODES);
+export const appearanceStyleSchema = z.enum(APPEARANCE_STYLES);
+export const themeSettingSchema = z.enum(THEME_SETTINGS);
 
-/** The appearance, or null for anything else (case, spacing and labels included). */
-export function parseAppearance(value: unknown): AppearanceMode | null {
-  const parsed = appearanceModeSchema.safeParse(value);
+/** The Design, or null for anything else (case, spacing and labels included). */
+export function parseStyle(value: unknown): AppearanceStyle | null {
+  const parsed = appearanceStyleSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
-/** A classic appearance (dark, light, system), or null. */
-export function parseClassicAppearance(value: unknown): ClassicAppearanceMode | null {
-  const parsed = classicAppearanceModeSchema.safeParse(value);
+/** The Theme (light, dark, system), or null for anything else. */
+export function parseThemeSetting(value: unknown): ThemeSetting | null {
+  const parsed = themeSettingSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
 
-export function isClassicAppearance(mode: AppearanceMode): mode is ClassicAppearanceMode {
-  return mode !== 'liquid-glass';
-}
-
-/** 'liquid-glass' is the glass style; every other choice is classic. */
-export function styleOf(mode: AppearanceMode): AppearanceStyle {
-  return mode === 'liquid-glass' ? 'liquid-glass' : 'classic';
+/**
+ * The kill switch value: exactly 'opt-in' or 'default'; anything else, unset,
+ * empty and the stage 2 value '1' included, is 'off' (revision R5).
+ */
+export function parseRollout(value: unknown): GlassRollout {
+  return value === 'opt-in' || value === 'default' ? value : 'off';
 }
 
 /**
- * What a light/dark/system theme API is given. Liquid Glass follows the
- * device for its Day or Night version (plan D3), so it hands over 'system'.
+ * The Design to show. The rollout decides only what is shown, never what is
+ * stored:
+ *   off            Classic, whatever was chosen (the choice is kept);
+ *   crash fallback Classic for this tab or run (plan 5.6);
+ *   otherwise      the person's choice, or the rollout's default when there is
+ *                  none (Liquid Glass under 'default', Classic under 'opt-in').
  */
-export function schemeSettingOf(mode: AppearanceMode): ColorSchemeSetting {
-  return mode === 'liquid-glass' ? 'system' : mode;
+export function shownStyle(
+  style: AppearanceStyle | null,
+  rollout: GlassRollout,
+  crashFallback: boolean,
+): AppearanceStyle {
+  if (rollout === 'off' || crashFallback) return 'classic';
+  return style ?? defaultStyle(rollout);
 }
 
 /**
- * The adapter for every API that accepts only light or dark. System and
- * Liquid Glass follow the device; Dark and Light are fixed.
+ * The adapter for every API that accepts only light or dark. Light and Dark
+ * are fixed in both Designs; System, or a Theme never chosen, follows the
+ * device.
  */
-export function resolveScheme(mode: AppearanceMode, deviceIsDark: boolean): ColorScheme {
-  const setting = schemeSettingOf(mode);
-  if (setting === 'system') return deviceIsDark ? 'dark' : 'light';
-  return setting;
+export function resolveScheme(theme: ThemeSetting | null, deviceIsDark: boolean): ColorScheme {
+  if (theme === 'light' || theme === 'dark') return theme;
+  return deviceIsDark ? 'dark' : 'light';
 }
 
 /**
- * The appearance to render under the kill switch (plan D12). With Liquid
- * Glass turned off for this build, a stored 'liquid-glass' renders as classic
- * System. The stored value itself is kept, not rewritten: callers apply this
- * when rendering, never when saving.
+ * The Theme an existing web user already has: next-themes' own stored `theme`
+ * (light, dark or system), read as it is and never rewritten. Anything else,
+ * or nothing, is null: the device is followed. Inherited, so it is applied but
+ * never uploaded (Q11).
  */
-export function effectiveAppearance(mode: AppearanceMode, glassEnabled: boolean): AppearanceMode {
-  return mode === 'liquid-glass' && !glassEnabled ? 'system' : mode;
-}
-
-/**
- * The mode a device starts in when it has no appearance record yet. On the
- * web that is next-themes' own stored `theme` (light, dark or system), so an
- * existing person's look does not change; anything else, or nothing, is
- * System. A legacy value never resolves to Liquid Glass.
- */
-export function legacyAppearance(legacyTheme: unknown): ClassicAppearanceMode {
-  return parseClassicAppearance(legacyTheme) ?? 'system';
+export function legacyTheme(value: unknown): ThemeSetting | null {
+  return parseThemeSetting(value);
 }
 
 function fromJsonString(value: unknown): unknown {
@@ -97,53 +101,96 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isStamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
 /**
- * The device record from storage. Accepts the stored object, its JSON text,
- * or a bare mode (the web cookie holds only the mode). Returns null when the
- * mode is missing or unknown, or the record names a version this code does
- * not know. A bad lastClassic falls back to System; a bad anonAt is dropped.
+ * A list of axes, each known and none twice (it stands for a set), in the
+ * canonical order; null for anything else.
  */
-export function parseDeviceRecord(value: unknown): DeviceAppearanceRecord | null {
-  const raw = fromJsonString(value);
-  const bare = parseAppearance(raw);
-  if (bare) {
-    return { v: 1, mode: bare, lastClassic: isClassicAppearance(bare) ? bare : 'system' };
+function parseAxes(value: unknown): AppearanceAxis[] | null {
+  if (!Array.isArray(value)) return null;
+  const seen = new Set<AppearanceAxis>();
+  for (const item of value) {
+    if (!(APPEARANCE_AXES as readonly unknown[]).includes(item)) return null;
+    if (seen.has(item as AppearanceAxis)) return null;
+    seen.add(item as AppearanceAxis);
   }
-  if (!isRecord(raw) || raw.v !== 1) return null;
-  const mode = parseAppearance(raw.mode);
-  if (!mode) return null;
-  const lastClassic =
-    parseClassicAppearance(raw.lastClassic) ?? (isClassicAppearance(mode) ? mode : 'system');
-  const record: DeviceAppearanceRecord = { v: 1, mode, lastClassic };
+  return APPEARANCE_AXES.filter((axis) => seen.has(axis));
+}
+
+/**
+ * The device record from storage (object or JSON text). Version 2 only: the
+ * stage 2 version 1 record meant something else and is ignored. Each axis is
+ * read on its own, so a bad Theme does not lose a good Design. Returns null
+ * when neither axis holds a known value. `now` (milliseconds) is passed in so
+ * the parser stays pure: an anonAt more than PRE_SIGN_IN_CLOCK_SKEW_MS in the
+ * future is dropped (SR2), like any other unreadable stamp.
+ */
+export function parseDeviceRecord(value: unknown, now: number): DeviceAppearanceRecord | null {
+  const raw = fromJsonString(value);
+  if (!isRecord(raw) || raw.v !== 2) return null;
+  const style = parseStyle(raw.style);
+  const theme = parseThemeSetting(raw.theme);
+  if (!style && !theme) return null;
+  const record: DeviceAppearanceRecord = { v: 2 };
+  if (style) record.style = style;
+  if (theme) record.theme = theme;
   const anonAt = raw.anonAt;
-  if (typeof anonAt === 'number' && Number.isFinite(anonAt) && anonAt > 0) record.anonAt = anonAt;
+  if (isStamp(anonAt) && anonAt - now <= PRE_SIGN_IN_CLOCK_SKEW_MS) record.anonAt = anonAt;
   return record;
 }
 
-/** The account sync record from storage (object or JSON text), or null. */
-export function parseSyncRecord(value: unknown): AccountSyncRecord | null {
-  const raw = fromJsonString(value);
-  if (!isRecord(raw) || raw.v !== 1) return null;
-  const { userId, dirty, syncedAt } = raw;
-  if (typeof userId !== 'string' || userId.length === 0) return null;
-  if (typeof dirty !== 'boolean') return null;
-  if (syncedAt !== null && (typeof syncedAt !== 'string' || timestampMicros(syncedAt) === null)) {
-    return null;
-  }
-  return { v: 1, userId, dirty, syncedAt };
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/** A Supabase auth user id (a UUID in its 8-4-4-4-12 text form). */
+export function isUserId(value: unknown): value is string {
+  return typeof value === 'string' && UUID.test(value);
 }
 
 /**
- * The account row ({ appearance, updated_at } from public.user_appearance),
- * or null when it is missing or malformed. A row with an unknown appearance
- * is treated as no row: it is never adopted.
+ * The account sync record from storage (object or JSON text), or null.
+ * Version 2 only. The userId must be a UUID and dirtyAxes a subset of the two
+ * axes (SR1): a record that cannot name a real person, or says something this
+ * code does not understand, is dropped whole and never pushed.
+ */
+export function parseSyncRecord(value: unknown): AccountSyncRecord | null {
+  const raw = fromJsonString(value);
+  if (!isRecord(raw) || raw.v !== 2) return null;
+  const { userId, syncedAt } = raw;
+  if (!isUserId(userId)) return null;
+  const dirtyAxes = parseAxes(raw.dirtyAxes);
+  if (!dirtyAxes) return null;
+  if (syncedAt !== null && (typeof syncedAt !== 'string' || timestampMicros(syncedAt) === null)) {
+    return null;
+  }
+  return { v: 2, userId, dirtyAxes, syncedAt };
+}
+
+/** This tab's signed-out choices (the SR4 continuity stamp), or null. */
+export function parseAnonFlowRecord(value: unknown): AnonFlowRecord | null {
+  const raw = fromJsonString(value);
+  if (!isRecord(raw) || raw.v !== 1 || !isStamp(raw.anonAt)) return null;
+  const axes = parseAxes(raw.axes);
+  if (!axes || axes.length === 0) return null;
+  return { v: 1, anonAt: raw.anonAt, axes };
+}
+
+/**
+ * The account row ({ style, theme, updated_at } from public.user_appearance),
+ * or null when it is missing or malformed. Each column is read on its own: an
+ * unknown value counts as not chosen and is never adopted. A row in which
+ * neither column holds a known value is treated as no row.
  */
 export function parseAccountRow(value: unknown): AccountAppearanceRow | null {
   if (!isRecord(value)) return null;
-  const mode = parseAppearance(value.appearance);
   const updatedAt = value.updated_at;
-  if (!mode || typeof updatedAt !== 'string' || timestampMicros(updatedAt) === null) return null;
-  return { mode, updatedAt };
+  if (typeof updatedAt !== 'string' || timestampMicros(updatedAt) === null) return null;
+  const style = parseStyle(value.style);
+  const theme = parseThemeSetting(value.theme);
+  if (!style && !theme) return null;
+  return { style, theme, updatedAt };
 }
 
 const TIMESTAMP =
