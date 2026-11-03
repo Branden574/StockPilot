@@ -14,6 +14,7 @@ import {
   readDeviceRecordRaw,
   readLegacyTheme,
   readSyncRecordRaw,
+  refreshAppearanceCookie,
   writeDeviceRecord,
   writeSyncRecord,
 } from './appearance-cookie';
@@ -21,6 +22,7 @@ import {
 /** The web's appearance records (Liquid Glass plan 3.3) and the crash fallback (5.6). */
 
 afterEach(() => {
+  vi.restoreAllMocks();
   localStorage.clear();
   sessionStorage.clear();
   document.cookie = 'sp_appearance=; path=/; max-age=0';
@@ -68,6 +70,71 @@ describe('the device record', () => {
     expect(readDeviceRecord()).toBeNull();
     localStorage.setItem('sp-appearance', 'not json {');
     expect(readDeviceRecord()).toBeNull();
+  });
+
+  /**
+   * localStorage that throws for the device record's key only, as a full
+   * quota does. (A spy on Storage.prototype misses happy-dom's calls for a key
+   * already stored, so the whole object is swapped.)
+   */
+  function failDeviceStorage(methods: ('setItem' | 'removeItem')[]) {
+    const real = window.localStorage;
+    const failing = (method: 'setItem' | 'removeItem') => methods.includes(method);
+    const fake = {
+      getItem: (key: string) => real.getItem(key),
+      setItem: (key: string, value: string) => {
+        if (key === 'sp-appearance' && failing('setItem')) {
+          throw new DOMException('full', 'QuotaExceededError');
+        }
+        real.setItem(key, value);
+      },
+      removeItem: (key: string) => {
+        if (key === 'sp-appearance' && failing('removeItem')) {
+          throw new DOMException('blocked', 'SecurityError');
+        }
+        real.removeItem(key);
+      },
+    } as unknown as Storage;
+    vi.spyOn(window, 'localStorage', 'get').mockReturnValue(fake);
+  }
+
+  it('a localStorage write that fails drops the older record, so the next load reads the cookie that holds the choice', () => {
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'dark', lastClassic: 'dark' }),
+    );
+    failDeviceStorage(['setItem']);
+    writeDeviceRecord({ v: 1, mode: 'liquid-glass', lastClassic: 'dark' });
+    expect(document.cookie).toContain('sp_appearance=liquid-glass');
+    expect(readDeviceRecord()?.mode).toBe('liquid-glass');
+  });
+
+  it('when the older record cannot be dropped either, the cookie keeps saying what the next load will read', () => {
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'dark', lastClassic: 'dark' }),
+    );
+    document.cookie = 'sp_appearance=dark; path=/';
+    failDeviceStorage(['setItem', 'removeItem']);
+    writeDeviceRecord({ v: 1, mode: 'liquid-glass', lastClassic: 'dark' });
+    expect(readAppearanceCookie(document.cookie)).toBe('dark');
+    expect(readDeviceRecord()?.mode).toBe('dark');
+  });
+
+  it('refreshAppearanceCookie writes the stored record back into a cookie that expired', () => {
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'liquid-glass', lastClassic: 'light' }),
+    );
+    expect(readAppearanceCookie(document.cookie) ?? '').toBe('');
+    refreshAppearanceCookie();
+    expect(readAppearanceCookie(document.cookie)).toBe('liquid-glass');
+  });
+
+  it('refreshAppearanceCookie writes nothing when no record is stored (a classic person)', () => {
+    localStorage.setItem('theme', 'dark');
+    refreshAppearanceCookie();
+    expect(readAppearanceCookie(document.cookie) ?? '').toBe('');
   });
 
   it('reads next-themes’ own stored theme for the legacy migration', () => {

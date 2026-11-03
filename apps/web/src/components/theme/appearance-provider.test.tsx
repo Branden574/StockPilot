@@ -194,6 +194,34 @@ describe('the account', () => {
   });
 });
 
+describe('the first-paint cookie', () => {
+  it('is written again on load when it expired but this device still holds Liquid Glass', async () => {
+    // Safari caps a script-written cookie at 7 days; localStorage outlives it.
+    // Without the cookie the head script paints classic and glass arrives a
+    // moment later, on every load, until the person chooses again.
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'liquid-glass', lastClassic: 'light' }),
+    );
+    expect(document.cookie).not.toContain('sp_appearance=liquid-glass');
+    render(<App />);
+    await waitFor(() => expect(html().getAttribute('data-appearance')).toBe('liquid-glass'));
+    expect(document.cookie).toContain('sp_appearance=liquid-glass');
+  });
+
+  it('is made to say what the device record says when the two disagree', async () => {
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'dark', lastClassic: 'dark' }),
+    );
+    document.cookie = 'sp_appearance=liquid-glass; path=/';
+    render(<App />);
+    await waitFor(() => expect(radio('Dark')).toBeChecked());
+    expect(document.cookie).toContain('sp_appearance=dark');
+    expect(document.cookie).not.toContain('sp_appearance=liquid-glass');
+  });
+});
+
 describe('the kill switch (NEXT_PUBLIC_LIQUID_GLASS off)', () => {
   it('renders a stored Liquid Glass as classic System, removes the attribute, keeps the stored value and offers no glass', async () => {
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
@@ -236,6 +264,25 @@ describe('the one-time crash fallback', () => {
 
     act(() => options.action.onClick());
     expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+    expect(sessionStorage.getItem('sp-lg-fallback')).toBeNull();
+  });
+});
+
+describe('the one-time crash fallback in Settings', () => {
+  it('marks what is on screen, not the stored choice, and choosing Liquid Glass turns it back on', async () => {
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'liquid-glass', lastClassic: 'light' }),
+    );
+    sessionStorage.setItem('sp-lg-fallback', 'shown');
+    render(<App />);
+    await waitFor(() => expect(radio('System')).toBeChecked());
+    expect(radio('Liquid Glass')).not.toBeChecked();
+    expect(html().hasAttribute('data-appearance')).toBe(false);
+
+    fireEvent.click(radio('Liquid Glass'));
+    await waitFor(() => expect(html().getAttribute('data-appearance')).toBe('liquid-glass'));
+    expect(radio('Liquid Glass')).toBeChecked();
     expect(sessionStorage.getItem('sp-lg-fallback')).toBeNull();
   });
 });

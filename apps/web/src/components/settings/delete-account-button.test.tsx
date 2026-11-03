@@ -22,6 +22,8 @@ vi.mock('sonner', () => ({
 const deleteOwnAccountAction = vi.hoisted(() => vi.fn());
 vi.mock('@/server/actions/profile', () => ({ deleteOwnAccountAction }));
 
+import { APPEARANCE_SIGNED_OUT_EVENT } from '@/components/theme/appearance-cookie';
+
 import { DeleteAccountButton } from './delete-account-button';
 
 beforeEach(() => {
@@ -84,7 +86,9 @@ describe('DeleteAccountButton: a refusal', () => {
 
     const dialog = await openAndConfirm(user);
 
-    expect(within(dialog).getByRole('alert')).toHaveTextContent('Your account could not be deleted right now.');
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(
+      'Your account could not be deleted right now.',
+    );
     expect(within(dialog).queryByRole('button', { name: 'Open the Team page' })).toBeNull();
     expect(errorMock).not.toHaveBeenCalled();
   });
@@ -164,6 +168,48 @@ describe('DeleteAccountButton: deleting the account', () => {
     expect(sentAtRequest).toEqual([{ type: 'purge' }]);
     tabs.deliver();
     expect(otherTab.received).toEqual([{ type: 'purge' }]);
+  });
+
+  it('forgets the account’s appearance sync, like every sign-out, once the account is deleted', async () => {
+    // Liquid Glass plan 3.3: the sync record goes at every sign-out, and the
+    // provider (which outlives this soft navigation) forgets the account, so a
+    // choice made next on the sign-in page is not filed under a deleted account.
+    localStorage.setItem(
+      'sp-appearance-sync',
+      JSON.stringify({ v: 1, userId: 'user-a', dirty: false, syncedAt: null }),
+    );
+    const heard = vi.fn();
+    window.addEventListener(APPEARANCE_SIGNED_OUT_EVENT, heard);
+    deleteOwnAccountAction.mockResolvedValue({ ok: true, data: undefined });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    await openAndConfirm(user);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith('/signin'));
+    window.removeEventListener(APPEARANCE_SIGNED_OUT_EVENT, heard);
+    expect(localStorage.getItem('sp-appearance-sync')).toBeNull();
+    expect(heard).toHaveBeenCalledTimes(1);
+    localStorage.clear();
+  });
+
+  it('a refused deletion keeps the account’s appearance sync: the person is still signed in', async () => {
+    localStorage.setItem(
+      'sp-appearance-sync',
+      JSON.stringify({ v: 1, userId: 'user-a', dirty: false, syncedAt: null }),
+    );
+    deleteOwnAccountAction.mockResolvedValue({
+      ok: false,
+      error: { code: 'conflict', message: REFUSAL, details: { reason: 'last_owner' } },
+    });
+    const user = userEvent.setup();
+    render(<DeleteAccountButton />);
+
+    const dialog = await openAndConfirm(user);
+
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(REFUSAL);
+    expect(localStorage.getItem('sp-appearance-sync')).not.toBeNull();
+    localStorage.clear();
   });
 
   it('opening the dialog and cancelling removes nothing and tells no other tab', async () => {

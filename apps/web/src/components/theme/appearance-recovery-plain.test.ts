@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { APPEARANCE_STORAGE_KEYS, CLASSIC_APPEARANCE_MODES } from '@stockpilot/core';
 
@@ -20,6 +20,7 @@ import { join } from 'node:path';
 const SOURCE = readFileSync(join(__dirname, 'appearance-recovery-plain.ts'), 'utf8');
 
 afterEach(() => {
+  vi.restoreAllMocks();
   localStorage.clear();
   sessionStorage.clear();
   document.cookie = 'sp_appearance=; path=/; max-age=0';
@@ -80,6 +81,29 @@ describe('appearance-recovery-plain', () => {
     });
     expect(sessionStorage.getItem('sp-lg-fallback')).toBeNull();
     expect(document.documentElement.hasAttribute('data-appearance')).toBe(false);
+  });
+
+  it('a localStorage write that fails drops the Liquid Glass record, so the next load reads the classic cookie', () => {
+    localStorage.setItem(
+      'sp-appearance',
+      JSON.stringify({ v: 1, mode: 'liquid-glass', lastClassic: 'light' }),
+    );
+    // localStorage that throws for the device record only, as a full quota does.
+    const real = window.localStorage;
+    const fake = {
+      getItem: (key: string) => real.getItem(key),
+      setItem: (key: string, value: string) => {
+        if (key === 'sp-appearance') throw new DOMException('full', 'QuotaExceededError');
+        real.setItem(key, value);
+      },
+      removeItem: (key: string) => real.removeItem(key),
+    } as unknown as Storage;
+    vi.spyOn(window, 'localStorage', 'get').mockReturnValue(fake);
+    expect(switchToClassicOnThisDevice()).toBe('light');
+    expect(storedAppearanceWord()).toBe('light');
+    expect(isLiquidGlassStored()).toBe(false);
+    // next-themes' theme is still written: the rest of the switch carries on.
+    expect(real.getItem('theme')).toBe('light');
   });
 
   it('falls back to System when no classic choice is known or it is malformed', () => {

@@ -5,7 +5,6 @@ import { useTheme } from 'next-themes';
 import * as React from 'react';
 
 import {
-  effectiveAppearance,
   parseAppearance,
   parseClassicAppearance,
   type AppearanceMode,
@@ -78,9 +77,11 @@ export function useAppearanceChoice(): AppearanceChoice {
   const { theme, setTheme } = useTheme();
   if (appearance) {
     return {
-      value: appearance.hydrated
-        ? effectiveAppearance(appearance.mode, appearance.glassAvailable)
-        : undefined,
+      // What is on screen, not the stored choice: during the one-time crash
+      // fallback a stored Liquid Glass shows classic System, so System is the
+      // one checked and Liquid Glass can be chosen to turn glass back on (a
+      // radio that is already checked never fires its change).
+      value: appearance.hydrated ? appearance.shown : undefined,
       options: offeredAppearanceOptions(appearance.glassAvailable),
       choose: appearance.choose,
       status: appearance.status,

@@ -29,6 +29,7 @@ import {
   readDeviceRecordRaw,
   readLegacyTheme,
   readSyncRecordRaw,
+  refreshAppearanceCookie,
   writeDeviceRecord,
   writeSyncRecord,
 } from './appearance-cookie';
@@ -276,6 +277,11 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       sync: readSyncRecordRaw(),
       legacyTheme: readLegacyTheme(),
     });
+    // The head script painted from the cookie; this load applied the
+    // localStorage record. Make the cookie say what was applied, so the next
+    // load paints it first time (a cookie Safari let expire after 7 days, or
+    // one the person cleared, would otherwise flash classic on every load).
+    refreshAppearanceCookie();
     setHydrated(true);
   }, [reduce]);
 

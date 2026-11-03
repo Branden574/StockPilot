@@ -79,11 +79,14 @@ function getItem(store: Storage | null, key: string): string | null {
   }
 }
 
-function setItem(store: Storage | null, key: string, value: string): void {
+/** Returns false when the write threw (storage full or blocked). */
+function setItem(store: Storage | null, key: string, value: string): boolean {
   try {
     store?.setItem(key, value);
+    return true;
   } catch {
     // Storage full or blocked: the choice still applies to this page.
+    return false;
   }
 }
 
@@ -114,19 +117,50 @@ export function readDeviceRecord(): DeviceAppearanceRecord | null {
   return parseDeviceRecord(readDeviceRecordRaw());
 }
 
-/** Write the device record: the cookie for the head script and the localStorage mirror. */
-export function writeDeviceRecord(record: DeviceAppearanceRecord): void {
-  if (typeof document !== 'undefined') {
-    try {
-      document.cookie = appearanceCookieString(
-        record.mode,
-        typeof location !== 'undefined' && location.protocol === 'https:',
-      );
-    } catch {
-      // A blocked cookie jar: localStorage below still remembers it.
-    }
+function writeAppearanceCookie(mode: AppearanceMode): void {
+  if (typeof document === 'undefined') return;
+  try {
+    document.cookie = appearanceCookieString(
+      mode,
+      typeof location !== 'undefined' && location.protocol === 'https:',
+    );
+  } catch {
+    // A blocked cookie jar: localStorage still remembers the choice.
   }
-  setItem(local(), KEYS.webDevice, JSON.stringify(record));
+}
+
+/**
+ * Write the device record: localStorage first, then the cookie for the head
+ * script. The two must never disagree, because the head script paints from
+ * the cookie and the provider then applies the localStorage record (which
+ * wins in readDeviceRecordRaw): a disagreement is a flash on every load and,
+ * worse, an older record undoing the person's choice. So when the
+ * localStorage write fails (a full quota), the older record is removed and
+ * the next load reads the cookie, which holds this choice. If even that
+ * fails, the cookie says what the next load will read.
+ */
+export function writeDeviceRecord(record: DeviceAppearanceRecord): void {
+  const store = local();
+  if (!setItem(store, KEYS.webDevice, JSON.stringify(record))) removeItem(store, KEYS.webDevice);
+  const kept = getItem(store, KEYS.webDevice);
+  const keptMode = kept === null ? null : parseDeviceRecord(kept)?.mode;
+  writeAppearanceCookie(keptMode ?? record.mode);
+}
+
+/**
+ * Write the stored device record's mode back into the cookie, on every load
+ * (the provider's hydrate). The cookie can go while localStorage stays:
+ * Safari and every WebKit browser cap a cookie written by script at 7 days,
+ * the one-year max-age runs out, or the person clears cookies only. Without
+ * it the head script paints classic and glass arrives a moment later, on
+ * every load. Rewriting it here also restarts its lifetime on each visit and
+ * repairs a cookie that disagrees with the record. Writes nothing when no
+ * record is stored, so a person who never used the new selector gets no
+ * cookie.
+ */
+export function refreshAppearanceCookie(): void {
+  const record = readDeviceRecord();
+  if (record) writeAppearanceCookie(record.mode);
 }
 
 export function readSyncRecordRaw(): unknown {

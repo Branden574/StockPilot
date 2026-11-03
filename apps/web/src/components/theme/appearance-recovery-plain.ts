@@ -78,14 +78,27 @@ export function switchToClassicOnThisDevice(): Classic {
   } catch {
     // System.
   }
+  // localStorage first, then the cookie, so the two never disagree: the head
+  // script paints from the cookie and the provider applies the localStorage
+  // record. When the record cannot be written (a full quota), the Liquid
+  // Glass record is removed so the next load reads the classic cookie instead
+  // of putting glass back on.
+  try {
+    try {
+      window.localStorage.setItem(DEVICE, JSON.stringify({ v: 1, mode: lastClassic, lastClassic }));
+    } catch {
+      window.localStorage.removeItem(DEVICE);
+    }
+  } catch {
+    // Storage blocked: the cookie carries the choice.
+  }
   try {
     const secure = window.location.protocol === 'https:' ? '; secure' : '';
     document.cookie = `${COOKIE}=${lastClassic}; path=/; max-age=31536000; samesite=lax${secure}`;
   } catch {
-    // A blocked cookie jar: localStorage below still remembers it.
+    // A blocked cookie jar: localStorage above still remembers it.
   }
   try {
-    window.localStorage.setItem(DEVICE, JSON.stringify({ v: 1, mode: lastClassic, lastClassic }));
     window.localStorage.setItem(THEME, lastClassic);
     const sync = readJson(window.localStorage, SYNC);
     if (sync && sync.v === 1 && typeof sync.userId === 'string' && sync.userId) {
