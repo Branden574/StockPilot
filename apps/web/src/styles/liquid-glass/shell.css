@@ -1,0 +1,166 @@
+/* The dashboard shell under Liquid Glass (spec/design-system.md 3.3, 9, 13:
+   AppSidebar, AppTopbar), on the hooks DashboardShell, Sidebar and Topbar
+   carry: [data-glass=shell|sidebar|sidebar-brand|sidebar-nav|nav-item|
+   main-column|topbar|pane|navsheet|workspace|tb-btn].
+
+   The composition, as drawn: the scene shows around a floating glass sidebar
+   (radius 22) and one frosted workspace pane (radius 28, 10 px from the
+   window's edges) that holds the top bar and the page. The pane's frost is on
+   a ::before layer on purpose (sp.css:965-966): an element with
+   backdrop-filter becomes a Backdrop Root, and dialogs and menus inside it
+   would then blur nothing.
+
+   Stage 2 builds the frame and its materials. The rail under 1180 px, the
+   top-bar capsule, the phone nav sheet's bottom-sheet form and the 761-767 px
+   band where glass is already desktop are stage 3 ("glass shell finished");
+   until then the classic breakpoints (Tailwind md, 768 px) hold. */
+@layer lg {
+  @media screen {
+    /* The frame lets the scene through. */
+    :root[data-appearance='liquid-glass'] [data-glass='shell'] {
+      background-color: transparent;
+    }
+
+    /* ── Sidebar: floating glass, radius 22, 256 px ────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='shell'] > [data-glass='sidebar'] {
+      position: relative;
+      isolation: isolate;
+      width: var(--lg-sb-w);
+      height: auto;
+      align-self: stretch;
+      margin: 10px 0 10px 10px;
+      border-width: 0;
+      border-radius: 22px;
+    }
+    /* The specular edge: a 1 px masked gradient ring (sp.css:97). */
+    :root[data-appearance='liquid-glass'] [data-glass='shell'] > [data-glass='sidebar']::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      padding: 1px;
+      border-radius: inherit;
+      background: var(--lg-glass-edge);
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] {
+      border-color: transparent;
+    }
+    /* Navigation rows: 34 px, radius 10; the current page lifts onto the
+       surface with an accent icon (AppSidebar .nav-item.on). */
+    :root[data-appearance='liquid-glass'] [data-glass='nav-item'] {
+      border-radius: 10px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='nav-item']:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 6%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='nav-item'][aria-current='page'] {
+      background-color: var(--lg-surface);
+      color: var(--lg-ink);
+      font-weight: 650;
+      box-shadow:
+        0 1px 2px rgba(16, 20, 18, 0.1),
+        0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass='nav-item'][aria-current='page'] {
+      background-color: var(--lg-surface-4);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='nav-item'][aria-current='page'] svg {
+      color: var(--lg-accent);
+    }
+    /* The workspace switcher (AppSidebar .ws). */
+    :root[data-appearance='liquid-glass'] [data-glass='workspace'] {
+      border-radius: 13px;
+      border-color: color-mix(in srgb, var(--lg-line-2) 70%, transparent);
+      background-color: color-mix(in srgb, var(--lg-surface) 72%, transparent);
+    }
+
+    /* ── The workspace pane: radius 28, frost on ::before ──────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='main-column'] {
+      position: relative;
+      isolation: isolate;
+      margin: 10px 10px 10px 12px;
+      border-radius: var(--lg-r-2xl);
+      overflow: hidden;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 0 0 0.5px var(--lg-pane-line),
+        var(--lg-glass-shadow);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass='main-column'] {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 0 0 0.5px var(--lg-pane-line),
+        var(--lg-glass-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='main-column']::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      background: var(--lg-pane);
+      -webkit-backdrop-filter: var(--lg-pane-blur);
+      backdrop-filter: var(--lg-pane-blur);
+      pointer-events: none;
+    }
+    /* The top bar and the page sit on the pane's frost. */
+    :root[data-appearance='liquid-glass'] [data-glass='topbar'] {
+      background-color: transparent;
+      border-color: transparent;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='pane'] {
+      background-color: transparent;
+    }
+    /* Reduce Transparency / High Contrast: the pane is the page, edge to edge
+       (sp.css:968). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass='main-column'] {
+        margin: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='topbar'] {
+        background-color: var(--lg-bg);
+      }
+    }
+    /* Phone (the artifact's 760 px): the pane loses its margin and radius. */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass='main-column'] {
+        margin: 0;
+        border-radius: 0;
+      }
+    }
+
+    /* ── Phone navigation sheet: the 86% / 88% frost (sp.css .navsheet) ── */
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet'] {
+      --lg-glass-strong: rgba(255, 255, 255, 0.86);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass='navsheet'] {
+      --lg-glass-strong: rgba(26, 30, 29, 0.88);
+    }
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass='navsheet'] {
+        --lg-glass-strong: var(--lg-chrome);
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='navsheet'] [data-glass='sidebar'] {
+      background-color: transparent;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+      box-shadow: none;
+    }
+
+    /* ── Top-bar buttons (AppTopbar .tb-btn): glass pills ────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='tb-btn'] {
+      border-radius: 999px;
+    }
+  }
+}

@@ -1,0 +1,118 @@
+/* The glass materials (spec/design-system.md 3.3-3.5, sp.css:94-104, 965-982),
+   applied to the inert data-glass hooks the shared components carry. Values
+   come from the generated --lg-* tokens only.
+
+   The layers, as drawn:
+     1 pane + content glass   the workspace column is one frosted pane; cards,
+                              panels and wells inside it do NOT blur (they read
+                              on the pane's frost);
+     2 floating glass         sidebar, top-bar controls: 58% / blur 26 / sat 170%;
+     3 overlay glass          menus, popovers, dialogs, sheets: 74% / blur 30 /
+                              sat 160%; the scrim tints and is never blurred.
+   Rows, chips and buttons never blur (the artifact's rule). Material rules
+   set only material properties (background, border colour, radius, shadow,
+   backdrop-filter), so every caller's layout utilities still apply.
+
+   Edge highlight: the artifact draws a 1 px masked gradient ring with a
+   pseudo-element. On these shared components a positioned pseudo-element would
+   change the containing block of their absolutely positioned children, so the
+   generic hooks carry the inner highlight (--lg-glass-inner, whose top line
+   is the visible specular edge) and the hairline ring; the full gradient ring
+   is drawn only where the element is already positioned (the sidebar, in
+   shell.css). Recorded as a stage 2 deviation. */
+@layer lg {
+  @media screen {
+    /* ── Content glass: cards (radius 20), panels (26), wells (10) ─────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='card'], [data-glass='grid-card'], [data-glass='stat-strip']) {
+      background-color: var(--lg-card-fill);
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass'] :is([data-glass='panel'], [data-slot='settings-panel']) {
+      background-color: var(--lg-card-fill);
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-xl);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-panel'] {
+      border-radius: var(--lg-r-lg);
+    }
+
+    /* ── Floating glass ───────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] :is([data-glass='sidebar'], [data-glass='tb-btn']) {
+      background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      border-color: transparent;
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+    }
+
+    /* ── Overlay glass: menus, popovers, select lists, dialogs, sheets ── */
+    :root[data-appearance='liquid-glass']
+      :is(
+        [data-glass='menu'],
+        [data-glass='popover'],
+        [data-glass='dialog'],
+        [data-glass='sheet'],
+        [data-glass='navsheet']
+      ) {
+      background-color: var(--lg-glass-strong);
+      -webkit-backdrop-filter: blur(30px) saturate(160%);
+      backdrop-filter: blur(30px) saturate(160%);
+      border-color: transparent;
+      color: var(--lg-ink);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-sh-3);
+    }
+    /* Reduce Transparency, High Contrast and no backdrop-filter support: the
+       overlay and floating materials are opaque (tokens.generated.css) and
+       nothing is blurred. */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        :is(
+          [data-glass='sidebar'],
+          [data-glass='tb-btn'],
+          [data-glass='menu'],
+          [data-glass='popover'],
+          [data-glass='dialog'],
+          [data-glass='sheet'],
+          [data-glass='navsheet']
+        ) {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        :is(
+          [data-glass='card'],
+          [data-glass='panel'],
+          [data-glass='sidebar'],
+          [data-glass='menu'],
+          [data-glass='popover'],
+          [data-glass='dialog'],
+          [data-glass='sheet'],
+          [data-glass='navsheet']
+        ) {
+        background: Canvas;
+        border: 1px solid CanvasText;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+    }
+
+    /* The scrim tints and is never blurred (the owner measured the cost of a
+       full-screen backdrop-filter; the artifact draws it the same way). */
+    :root[data-appearance='liquid-glass'] [data-glass='scrim'] {
+      background-color: var(--lg-scrim);
+    }
+  }
+}

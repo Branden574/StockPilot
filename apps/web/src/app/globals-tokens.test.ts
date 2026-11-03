@@ -671,3 +671,48 @@ describe('globals.css follow-ups (redesign P2.1c)', () => {
     }
   });
 });
+
+describe('globals.css and Liquid Glass (stage 2)', () => {
+  /**
+   * Liquid Glass lives in styles/liquid-glass, scoped to
+   * :root[data-appearance="liquid-glass"]. globals.css only gained the one
+   * import line that brings it in after Tailwind; its classic palette, its
+   * contrast and its "no print rules" all still hold (the cases above), and
+   * globals.css itself names no glass selector.
+   */
+  it('imports Tailwind and the Liquid Glass index, nothing else, in that order', () => {
+    const imports: string[] = [];
+    TREE.walkAtRules('import', (at) => {
+      imports.push(at.params);
+    });
+    expect(imports).toEqual(["'tailwindcss'", "'../styles/liquid-glass/index.css'"]);
+    const plugin = SOURCE.indexOf("@plugin 'tailwindcss-animate';");
+    const glass = SOURCE.indexOf("@import '../styles/liquid-glass/index.css';");
+    expect(glass).toBeGreaterThan(plugin);
+    expect(glass).toBeLessThan(SOURCE.indexOf('@custom-variant dark'));
+  });
+
+  it('names no glass selector of its own', () => {
+    const glassy: string[] = [];
+    TREE.walkRules((rule) => {
+      if (/data-appearance|data-glass|liquid-glass/.test(rule.selector)) glassy.push(rule.selector);
+    });
+    expect(glassy).toEqual([]);
+  });
+
+  it('compiled, its only print rule is the glass one that hides glass-only elements', async () => {
+    const input = SOURCE.replace("@import 'tailwindcss';", "@import 'tailwindcss' source(none);");
+    const { css } = await postcss([tailwindcss({ optimize: false })]).process(input, {
+      from: GLOBALS,
+    });
+    const print: string[] = [];
+    postcss.parse(css).walkAtRules('media', (at) => {
+      if (/\bprint\b/.test(at.params)) {
+        at.walkRules((r) => {
+          print.push(r.selector);
+        });
+      }
+    });
+    expect(print).toEqual(['[data-glass-only]']);
+  });
+});

@@ -3,9 +3,10 @@
 import { BookOpen, LifeBuoy, LogOut, Settings, ShieldAlert, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useTheme } from 'next-themes';
 
 import type { Density } from '@/components/dashboard/sidebar-pref';
+import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
+import { AppearanceMenuRadioGroup } from '@/components/theme/appearance-select';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -53,7 +54,6 @@ export function UserMenu({
   onDensityChange,
 }: UserMenuProps) {
   const router = useRouter();
-  const { theme, setTheme } = useTheme();
   // NO LINK IN THE MENU PREFETCHES ITS PAGE WHEN THE MENU OPENS (PLAN 0.6). A
   // default <Link> prefetches as soon as it is on screen, so opening the menu
   // fetched Profile, Settings, Help, Support (and Platform) at once: two
@@ -159,21 +159,13 @@ export function UserMenu({
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel className={GROUP_LABEL}>Theme</DropdownMenuLabel>
-          {/* One choice of three: the one in use is marked with a dot in the
-              icon column (announced as checked); pl-10 lines the names up
-              with the items above (icon 16 + its margin + the item's gap). */}
-          <DropdownMenuRadioGroup aria-label="Theme" value={theme} onValueChange={setTheme}>
-            <DropdownMenuRadioItem value="light" className="pl-10">
-              Light
-            </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="dark" className="pl-10">
-              Dark
-            </DropdownMenuRadioItem>
-            <DropdownMenuRadioItem value="system" className="pl-10">
-              System
-            </DropdownMenuRadioItem>
-          </DropdownMenuRadioGroup>
+          <DropdownMenuLabel className={GROUP_LABEL}>Appearance</DropdownMenuLabel>
+          {/* One choice of four (three when this build does not offer Liquid
+              Glass): the one in use is marked with a dot in the icon column
+              (announced as checked); pl-10 lines the names up with the items
+              above (icon 16 + its margin + the item's gap). The choices and
+              their order come from components/theme/appearance-select.tsx. */}
+          <AppearanceMenuRadioGroup itemClassName="pl-10" />
           {density && onDensityChange ? (
             <>
               <DropdownMenuLabel className={GROUP_LABEL}>Density</DropdownMenuLabel>
@@ -215,6 +207,10 @@ export function UserMenu({
               // And this person's tour state, kept for the browser session
               // (sign-out is a soft navigation, so module state survives it).
               forgetTourState();
+              // And the appearance's account sync record (the device keeps its
+              // appearance, as it keeps its theme): nothing that names this
+              // account outlives the session (Liquid Glass plan 3.3).
+              forgetAppearanceAccount();
               // And what an interrupted run kept in this tab
               // (lib/interrupted-run): a sign-out on purpose leaves none of it.
               // Before the request, which answers with a redirect.

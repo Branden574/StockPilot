@@ -1,0 +1,11 @@
+/* Print (plan 4.8): every other glass rule sits inside @media screen, so a
+   printed page already gets the classic paper look, the classic tokens and no
+   frost or scene. The one print rule hides what only the glass composition
+   draws, so it never reaches paper either. */
+@layer lg {
+  @media print {
+    [data-glass-only] {
+      display: none;
+    }
+  }
+}

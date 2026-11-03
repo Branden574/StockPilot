@@ -1,4 +1,5 @@
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { AvatarUploader } from '@/components/settings/avatar-uploader';
 import { DeleteAccountButton } from '@/components/settings/delete-account-button';
 import { DELETE_ACCOUNT_CARD_COPY } from '@/components/settings/delete-account-copy';
@@ -51,7 +52,7 @@ export default async function ProfileSettingsPage({
     <SettingsPage>
       <PageHeader
         title="Profile"
-        subline="Your name, avatar, and sign-in email."
+        subline="Your name, avatar, sign-in email, and appearance."
         back={
           <PageHeaderBackLink href="/dashboard/settings">← Back to settings</PageHeaderBackLink>
         }
@@ -88,6 +89,16 @@ export default async function ProfileSettingsPage({
           expired={status?.expired ?? false}
           justChanged={justChanged}
         />
+      </SettingsPanel>
+
+      {/* Personal and ungated: every signed-in person chooses their own look,
+          and the choice changes nobody else's (components/theme). */}
+      <SettingsPanel
+        title="Appearance"
+        headingId="settings-appearance-heading"
+        description="Choose how StockPilot looks to you. It changes at once, on every page; the line below says where it is saved."
+      >
+        <AppearancePanel labelledBy="settings-appearance-heading" />
       </SettingsPanel>
 
       {/* The danger zone: set apart below the everyday cards, destructive in

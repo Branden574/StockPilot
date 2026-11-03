@@ -1,25 +1,28 @@
 'use client';
 
-import { Monitor, Moon, Sun } from 'lucide-react';
-import { useTheme } from 'next-themes';
+import { Moon, Sun } from 'lucide-react';
 import * as React from 'react';
 
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+import { AppearanceMenuRadioGroup } from './appearance-select';
+
 /**
- * Light / Dark / System. `className` sizes the trigger to its bar (the
+ * The header appearance menu: Dark, Light, Liquid Glass (when this build
+ * offers it) and System, the choice in use marked and announced as checked
+ * (appearance-select.tsx). The trigger is the same icon button as before, so
+ * every bar keeps its look. `className` sizes the trigger to its bar (the
  * dashboard top bar passes its 32px icon-button look); without it the trigger
  * is the shared ghost icon button, as on the sign-in, onboarding, invite and
  * marketing headers.
  */
 export function ThemeToggle({ className }: { className?: string } = {}) {
-  const { setTheme } = useTheme();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -35,18 +38,8 @@ export function ThemeToggle({ className }: { className?: string } = {}) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={() => setTheme('light')}>
-          <Sun className="mr-2 h-4 w-4" />
-          Light
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('dark')}>
-          <Moon className="mr-2 h-4 w-4" />
-          Dark
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => setTheme('system')}>
-          <Monitor className="mr-2 h-4 w-4" />
-          System
-        </DropdownMenuItem>
+        <DropdownMenuLabel>Appearance</DropdownMenuLabel>
+        <AppearanceMenuRadioGroup withIcons />
       </DropdownMenuContent>
     </DropdownMenu>
   );

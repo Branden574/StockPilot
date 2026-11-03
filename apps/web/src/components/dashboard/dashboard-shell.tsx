@@ -29,6 +29,7 @@ import {
 } from '@/components/dashboard/sidebar-pref';
 import { Topbar } from '@/components/dashboard/topbar';
 import { Sheet, SheetClose, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { AppearanceAccountSync } from '@/components/theme/appearance-provider';
 import { UpdateCenter } from '@/components/updates/update-center';
 import { identify } from '@/lib/analytics';
 import { sweepInterruptedRuns } from '@/lib/interrupted-run';
@@ -121,8 +122,7 @@ export function DashboardShell({
   initialCollapsedSections = null,
 }: DashboardShellProps) {
   const [mobileNavOpen, setMobileNavOpen] = React.useState(false);
-  const [desktopSidebarHidden, setDesktopSidebarHidden] =
-    React.useState(initialSidebarHidden);
+  const [desktopSidebarHidden, setDesktopSidebarHidden] = React.useState(initialSidebarHidden);
 
   // Table density: data-density on the shell root, which globals.css turns
   // into --row-py (table body cell padding only). Chosen in the account menu,
@@ -310,7 +310,11 @@ export function DashboardShell({
   return (
     // .sp-shell (globals.css) carries the dashboard chrome type, 13.5px Inter;
     // data-density feeds --row-py to every table in the page.
-    <div className="sp-shell bg-background flex h-dvh overflow-hidden" data-density={density}>
+    <div
+      className="sp-shell bg-background flex h-dvh overflow-hidden"
+      data-density={density}
+      data-glass="shell"
+    >
       {/* Top progress bar — fires at click time on every internal nav,
           covers links the per-link useLinkStatus indicator can't see
           (topbar, dashboard cards, table rows, breadcrumbs, etc), and
@@ -326,6 +330,11 @@ export function DashboardShell({
           user's access. Renders nothing. */}
       <PermissionsRealtime organizationId={organizationId} userId={userId} role={role} />
       <SessionRevocationListener userId={userId} />
+      {/* Names the signed-in person to the appearance layer, so an appearance
+          choice is saved to this account and the account's choice is adopted
+          after sign-in (components/theme/appearance-provider.tsx). Renders
+          nothing. */}
+      <AppearanceAccountSync userId={userId} />
       {/*
         Skip link: hidden until keyboard-focused. Lets keyboard / screen-
         reader users jump past the sidebar + topbar straight into the
@@ -357,7 +366,7 @@ export function DashboardShell({
         />
       )}
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col" data-glass="main-column">
         <Topbar
           email={email}
           fullName={fullName}
@@ -385,6 +394,7 @@ export function DashboardShell({
           id="main-content"
           tabIndex={-1}
           className="bg-card flex-1 overflow-y-auto focus:outline-none"
+          data-glass="pane"
         >
           <div className="min-h-full">
             {/* The page area. A navigation still waiting after 400 ms
@@ -405,6 +415,7 @@ export function DashboardShell({
             side="left"
             hideClose
             className="bg-background w-[280px] max-w-[280px] gap-0 rounded-none p-0"
+            data-glass="navsheet"
             aria-describedby={undefined}
             onOpenAutoFocus={focusDrawerStart}
           >
@@ -445,10 +456,7 @@ export function DashboardShell({
       )}
 
       {mounted && (
-        <EdgeSwipeOpener
-          onOpen={() => setMobileNavOpen(true)}
-          disabled={mobileNavOpen}
-        />
+        <EdgeSwipeOpener onOpen={() => setMobileNavOpen(true)} disabled={mobileNavOpen} />
       )}
 
       <UpdateCenter userId={userId} organizationId={organizationId} />

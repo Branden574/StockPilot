@@ -93,7 +93,7 @@ export const SETTINGS_NAV_GROUPS: readonly SettingsNavGroup[] = [
       {
         href: '/dashboard/settings/profile',
         title: 'Profile',
-        description: 'Your name, avatar, and sign-in email.',
+        description: 'Your name, avatar, sign-in email, and appearance.',
       },
       {
         href: '/dashboard/settings/security',

@@ -518,7 +518,10 @@ describe('the account menu fits a short screen, and shows the theme in use', () 
   });
 
   // Mutation caught: the theme back to three plain items, which do not say
-  // which one is in use.
+  // which one is in use. Since the Liquid Glass stage 2 the group is
+  // "Appearance", in the order Dark, Light, (Liquid Glass when the build
+  // offers it), System; without an AppearanceProvider above it (this test)
+  // the classic choices still drive next-themes directly.
   it('marks the theme in use, and switches with one tap', async () => {
     const user = userEvent.setup();
     render(
@@ -532,10 +535,11 @@ describe('the account menu fits a short screen, and shows the theme in use', () 
     await user.click(screen.getByRole('button', { name: /^Account menu/ }));
     const themes = await screen.findAllByRole('menuitemradio');
     expect(themes.map((t) => [t.textContent, t.getAttribute('aria-checked')])).toEqual([
-      ['Light', 'true'],
       ['Dark', 'false'],
+      ['Light', 'true'],
       ['System', 'false'],
     ]);
+    expect(screen.getByRole('group', { name: 'Appearance' })).toBeInTheDocument();
     await user.click(screen.getByRole('menuitemradio', { name: 'System' }));
     expect(setTheme).toHaveBeenCalledWith('system');
   });
@@ -652,8 +656,8 @@ describe('Density in the account menu', () => {
     await user.click(screen.getByRole('button', { name: /^Account menu/ }));
     const radios = await screen.findAllByRole('menuitemradio');
     expect(radios.map((r) => r.textContent)).toEqual([
-      'Light',
       'Dark',
+      'Light',
       'System',
       'Comfortable',
       'Compact',

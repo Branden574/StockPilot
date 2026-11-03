@@ -144,6 +144,7 @@ export const Checkbox = React.forwardRef<HTMLButtonElement, CheckboxProps>(funct
   return (
     <button
       {...props}
+      data-glass="checkbox"
       ref={setRef}
       type="button"
       role="checkbox"

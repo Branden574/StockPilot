@@ -245,13 +245,17 @@ export function Sidebar({
   return (
     <aside
       id={id}
+      data-glass="sidebar"
       className={cn(
         'border-border bg-background flex h-full w-[228px] shrink-0 flex-col border-r',
         className,
       )}
     >
       {/* Brand row: the same 56px as the top bar, so their hairlines meet. */}
-      <div className="border-border flex h-14 shrink-0 items-center border-b px-[18px]">
+      <div
+        className="border-border flex h-14 shrink-0 items-center border-b px-[18px]"
+        data-glass="sidebar-brand"
+      >
         <Link href="/dashboard" onClick={onNavigate} className="text-foreground rounded-md">
           <IconMark size={22} />
         </Link>
@@ -278,6 +282,7 @@ export function Sidebar({
       {/* Nav: the registry's sections, each under its own label. */}
       <nav
         ref={navRef}
+        data-glass="sidebar-nav"
         className="scrollbar-thin flex flex-1 flex-col gap-3.5 overflow-y-auto px-3 pb-3 pt-1"
       >
         {sections.map((section) => {
@@ -393,6 +398,7 @@ function NavList({
               onPointerDown={() => warmRoute(item.href)}
               onClick={onNavigate}
               aria-current={active ? 'page' : undefined}
+              data-glass="nav-item"
               className={cn(
                 // 32px rows (min-h-8), 44px wherever a finger is the
                 // pointer (the phone drawer, a tablet). A renamed label that
