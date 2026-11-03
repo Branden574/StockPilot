@@ -1,10 +1,13 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import postcss from 'postcss';
 import { describe, expect, it } from 'vitest';
 
 import { OUTPUT_PATH } from '../../../scripts/liquid-glass/gen-tokens.mjs';
+
+import { enclosing, normaliseQuotes } from './glass-css';
 
 /**
  * AA CONTRAST OF THE STAGE 3 SHELL AND ITEMS PAIRS (plans/REVISION-DEFAULT.md
@@ -120,7 +123,15 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['nav label (ink 2) on the sidebar', '--lg-ink-2', ['--lg-glass'], 4.5],
   ['section heading (ink 3) on the sidebar', '--lg-ink-3', ['--lg-glass'], 4.5],
   ['current row (ink) on its surface', '--lg-ink', ['--lg-glass', '--lg-surface'], 4.5],
+  [
+    'current row icon (accent text) on its surface',
+    '--lg-accent-text',
+    ['--lg-glass', '--lg-surface'],
+    3,
+  ],
   ['nav count (ink 3) on the sidebar', '--lg-ink-3', ['--lg-glass'], 4.5],
+  ['Beta / New pill (info) on its wash', '--lg-info', ['--lg-glass', '--lg-info-wash'], 4.5],
+  ['identity initials (white) on the avatar colour', '#FFFFFF', ['#4E6A8C'], 4.5],
   ['alert count (danger) on its wash', '--lg-danger', ['--lg-danger-wash'], 4.5],
   ['section chevron (ink 4) on the sidebar', '--lg-ink-4', ['--lg-glass'], 3],
   // Top bar (on the pane's frost)
@@ -182,6 +193,12 @@ const PAIRS: Array<[string, string, string[], number]> = [
     ['--lg-pane', '--lg-card-fill', '--lg-warn-wash'],
     4.5,
   ],
+  [
+    'Unplaced rack chip (info) on its wash',
+    '--lg-info',
+    ['--lg-pane', '--lg-card-fill', '--lg-info-wash'],
+    4.5,
+  ],
   ['selection bar (ink) on its glass', '--lg-ink', ['--lg-pane', '--lg-glass'], 4.5],
   ['filter chip (ink 2) on the field frost', '--lg-ink-2', ['--lg-pane', '--lg-field-fill'], 4.5],
   ['item header (ink) on the overlay glass', '--lg-ink', ['--lg-pane', '--lg-glass-strong'], 4.5],
@@ -203,6 +220,82 @@ const PAIRS: Array<[string, string, string[], number]> = [
 ];
 
 const VARIANTS = variants();
+
+/**
+ * The empty glass checkbox, as primitives.css draws it (the checkbox-glyph
+ * rule): its edge is the only thing that shows the box is there, so the edge
+ * needs 3:1 against the box's own fill and against every surface a box sits
+ * on (WCAG 1.4.11). The edge and fill tokens are read from the rule itself,
+ * so the pair follows the CSS. The edge is painted over the box's fill (the
+ * default border-box background), which is painted over the surface.
+ */
+const GLYPH = ":root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph']";
+
+interface GlyphRule {
+  media: string[];
+  decls: Record<string, string>;
+}
+
+function glyphRules(): GlyphRule[] {
+  const out: GlyphRule[] = [];
+  const css = readFileSync(join(__dirname, 'primitives.css'), 'utf8');
+  postcss.parse(css).walkRules((rule) => {
+    if (normaliseQuotes(rule.selector.replace(/\s+/g, ' ').trim()) !== GLYPH) return;
+    const decls: Record<string, string> = {};
+    rule.walkDecls((d) => {
+      decls[d.prop] = d.value;
+    });
+    const media = enclosing(rule)
+      .filter((a) => a.startsWith('@media ') && a !== '@media screen')
+      .map((a) => a.slice('@media '.length));
+    out.push({ media, decls });
+  });
+  return out;
+}
+
+const tokenOf = (value: string | undefined) => /^var\((--lg-[\w-]+)\)$/u.exec(value ?? '')?.[1];
+
+const GLYPH_SURFACES: Array<[string, string[]]> = [
+  ['a row on the card', ['--lg-pane', '--lg-card-fill']],
+  ['a hovered row', ['--lg-pane', '--lg-card-fill', '--lg-card-hover']],
+  ['the table header band', ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2']],
+  ['the selection bar', ['--lg-pane', '--lg-glass']],
+  ['a menu, popover or dialog', ['--lg-pane', '--lg-glass-strong']],
+];
+
+describe('the empty glass checkbox (primitives.css checkbox-glyph, sp.css .cb)', () => {
+  const base = glyphRules().find((r) => r.media.length === 0);
+
+  it('is the board’s box: 18 px, 24 px where a finger is the pointer, a 1.5 px edge', () => {
+    expect(base?.decls.width).toBe('18px');
+    expect(base?.decls.height).toBe('18px');
+    expect(base?.decls['border-width']).toBe('1.5px');
+    const coarse = glyphRules().find((r) => r.media.join() === '(pointer: coarse)');
+    expect(coarse?.decls.width).toBe('24px');
+    expect(coarse?.decls.height).toBe('24px');
+  });
+
+  for (const [name, t] of Object.entries(VARIANTS)) {
+    it(`${name}: the empty box's edge reads 3:1 against its fill and every surface it sits on`, () => {
+      const edgeToken = tokenOf(base?.decls['border-color']);
+      const fillToken = tokenOf(base?.decls['background-color']);
+      expect(edgeToken, 'the edge is a glass token').toBeTruthy();
+      expect(fillToken, 'the fill is a glass token').toBeTruthy();
+      const short = GLYPH_SURFACES.flatMap(([where, layers]) => {
+        const surface = stack(t, layers);
+        const fill = over(colour(t, fillToken!), surface);
+        const edge = over(colour(t, edgeToken!), fill);
+        const inside = contrast(edge, fill);
+        const outside = contrast(edge, surface);
+        return [
+          ...(inside < 3 ? [`edge against the box on ${where}: ${inside.toFixed(2)} < 3`] : []),
+          ...(outside < 3 ? [`edge against ${where}: ${outside.toFixed(2)} < 3`] : []),
+        ];
+      });
+      expect(short).toEqual([]);
+    });
+  }
+});
 
 describe('stage 3 shell and Items contrast, from the tokens (R11)', () => {
   it('computes WCAG ratios and composites translucent layers', () => {

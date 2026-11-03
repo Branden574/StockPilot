@@ -137,6 +137,22 @@ const CASES: Case[] = [
   ],
 ];
 
+describe('the inert hooks the glass shell reads', () => {
+  it('a word in a count’s place (Beta, New) carries the pill tone, which glass draws as the board’s .nav-pill', () => {
+    const { container } = render(
+      <Sidebar
+        {...ADMIN}
+        collapsedSections={[...ADMIN.collapsedSections]}
+        onToggleSection={() => {}}
+      />,
+    );
+    const badges = [...container.querySelectorAll('[data-glass="nav-ct"]')];
+    const words = badges.filter((b) => /^[A-Za-z]/u.test(b.textContent ?? ''));
+    expect(words.map((b) => b.textContent).sort()).toEqual(['Beta', 'New']);
+    for (const b of words) expect(b.getAttribute('data-glass-tone')).toBe('pill');
+  });
+});
+
 describe('classic parity of the dashboard shell', () => {
   for (const [name, draw] of CASES) {
     it(`${name}: the off rollout renders no glass-only element and today's markup`, async () => {

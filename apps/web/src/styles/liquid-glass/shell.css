@@ -74,8 +74,10 @@
     :root[data-appearance='liquid-glass'].dark [data-glass='nav-item'][aria-current='page'] {
       background-color: var(--lg-surface-4);
     }
+    /* The current row's icon in the accent's text colour (.nav-item.on .ic,
+       sp.css:437), the darker accent in Day and the lighter one in Night. */
     :root[data-appearance='liquid-glass'] [data-glass='nav-item'][aria-current='page'] svg {
-      color: var(--lg-accent);
+      color: var(--lg-accent-text);
     }
     /* The workspace switcher (AppSidebar .ws). */
     :root[data-appearance='liquid-glass'] [data-glass='workspace'] {
@@ -207,7 +209,13 @@
    help, support, the appearance menu and the account menu, which the board
    keeps in the sidebar foot); the rail keeps each section heading as a small
    chevron button so a folded section can still be opened; the rail labels
-   are visually hidden, never removed, so every link keeps its name. */
+   are visually hidden, never removed, so every link keeps its name; the
+   rail's links show no name on hover (the board gives each a title: a title
+   on classic's links would change classic's accessibility tree, and a CSS
+   tooltip cannot leave the rail's scrolling, clipped list); the identity
+   avatar takes the board's .av colour for everyone (the app keeps no colour
+   per person); Beta and New keep the product's own casing in the .nav-pill
+   look. */
 @layer lg {
   @media screen {
     /* ── Desktop from 761 px (the boards' phone layout ends at 760) ───── */
@@ -238,6 +246,23 @@
     :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] svg {
       width: 26px;
       height: 26px;
+    }
+    /* The wordmark (.brand, .wordmark, sp.css:420-422): 9 px from the mark,
+       17 / 650 at -0.022em, "Pilot" at 500 and 58% of the ink. The brand
+       link's mark is hidden from assistive technology, so these words are
+       its name (IconMark draws them: the one span after the mark). */
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] > a > span {
+      gap: 9px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] > a > span > span {
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: -0.022em;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sidebar-brand'] > a > span > span > span {
+      font-weight: 500;
+      opacity: 0.58;
     }
     :root[data-appearance='liquid-glass'] [data-glass='sb-ws'] {
       padding: 0;
@@ -315,11 +340,14 @@
         border: 1px solid ButtonText;
       }
     }
-    /* Sections (.sb-nav, .sb-sec, .sb-sec-h): 26 px headings in 12 / 600. */
+    /* Sections (.sb-nav, .sb-sec, .sb-sec-h): 26 px headings in 12 / 600.
+       Every group, the first included, sits 10 px below what comes before it
+       (.sb-sec margin-top 10 over the list's 1 px gap: 11 between groups),
+       which also keeps the first row's focus ring inside the scrolling list. */
     :root[data-appearance='liquid-glass'] [data-glass='sidebar-nav'] {
-      gap: 10px;
+      gap: 11px;
       margin: 0 -6px;
-      padding: 0 6px 6px;
+      padding: 10px 6px 6px;
     }
     :root[data-appearance='liquid-glass'] [data-glass='sb-sec-h'] {
       min-height: 26px;
@@ -377,6 +405,18 @@
       background-color: var(--lg-danger-wash);
       color: var(--lg-danger);
     }
+    /* A word in the count's place (Beta, New: the registry's badge) is the
+       board's .nav-pill (sp.css:442): 11 / 700 on the info wash, radius 5.
+       The product's own words are kept as they are written. */
+    :root[data-appearance='liquid-glass'] [data-glass='nav-ct'][data-glass-tone='pill'] {
+      padding: 2px 6px;
+      border-radius: 5px;
+      background-color: var(--lg-info-wash);
+      color: var(--lg-info);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+    }
     /* Identity foot (.sb-foot). */
     :root[data-appearance='liquid-glass'] [data-glass='sb-foot'] {
       gap: 10px;
@@ -384,10 +424,18 @@
       border-top-width: 0;
       border-radius: 13px;
     }
+    /* The identity avatar (.av, sp.css:242): 28 px, white initials at 700
+       on the board's avatar colour. The boards colour each sample person
+       differently (.av.c1-c6); the app holds no colour per person, so every
+       avatar takes the .av colour itself. */
     :root[data-appearance='liquid-glass'] [data-glass='avatar'] {
-      border-color: var(--lg-line-2);
-      background-color: var(--lg-surface-3);
-      color: var(--lg-ink);
+      width: 28px;
+      height: 28px;
+      border-width: 0;
+      background-color: #4e6a8c;
+      color: #fff;
+      font-weight: 700;
+      letter-spacing: 0.02em;
     }
     :root[data-appearance='liquid-glass'] [data-glass='sb-foot-text'] > :first-child {
       color: var(--lg-ink);
@@ -412,8 +460,9 @@
       }
     }
 
-    /* ── The rail, 761-1179 px (.sidebar.is-rail): 84 px, icons only ── */
-    @media (min-width: 761px) and (max-width: 1179px) {
+    /* ── The rail, 761-1180 px (.sidebar.is-rail; sp.css:468 is
+       max-width 1180px, so 1180 itself is a rail): 84 px, icons only ── */
+    @media (min-width: 761px) and (max-width: 1180px) {
       :root[data-appearance='liquid-glass'] [data-glass='shell'] > [data-glass='sidebar'] {
         width: 84px;
         align-items: center;
@@ -438,6 +487,26 @@
           [data-glass='sb-foot-text'],
           [data-glass='ws-name']
         ) {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+        border: 0;
+      }
+      /* The wordmark too (the rail hides .wordmark, sp.css:469): the mark
+         alone, centred. The same visually hidden pattern, not display: none,
+         because these words are the brand link's only name. */
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
+        > [data-glass='sidebar-brand']
+        > a
+        > span
+        > span {
         position: absolute;
         width: 1px;
         height: 1px;
@@ -477,8 +546,10 @@
         width: 100%;
         align-items: center;
         margin: 0;
-        padding: 0 0 6px;
-        gap: 6px;
+        /* .sb-sec margin-top 6 over the list's 1 px gap, the first group
+           included (which keeps its focus ring inside the list). */
+        padding: 6px 0 6px;
+        gap: 7px;
       }
       :root[data-appearance='liquid-glass']
         [data-glass='shell']
@@ -532,7 +603,7 @@
         padding: 6px;
       }
     }
-    @media (min-width: 761px) and (max-width: 1179px) and (pointer: coarse) {
+    @media (min-width: 761px) and (max-width: 1180px) and (pointer: coarse) {
       :root[data-appearance='liquid-glass']
         [data-glass='shell']
         > [data-glass='sidebar']
@@ -610,7 +681,11 @@
       font-size: 13px;
       font-weight: 600;
     }
-    /* Search (.tb-search): a 300 px pill (200 px under 1180), ⌘K in a key. */
+    /* Search (.tb-search): a 300 px pill (200 px at 1180 and under,
+       sp.css:478), ⌘K in a key. In the rail band the pill may give up to
+       80 px before the bar would overflow (a touch tablet's 44 px buttons
+       next to a long warehouse name at 761 px): it never pushes the account
+       menu out of the bar, and its words truncate as classic's do. */
     :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
       flex: 0 1 300px;
       width: 300px;
@@ -623,10 +698,11 @@
       color: var(--lg-ink-3);
       font-size: 13px;
     }
-    @media (max-width: 1179px) {
+    @media (max-width: 1180px) {
       :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
         flex-basis: 200px;
         width: 200px;
+        min-width: 120px;
       }
     }
     :root[data-appearance='liquid-glass'] [data-glass='tb-search'] > svg {
@@ -693,17 +769,24 @@
     }
     /* ── One capsule from three classic siblings (AppTopbar .tb-cap.glass:
        warehouse | search | bell), from 761 px: the warehouse picker's box,
-       the search (the field from 960 px of bar, the icon below) and the icon
-       cluster each take the floating glass, 42 px tall, with no gap between
-       them; the outer ends round and the inner ends square, and a hairline
-       inset 6 px (the board's .vr) starts every piece after the first. Under
-       400 px of bar classic shows no search, and with no warehouses there is
-       no picker; the ends follow what is shown. The phone bar keeps separate
-       round glass buttons, as Overview-Mobile draws it. ───────────────── */
+       the search pill and the icon cluster each take the floating glass,
+       42 px tall, with no gap between them; the outer ends round and the
+       inner ends square, and a hairline (the board's .vr: 6 px off the 34 px
+       buttons inside the 4 px padding, so 22 px tall) starts every piece
+       after the first. The board draws the search as the pill at every
+       desktop width (Overview-Tablet at 1024 too), so from 761 px glass shows
+       the pill and never the search icon classic shows under 960 px of bar:
+       both are the same "Open command palette" button. With no warehouses
+       there is no picker, and the search starts the capsule. The phone bar
+       keeps separate round glass buttons, as Overview-Mobile draws it. ──── */
     @media (min-width: 761px) {
-      :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']),
+      :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
+        display: flex;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
+        display: none;
+      }
       :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
-      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'],
       :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
         height: 42px;
         border-width: 0;
@@ -712,7 +795,7 @@
         background-image: linear-gradient(var(--lg-line), var(--lg-line));
         background-position: left center;
         background-repeat: no-repeat;
-        background-size: 1px calc(100% - 12px);
+        background-size: 1px calc(100% - 20px);
         -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
         backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
         box-shadow:
@@ -720,11 +803,30 @@
           0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
           var(--lg-glass-shadow);
       }
-      /* The first piece: the picker when there is one. */
+      /* The first piece: the picker's box when there is one, the same glass
+         with no hairline. Its selector holds :has(), so it is never in a list
+         and never next to a rule with the same declarations: the production
+         minifiers would join them into one :is() that starts outside the
+         glass root and gives every selector in it this one's specificity
+         (compiled-css.guard.test.ts). Its finger height follows it here, away
+         from the other pieces' rule with the same height. */
       :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']) {
+        height: 42px;
         padding: 4px;
+        border-width: 0;
         border-radius: 999px 0 0 999px;
-        background-image: none;
+        background-color: var(--lg-glass);
+        -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+        backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+        box-shadow:
+          var(--lg-glass-inner),
+          0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+          var(--lg-glass-shadow);
+      }
+      @media (pointer: coarse) {
+        :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']) {
+          height: 52px;
+        }
       }
       :root[data-appearance='liquid-glass'] [data-glass='tb-tools'] [data-glass='tb-btn'] {
         border-radius: 999px;
@@ -740,73 +842,41 @@
       /* The search joins the picker; without one it is the first piece. */
       :root[data-appearance='liquid-glass']
         [data-glass='tb-tools']:has([data-glass='tb-btn'])
-        ~ :is([data-glass='tb-search'], [data-glass='tb-icon'][data-glass-variant='search']) {
+        ~ [data-glass='tb-search'] {
         margin-left: -12px;
       }
       :root[data-appearance='liquid-glass']
         [data-glass='tb-tools']:not(:has([data-glass='tb-btn']))
-        ~ :is([data-glass='tb-search'], [data-glass='tb-icon'][data-glass-variant='search']) {
+        ~ [data-glass='tb-search'] {
         border-radius: 999px 0 0 999px;
         background-image: none;
       }
       :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
         padding: 0 10px 0 16px;
       }
-      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
-        width: 46px;
-        padding-left: 4px;
-      }
-      /* The icon cluster ends the capsule. It always follows a piece where
-         the bar shows a search (400 px up); under that, only after the
-         picker. */
+      /* The icon cluster ends the capsule, joined to the search. */
       :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+        margin-left: -12px;
         padding: 4px 4px 4px 6px;
         border-radius: 0 999px 999px 0;
       }
-      @container (min-width: 400px) {
-        :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
-          margin-left: -12px;
-        }
-      }
-      /* A finger's 44 px buttons make the cluster 52 px: every piece follows.
-         The picker's rule stays on its own, away from the list with the same
-         height: the minifier would otherwise fold a list holding :has() into
-         one :is(), which starts outside the glass root and changes the
-         rule's specificity (compiled-css.guard.test.ts). */
+      /* A finger's 44 px buttons make the cluster 52 px: every piece follows
+         (the picker's box in its own rule, above). */
       @media (pointer: coarse) {
         :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
         :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
           height: 52px;
         }
-        :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
-          width: 52px;
-          height: 52px;
-        }
-        :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']) {
-          height: 52px;
-        }
-      }
-      @container (max-width: 399.98px) {
-        :root[data-appearance='liquid-glass']
-          [data-glass='tb-tools']:has([data-glass='tb-btn'])
-          ~ [data-glass='tb-cap'] {
-          margin-left: -12px;
-        }
-        :root[data-appearance='liquid-glass']
-          [data-glass='tb-tools']:not(:has([data-glass='tb-btn']))
-          ~ [data-glass='tb-cap'] {
-          padding-left: 4px;
-          border-radius: 999px;
-          background-image: none;
-        }
       }
     }
 
     /* The unread count (.badge-dot): 16 px on the danger fill, ringed in
-       the chrome colour. White on #C8321F is 5.3:1. */
+       the chrome colour, 5 px in from the bell's corner in the capsule and
+       2 px on the phone's round bell (AppTopbar). White on #C8321F is
+       5.3:1. */
     :root[data-appearance='liquid-glass'] [data-glass='badge-dot'] {
-      top: 3px;
-      right: 3px;
+      top: 2px;
+      right: 2px;
       min-width: 16px;
       height: 16px;
       padding: 0 4px;
@@ -817,6 +887,12 @@
       font-size: 10px;
       font-weight: 700;
       box-shadow: 0 0 0 2px var(--lg-chrome);
+    }
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass'] [data-glass='badge-dot'] {
+        top: 5px;
+        right: 5px;
+      }
     }
 
     /* ── Phone navigation sheet: a bottom sheet, 88% tall, radius 28 ─── */
@@ -1015,25 +1091,45 @@
     }
 
     /* Reduce Transparency, Increase Contrast: nothing in the bar blurs; the
-       glass token is already opaque there (tokens.generated.css). */
+       glass token is already opaque there (tokens.generated.css). Every
+       piece of the bar that blurs is named here, the warehouse piece (tb-tools
+       holding the picker) with the others, in one :is() written at the glass
+       root: its selector holds :has(), and a plain list holding :has() comes
+       out of the production minifiers as one :is() that starts outside the
+       root (compiled-css.guard.test.ts). At the root, the :is() gives every
+       piece the specificity of the most specific rule that gave one its blur
+       (the picker's), which an override wants. The low-power twin and forced
+       colours below are written the same way. */
     @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-      :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
-      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'],
-      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+      :root[data-appearance='liquid-glass']
+        :is(
+          [data-glass='tb-search'],
+          [data-glass='tb-cap'],
+          [data-glass='tb-icon'],
+          [data-glass='tb-tools']:has([data-glass='tb-btn'])
+        ) {
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
       }
     }
-    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='tb-search'],
-    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='tb-cap'],
-    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='tb-icon'] {
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      :is(
+        [data-glass='tb-search'],
+        [data-glass='tb-cap'],
+        [data-glass='tb-icon'],
+        [data-glass='tb-tools']:has([data-glass='tb-btn'])
+      ) {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
     @media (forced-colors: active) {
-      :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
-      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'],
-      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
+      :root[data-appearance='liquid-glass']
+        :is(
+          [data-glass='tb-search'],
+          [data-glass='tb-cap'],
+          [data-glass='tb-icon'],
+          [data-glass='tb-tools']:has([data-glass='tb-btn'])
+        ) {
         border: 1px solid CanvasText;
         background: Canvas;
         -webkit-backdrop-filter: none;

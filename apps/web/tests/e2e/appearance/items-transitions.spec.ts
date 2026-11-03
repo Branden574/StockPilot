@@ -25,8 +25,10 @@ import {
  *  - An item's page with the Adjust stock dialog open, and the command
  *    palette open with a query: the switch is made in a second tab (the
  *    provider follows the stored choice), so the dialog keeps its focus; it
- *    stays open with what was typed, focus stays inside it, Escape still
- *    closes it and focus returns to what opened it.
+ *    stays open with what was typed, focus stays inside it and Escape still
+ *    closes it. Focus then returns to Adjust stock (its Radix trigger); the
+ *    palette has no trigger (the launcher opens it), so there focus must land
+ *    where it lands when the palette is closed without any switch.
  *
  * Needs a running server and a signed-in lab user who can adjust stock, in an
  * organisation with items: the integrator's lab run. Skips in a build
@@ -46,6 +48,13 @@ interface ListState {
   scrollTop: number;
 }
 
+/** A group's own disclosure: the chevron in a header row of the table body
+ *  (inventory-table.tsx HeaderChevron, on every row kind "header": a display
+ *  group, a shared SKU, a size run). The 14-day column's mode menu in the
+ *  table head also carries aria-expanded, and a look switch closes that menu
+ *  as any click elsewhere does, so it is never read as a group. */
+const GROUP_TOGGLE = 'tbody tr[data-row-kind="header"] button[aria-expanded]';
+
 async function listState(page: Page): Promise<ListState> {
   return {
     url: page.url(),
@@ -55,7 +64,7 @@ async function listState(page: Page): Promise<ListState> {
       .evaluateAll((boxes) => boxes.map((b) => b.getAttribute('aria-label') ?? '')),
     expanded: await page
       .getByRole('table')
-      .locator('button[aria-expanded="true"]')
+      .locator(`${GROUP_TOGGLE}[aria-expanded="true"]`)
       .evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label') ?? '')),
     scrollTop: await page.locator('main#main-content').evaluate((main) => main.scrollTop),
   };
@@ -73,8 +82,12 @@ test('Items: ticked rows, an open group and the scroll survive every switch, wit
   if ((await rows.count()) < 2) test.skip(true, 'Needs at least two items on the first page.');
   await rows.nth(0).click();
   await rows.nth(1).click();
-  const closedGroup = page.getByRole('table').locator('button[aria-expanded="false"]').first();
-  if (await closedGroup.isVisible().catch(() => false)) await closedGroup.click();
+  const closedGroup = page
+    .getByRole('table')
+    .locator(`${GROUP_TOGGLE}[aria-expanded="false"]`)
+    .first();
+  const openedGroup = await closedGroup.isVisible().catch(() => false);
+  if (openedGroup) await closedGroup.click();
   await page.locator('main#main-content').evaluate((main) => {
     main.scrollTop = Math.min(240, main.scrollHeight - main.clientHeight);
   });
@@ -82,6 +95,8 @@ test('Items: ticked rows, an open group and the scroll survive every switch, wit
 
   const before = await listState(page);
   expect(before.ticked.length).toBeGreaterThanOrEqual(2);
+  // The group opened above is the one the switches must keep open.
+  if (openedGroup) expect(before.expanded.length).toBeGreaterThanOrEqual(1);
   const toastsBefore = await toastTexts(page);
   const joinsBefore = joins.count();
   const requests = watchDataRequests(page);
@@ -167,7 +182,16 @@ test('Item page: the Adjust stock dialog stays open with its quantity and focus 
   await remote.close();
 });
 
-test('Command palette: open with a query through switches made in another tab; Escape closes it and focus returns', async ({
+/** Where keyboard focus is: the body, or the focused control's accessible label or text. */
+async function focusedControl(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active || active === document.body) return 'body';
+    return `${active.tagName.toLowerCase()}: ${active.getAttribute('aria-label') ?? active.textContent?.trim() ?? ''}`;
+  });
+}
+
+test('Command palette: open with a query through switches made in another tab; Escape closes it and focus lands where it does without a switch', async ({
   page,
   context,
 }) => {
@@ -176,12 +200,27 @@ test('Command palette: open with a query through switches made in another tab; E
   await ready(page);
   const remote = await openRemote(context);
 
-  const search = page.getByPlaceholder(/search name, sku, barcode/iu);
-  await search.focus();
-  await page.keyboard.press('ControlOrMeta+k');
+  // The top bar's search opens it, as a person would. ⌘K is not used: from
+  // a text field (the Items search) the launcher ignores it on purpose
+  // (command-palette-launcher.tsx isPaletteChord). Whichever of the bar's two
+  // "Open command palette" buttons the bar shows at this width is the one in
+  // the accessibility tree.
+  const opener = page.getByRole('button', { name: 'Open command palette' });
   const palette = page.getByRole('dialog', { name: 'Search' });
+
+  // Without a switch first: where Escape leaves focus in this look. The
+  // palette has no Radix trigger (the launcher opens it), so Radix hands
+  // focus to no control when it closes; the switches must not change that.
+  await opener.click();
+  await expect(palette).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(palette).toBeHidden();
+  const focusWithoutSwitch = await focusedControl(page);
+
+  await opener.click();
   await expect(palette).toBeVisible();
   const input = palette.getByRole('combobox');
+  await expect(input).toBeFocused();
   await input.fill('lab');
   const requestsBefore = watchDataRequests(page);
   // Typing searched; only the switches are measured from here.
@@ -199,6 +238,6 @@ test('Command palette: open with a query through switches made in another tab; E
 
   await page.keyboard.press('Escape');
   await expect(palette).toBeHidden();
-  await expect(search).toBeFocused();
+  expect(await focusedControl(page)).toBe(focusWithoutSwitch);
   await remote.close();
 });

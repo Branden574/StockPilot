@@ -3988,7 +3988,13 @@ function ItemsRackContent({ item }: { item: Item }) {
     }
     const awaiting = item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
     return item.placement_label ? (
-      <span className={awaiting ? 'text-warning font-mono tabular-nums' : 'font-mono tabular-nums'}>
+      <span
+        className={awaiting ? 'text-warning font-mono tabular-nums' : 'font-mono tabular-nums'}
+        // Inert hook (no style, no behaviour): Liquid Glass draws the board's
+        // rack chip from it, Staging on the warn wash and Unplaced on the
+        // info wash (pages/items.css).
+        data-glass-tone={awaiting ? item.placement_kind : undefined}
+      >
         {item.placement_label}
       </span>
     ) : (

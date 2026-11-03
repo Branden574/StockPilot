@@ -237,6 +237,41 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+describe('the rack cell’s inert tone hook', () => {
+  const PLACED = [
+    row('s', 'STG-1', {
+      name: 'Staged tee',
+      placement_label: 'Staging',
+      placement_kind: 'staging',
+    }),
+    row('u', 'UNP-1', {
+      name: 'Loose cap',
+      placement_label: 'Unplaced',
+      placement_kind: 'unplaced',
+    }),
+    row('r', 'RCK-1', { name: 'Shelved polo', placement_label: '12-B', placement_kind: 'rack' }),
+  ];
+
+  it('names Staging and Unplaced apart, so glass draws them on the warn and the info wash; classic markup is unchanged', () => {
+    const { container } = render(itemsTable({ items: PLACED as never, total: 3 }));
+    const label = (text: string) =>
+      [...container.querySelectorAll('td[data-glass="rack"] > span')].find(
+        (s) => s.textContent === text,
+      )!;
+    expect(label('Staging').getAttribute('data-glass-tone')).toBe('staging');
+    expect(label('Unplaced').getAttribute('data-glass-tone')).toBe('unplaced');
+    expect(label('12-B').hasAttribute('data-glass-tone')).toBe(false);
+    // With the hook stripped, each is the span classic has always drawn.
+    expect(classicMarkup(label('Staging'))).toBe(
+      '<span class="text-warning font-mono tabular-nums">Staging</span>',
+    );
+    expect(classicMarkup(label('Unplaced'))).toBe(
+      '<span class="text-warning font-mono tabular-nums">Unplaced</span>',
+    );
+    expect(classicMarkup(label('12-B'))).toBe('<span class="font-mono tabular-nums">12-B</span>');
+  });
+});
+
 describe('classic parity of the Items and Books lists', () => {
   for (const [name, draw] of CASES) {
     it(`${name}: the off rollout renders no glass-only element and today's markup`, async () => {

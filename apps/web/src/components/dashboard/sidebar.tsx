@@ -414,6 +414,13 @@ export function Sidebar({
   );
 }
 
+/** A badge that is a word (the registry's "Beta", "New"), not a count. Read
+ *  only by the inert data-glass-tone hook, which Liquid Glass draws as the
+ *  board's .nav-pill; classic draws every badge the same. */
+function isWordBadge(badge: string | number): boolean {
+  return typeof badge === 'string' && !/^\s*\d[\d,]*\+?\s*$/u.test(badge);
+}
+
 function NavList({
   items,
   pathname,
@@ -479,7 +486,9 @@ function NavList({
               {item.badge != null && (
                 <span
                   data-glass="nav-ct"
-                  data-glass-tone={item.alert ? 'alert' : undefined}
+                  data-glass-tone={
+                    item.alert ? 'alert' : isWordBadge(item.badge) ? 'pill' : undefined
+                  }
                   className={cn(
                     'shrink-0 rounded-full px-1.5 font-mono text-[11px] font-normal leading-4',
                     item.alert

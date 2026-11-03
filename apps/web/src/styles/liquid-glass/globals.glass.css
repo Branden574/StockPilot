@@ -36,28 +36,69 @@
      the eye already is, clear of the pane's corner. Above sonner's 600 px
      phone layout only, where its stack is full width. It still lifts over the
      product-update card (app/globals.css), whose height UpdateCenter puts in
-     --sp-update-card-offset while the card is up. */
+     --sp-update-card-offset while the card is up.
+     In the dashboard from 761 px the board docks it in the workspace pane
+     (.toast-dock is absolute in .app-main, Items.dc.html), so it is centred
+     on the pane and 84 px above the pane's foot, not the window's: the pane
+     starts after the sidebar column (the 256 px panel or the 84 px rail,
+     10 px in from the window's edge; none when the sidebar is hidden) and its
+     own 12 px margin, ends 10 px in from the window's right edge, and its
+     foot is 10 px above the window's. Reduce Transparency, Increase Contrast
+     and the low-power material take the pane's margins away (shell.css). */
   @media (min-width: 601px) {
     :root[data-appearance='liquid-glass'] ol[data-sonner-toaster][data-y-position='bottom'] {
       right: auto;
-      bottom: calc(84px + var(--sp-update-card-offset, 0px));
-      left: 50%;
+      bottom: calc(84px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
+      left: calc(50% + var(--lg-dock-shift, 0px));
       transform: translateX(-50%);
+    }
+  }
+  @media (min-width: 761px) {
+    :root[data-appearance='liquid-glass']:has([data-glass='shell']) {
+      --lg-dock-col: 0px;
+      --lg-dock-pane-l: 12px;
+      --lg-dock-pane-r: 10px;
+      --lg-dock-lift: 10px;
+      --lg-dock-shift: calc(
+        (var(--lg-dock-col) + var(--lg-dock-pane-l) - var(--lg-dock-pane-r)) / 2
+      );
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass='shell'] > [data-glass='sidebar']) {
+      --lg-dock-col: 266px;
+    }
+  }
+  @media (min-width: 761px) and (max-width: 1180px) {
+    :root[data-appearance='liquid-glass']:has([data-glass='shell'] > [data-glass='sidebar']) {
+      --lg-dock-col: 94px;
+    }
+  }
+  @media (min-width: 761px) and (prefers-reduced-transparency: reduce),
+    (min-width: 761px) and (prefers-contrast: more) {
+    :root[data-appearance='liquid-glass']:has([data-glass='shell']) {
+      --lg-dock-pane-l: 0px;
+      --lg-dock-pane-r: 0px;
+      --lg-dock-lift: 0px;
+    }
+  }
+  @media (min-width: 761px) {
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']:has([data-glass='shell']) {
+      --lg-dock-pane-l: 0px;
+      --lg-dock-pane-r: 0px;
+      --lg-dock-lift: 0px;
     }
   }
   /* While the Items or Books selection bar floats at the pane's foot (from
      761 px, pages/items.css), the dock rises 12 px clear of it, so an error
      toast never covers the bar's actions: with every classic action the
      bar's top sits 104, 142 or 180 px above the pane's foot (two, three or
-     four rows: from 1280 px, below it, below 1000 px), and the pane's foot
-     is 10 px above the window's. */
+     four rows: from 1280 px, below it, below 1000 px). */
   @media (min-width: 761px) {
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='items'], [data-glass-page='books'])
           [data-glass='selbar-layer'][data-glass-state='open']
       )
       ol[data-sonner-toaster][data-y-position='bottom'] {
-      bottom: calc(126px + var(--sp-update-card-offset, 0px));
+      bottom: calc(116px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
     }
   }
   @media (min-width: 761px) and (max-width: 1279.98px) {
@@ -66,7 +107,7 @@
           [data-glass='selbar-layer'][data-glass-state='open']
       )
       ol[data-sonner-toaster][data-y-position='bottom'] {
-      bottom: calc(164px + var(--sp-update-card-offset, 0px));
+      bottom: calc(154px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
     }
   }
   @media (min-width: 761px) and (max-width: 999.98px) {
@@ -75,7 +116,7 @@
           [data-glass='selbar-layer'][data-glass-state='open']
       )
       ol[data-sonner-toaster][data-y-position='bottom'] {
-      bottom: calc(202px + var(--sp-update-card-offset, 0px));
+      bottom: calc(192px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
     }
   }
 }
