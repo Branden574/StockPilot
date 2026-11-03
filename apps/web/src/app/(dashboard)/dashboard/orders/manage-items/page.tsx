@@ -25,6 +25,10 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { CategoriesService } from '@/server/services/categories';
 import { ServiceError, withContext } from '@/server/services/context';
 import { OrderCatalogVisibilityService } from '@/server/services/order-catalog-visibility';
+// Liquid Glass's composition of the Orders pages (the list and this page),
+// scoped to the glass root and this page's data-glass-page root; inert in
+// Classic.
+import '@/styles/liquid-glass/pages/orders.css';
 
 export const metadata: Metadata = { title: ORDER_ITEMS_MANAGE_BUTTON_COPY };
 
@@ -120,7 +124,7 @@ export default async function ManageOrderItemsPage({
   const selfHref = qs ? `${PAGE_PATH}?${qs}` : PAGE_PATH;
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass-page="manage-items">
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/orders">← Back to orders</PageHeaderBackLink>}
         title={ORDER_ITEMS_MANAGE_BUTTON_COPY}

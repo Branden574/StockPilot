@@ -202,6 +202,27 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['dialog words (ink 2) on the overlay glass', '--lg-ink-2', OVERLAY, 4.5],
   ['dialog field (ink) in the reading area', '--lg-ink', [...OVERLAY, '--lg-field-fill'], 4.5],
   ['Deny request (white) on the danger fill', '#FFFFFF', ['--lg-danger-fill'], 4.5],
+  // The digital pick (inferred: pick lines in a card)
+  ['pick line (ink) on the card', '--lg-ink', CARD, 4.5],
+  ['of N (ink 2) on the card', '--lg-ink-2', CARD, 4.5],
+  ['picked figure (ink) on the field frost', '--lg-ink', [...CARD, '--lg-field-fill'], 4.5],
+  // Manage order items (Manage-Items.dc.html)
+  [
+    'segment count (ink 3) on the segment track',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-surface-3'],
+    4.5,
+  ],
+  [
+    'Select family (accent text) on its wash',
+    '--lg-accent-text',
+    [...CARD, '--lg-accent-wash'],
+    4.5,
+  ],
+  ['selection count (ink) on the floating glass', '--lg-ink', ['--lg-pane', '--lg-glass'], 4.5],
+  ['refusal title (ink) on the card', '--lg-ink', CARD, 4.5],
+  ['refusal lock (ink 3) on the neutral wash', '--lg-ink-3', [...CARD, '--lg-neutral-wash'], 3],
+  ['drawer row (ink) in the reading area', '--lg-ink', [...OVERLAY, '--lg-field-fill'], 4.5],
   // Focus ring (R11)
   ['focus ring on the pane', '--lg-focus', ['--lg-pane'], 3],
   ['focus ring on a card', '--lg-focus', CARD, 3],

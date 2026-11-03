@@ -596,5 +596,380 @@
       font-size: 12px;
       line-height: 1;
     }
+
+    /* ══ Manage order items (Manage-Items.dc.html) ═════════════════════════
+       The page box and head as the list's; the toolbar's 36 px controls and
+       segments with their counts; the table card; Select family as the
+       board's tinted button; the selection bar floating on glass; the
+       Review selection drawer and the Select family dialog with the board's
+       head, inset reading area and foot. The Hide and Show confirm is the
+       shared DestructiveConfirm and keeps the stage 2 dialog. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='manage-items'] {
+      max-width: 1480px;
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='page-header']
+      > div:first-child:has(> a) {
+      margin-bottom: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div {
+      max-width: 720px;
+      margin-top: 4px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* The toolbar (.toolbar: 8 between; .seg with its counts; 36 px fields
+       from the small breakpoint, the 44 px phone fields below it). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='filter-bar'] {
+      gap: 8px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='seg']
+      [data-slot='segmented-tab-count'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='seg']
+      [aria-current='page']
+      [data-slot='segmented-tab-count'] {
+      color: var(--lg-accent-text);
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='manage-items']
+        [data-glass='filter-bar']
+        :is([data-glass='input'], [data-glass='select']) {
+        height: 36px;
+        font-size: 14px;
+      }
+    }
+
+    /* The table card (.card + .dt: 38 px header band, 52 px rows). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table'] {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      thead
+      tr {
+      border-bottom: 1px solid var(--lg-line);
+      background: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      th {
+      height: 38px;
+      padding-top: 0;
+      padding-bottom: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      tbody
+      tr {
+      height: var(--lg-row-h);
+      border-bottom: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      tbody
+      tr:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      td {
+      padding-top: var(--lg-row-pad);
+      padding-bottom: var(--lg-row-pad);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      tbody
+      td:nth-child(2)
+      > div
+      > div:last-child
+      > div:first-child {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='table']
+      tbody
+      td:nth-child(4) {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      [data-glass='button'][data-glass-size='sm'] {
+      height: 30px;
+      gap: 6px;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    /* Select family: the tinted button (.btn-tinted). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='button'][data-glass-role='order-items-family'] {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='button'][data-glass-role='order-items-family']:hover {
+      background-color: var(--lg-accent-wash-2);
+      color: var(--lg-accent-text);
+    }
+    /* The pager row (.pager: 13 px ink 3 on a hairline). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='card']
+      > div:last-child:not([data-glass='table-scroll']) {
+      padding: 10px 12px 10px 16px;
+      border-top-color: var(--lg-line);
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+
+    /* The selection bar (.selbar on floating glass, centred at the foot). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='order-items-selbar'] {
+      align-self: center;
+      width: max-content;
+      max-width: 100%;
+      gap: 10px;
+      padding: 8px 8px 8px 14px;
+      border-color: transparent;
+      border-radius: 18px;
+      background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='order-items-selbar']
+      > span:first-child {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='manage-items']
+        [data-glass='order-items-selbar']
+        [data-glass='button'] {
+        height: 36px;
+        gap: 8px;
+        padding: 0 14px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+    }
+    /* Reduce Transparency, Increase Contrast: nothing is blurred (the
+       tokens are already opaque there). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='manage-items']
+        [data-glass='order-items-selbar'] {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='manage-items']
+      [data-glass='order-items-selbar'] {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    /* The refusals (.card.empty): the lock on the neutral wash, the
+       sentence as the board's title. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-state-kind='forbidden']
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-neutral-wash);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='manage-items']
+      [data-glass='state-panel'][data-state-kind='forbidden']
+      > :is(h1, h2, h3):not([data-slot]) {
+      font-family: var(--lg-font-display);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+
+    /* The Review selection drawer and the Select family dialog (portalled:
+       named by the page root on :root and by the parts they mark). */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='dialog']:has(> [data-glass='dialog-header']) {
+      gap: 0;
+      padding: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-header'] {
+      gap: 4px;
+      padding: 20px 48px 14px 24px;
+      border-bottom-width: 0;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-header']
+      > h2 {
+      font-family: var(--lg-font-display);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-header']
+      > :not(h2) {
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-body'] {
+      margin: 0 8px;
+      padding: 4px 14px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-field-fill);
+    }
+    /* The checked and selected lists (.chk-list: 52 px rows on hairlines). */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      [data-glass='dialog-body']
+      > ul,
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='dialog']
+      > ul[data-glass='dialog-body'] {
+      gap: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      [data-glass='dialog-body']
+      > ul
+      > li,
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='dialog']
+      > ul[data-glass='dialog-body']
+      > li {
+      align-items: center;
+      min-height: 52px;
+      padding: 10px 4px;
+      border-bottom: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      [data-glass='dialog-body']
+      > ul
+      > li:last-child,
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='dialog']
+      > ul[data-glass='dialog-body']
+      > li:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      [data-glass='dialog']:has(> [data-glass='dialog-header'])
+      > :not(
+        [data-glass='dialog-header'],
+        [data-glass='dialog-body'],
+        [data-glass='dialog-footer'],
+        button
+      ) {
+      margin: 0 24px 14px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-footer'] {
+      gap: 10px;
+      padding: 14px 16px 16px 24px;
+      border-top-width: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='manage-items'])
+      :is([data-glass='dialog'], [data-glass='sheet'])
+      > [data-glass='dialog-footer']
+      > [data-glass='button'] {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* The phone (≤ 760: 4 / 16 / 96 padding, 16 between, title 24 / 30). */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='manage-items'] {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='manage-items']
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
   }
 }
