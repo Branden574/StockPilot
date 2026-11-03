@@ -5,7 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   COUNT_START_MANAGER_ONLY_COPY,
+  countStartAllowed,
+  countStartManagerOnly,
   deletedDriverHandOverLine,
+  type Permission,
   MODULE_REGISTRY,
   PERMISSION_META,
   PERMISSIONS,
@@ -453,6 +456,30 @@ describe('the phone update release (B42, B23, B65, B75 and S5a)', () => {
     );
   });
 
+  // Added in the review round of docs/whats-new-2026-11-02d (2026-11-02): New count's sentence comes from countStartManagerOnly, which leaves the module out, so a manager who can assign counts and adjust stock where Cycle Counts is off cannot start a count and still reads no sentence. The entry names who reads it instead of "anyone else".
+  it('B42: names who reads the New count sentence, which a manager able to start counts never reads, even with Cycle Counts off', () => {
+    const managerCan = new Set<Permission>(['cycle_counts:assign', 'stock:adjust']);
+    expect(
+      countStartAllowed({ role: 'manager', permissions: managerCan, cycleCountsEnabled: false }),
+    ).toBe(false);
+    expect(countStartManagerOnly({ role: 'manager', permissions: managerCan })).toBe(false);
+    expect(countStartManagerOnly({ role: 'staff', permissions: managerCan })).toBe(true);
+    expect(
+      countStartManagerOnly({
+        role: 'manager',
+        permissions: new Set<Permission>(['stock:adjust']),
+      }),
+    ).toBe(true);
+    expect(phone('app/cycle-count/new.tsx')).toContain(
+      'const managerOnly = countStartManagerOnly({ role, permissions });',
+    );
+    const e = entry(PHONE_ID, 'app-count-start-managers-only');
+    expect(e.whatChanged).not.toMatch(/Anyone else/);
+    expect(e.whatChanged).toContain(
+      'Anyone who is not a manager able to assign counts and adjust stock and opens New count',
+    );
+  });
+
   it('B23: quotes the line core words for a manager', () => {
     const e = entry(PHONE_ID, 'app-deleted-driver-hand-over-line');
     expect(e.whatChanged).toContain(
@@ -553,6 +580,36 @@ describe('the QW1 release (#483)', () => {
       'invite-sign-in-link',
       'record-pages-could-not-load',
     ]);
+  });
+
+  // Added in the review round of docs/whats-new-2026-11-02d (2026-11-02): #483 changed the failed-read handling on the bundle page, its edit page and an order's pick and print views. The order page already sent only not_found to Page not found before #483 (c7d6cc625^, orders/[id]/page.tsx:253-262), so the entry and the summary do not name it for the failed read; its module check is the entry's third sentence.
+  it('names for the failed read only the four pages #483 changed, and the order page for its module check', () => {
+    const dashboard = 'app/(dashboard)/dashboard/';
+    for (const page of [
+      'bundles/[id]/page.tsx',
+      'bundles/[id]/edit/page.tsx',
+      'orders/[id]/pick/page.tsx',
+      'orders/[id]/print/page.tsx',
+    ]) {
+      expect(source(dashboard + page), page).toContain(
+        "if (e instanceof ServiceError && e.code === 'not_found') notFound();",
+      );
+    }
+    expect(source(dashboard + 'orders/[id]/page.tsx')).toContain(
+      '<ModuleUnavailable moduleId="orders" access={moduleAccess} />',
+    );
+    const e = entry(QW1_ID, 'record-pages-could-not-load');
+    expect(e.whatChanged).toMatch(
+      /^On the web, when a bundle, or an order’s pick or print view, cannot be loaded, /,
+    );
+    expect(e.whatChanged).toContain(
+      'A link to a bundle, order, purchase order or Schedule event whose module is turned off now says the module is off.',
+    );
+    expect(e.title).not.toMatch(/order pages/);
+    expect(release().summary).toContain(
+      'Bundle pages and an order’s pick and print views that cannot be loaded say so with Try again',
+    );
+    expect(release().summary).not.toMatch(/Bundle and order pages/);
   });
 
   it('quotes the invite, the error page and the Billing lines the code shows', () => {

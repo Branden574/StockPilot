@@ -87,8 +87,8 @@ const RETRIES_ID = 'integration-retries-2026-11';
 /**
  * Added by docs/whats-new-2026-11-02d (2026-11-02): the Export items, phone
  * update, clearer web messages and QW1 releases, published later still, at
- * the top. Three reach every member and the fourth an owner, so they are read
- * or seen with the releases below them.
+ * the top. All four reach every member (each has an entry with no
+ * audience), so they are read or seen with the releases below them.
  */
 const NIGHT_IDS = [
   'export-items-permission-2026-11',

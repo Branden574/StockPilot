@@ -455,9 +455,9 @@ const listsSeen = (): Record<string, boolean> => ({ [LISTS_ID]: true });
  * Added by docs/whats-new-2026-11-02d (2026-11-02): the four releases
  * published at the top, above WEB_FIXES_ID's: the Export items release
  * (B68), the phone update release (B42, B23, B65, B75 and S5a), the clearer
- * web messages release (S31 and S29) and the QW1 release. The first three
- * reach every member (an entry with no audience each), the QW1 release
- * reaches an owner, so each is read or seen with eveningIds.
+ * web messages release (S31 and S29) and the QW1 release. All four reach
+ * every member (an entry with no audience each; the QW1 release's is
+ * invite-sign-in-link), so each is read or seen with eveningIds.
  */
 const nightIds = [
   'export-items-permission-2026-11',

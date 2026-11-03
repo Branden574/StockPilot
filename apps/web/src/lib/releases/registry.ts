@@ -287,7 +287,7 @@ export const RELEASES: Release[] = [
         area: 'Cycle counts',
         title: 'In the mobile app, counts are started only by people who can start one',
         whatChanged:
-          'In the mobile app, after the latest update, the + button on Cycle counts and Review in the Items and Books select bar show only for managers who can assign counts and adjust stock, where Cycle Counts is turned on. Select on Items and Books shows only when the bar has something for you, such as Group selected, so viewers no longer see it. Anyone else who opens New count, for example from a link, reads “Only a manager with permission to assign counts and adjust stock can start a count.” above Start count, which stays off.',
+          'In the mobile app, after the latest update, the + button on Cycle counts and Review in the Items and Books select bar show only for managers who can assign counts and adjust stock, where Cycle Counts is turned on. Select on Items and Books shows only when the bar has something for you, such as Group selected, so viewers no longer see it. Anyone who is not a manager able to assign counts and adjust stock and opens New count, for example from a link, reads “Only a manager with permission to assign counts and adjust stock can start a count.” above Start count, which stays off.',
         whyItMatters:
           'Staff and viewers could pick items and press Start count, and the start was always refused. Where Cycle Counts is turned off, Review could not start a count for anyone.',
         howItAffectsYou:
@@ -438,6 +438,9 @@ export const RELEASES: Release[] = [
     //   broke loading this page", :71, with Try again, :91); the module check
     //   also on orders/[id]/page.tsx:209-211, purchase-orders/[id]/page.tsx
     //   :60-62 and schedule/[id]/page.tsx:72-74 (and their edit pages).
+    //   The order page itself is not named for the failed read: it already
+    //   sent only not_found to Page not found before #483 (c7d6cc625^,
+    //   orders/[id]/page.tsx:253-262); #483 added only its module check.
     // - distribute-own-events: bundles/[id]/page.tsx:76 and :309-319 (the
     //   events read filters organization_id); Distribute is offered by
     //   canDistributeBundles (:59): bundles:distribute and the manager role or
@@ -449,7 +452,7 @@ export const RELEASES: Release[] = [
     title:
       'Invites point to Sign in, the team calendar stops at Saturday, and record pages say when they could not be loaded',
     summary:
-      'On the web, an invite for an address that already has an account now points to the page’s Sign in link, and the team calendar no longer scrolls into blank space past Saturday. Bundle and order pages that cannot be loaded say so with Try again, instead of saying the record does not exist. Distribute offers only your organization’s events, and Billing says whether a checkout went through.',
+      'On the web, an invite for an address that already has an account now points to the page’s Sign in link, and the team calendar no longer scrolls into blank space past Saturday. Bundle pages and an order’s pick and print views that cannot be loaded say so with Try again, instead of saying the record does not exist. Distribute offers only your organization’s events, and Billing says whether a checkout went through.',
     publishedAt: '2026-11-02T22:29:00Z',
     entries: [
       {
@@ -484,9 +487,9 @@ export const RELEASES: Release[] = [
         id: 'record-pages-could-not-load',
         category: 'fixed',
         area: 'Bundles and Orders',
-        title: 'Bundle and order pages that cannot be loaded say so',
+        title: 'Bundle pages and order pick and print views that cannot be loaded say so',
         whatChanged:
-          'On the web, when a bundle, an order, or an order’s pick or print view cannot be loaded, for example after a timeout, the page now says “Something broke loading this page” and offers Try again, instead of “Page not found”. A record that does not exist still shows Page not found. A link to a bundle, order, purchase order or Schedule event whose module is turned off now says the module is off.',
+          'On the web, when a bundle, or an order’s pick or print view, cannot be loaded, for example after a timeout, the page now says “Something broke loading this page” and offers Try again, instead of “Page not found”. A record that does not exist still shows Page not found. A link to a bundle, order, purchase order or Schedule event whose module is turned off now says the module is off.',
         whyItMatters:
           '“Page not found” made a passing problem look like a deleted record, and the failure was not reported to us.',
         howItAffectsYou: 'Try again loads the page again. Pages that load work as before.',
