@@ -44,6 +44,8 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Toggle } from '@/components/ui/toggle';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { appearanceLabel } from '@/lib/appearance/labels';
+import { useAppearance } from '@/lib/appearance/provider';
 import { useAuth } from '@/lib/auth-context';
 import { getBiometricCapability, type BiometricCapability } from '@/lib/biometric';
 import { deleteOrgData } from '@/lib/db';
@@ -101,6 +103,7 @@ export default function Settings() {
   const { signOut, biometricEnabled, enableBiometric, disableBiometric } = useAuth();
   const profile = useProfile();
   const { c } = useTheme();
+  const appearance = useAppearance();
   const router = useRouter();
   const { isAdmin, role } = useRole();
   const rolePill = settingsRolePill(role);
@@ -435,17 +438,15 @@ export default function Settings() {
             onPress={() => router.push('/settings/customize-tabs' as never)}
           />
           <Hair inset={70} />
+          {/* Dark, Light, Liquid Glass or System (the default, which follows
+              the device as the phone always did). Every signed-in person can
+              change their own; it is a personal preference, not a permission. */}
           <SettingRow
             icon={Moon}
-            title="Theme"
-            detail="Auto"
+            title="Appearance"
+            detail={appearanceLabel(appearance.choice, appearance.glassEnabled)}
             chevron
-            onPress={() =>
-              Alert.alert(
-                'Theme',
-                'Mobile follows your device appearance (Light or Dark) automatically.',
-              )
-            }
+            onPress={() => router.push('/settings/appearance' as never)}
           />
           <Hair inset={70} />
           <SettingRow
