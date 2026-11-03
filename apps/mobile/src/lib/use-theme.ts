@@ -16,7 +16,10 @@ export type { ThemeValue } from './appearance/theme-value';
  *     (`userInterfaceStyle: 'automatic'`; light when the device reports
  *     nothing). It is the default, so an install that never chose anything
  *     looks as it always has.
- *   - Dark and Light are fixed.
+ *   - Dark and Light are fixed, and also set the OS scheme so alerts and the
+ *     keyboard match (appearance/os-scheme.ts). That override is on only
+ *     while a fixed scheme is chosen, so for System and Liquid Glass
+ *     useColorScheme() below is the device's own scheme.
  *   - Liquid Glass follows the device for Day or Night glass (plan D3).
  * Outside the provider it is classic System, today's behaviour.
  *

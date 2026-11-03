@@ -28,7 +28,9 @@ import {
  *      saved to the account.
  *   2  A failed save keeps the choice on the device, stays dirty and says so
  *      (status 'failed', or 'unavailable' when the table is missing); `retry`
- *      tries again. Nothing claims 'synced' unless the server answered.
+ *      tries again: it resends a dirty choice, or, when a read found no table
+ *      and nothing is dirty, reads the row again. Nothing claims 'synced'
+ *      unless the server answered.
  *   3  A fetch records `gen` when it starts; its answer is dropped if `gen`
  *      moved while it was in flight, so a late fetch never overwrites a newer
  *      choice.
@@ -369,6 +371,12 @@ export function reduceAppearance(
 
     case 'retry': {
       if (event.userId === null || event.userId !== state.userId) return done(state);
+      if (!state.dirty && state.saving === null && state.status === 'unavailable') {
+        // The READ found no account store (fetch-failed 'missing-table'), so
+        // there is nothing to resend: read the row again. Once the table
+        // exists the answer is taken as any first read is (rules 4c / 4d).
+        return done(state, [{ type: 'fetch', userId: state.userId, gen: state.gen }]);
+      }
       return pushDirty(state);
     }
   }

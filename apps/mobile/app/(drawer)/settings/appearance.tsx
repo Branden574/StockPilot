@@ -10,14 +10,14 @@ import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import {
-  APPEARANCE_FOOTNOTE,
+  appearanceFootnote,
   appearanceOptions,
   syncLine,
   type AppearanceOption,
 } from '@/lib/appearance/labels';
 import { useAppearance } from '@/lib/appearance/provider';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
-import { FONT, GLASS_DAY, GLASS_NIGHT, palette, type Palette } from '@/lib/theme';
+import { FONT, GLASS_DAY, GLASS_NIGHT, glassTokens, palette, type Palette } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -46,6 +46,8 @@ export default function AppearanceScreen() {
   const appearance = useAppearance();
   const options = appearanceOptions(appearance.glassEnabled);
   const sync = syncLine(appearance.status);
+  // About Liquid Glass, so only in a build that offers it (kill switch, plan D12).
+  const footnote = appearanceFootnote(appearance.glassEnabled);
   // A stored Liquid Glass in a build that cannot show it draws as System.
   const checked: AppearanceMode =
     appearance.choice === 'liquid-glass' && !appearance.glassEnabled ? 'system' : appearance.choice;
@@ -107,11 +109,13 @@ export default function AppearanceScreen() {
           ) : null}
         </View>
 
-        <View style={styles.footnote}>
-          <Body size={13} color={c.ink3}>
-            {APPEARANCE_FOOTNOTE}
-          </Body>
-        </View>
+        {footnote !== null ? (
+          <View style={styles.footnote}>
+            <Body size={13} color={c.ink3}>
+              {footnote}
+            </Body>
+          </View>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -181,14 +185,18 @@ function PreviewTile({ mode }: { mode: AppearanceMode }) {
       </View>
     );
   }
-  const p = mode === 'liquid-glass' ? (scheme === 'dark' ? GLASS_NIGHT : GLASS_DAY) : palette(mode);
+  const glass = mode === 'liquid-glass';
+  const p = glass ? (scheme === 'dark' ? GLASS_NIGHT : GLASS_DAY) : palette(mode);
+  // The palette's card is opaque (it paints sheets); the preview shows the
+  // frosted content card, the translucent --card-fill over the page.
+  const frost = glass ? glassTokens(scheme, false) : null;
   return (
     <View
       style={styles.tile}
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
     >
-      <TileFace p={p} rounded={mode === 'liquid-glass'} />
+      <TileFace p={p} rounded={glass} cardFill={frost?.cardFill} cardLine={frost?.cardLine} />
     </View>
   );
 }
@@ -197,17 +205,25 @@ function TileFace({
   p,
   half = false,
   rounded = false,
+  cardFill,
+  cardLine,
 }: {
   p: Palette;
   half?: boolean;
   rounded?: boolean;
+  cardFill?: string;
+  cardLine?: string;
 }) {
   return (
     <View style={[styles.face, { backgroundColor: p.paper, flex: half ? 1 : undefined }]}>
       <View
         style={[
           styles.faceCard,
-          { backgroundColor: p.card, borderColor: p.hair2, borderRadius: rounded ? 8 : 3 },
+          {
+            backgroundColor: cardFill ?? p.card,
+            borderColor: cardLine ?? p.hair2,
+            borderRadius: rounded ? 8 : 3,
+          },
         ]}
       >
         <View style={[styles.faceLine, { backgroundColor: p.ink, width: '70%' }]} />

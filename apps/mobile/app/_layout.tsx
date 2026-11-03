@@ -14,7 +14,7 @@ import { WhatsNew } from '@/components/onboarding/whats-new';
 import { UpdatePromptHost } from '@/components/update-prompt-host';
 import { clearSessionEnded, signedOutRoute } from '@/lib/account-eviction';
 import { installAlertHolds } from '@/lib/alert-holds';
-import { AppearanceProvider, useAppearance } from '@/lib/appearance/provider';
+import { AppearanceProvider, useAppearanceReady } from '@/lib/appearance/provider';
 import { AppearanceSessionBridge } from '@/lib/appearance/session-bridge';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
@@ -120,8 +120,9 @@ function RootLayout() {
   // The person's appearance is read from this phone before the first paint
   // (one AsyncStorage read, capped like the fonts at 4 s, then System), so a
   // Liquid Glass or a fixed Dark/Light choice never shows a frame of the
-  // device's look first.
-  const appearanceReady = useAppearance().ready;
+  // device's look first. Only the ready flag: the sync status never
+  // re-renders RootLayout.
+  const appearanceReady = useAppearanceReady();
   const { mode, c } = useTheme();
 
   // Cold-launch branded splash (fire-once). `isCold` is computed once; the

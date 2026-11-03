@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { appearanceLabel, appearanceOptions, syncLine } from './labels';
+import { appearanceFootnote, appearanceLabel, appearanceOptions, syncLine } from './labels';
 
 /**
  * How the appearance is wired into the shell, read as source (the suite has
@@ -35,7 +35,20 @@ describe('root layout', () => {
     const appearance = src.indexOf('if (!appearanceReady) {');
     expect(fonts).toBeGreaterThan(-1);
     expect(appearance).toBeGreaterThan(fonts);
-    expect(src).toContain('const appearanceReady = useAppearance().ready;');
+    expect(src).toContain('const appearanceReady = useAppearanceReady();');
+  });
+
+  it('RootLayout subscribes to the ready flag alone, never to the sync status', () => {
+    // A save or fetch answering ("Saving...", "Saved to your account") must not
+    // re-render RootLayout and the whole tree under it.
+    expect(src).not.toMatch(/useAppearance\(\)/);
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('<ReadyContext.Provider value={snapshot.ready}>');
+  });
+
+  it('the provider tells the OS a fixed Dark or Light, so alerts and the keyboard match', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('applyOsScheme(snapshot.effective);');
   });
 
   it('the session bridge is inside AuthProvider; the notice outside the error boundary', () => {
@@ -128,6 +141,13 @@ describe('Settings', () => {
       expect(src, gate).not.toContain(gate);
     }
   });
+
+  it('the footnote about Liquid Glass shows only in a build that offers Liquid Glass', () => {
+    const src = flat('app/(drawer)/settings/appearance.tsx');
+    expect(src).toContain('const footnote = appearanceFootnote(appearance.glassEnabled);');
+    expect(src).toContain('{footnote !== null ? (');
+    expect(src).not.toContain('APPEARANCE_FOOTNOTE');
+  });
 });
 
 describe('the words', () => {
@@ -142,6 +162,17 @@ describe('the words', () => {
     expect(appearanceLabel('liquid-glass', true)).toBe('Liquid Glass');
     expect(appearanceLabel('liquid-glass', false)).toBe('System');
     expect(appearanceLabel('system', true)).toBe('System');
+  });
+
+  it('never names Liquid Glass with the kill switch off (plan D12, 5.5)', () => {
+    expect(appearanceFootnote(true)).toContain('Liquid Glass follows your device');
+    expect(appearanceFootnote(false)).toBeNull();
+    const offered = [
+      ...appearanceOptions(false).flatMap((o) => [o.label, o.detail]),
+      appearanceFootnote(false) ?? '',
+    ].join(' ');
+    expect(offered).not.toContain('Liquid Glass');
+    expect(offered).not.toContain('glass');
   });
 
   it('claims the account only when the server answered', () => {

@@ -5,6 +5,7 @@ import { AppState, Platform } from 'react-native';
 
 import {
   ControlContext,
+  ReadyContext,
   ThemeContext,
   type AppearanceControl,
   type AppearanceThemeContextValue,
@@ -12,6 +13,7 @@ import {
 import type { AppearanceSnapshot } from './controller';
 import { getGlassModule } from './glass-module';
 import { selectMaterial, type GlassMaterial } from './material';
+import { applyOsScheme } from './os-scheme';
 import { getAppearanceController } from './singleton';
 import { useReduceTransparency } from './use-reduce-transparency';
 
@@ -27,9 +29,11 @@ import { useReduceTransparency } from './use-reduce-transparency';
  * state. It reads nothing from the network before the first paint: one
  * AsyncStorage read, capped by APPEARANCE_READ_TIMEOUT_MS.
  *
- * Two contexts, so a sync-status change ("Saving...", "Saved to your
- * account") re-renders the Appearance screen only, never the 157 useTheme()
- * callers.
+ * Three contexts, so a sync-status change ("Saving...", "Saved to your
+ * account") re-renders only the readers of the control (the Appearance
+ * screen, the Settings row, the crash-fallback notice), never the 157
+ * useTheme() callers (ThemeContext: the appearance and material) and never
+ * RootLayout (ReadyContext: one boolean that flips once at launch).
  */
 
 /** Same cap as the font gate (app/_layout.tsx FONT_GATE_TIMEOUT_MS): past it, System. */
@@ -64,8 +68,9 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     return () => clearTimeout(timer);
   }, [controller]);
 
-  // Rule 2: a save that failed is tried again when the app comes back to the
-  // foreground and when the network comes back, as well as by Try again.
+  // Rule 2: a save that failed (or a read that found no account store) is
+  // tried again when the app comes back to the foreground and when the
+  // network comes back, as well as by Try again.
   const status = snapshot.state.status;
   React.useEffect(() => {
     if (status !== 'failed' && status !== 'unavailable') return;
@@ -85,6 +90,12 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   }, [controller, status]);
 
   const material = useMaterial(snapshot.effective);
+
+  // A fixed Dark or Light also sets the OS scheme, so alerts and the keyboard
+  // match the screens; System and Liquid Glass hand it back to the device.
+  React.useEffect(() => {
+    applyOsScheme(snapshot.effective);
+  }, [snapshot.effective]);
 
   const theme = React.useMemo<AppearanceThemeContextValue>(
     () => ({ appearance: snapshot.effective, material }),
@@ -110,10 +121,12 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
   return (
     <ControlContext.Provider value={control}>
-      <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+      <ReadyContext.Provider value={snapshot.ready}>
+        <ThemeContext.Provider value={theme}>{children}</ThemeContext.Provider>
+      </ReadyContext.Provider>
     </ControlContext.Provider>
   );
 }
 
-export { useAppearance, useAppearanceTheme } from './context';
+export { useAppearance, useAppearanceReady, useAppearanceTheme } from './context';
 export type { AppearanceControl, AppearanceThemeContextValue } from './context';

@@ -61,9 +61,17 @@ export function syncLine(status: AppearanceSyncStatus): { text: string; retry: b
   }
 }
 
-/** The footnote: glass follows the OS settings, there are no in-app switches (plan Q3). */
-export const APPEARANCE_FOOTNOTE =
+const APPEARANCE_FOOTNOTE =
   'Liquid Glass follows your device: Reduce Transparency makes it solid and Reduce Motion calms its movement. Change them in iOS Settings > Accessibility.';
+
+/**
+ * The footnote: glass follows the OS settings, there are no in-app switches
+ * (plan Q3). It is about Liquid Glass only, so a build with the kill switch
+ * off (plan D12, 5.5: the selector hides the option) shows none.
+ */
+export function appearanceFootnote(glassEnabled: boolean): string | null {
+  return glassEnabled ? APPEARANCE_FOOTNOTE : null;
+}
 
 export const FALLBACK_NOTICE = {
   title: 'Liquid Glass hit a problem',

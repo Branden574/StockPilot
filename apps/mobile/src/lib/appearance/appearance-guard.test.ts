@@ -13,9 +13,10 @@ import { describe, expect, it } from 'vitest';
  * 2. The appearance is presentation only (plan 2.3): no data layer, cache,
  *    query, signed URL, realtime channel or outbox reads it, so changing it
  *    can never refetch, re-sign, resubscribe or touch queued work.
- * 3. Only the screens that change the appearance, the root gate and the
- *    crash notice read the appearance control; every other component reads
- *    the look through useTheme() alone.
+ * 3. Only the screens that change the appearance and the crash notice read
+ *    the appearance control (it changes with every sync status); the root
+ *    gate reads the ready flag alone; every other component reads the look
+ *    through useTheme() alone.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../../..');
@@ -70,7 +71,7 @@ describe('appearance guards', () => {
     expect(readers).toEqual([]);
   });
 
-  it('only the appearance screen, the Settings row, the root gate and the crash notice read the control', () => {
+  it('only the appearance screen, the Settings row and the crash notice read the control; the root reads ready alone', () => {
     const readers = SOURCES.filter((f) => /\buseAppearance\(\)/.test(code(f)))
       .map(rel)
       .filter((f) => !f.startsWith('src/lib/appearance/'))
@@ -78,9 +79,12 @@ describe('appearance guards', () => {
     expect(readers).toEqual([
       'app/(drawer)/settings.tsx',
       'app/(drawer)/settings/appearance.tsx',
-      'app/_layout.tsx',
       'src/components/appearance-fallback-notice.tsx',
     ]);
+    const ready = SOURCES.filter((f) => /\buseAppearanceReady\(\)/.test(code(f)))
+      .map(rel)
+      .filter((f) => !f.startsWith('src/lib/appearance/'));
+    expect(ready).toEqual(['app/_layout.tsx']);
   });
 
   it('nothing keys a tree by the appearance (a key would remount screens, sheets and forms)', () => {

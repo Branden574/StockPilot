@@ -152,10 +152,19 @@ export function palette(mode: ThemeMode): Palette {
  * IMPLEMENTATION-PLAN.md 5.1). The same Palette shape, so every screen that
  * reads `c` draws in glass colours without a branch, mapped from the generated
  * artifact tokens (appearance/glass-tokens.generated.ts), never retyped:
- *   paper --bg, paper2 --card-fill-2 (the well), card --card-fill, sunk
- *   --surface-3 (segmented tracks), ink..ink4 --ink..--ink-4, ink5 --line-3,
- *   hair --line, hair2 --line-2, accent --accent, accentInk --on-accent,
- *   accentWash --accent-wash, warn/crit --warn/--danger and their washes.
+ *   paper --bg, paper2 --card-fill-2 (the well), card --surface (OPAQUE),
+ *   sunk --surface-3 (segmented tracks), ink..ink4 --ink..--ink-4, ink5
+ *   --line-3, hair --line, hair2 --line-2, accent --accent, accentInk
+ *   --on-accent, accentWash --accent-wash, warn/crit --warn/--danger and
+ *   their washes.
+ * `card` is the opaque --surface, not the translucent --card-fill: about a
+ * hundred existing files paint sheets, sticky bars and menus with
+ * `backgroundColor: c.card` over a light scrim, and a 46% fill with no blur
+ * behind it would show the page's text through them (the web keeps its
+ * --card triplet opaque for the same reason, plan 4.2). The frosted content
+ * card is GlassSurface variant="content", which reads g.cardFill itself;
+ * stage 4 moves each overlay onto GlassSurface. In the opaque twins --surface
+ * and --card-fill are the same value, so those palettes do not change.
  * Day glass is the light scheme and Night glass the dark one; the OPAQUE twins
  * are the artifact's reduced material (Reduce Transparency, Android). These are
  * module-level constants, one per (scheme, material), so memoised rows keep
@@ -166,7 +175,7 @@ function glassPaletteOf(t: GlassTokens): Palette {
   return {
     paper: t.bg,
     paper2: t.cardFill2,
-    card: t.cardFill,
+    card: t.surface,
     sunk: t.surface3,
     ink: t.ink,
     ink2: t.ink2,

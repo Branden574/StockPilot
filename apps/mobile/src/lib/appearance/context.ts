@@ -33,6 +33,8 @@ export interface AppearanceControl {
 
 export const ThemeContext = React.createContext<AppearanceThemeContextValue | null>(null);
 export const ControlContext = React.createContext<AppearanceControl | null>(null);
+/** The stored choice was read (or the first-paint wait gave up). True outside the provider. */
+export const ReadyContext = React.createContext<boolean>(true);
 
 /** For useTheme() only: the appearance and material, or null outside the provider. */
 export function useAppearanceTheme(): AppearanceThemeContextValue | null {
@@ -40,9 +42,19 @@ export function useAppearanceTheme(): AppearanceThemeContextValue | null {
 }
 
 /**
- * The Appearance screen's control, the crash-fallback notice and the root's
- * first-paint gate. Outside the provider (never in the app) it reports a ready
- * classic System that cannot be changed.
+ * The root's first-paint gate: only whether the stored choice was read. Its
+ * own context, so RootLayout re-renders when this flips once at launch and
+ * never when the sync status moves ("Saving...", "Saved to your account").
+ */
+export function useAppearanceReady(): boolean {
+  return React.useContext(ReadyContext);
+}
+
+/**
+ * The Appearance screen's control and the crash-fallback notice. It changes
+ * with every sync status, so the root never reads it (useAppearanceReady).
+ * Outside the provider (never in the app) it reports a ready classic System
+ * that cannot be changed.
  */
 export function useAppearance(): AppearanceControl {
   return React.useContext(ControlContext) ?? OUTSIDE_PROVIDER;

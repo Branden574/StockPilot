@@ -81,7 +81,7 @@ describe('glass palettes', () => {
   it('map the tokens onto the classic Palette shape, so screens draw them without a branch', () => {
     expect(GLASS_DAY).toMatchObject({
       paper: GLASS_TOKENS.day.bg,
-      card: GLASS_TOKENS.day.cardFill,
+      card: GLASS_TOKENS.day.surface,
       ink: GLASS_TOKENS.day.ink,
       ink3: GLASS_TOKENS.day.ink3,
       accent: GLASS_TOKENS.day.accent,
@@ -92,6 +92,28 @@ describe('glass palettes', () => {
     expect(GLASS_DAY_OPAQUE.card).toBe(GLASS_TOKENS.dayOpaque.cardFill);
     expect(GLASS_NIGHT_OPAQUE.card).toBe(GLASS_TOKENS.nightOpaque.cardFill);
     expect(Object.keys(GLASS_DAY).sort()).toEqual(Object.keys(palette('light')).sort());
+  });
+
+  it('paint c.card opaque in every glass palette, so a sheet, sticky bar or menu hides the page under it', () => {
+    // About a hundred files paint sheets, sticky bars and menus with
+    // `backgroundColor: c.card` over a light scrim; a translucent card there
+    // would show the page's text through the sheet. The frosted content card
+    // is GlassSurface variant="content", which reads g.cardFill itself.
+    const opaque = (colour: string) =>
+      /^#[0-9a-f]{6}$/i.test(colour) ||
+      /^rgba?\((\s*[\d.]+\s*,){2}\s*[\d.]+\s*(,\s*(1|1\.0+)\s*)?\)$/.test(colour);
+    for (const [name, p] of [
+      ['Day glass', GLASS_DAY],
+      ['Night glass', GLASS_NIGHT],
+      ['Day glass, opaque', GLASS_DAY_OPAQUE],
+      ['Night glass, opaque', GLASS_NIGHT_OPAQUE],
+    ] as const) {
+      expect(opaque(p.card), `${name} card ${p.card}`).toBe(true);
+      expect(opaque(p.paper), `${name} paper ${p.paper}`).toBe(true);
+    }
+    // The opaque twins keep exactly the values they had: their --surface is their card fill.
+    expect(GLASS_TOKENS.dayOpaque.surface).toBe(GLASS_TOKENS.dayOpaque.cardFill);
+    expect(GLASS_TOKENS.nightOpaque.surface).toBe(GLASS_TOKENS.nightOpaque.cardFill);
   });
 
   it('leave the classic palettes untouched', () => {

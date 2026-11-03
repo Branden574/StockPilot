@@ -227,6 +227,23 @@ describe('choosing', () => {
     expect(snap().state.status).toBe('unavailable');
   });
 
+  it('Try again after the read found no account store reads again, and the answer counts once the table exists', async () => {
+    const { controller, snap, account } = setup({ [KEYS.device]: device('light') });
+    await controller.hydrate();
+    controller.setSession('user-a');
+    await account.release({ ok: false, reason: 'missing-table' });
+    expect(snap().state).toMatchObject({ status: 'unavailable', dirty: false });
+
+    controller.retry();
+    expect(account.calls).toEqual([
+      { kind: 'fetch', userId: 'user-a' },
+      { kind: 'fetch', userId: 'user-a' },
+    ]);
+    await account.release({ ok: true, row: row('dark', '2026-11-02T20:00:03Z') });
+    expect(snap().effective).toBe('dark');
+    expect(snap().state.status).toBe('synced');
+  });
+
   it('two quick choices never reach the server out of order', async () => {
     const { controller, snap, account } = setup();
     await controller.hydrate();

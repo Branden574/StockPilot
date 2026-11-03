@@ -47,6 +47,7 @@ describe.each(VARIANTS)('%s', (_name, t) => {
   const surfaces: [string, string][] = [
     ['the page', bg],
     ['a card', over(t.cardFill, bg)],
+    ['a sheet, sticky bar or menu (c.card, opaque --surface)', over(t.surface, bg)],
     ['a well', over(t.cardFill2, bg)],
   ];
   const words: [string, string][] = [
