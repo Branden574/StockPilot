@@ -192,17 +192,22 @@
    396-484). Hooks: [data-glass=sb-ws|sb-sec|sb-sec-h|sb-sec-label|nav-label|
    nav-ct|sb-foot|sb-foot-text|avatar|ws-name|ws-mark|ws-chev|crumbs|
    crumb-sep|tb-tools|tb-search|kbd|tb-cap|tb-icon|badge-dot|navsheet-close|
-   edge-swipe]. Every one is an inert attribute on today's markup
-   (components/dashboard/shell.classic-parity.test.tsx), so these rules only
-   restyle; no element exists in glass that classic lacks.
+   edge-swipe|sb-cta]. Every one but sb-cta is an inert attribute on today's
+   markup (components/dashboard/shell.classic-parity.test.tsx), so these rules
+   only restyle. The one glass-only element is the tinted Place an order
+   (.sb-cta), a duplicate of the Orders list's own Place order behind the same
+   gate, absent under the off rollout and on the 8.5 allowlist
+   (sidebar.place-order.test.tsx).
 
    Deviations from the boards, on purpose (stockpilot-work/liquid-glass/
-   stage3/items-rows.md): the top bar's controls float as three glass pieces
-   (warehouse, search, the icon capsule) because classic keeps them as
-   siblings; the rail keeps each section heading as a small chevron button so
-   a folded section can still be opened; the rail labels are visually hidden,
-   never removed, so every link keeps its name; there is no tinted Place an
-   order button (classic has no New order entry on these routes to duplicate). */
+   stage3/items-rows.md): the top bar's warehouse button, search and icon
+   cluster are classic siblings, so they are drawn as one capsule from three
+   joined pieces (square inner ends, a hairline between them) rather than one
+   element; the capsule keeps classic's extra controls (What's New, shortcuts,
+   help, support, the appearance menu and the account menu, which the board
+   keeps in the sidebar foot); the rail keeps each section heading as a small
+   chevron button so a folded section can still be opened; the rail labels
+   are visually hidden, never removed, so every link keeps its name. */
 @layer lg {
   @media screen {
     /* ── Desktop from 761 px (the boards' phone layout ends at 760) ───── */
@@ -266,6 +271,49 @@
       height: 14px;
       color: var(--lg-ink-3);
       opacity: 1;
+    }
+    /* Place an order (.btn.btn-tinted.sb-cta): 36 px, the accent wash, the
+       accent text, full width; a 44 px icon button in the rail. */
+    :root[data-appearance='liquid-glass'] [data-glass='sb-cta'] {
+      display: inline-flex;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      height: 36px;
+      padding: 0 14px;
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+      transition:
+        background-color var(--lg-d-1) var(--lg-ease),
+        transform var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-cta']:hover {
+      background-color: var(--lg-accent-wash-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-cta']:active {
+      transform: scale(0.97);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sb-cta'] > svg {
+      width: 16px;
+      height: 16px;
+      flex: none;
+    }
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='sb-cta'] {
+        height: 44px;
+      }
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass='sb-cta'] {
+        border: 1px solid ButtonText;
+      }
     }
     /* Sections (.sb-nav, .sb-sec, .sb-sec-h): 26 px headings in 12 / 600. */
     :root[data-appearance='liquid-glass'] [data-glass='sidebar-nav'] {
@@ -418,6 +466,13 @@
       :root[data-appearance='liquid-glass']
         [data-glass='shell']
         > [data-glass='sidebar']
+        > [data-glass='sb-cta'] {
+        width: 44px;
+        padding: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='shell']
+        > [data-glass='sidebar']
         [data-glass='sidebar-nav'] {
         width: 100%;
         align-items: center;
@@ -532,8 +587,9 @@
       mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m9 18 6-6-6-6'/%3E%3C/svg%3E")
         center / 13px 13px no-repeat;
     }
-    /* Floating glass pieces: the warehouse button (stage 2's tb-btn), the
-       search field, the icon capsule and the lone icon buttons. */
+    /* Floating glass pieces: the search, the icon cluster and the lone icon
+       buttons, each its own round glass (the phone bar, Overview-Mobile);
+       from 761 px the capsule rules below join them. */
     :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
     :root[data-appearance='liquid-glass'] [data-glass='tb-cap'],
     :root[data-appearance='liquid-glass'] [data-glass='tb-icon'] {
@@ -635,6 +691,111 @@
         min-height: 44px;
       }
     }
+    /* ── One capsule from three classic siblings (AppTopbar .tb-cap.glass:
+       warehouse | search | bell), from 761 px: the warehouse picker's box,
+       the search (the field from 960 px of bar, the icon below) and the icon
+       cluster each take the floating glass, 42 px tall, with no gap between
+       them; the outer ends round and the inner ends square, and a hairline
+       inset 6 px (the board's .vr) starts every piece after the first. Under
+       400 px of bar classic shows no search, and with no warehouses there is
+       no picker; the ends follow what is shown. The phone bar keeps separate
+       round glass buttons, as Overview-Mobile draws it. ───────────────── */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']),
+      :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'],
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+        height: 42px;
+        border-width: 0;
+        border-radius: 0;
+        background-color: var(--lg-glass);
+        background-image: linear-gradient(var(--lg-line), var(--lg-line));
+        background-position: left center;
+        background-repeat: no-repeat;
+        background-size: 1px calc(100% - 12px);
+        -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+        backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+        box-shadow:
+          var(--lg-glass-inner),
+          0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+          var(--lg-glass-shadow);
+      }
+      /* The first piece: the picker when there is one. */
+      :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']) {
+        padding: 4px;
+        border-radius: 999px 0 0 999px;
+        background-image: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-tools'] [data-glass='tb-btn'] {
+        border-radius: 999px;
+        background-color: transparent;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-tools'] [data-glass='tb-btn']:hover {
+        background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+        color: var(--lg-ink);
+      }
+      /* The search joins the picker; without one it is the first piece. */
+      :root[data-appearance='liquid-glass']
+        [data-glass='tb-tools']:has([data-glass='tb-btn'])
+        ~ :is([data-glass='tb-search'], [data-glass='tb-icon'][data-glass-variant='search']) {
+        margin-left: -12px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='tb-tools']:not(:has([data-glass='tb-btn']))
+        ~ :is([data-glass='tb-search'], [data-glass='tb-icon'][data-glass-variant='search']) {
+        border-radius: 999px 0 0 999px;
+        background-image: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-search'] {
+        padding: 0 10px 0 16px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
+        width: 46px;
+        padding-left: 4px;
+      }
+      /* The icon cluster ends the capsule. It always follows a piece where
+         the bar shows a search (400 px up); under that, only after the
+         picker. */
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+        padding: 4px 4px 4px 6px;
+        border-radius: 0 999px 999px 0;
+      }
+      @container (min-width: 400px) {
+        :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+          margin-left: -12px;
+        }
+      }
+      /* A finger's 44 px buttons make the cluster 52 px: every piece follows. */
+      @media (pointer: coarse) {
+        :root[data-appearance='liquid-glass'] [data-glass='tb-tools']:has([data-glass='tb-btn']),
+        :root[data-appearance='liquid-glass'] [data-glass='tb-search'],
+        :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+          height: 52px;
+        }
+        :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
+          width: 52px;
+          height: 52px;
+        }
+      }
+      @container (max-width: 399.98px) {
+        :root[data-appearance='liquid-glass']
+          [data-glass='tb-tools']:has([data-glass='tb-btn'])
+          ~ [data-glass='tb-cap'] {
+          margin-left: -12px;
+        }
+        :root[data-appearance='liquid-glass']
+          [data-glass='tb-tools']:not(:has([data-glass='tb-btn']))
+          ~ [data-glass='tb-cap'] {
+          padding-left: 4px;
+          border-radius: 999px;
+          background-image: none;
+        }
+      }
+    }
+
     /* The unread count (.badge-dot): 16 px on the danger fill, ringed in
        the chrome colour. White on #C8321F is 5.3:1. */
     :root[data-appearance='liquid-glass'] [data-glass='badge-dot'] {

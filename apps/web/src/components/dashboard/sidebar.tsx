@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ShoppingBag } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
@@ -9,6 +9,7 @@ import { navForRole, type NavItem, type NavSection } from '@/components/dashboar
 import { NavLinkPending } from '@/components/dashboard/nav-link-pending';
 import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { defaultCollapsedSections } from '@/components/dashboard/sidebar-pref';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { IconMark } from '@/components/ui/icon-mark';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { cn } from '@/lib/utils';
@@ -96,6 +97,13 @@ const TOP_ROUTES = [
   '/dashboard/movements',
 ];
 
+/** The Orders entry (registry: module orders, `orders:request`) and its Place an order page. */
+const ORDERS_HREF = '/dashboard/orders';
+const PLACE_ORDER_HREF = '/dashboard/orders/new';
+
+const showsOrders = (list: readonly NavSection[]) =>
+  list.some((s) => s.items.some((i) => i.href === ORDERS_HREF));
+
 export function Sidebar({
   className,
   id,
@@ -128,6 +136,23 @@ export function Sidebar({
   const sections: NavSection[] = React.useMemo(
     () => navForRole(role, moduleSet, (navOverrides as NavOverrides | null) ?? null, permissionSet),
     [role, moduleSet, navOverrides, permissionSet],
+  );
+  // Liquid Glass's tinted "Place an order" (AppSidebar.dc.html .sb-cta): a
+  // glass-only shortcut to the page the Orders list's own "+ Place order"
+  // opens, behind the same gate as the Orders entry: the Orders module and
+  // `orders:request` (the registry's entry, which /dashboard/orders/new checks
+  // too), read from the nav without the org's overrides so a custom link to
+  // the list cannot stand in for the permission, and still shown in this nav
+  // so an org that hid Orders does not get it back here. Not rendered at all
+  // under the `off` rollout (R5: today's exact markup); under opt-in and
+  // default it is hidden in classic by styles/liquid-glass/visibility.css.
+  // Listed in tests/e2e/appearance/glass-only-allowlist.json.
+  const canPlaceOrder = React.useMemo(
+    () =>
+      liquidGlassRollout() !== 'off' &&
+      showsOrders(sections) &&
+      showsOrders(navForRole(role, moduleSet, null, permissionSet)),
+    [sections, role, moduleSet, permissionSet],
   );
   const pathname = usePathname();
   const initials = (userName || 'U')
@@ -278,6 +303,22 @@ export function Sidebar({
           activeId={organizationId}
         />
       </div>
+
+      {canPlaceOrder ? (
+        <Link
+          href={PLACE_ORDER_HREF}
+          prefetch={false}
+          onFocus={() => warmRoute(PLACE_ORDER_HREF)}
+          onPointerEnter={() => warmRoute(PLACE_ORDER_HREF)}
+          onPointerDown={() => warmRoute(PLACE_ORDER_HREF)}
+          onClick={onNavigate}
+          data-glass-only=""
+          data-glass="sb-cta"
+        >
+          <ShoppingBag aria-hidden strokeWidth={1.6} />
+          <span data-glass="nav-label">Place an order</span>
+        </Link>
+      ) : null}
 
       {/* Nav: the registry's sections, each under its own label. */}
       <nav
