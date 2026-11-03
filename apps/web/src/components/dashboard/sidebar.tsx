@@ -261,7 +261,7 @@ export function Sidebar({
         </Link>
       </div>
 
-      <div className="shrink-0 px-3 pb-1 pt-3">
+      <div className="shrink-0 px-3 pb-1 pt-3" data-glass="sb-ws">
         <OrgSwitcher
           orgs={
             memberships && memberships.length > 0
@@ -307,12 +307,13 @@ export function Sidebar({
           const open = isStoredCollapsed ? holdsActive && !heldClosed : true;
           const listId = `${sectionIdPrefix}-${section.key}`;
           return (
-            <div key={section.key} className="flex flex-col gap-px">
+            <div key={section.key} className="flex flex-col gap-px" data-glass="sb-sec">
               <button
                 type="button"
                 aria-expanded={open}
                 aria-controls={listId}
                 onClick={() => toggleSection(section.key, open, holdsActive)}
+                data-glass="sb-sec-h"
                 className="text-muted-foreground hover:text-foreground group flex w-full items-center gap-1.5 rounded-md px-2.5 pb-1 pt-2 text-left text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em] transition-colors [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-0"
               >
                 <span className="min-w-0 flex-1">{section.label}</span>
@@ -346,9 +347,13 @@ export function Sidebar({
 
       {/* Identity foot: who is signed in, and as what. Not interactive (the
           account menu in the top bar holds the actions). */}
-      <div className="border-border flex shrink-0 items-center gap-2.5 border-t px-4 py-3">
+      <div
+        className="border-border flex shrink-0 items-center gap-2.5 border-t px-4 py-3"
+        data-glass="sb-foot"
+      >
         <span
           aria-hidden
+          data-glass="avatar"
           className="bg-sunk text-foreground grid size-8 shrink-0 place-items-center rounded-full border border-[var(--ed-line-strong)] text-[11px] font-semibold"
         >
           {initials}
@@ -428,6 +433,8 @@ function NavList({
               <NavLinkPending />
               {item.badge != null && (
                 <span
+                  data-glass="nav-ct"
+                  data-glass-tone={item.alert ? 'alert' : undefined}
                   className={cn(
                     'shrink-0 rounded-full px-1.5 font-mono text-[11px] font-normal leading-4',
                     item.alert

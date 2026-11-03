@@ -77,16 +77,23 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
       src={active.logoUrl}
       alt=""
       aria-hidden
+      data-glass="ws-mark"
       className="size-4 shrink-0 rounded-[3px] object-cover"
     />
   ) : (
-    <span aria-hidden className="bg-accent size-1.5 shrink-0 rounded-full" />
+    <span
+      aria-hidden
+      data-glass="ws-mark"
+      data-glass-variant="dot"
+      className="bg-accent size-1.5 shrink-0 rounded-full"
+    />
   );
 
   if (single) {
     return (
       <div
         role="presentation"
+        data-glass="workspace"
         className="border-border bg-card flex h-[34px] w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)]"
       >
         {mark}

@@ -577,7 +577,10 @@ export function BulkActions({
           on a mouse; 8 px below sm and on coarse pointers, where each action
           grows a 44 px touch area and a later one paints over its
           neighbour's edge (the Button's touch rule). */}
-      <div className="border-border bg-card flex min-h-9 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2">
+      <div
+        className="border-border bg-card flex min-h-9 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2"
+        data-glass="selbar"
+      >
         {/* Leading checked box — the bar swaps in over the toolbar when rows
             are selected, so this sits right where the user's attention is.
             Mirrors the table's header select-all: one click unselects

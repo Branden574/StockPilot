@@ -220,7 +220,10 @@ export default async function InventoryPage({
   return (
     // The page box every redesigned dashboard page shares (max 1320, 28 / 32
     // / 64 padding, 16 px gutters on a phone; the route skeleton draws it too).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="items"
+    >
       <PageHeader
         title={heading}
         subline={

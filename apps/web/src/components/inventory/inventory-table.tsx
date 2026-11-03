@@ -2802,7 +2802,7 @@ export function InventoryTable({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-glass="items-list">
       {/* Group selected (0400): a group header's Rename / Remove and a row
           chip's Add to group. Each reviews first and writes only on Save; a
           change refreshes the page (the server re-reads every row). */}
@@ -2865,7 +2865,7 @@ export function InventoryTable({
           It stays usable while rows are ticked (only the toolbar below swaps
           for the bulk bar), so the view can be switched with a selection: the
           grid draws the same page with the same picks. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3" data-glass="items-views">
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <SegmentedTabs
             aria-label="Filter by stock"
@@ -3007,12 +3007,13 @@ export function InventoryTable({
           "select-all disappears" / "3-4 clicks for row checkmarks"
           reports). Gmail-style swap keeps every table pixel exactly where
           it was. */}
-      <div className="grid">
+      <div className="grid" data-glass="items-tools">
         <div
           className={cn(
             'col-start-1 row-start-1 flex flex-wrap content-start items-center gap-x-1.5 gap-y-2',
             selected.size > 0 && 'invisible',
           )}
+          data-glass="items-toolbar"
         >
           <div className="relative w-full sm:w-[240px]">
             <Search
@@ -3120,6 +3121,8 @@ export function InventoryTable({
             'col-start-1 row-start-1 flex min-w-0 flex-col justify-center',
             selected.size === 0 && 'invisible',
           )}
+          data-glass="selbar-layer"
+          data-glass-state={selected.size > 0 ? 'open' : 'closed'}
         >
           <BulkActions
             // DISTINCT item ids (not rowKeys) — actions are item-level and the
@@ -3261,7 +3264,10 @@ export function InventoryTable({
           the top pager at the right. The redesign moved the count out of the
           toolbar row, which wrapped it onto a line of its own, to sit under
           the filters beside the pager. */}
-      <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <div
+        className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2"
+        data-glass="items-count"
+      >
         <p
           className={cn(
             'text-muted-foreground flex items-center gap-1.5 font-mono text-[12px] tabular-nums',
@@ -3350,6 +3356,7 @@ export function InventoryTable({
       {/* Table */}
       <div
         aria-busy={isFilterPending}
+        data-glass="items-card"
         className={cn(
           'border-border bg-card overflow-hidden rounded-lg border transition-opacity',
           // Subtle pending treatment ONLY — never pointer-events-none. The
@@ -3385,7 +3392,7 @@ export function InventoryTable({
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-[13.5px]">
+            <table className="w-full min-w-[900px] text-[13.5px]" data-glass="items-table">
               <thead>
                 <tr className="border-border border-b">
                   <th className="w-10 py-2.5 pl-4 pr-0 text-left">
@@ -3668,7 +3675,10 @@ export function InventoryTable({
         {listView !== 'grid' && displayed.length === 0 ? noMatchLine : null}
 
         {showPagination || (plannedPageStranded && pageRange) || canCreate ? (
-          <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5">
+          <div
+            className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5"
+            data-glass="items-pager"
+          >
             {/* Pagination — hides when everything fits on one page so the
                 single-screen empty/typical case stays clean. URL-driven so
                 paginated views are bookmarkable + shareable. Server mode also
