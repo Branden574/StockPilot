@@ -83,6 +83,7 @@ export function FilterChip({
     <button
       type={type}
       data-slot="filter-chip"
+      data-glass="chip"
       aria-pressed={pressed}
       className={cn(filterChipClass({ active: isActive, size, dashed }), className)}
       {...props}
@@ -109,6 +110,7 @@ export function FilterChipLink({
   return (
     <Link
       data-slot="filter-chip"
+      data-glass="chip"
       className={cn(filterChipClass({ active, size, dashed }), className)}
       {...props}
     >
@@ -131,6 +133,7 @@ export function MetaChip({ action, className, children, ...props }: MetaChipProp
   const chip = (
     <span
       data-slot="meta-chip"
+      data-glass="meta-chip"
       className={cn(
         'text-muted-foreground inline-flex min-w-0 max-w-full items-center gap-1 whitespace-nowrap rounded-full border border-[var(--ed-line-strong)] px-1.5 text-[11px] leading-[16.5px]',
         action ? null : className,

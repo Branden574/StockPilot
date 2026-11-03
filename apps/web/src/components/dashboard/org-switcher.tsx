@@ -102,6 +102,7 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
+        data-glass="workspace"
         disabled={pending}
         className="border-border bg-card flex h-[34px] w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:opacity-60"
         aria-label="Switch organization"

@@ -155,6 +155,7 @@ export function Topbar({
   return (
     <header
       ref={headerRef}
+      data-glass="topbar"
       className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 max-[390px]:gap-1 sm:gap-3 sm:px-6"
       style={{ height: 56 }}
     >

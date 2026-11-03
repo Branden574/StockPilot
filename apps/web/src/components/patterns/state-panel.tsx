@@ -88,6 +88,7 @@ export function StatePanel({
   return (
     <div
       data-slot="state-panel"
+      data-glass="state-panel"
       data-state-kind={kind}
       role={role}
       className={cn(

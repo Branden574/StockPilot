@@ -51,6 +51,7 @@ export const Switch = React.forwardRef<HTMLButtonElement, SwitchProps>(function 
   return (
     <button
       {...props}
+      data-glass="switch"
       ref={ref}
       type="button"
       role="switch"

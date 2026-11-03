@@ -107,6 +107,7 @@ export function GridCard({
   return (
     <div
       data-slot="grid-card"
+      data-glass="grid-card"
       data-selected={selected ? '' : undefined}
       className={cn(
         'group/card border-border bg-background has-[[data-slot=grid-card-name]_a:focus-visible]:ring-ring has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)] has-[[data-slot=grid-card-name]_a:focus-visible]:ring-2 has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-2',
