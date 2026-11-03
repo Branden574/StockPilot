@@ -93,6 +93,16 @@ describe('LabelSheet', () => {
     expect(well).toContainElement(container.querySelector('.label-print-page') as HTMLElement);
   });
 
+  it('keeps its classic tokens inside Liquid Glass: the sheet preview is an exempt surface (R6)', () => {
+    const { container } = render(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+    const well = container.querySelector('[data-slot="label-sheet-preview"]')!;
+    expect(well).toHaveAttribute('data-appearance-exempt');
+    // Only the sheet: the controls above it follow the page's look.
+    expect(container.querySelector('[data-slot="label-sheet-controls"]')).not.toHaveAttribute(
+      'data-appearance-exempt',
+    );
+  });
+
   it('says how to pick items when there are none, in the shared state panel', () => {
     const { container } = render(<LabelSheet items={[]} copies={1} template="medium" />);
     expect(

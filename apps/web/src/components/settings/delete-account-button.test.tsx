@@ -171,12 +171,18 @@ describe('DeleteAccountButton: deleting the account', () => {
   });
 
   it('forgets the account’s appearance sync, like every sign-out, once the account is deleted', async () => {
-    // Liquid Glass plan 3.3: the sync record goes at every sign-out, and the
+    // Liquid Glass plan 3.3 (the v2 record of REVISION-DEFAULT R2, under the
+    // same key): the sync record goes at every sign-out, and the
     // provider (which outlives this soft navigation) forgets the account, so a
     // choice made next on the sign-in page is not filed under a deleted account.
     localStorage.setItem(
       'sp-appearance-sync',
-      JSON.stringify({ v: 1, userId: 'user-a', dirty: false, syncedAt: null }),
+      JSON.stringify({
+        v: 2,
+        userId: '11111111-1111-4111-8111-111111111111',
+        dirtyAxes: [],
+        syncedAt: null,
+      }),
     );
     const heard = vi.fn();
     window.addEventListener(APPEARANCE_SIGNED_OUT_EVENT, heard);
@@ -196,7 +202,12 @@ describe('DeleteAccountButton: deleting the account', () => {
   it('a refused deletion keeps the account’s appearance sync: the person is still signed in', async () => {
     localStorage.setItem(
       'sp-appearance-sync',
-      JSON.stringify({ v: 1, userId: 'user-a', dirty: false, syncedAt: null }),
+      JSON.stringify({
+        v: 2,
+        userId: '11111111-1111-4111-8111-111111111111',
+        dirtyAxes: [],
+        syncedAt: null,
+      }),
     );
     deleteOwnAccountAction.mockResolvedValue({
       ok: false,

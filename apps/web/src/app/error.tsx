@@ -54,7 +54,7 @@ export default function GlobalError({
       <Button onClick={reset} className="mt-2">
         Try again
       </Button>
-      {/* Only while Liquid Glass is selected; nothing in the classic looks. */}
+      {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
       <AppearanceRecovery />
     </div>
   );

@@ -226,6 +226,9 @@ function PreviewWell({ children }: { children: React.ReactNode }) {
     <div
       ref={ref}
       data-slot="label-sheet-preview"
+      // Liquid Glass leaves the sheet as it is: its classic tokens are
+      // declared again inside it (tokens.generated.css, REVISION-DEFAULT R6).
+      data-appearance-exempt=""
       role={overflows ? 'region' : undefined}
       aria-label={overflows ? 'Label sheet preview' : undefined}
       tabIndex={stop ? 0 : undefined}

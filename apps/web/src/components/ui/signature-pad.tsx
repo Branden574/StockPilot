@@ -334,6 +334,9 @@ export const SignaturePad = React.forwardRef<SignaturePadHandle, SignaturePadPro
     return (
       <div
         data-slot="signature-pad"
+        // Liquid Glass leaves the pad as it is: its classic tokens are declared
+        // again inside it (tokens.generated.css, plans/REVISION-DEFAULT.md R6).
+        data-appearance-exempt=""
         className={['w-full', className ?? ''].filter(Boolean).join(' ')}
       >
         <div

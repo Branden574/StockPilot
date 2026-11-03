@@ -1,5 +1,7 @@
 import * as React from 'react';
 
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { cn } from '@/lib/utils';
 
 /**
@@ -17,6 +19,12 @@ import { cn } from '@/lib/utils';
  *   the page's own.
  * - Comfortable sizes (CONFLICTS E6): these pages are used one-handed at a
  *   dock, by principals and by requesters on a phone.
+ * - A way back to the classic design (plans/REVISION-DEFAULT.md R13): with
+ *   Liquid Glass in the build, a page that draws the whole frame and passes
+ *   no top bar gets the header appearance menu in a small corner that exists
+ *   only in glass (`data-glass-only`, hidden in classic by
+ *   styles/liquid-glass/visibility.css). Under the `off` rollout it is not
+ *   rendered at all, so the frame is today's markup.
  */
 
 const WIDTH = {
@@ -95,6 +103,11 @@ export function ExternalShell({
       ) : null}
       {column}
       {poweredBy ? <ExternalFooter className={WIDTH[width]} /> : null}
+      {!topBar && liquidGlassRollout() !== 'off' ? (
+        <div data-slot="external-appearance" data-glass-only="" className="absolute right-3 top-3">
+          <ThemeToggle />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -3,78 +3,72 @@
 import { RefreshCw } from 'lucide-react';
 import * as React from 'react';
 
-import type { AppearanceMode } from '@stockpilot/core';
+import type { AppearanceStyle } from '@stockpilot/core';
 
-import { appearanceStatusText, useAppearanceChoice } from '@/components/theme/appearance-select';
+import {
+  appearanceStatusText,
+  DESIGN_OPTIONS,
+  THEME_OPTIONS,
+  useAppearanceChoice,
+} from '@/components/theme/appearance-select';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 
 /**
- * Settings > Profile > Appearance (Liquid Glass plan 3.4 and 5.4's web twin;
- * brief section 4): the same choices as the account menu and the header menu
- * (components/theme/appearance-select.tsx), as preview tiles so the
- * difference is obvious before choosing.
+ * Settings > Profile > Appearance (plans/REVISION-DEFAULT.md R1, R13; brief
+ * section 4): the same two choices as the menus
+ * (components/theme/appearance-select.tsx), Design first.
  *
- * Native radio inputs, one group: Tab reaches the group, the arrow keys move
- * and choose, and each is announced as a radio with its word and its one-line
- * description (never an icon alone), checked or not. Choosing applies at once,
- * on this page, with no reload and no remount. Personal and ungated: every
- * signed-in person can change their own, and it changes nobody else's.
+ *   Design  two preview tiles: Liquid Glass, Classic;
+ *   Theme   three radios: Light, Dark, System.
  *
- * The line below the tiles says where the choice is saved, and never claims
- * the account holds it unless the server said so; a failed save offers Try
- * again (plan 3.4 rule 2).
+ * Native radio inputs in two fieldsets, each with its legend: Tab reaches a
+ * group, the arrow keys move and choose, and each is announced as a radio with
+ * its word (and, for a Design, its one-line description), checked or not.
+ * Choosing applies at once, on this page, with no reload and no remount;
+ * switching the Design never changes the Theme. Personal and ungated.
+ *
+ * The line below says where the choice is saved, and never claims the account
+ * holds it unless the server said so; a failed save offers Try again (plan 3.4
+ * rule 2). The profile page renders this only when the build has Liquid Glass.
  */
 
-/** Decorative miniatures of each look (aria-hidden): plain colours, no image request. */
+/** Decorative miniatures of each Design (aria-hidden): plain colours, no image request. */
 const PREVIEW: Record<
-  AppearanceMode,
-  { ground: string; side: string; card: string; line: string; accent: string }
+  AppearanceStyle,
+  { ground: string; side: string; card: string; line: string; accent: string; radius: number }
 > = {
-  dark: {
-    ground: '#0c0d0a',
-    side: '#131410',
-    card: '#131410',
-    line: '#2a2b25',
-    accent: 'hsl(165 45% 64%)',
-  },
-  light: {
-    ground: '#fafaf7',
-    side: '#ffffff',
-    card: '#ffffff',
-    line: '#e7e5dd',
-    accent: 'hsl(165 42% 32%)',
-  },
   'liquid-glass': {
     ground: 'linear-gradient(150deg, #dfe8e3 0%, #cfdcd5 45%, #e9dfd1 100%)',
     side: 'rgba(255,255,255,.58)',
     card: 'rgba(255,255,255,.46)',
     line: 'rgba(255,255,255,.78)',
     accent: '#0B7A5C',
+    radius: 8,
   },
-  system: {
+  classic: {
     ground: 'linear-gradient(135deg, #fafaf7 0 50%, #0c0d0a 50% 100%)',
     side: 'rgba(127,127,127,.18)',
     card: 'rgba(127,127,127,.22)',
     line: 'rgba(127,127,127,.4)',
     accent: 'hsl(165 42% 45%)',
+    radius: 3,
   },
 };
 
-function AppearancePreview({ mode }: { mode: AppearanceMode }) {
-  const p = PREVIEW[mode];
-  const glass = mode === 'liquid-glass';
+function DesignPreview({ style }: { style: AppearanceStyle }) {
+  const p = PREVIEW[style];
   return (
     <div
       aria-hidden="true"
       className="relative flex h-[72px] w-full gap-1.5 overflow-hidden p-1.5"
-      style={{ background: p.ground, borderRadius: glass ? 12 : 6 }}
+      style={{ background: p.ground, borderRadius: p.radius + 4 }}
     >
       <div
         className="w-[22%] shrink-0"
         style={{
           background: p.side,
-          borderRadius: glass ? 8 : 3,
+          borderRadius: p.radius,
           boxShadow: `inset 0 0 0 1px ${p.line}`,
         }}
       />
@@ -84,7 +78,7 @@ function AppearancePreview({ mode }: { mode: AppearanceMode }) {
           className="flex-1"
           style={{
             background: p.card,
-            borderRadius: glass ? 8 : 3,
+            borderRadius: p.radius,
             boxShadow: `inset 0 0 0 1px ${p.line}`,
           }}
         />
@@ -93,70 +87,110 @@ function AppearancePreview({ mode }: { mode: AppearanceMode }) {
   );
 }
 
-export function AppearancePanel({ labelledBy }: { labelledBy: string }) {
-  const { value, options, choose, status, retry } = useAppearanceChoice();
+/** The dot of a radio drawn beside its word (the input itself is visually hidden). */
+function RadioDot({ checked }: { checked: boolean }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'flex size-4 shrink-0 items-center justify-center rounded-full border',
+        checked ? 'border-foreground' : 'border-[var(--ed-line-strong)]',
+      )}
+    >
+      {checked ? <span className="bg-foreground size-2 rounded-full" /> : null}
+    </span>
+  );
+}
+
+const OPTION =
+  'bg-card relative flex min-h-11 cursor-pointer rounded-md border transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-2 has-[:focus-visible]:ring-offset-background';
+const LEGEND = 'text-foreground mb-2 text-[12.5px] font-medium';
+
+export function AppearancePanel() {
+  const { style, theme, chooseStyle, chooseTheme, status, retry } = useAppearanceChoice();
   const name = React.useId();
   const statusText = appearanceStatusText(status);
 
   return (
-    <div className="flex flex-col gap-3">
-      <div
-        role="radiogroup"
-        aria-labelledby={labelledBy}
-        className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-2 lg:grid-cols-4"
-      >
-        {options.map((option) => {
-          const checked = value === option.mode;
-          const labelId = `${name}-${option.mode}-label`;
-          const descriptionId = `${name}-${option.mode}-description`;
-          return (
-            <label
-              key={option.mode}
-              className={cn(
-                'bg-card relative flex min-h-11 cursor-pointer flex-col gap-2 rounded-md border p-2 transition-colors',
-                'has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2',
-                checked
-                  ? 'border-foreground'
-                  : 'border-border hover:border-[var(--ed-line-strong)]',
-              )}
-            >
-              <input
-                type="radio"
-                name={name}
-                value={option.mode}
-                checked={checked}
-                onChange={() => choose(option.mode)}
-                // The word alone is the name; the one line is the description
-                // (the whole label would read both as the name).
-                aria-labelledby={labelId}
-                aria-describedby={descriptionId}
-                className="sr-only"
-              />
-              <AppearancePreview mode={option.mode} />
-              <span className="flex items-center gap-2 px-0.5">
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    'flex size-4 shrink-0 items-center justify-center rounded-full border',
-                    checked ? 'border-foreground' : 'border-[var(--ed-line-strong)]',
-                  )}
-                >
-                  {checked ? <span className="bg-foreground size-2 rounded-full" /> : null}
-                </span>
-                <span id={labelId} className="text-foreground text-[13.5px] font-medium">
-                  {option.label}
-                </span>
-              </span>
-              <span
-                id={descriptionId}
-                className="text-muted-foreground px-0.5 text-[12.5px] leading-[18px]"
+    <div className="flex flex-col gap-4">
+      <fieldset>
+        <legend className={LEGEND}>Design</legend>
+        <div className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-2">
+          {DESIGN_OPTIONS.map((option) => {
+            const checked = style === option.value;
+            const labelId = `${name}-design-${option.value}-label`;
+            const descriptionId = `${name}-design-${option.value}-description`;
+            return (
+              <label
+                key={option.value}
+                className={cn(
+                  OPTION,
+                  'flex-col gap-2 p-2',
+                  checked
+                    ? 'border-foreground'
+                    : 'border-border hover:border-[var(--ed-line-strong)]',
+                )}
               >
-                {option.description}
-              </span>
-            </label>
-          );
-        })}
-      </div>
+                <input
+                  type="radio"
+                  name={`${name}-design`}
+                  value={option.value}
+                  checked={checked}
+                  onChange={() => chooseStyle(option.value)}
+                  // The word alone is the name; the one line is the description.
+                  aria-labelledby={labelId}
+                  aria-describedby={descriptionId}
+                  className="sr-only"
+                />
+                <DesignPreview style={option.value} />
+                <span className="flex items-center gap-2 px-0.5">
+                  <RadioDot checked={checked} />
+                  <span id={labelId} className="text-foreground text-[13.5px] font-medium">
+                    {option.label}
+                  </span>
+                </span>
+                <span
+                  id={descriptionId}
+                  className="text-muted-foreground px-0.5 text-[12.5px] leading-[18px]"
+                >
+                  {option.description}
+                </span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
+      <fieldset>
+        <legend className={LEGEND}>Theme</legend>
+        <div className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-3">
+          {THEME_OPTIONS.map((option) => {
+            const checked = theme === option.value;
+            return (
+              <label
+                key={option.value}
+                className={cn(
+                  OPTION,
+                  'items-center gap-2 px-3 py-2',
+                  checked
+                    ? 'border-foreground'
+                    : 'border-border hover:border-[var(--ed-line-strong)]',
+                )}
+              >
+                <input
+                  type="radio"
+                  name={`${name}-theme`}
+                  value={option.value}
+                  checked={checked}
+                  onChange={() => chooseTheme(option.value)}
+                  className="sr-only"
+                />
+                <RadioDot checked={checked} />
+                <span className="text-foreground text-[13.5px] font-medium">{option.label}</span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset>
       <div
         aria-live="polite"
         className="text-muted-foreground flex min-h-8 flex-wrap items-center gap-2 text-[12.5px]"

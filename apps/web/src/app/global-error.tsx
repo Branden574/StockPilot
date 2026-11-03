@@ -1,10 +1,11 @@
 'use client';
 
 import * as React from 'react';
-import { isLiquidGlassEnabled } from '@/components/theme/appearance-flag';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import {
   holdClassicForThisTab,
-  isLiquidGlassStored,
+  isGlassShown,
+  readStyleCookie,
   switchToClassicOnThisDevice,
 } from '@/components/theme/appearance-recovery-plain';
 import { listenForPurges, purgeInterruptedRuns } from '@/lib/interrupted-run';
@@ -48,7 +49,7 @@ const SIGN_OUT_PATH = '/auth/session-ended';
  * route's path is written out above: lib/auth/session-ended.ts imports
  * next/navigation.
  */
-/** The stored appearance never changes while this page shows: nothing to subscribe to. */
+/** The cookie and the path never change while this page shows: nothing to subscribe to. */
 const subscribeToNothing = () => () => {};
 
 function signOutAndBackIn(): void {
@@ -67,19 +68,20 @@ export default function GlobalError({
   // A sign-out in another tab of this browser clears this tab too (see above).
   React.useEffect(() => listenForPurges(), []);
 
-  // "Use classic appearance" (Liquid Glass plan 5.6): offered only while this
-  // device's stored choice is Liquid Glass, read after mount, so the classic
-  // page is unchanged. This document is already classic; the next load would
-  // not be, so this tab is held in classic once and the button makes it
-  // permanent.
-  const glassStored = React.useSyncExternalStore(
+  // "Use classic design" (Liquid Glass plan 5.6; REVISION-DEFAULT R13):
+  // offered when the next load would paint glass, from the inlined rollout,
+  // the Design cookie and the path (never the print route), read after mount
+  // so the classic page is unchanged. This document is already classic; the
+  // next load would not be, so this tab is held in classic once and the
+  // button sets the Design to Classic for good (the Theme is kept).
+  const glassShown = React.useSyncExternalStore(
     subscribeToNothing,
-    () => isLiquidGlassEnabled() && isLiquidGlassStored(),
+    () => isGlassShown(liquidGlassRollout(), readStyleCookie(), window.location.pathname),
     () => false,
   );
   React.useEffect(() => {
-    if (glassStored) holdClassicForThisTab();
-  }, [glassStored]);
+    if (glassShown) holdClassicForThisTab();
+  }, [glassShown]);
 
   React.useEffect(() => {
     // Best-effort report; we don't bring in the error-reporter module
@@ -224,7 +226,7 @@ export default function GlobalError({
             >
               Sign out and back in
             </button>
-            {glassStored ? (
+            {glassShown ? (
               <button
                 type="button"
                 onClick={() => {
@@ -243,7 +245,7 @@ export default function GlobalError({
                   cursor: 'pointer',
                 }}
               >
-                Use classic appearance
+                Use classic design
               </button>
             ) : null}
           </div>

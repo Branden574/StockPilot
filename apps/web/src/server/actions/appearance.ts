@@ -8,7 +8,11 @@ import { reportError } from '@/lib/error-reporter';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createClient } from '@/lib/supabase/server';
 
-import { appearanceModeSchema, isMissingAppearanceTableError } from '@stockpilot/core';
+import {
+  appearanceStyleSchema,
+  isMissingAppearanceTableError,
+  themeSettingSchema,
+} from '@stockpilot/core';
 
 /**
  * A person's own appearance on their account (public.user_appearance, the
@@ -21,8 +25,12 @@ import { appearanceModeSchema, isMissingAppearanceTableError } from '@stockpilot
  *   - the read and the write then run on a client that acts as exactly that
  *     verified token (createAccessTokenClient), under the table's own-row RLS
  *     (user_id = auth.uid()), and name only that user_id.
- * The value is validated with zod against the four words before anything is
- * sent; the table's CHECK refuses anything else as well.
+ * Two nullable columns (plans/REVISION-DEFAULT.md R3): the Design (`style`:
+ * liquid-glass or classic) and the Theme (light, dark or system). A save
+ * names one or both, validated with zod before anything is sent (the table's
+ * CHECKs refuse anything else as well), and upserts ONLY the columns it names:
+ * PostgREST's merge upsert leaves the others as they are, so a Theme saved on
+ * one device never clears a Design saved on another.
  *
  * Answers are what the reconcile reducer (packages/core/src/appearance) needs:
  * the row as the server holds it (so `synced` is only ever claimed when the
@@ -34,13 +42,22 @@ import { appearanceModeSchema, isMissingAppearanceTableError } from '@stockpilot
 
 const userIdSchema = z.string().uuid();
 
-const setAppearanceSchema = z.object({
-  userId: userIdSchema,
-  appearance: appearanceModeSchema,
-});
+const setAppearanceSchema = z
+  .object({
+    userId: userIdSchema,
+    style: appearanceStyleSchema.optional(),
+    theme: themeSettingSchema.optional(),
+  })
+  .refine((v) => v.style !== undefined || v.theme !== undefined, {
+    message: 'a Design, a Theme, or both',
+  });
+
+/** The columns read back: the row as the server holds it. */
+const ROW_COLUMNS = 'style, theme, updated_at';
 
 export interface AppearanceRowAnswer {
-  appearance: string;
+  style: string | null;
+  theme: string | null;
   updated_at: string;
 }
 
@@ -62,7 +79,7 @@ export async function getMyAppearanceAction(userId: unknown): Promise<Appearance
     if (!supabase) return { ok: false, reason: 'unauthenticated' };
     const { data, error } = await supabase
       .from('user_appearance')
-      .select('appearance, updated_at')
+      .select(ROW_COLUMNS)
       .eq('user_id', parsed.data)
       .maybeSingle();
     if (error) {
@@ -78,18 +95,24 @@ export async function getMyAppearanceAction(userId: unknown): Promise<Appearance
   }
 }
 
-/** Store the signed-in person's own appearance and answer with the row the server now holds. */
+/**
+ * Store the signed-in person's own Design and/or Theme (only the ones given)
+ * and answer with the whole row the server now holds.
+ */
 export async function setMyAppearanceAction(input: unknown): Promise<AppearanceActionResult> {
   const parsed = setAppearanceSchema.safeParse(input);
   if (!parsed.success) return { ok: false, reason: 'invalid' };
-  const { userId, appearance } = parsed.data;
+  const { userId, style, theme } = parsed.data;
+  const columns: { user_id: string; style?: string; theme?: string } = { user_id: userId };
+  if (style !== undefined) columns.style = style;
+  if (theme !== undefined) columns.theme = theme;
   try {
     const supabase = await clientFor(userId);
     if (!supabase) return { ok: false, reason: 'unauthenticated' };
     const { data, error } = await supabase
       .from('user_appearance')
-      .upsert({ user_id: userId, appearance }, { onConflict: 'user_id' })
-      .select('appearance, updated_at')
+      .upsert(columns, { onConflict: 'user_id' })
+      .select(ROW_COLUMNS)
       .single();
     if (error) {
       if (isMissingAppearanceTableError(error)) return { ok: false, reason: 'missing-table' };

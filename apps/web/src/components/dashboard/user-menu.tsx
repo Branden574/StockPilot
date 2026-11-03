@@ -3,10 +3,15 @@
 import { BookOpen, LifeBuoy, LogOut, Settings, ShieldAlert, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useTheme } from 'next-themes';
 
 import type { Density } from '@/components/dashboard/sidebar-pref';
 import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
-import { AppearanceMenuRadioGroup } from '@/components/theme/appearance-select';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
+import {
+  AppearanceDesignRadioGroup,
+  useAppearanceChoice,
+} from '@/components/theme/appearance-select';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -54,6 +59,21 @@ export function UserMenu({
   onDensityChange,
 }: UserMenuProps) {
   const router = useRouter();
+  // The Theme radio: origin/main's markup and words in every rollout. Under
+  // `off` it calls next-themes directly, as origin/main does; with Liquid Glass
+  // in the build it goes through the appearance provider, so the choice is the
+  // person's own and is saved (plans/REVISION-DEFAULT.md R13, finding 9).
+  const { theme: nextTheme, setTheme } = useTheme();
+  const appearance = useAppearanceChoice();
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const theme = glassBuild ? appearance.theme : nextTheme;
+  const onThemeChange = glassBuild
+    ? (value: string) => {
+        if (value === 'light' || value === 'dark' || value === 'system') {
+          appearance.chooseTheme(value);
+        }
+      }
+    : setTheme;
   // NO LINK IN THE MENU PREFETCHES ITS PAGE WHEN THE MENU OPENS (PLAN 0.6). A
   // default <Link> prefetches as soon as it is on screen, so opening the menu
   // fetched Profile, Settings, Help, Support (and Platform) at once: two
@@ -159,13 +179,29 @@ export function UserMenu({
             </Link>
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel className={GROUP_LABEL}>Appearance</DropdownMenuLabel>
-          {/* One choice of four (three when this build does not offer Liquid
-              Glass): the one in use is marked with a dot in the icon column
-              (announced as checked); pl-10 lines the names up with the items
-              above (icon 16 + its margin + the item's gap). The choices and
-              their order come from components/theme/appearance-select.tsx. */}
-          <AppearanceMenuRadioGroup itemClassName="pl-10" />
+          {glassBuild ? (
+            <>
+              {/* Design first (Liquid Glass, Classic; components/theme/
+                  appearance-select.tsx). Only when this build has Liquid Glass. */}
+              <DropdownMenuLabel className={GROUP_LABEL}>Design</DropdownMenuLabel>
+              <AppearanceDesignRadioGroup itemClassName="pl-10" />
+            </>
+          ) : null}
+          <DropdownMenuLabel className={GROUP_LABEL}>Theme</DropdownMenuLabel>
+          {/* One choice of three: the one in use is marked with a dot in the
+              icon column (announced as checked); pl-10 lines the names up
+              with the items above (icon 16 + its margin + the item's gap). */}
+          <DropdownMenuRadioGroup aria-label="Theme" value={theme} onValueChange={onThemeChange}>
+            <DropdownMenuRadioItem value="light" className="pl-10">
+              Light
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="dark" className="pl-10">
+              Dark
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="system" className="pl-10">
+              System
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
           {density && onDensityChange ? (
             <>
               <DropdownMenuLabel className={GROUP_LABEL}>Density</DropdownMenuLabel>

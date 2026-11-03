@@ -29,22 +29,41 @@
  *      forced colours: the WHOLE opaque set for the OS setting (finding F2), and
  *      for Night glass the documented intent, opaque chrome, instead of the
  *      literal translucent values (finding F1). Both are recorded deviations.
- * The scene image: emitted only when the files exist under
- * apps/web/public/liquid-glass/ (scene-day / scene-night, .avif .webp .jpg);
- * until the owner supplies them it is `none` and the opaque --bg shows (Q7).
+ *   7. The low-power material (plans/REVISION-DEFAULT.md R7): the reduced set
+ *      a second time under :root[data-appearance="liquid-glass"]
+ *      [data-lg-material="reduced"], which the head script and the provider set
+ *      on weak Chromium browsers. The contrast and forced-colours sets list the
+ *      attribute selector too, so they still win over it.
+ *   8. The exempt surfaces (R6): inside [data-appearance-exempt] (the
+ *      signature pad, the label sheet) every token glass overrides is declared
+ *      again with its classic value, read from app/globals.css, and the
+ *      Tailwind colour formulas of its @theme are computed again from them.
+ * The scene photo: the glass material's --lg-scene-img is
+ * var(--lg-scene-photo, none). --lg-scene-photo is set only by the inline
+ * style app/layout.tsx emits when the build found the installed photos
+ * (styles/liquid-glass/scene-photo.ts); the photos are never in the
+ * repository (FOLLOWUPS SC1), so this file is the same with or without them,
+ * and without them the opaque --bg shows (the documented fallback).
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import postcss from 'postcss';
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WEB = join(HERE, '..', '..');
 const SOURCE = join(WEB, 'src', 'styles', 'liquid-glass', 'tokens.source.json');
 const OUTPUT = join(WEB, 'src', 'styles', 'liquid-glass', 'tokens.generated.css');
-const PUBLIC_SCENE = join(WEB, 'public', 'liquid-glass');
+const GLOBALS = join(WEB, 'src', 'app', 'globals.css');
 
 export const ROOT = ':root[data-appearance="liquid-glass"]';
 export const ROOT_DARK = `${ROOT}.dark`;
+/** The low-power material (R7): the same root with the attribute the head script sets. */
+export const ROOT_REDUCED = `${ROOT}[data-lg-material="reduced"]`;
+export const ROOT_REDUCED_DARK = `${ROOT_REDUCED}.dark`;
+/** The embedded surfaces that keep their classic tokens inside glass (R6). */
+export const EXEMPT = '[data-appearance-exempt]';
 
 // ── Colour maths ──────────────────────────────────────────────────────────
 
@@ -203,27 +222,20 @@ function tripletOf(tokens, ref, scheme) {
   return toTriplet(over(colour, ground));
 }
 
-function sceneValue(scheme, sceneFiles) {
-  const base = scheme === 'dark' ? 'scene-night' : 'scene-day';
-  const formats = [
-    ['avif', 'image/avif'],
-    ['webp', 'image/webp'],
-    ['jpg', 'image/jpeg'],
-  ].filter(([ext]) => sceneFiles.includes(`${base}.${ext}`));
-  if (formats.length === 0) return 'none';
-  return `image-set(${formats.map(([ext, type]) => `url(/liquid-glass/${base}.${ext}) type("${type}")`).join(', ')})`;
-}
+/**
+ * The glass material draws the photo when the page set --lg-scene-photo (the
+ * installed photos, app/layout.tsx); the opaque materials never do.
+ */
+export const SCENE_IMAGE = 'var(--lg-scene-photo, none)';
 
-function declarationsFor(source, variant, sceneFiles) {
+function declarationsFor(source, variant) {
   const tokens = applyOpaqueIntent(source.variants[variant.key], variant.material);
   const lines = [];
   lines.push(`    /* ${variant.key}: artifact tokens */`);
   for (const [name, value] of Object.entries(tokens).sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`    --lg-${name.slice(2)}: ${value};`);
   }
-  lines.push(
-    `    --lg-scene-img: ${variant.material === 'glass' ? sceneValue(variant.scheme, sceneFiles) : 'none'};`,
-  );
+  lines.push(`    --lg-scene-img: ${variant.material === 'glass' ? SCENE_IMAGE : 'none'};`);
   lines.push('    /* semantic triplets: always opaque (no alpha inside a triplet) */');
   for (const [name, ref] of Object.entries(TRIPLETS)) {
     lines.push(`    ${name}: ${tripletOf(tokens, ref, variant.scheme)};`);
@@ -252,6 +264,8 @@ function fontBlock(source) {
     '    /* next/font puts its family names on <html> as --font-sans / --font-mono;',
     '       read them here, on <html>, so <body> can use them without a var() cycle. */',
     '    --lg-font-inter: var(--font-sans);',
+    '    --lg-font-display: var(--font-display);',
+    '    --lg-font-serif: var(--font-serif);',
     '    --lg-font-jetbrains: var(--font-mono);',
     '  }',
     `  ${ROOT} body {`,
@@ -271,14 +285,81 @@ function block(selector, body, indent = '  ') {
     .join('\n')}\n${indent}}`;
 }
 
-/** The whole generated stylesheet as text. Pure: the caller passes the scene files present. */
-export function generateTokensCss(source, { sceneFiles = [] } = {}) {
+/**
+ * The classic values glass overrides, read from app/globals.css: the custom
+ * properties of its base layer's :root and .dark blocks, and the @theme
+ * custom properties that are formulas over other variables (Tailwind computes
+ * those on :root, so inside a subtree they must be declared again to read the
+ * subtree's values).
+ */
+export function readClassicTokens(globalsCss) {
+  const tree = postcss.parse(globalsCss);
+  const light = new Map();
+  const dark = new Map();
+  const formulas = new Map();
+  tree.walkAtRules('layer', (layer) => {
+    if (layer.params !== 'base') return;
+    layer.each((node) => {
+      if (node.type !== 'rule') return;
+      const target = node.selector === ':root' ? light : node.selector === '.dark' ? dark : null;
+      if (!target) return;
+      node.each((d) => {
+        if (d.type === 'decl' && d.prop.startsWith('--') && !target.has(d.prop)) {
+          target.set(d.prop, d.value);
+        }
+      });
+    });
+  });
+  tree.walkAtRules('theme', (theme) => {
+    theme.walkDecls(/^--/u, (d) => {
+      if (d.value.includes('var(--')) formulas.set(d.prop, d.value);
+    });
+  });
+  return { light, dark, formulas };
+}
+
+/** The exempt blocks: Day (and the formulas and type stacks), then Night. */
+function exemptBlocks(classic) {
+  const names = [...Object.keys(TRIPLETS), ...Object.keys(EDITORIAL)];
+  const light = names.map((name) => {
+    const value = classic.light.get(name);
+    if (value === undefined) throw new Error(`globals.css :root has no ${name}`);
+    return `    ${name}: ${value};`;
+  });
+  const formulas = [...classic.formulas].map(([name, value]) => `    ${name}: ${value};`);
+  const dark = names
+    .filter((name) => classic.dark.has(name))
+    .map((name) => `    ${name}: ${classic.dark.get(name)};`);
+  return [
+    block(
+      `${ROOT} ${EXEMPT}`,
+      [
+        '    /* classic :root values (app/globals.css) */',
+        ...light,
+        '    /* the Tailwind colour formulas, computed again from them */',
+        ...formulas,
+        '    /* the classic next/font faces (captured on <html> above) */',
+        '    --font-sans: var(--lg-font-inter);',
+        '    --font-display: var(--lg-font-display);',
+        '    --font-serif: var(--lg-font-serif);',
+        '    --font-mono: var(--lg-font-jetbrains);',
+      ].join('\n'),
+    ),
+    block(`${ROOT_DARK} ${EXEMPT}`, ['    /* classic .dark values */', ...dark].join('\n')),
+  ].join('\n');
+}
+
+/**
+ * The whole generated stylesheet as text. Pure: the caller passes the source
+ * tokens and the text of app/globals.css.
+ */
+export function generateTokensCss(source, { globalsCss = readFileSync(GLOBALS, 'utf8') } = {}) {
   const by = Object.fromEntries(VARIANTS.map((v) => [v.key, v]));
-  const decl = (key) => declarationsFor(source, by[key], sceneFiles);
-  const opaque = (material) =>
+  const decl = (key) => declarationsFor(source, by[key]);
+  const opaque = (material, light = ROOT, dark = ROOT_DARK, indent = '    ') =>
     [
-      block(ROOT, decl(`light.${material}`), '    '),
-      block(ROOT_DARK, decl(`dark.${material}`), '    '),
+      block(light, decl(`light.${material}`), indent),
+      block(dark, decl(`dark.${material}`), indent),
     ].join('\n');
 
   return [
@@ -298,13 +379,19 @@ export function generateTokensCss(source, { sceneFiles = [] } = {}) {
     '  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {',
     opaque('reduced'),
     '  }',
-    '  /* Increased contrast (OS): opaque, 1.5 px borders, darker ink, 3 px focus. */',
+    '  /* Weak Chromium browsers (R7): the reduced set again, under the attribute the',
+    '     head script and the provider set. Declaration for declaration the same as',
+    '     the Reduce Transparency block (glass-material-twins.guard.test.ts). */',
+    opaque('reduced', ROOT_REDUCED, ROOT_REDUCED_DARK, '  '),
+    '  /* Increased contrast (OS): opaque, 1.5 px borders, darker ink, 3 px focus.',
+    '     It lists the low-power selector too, so it wins over that block. */',
     '  @media (prefers-contrast: more) {',
-    opaque('contrast'),
+    opaque('contrast', `${ROOT},\n    ${ROOT_REDUCED}`, `${ROOT_DARK},\n    ${ROOT_REDUCED_DARK}`),
     '  }',
     '  /* Forced colours: system colours for every material (the handoff recipe). */',
     '  @media (forced-colors: active) {',
-    `    ${ROOT} {`,
+    `    ${ROOT},`,
+    `    ${ROOT_REDUCED} {`,
     '      --lg-glass: Canvas;',
     '      --lg-glass-strong: Canvas;',
     '      --lg-glass-clear: Canvas;',
@@ -322,6 +409,9 @@ export function generateTokensCss(source, { sceneFiles = [] } = {}) {
     '      --lg-scene-veil: none;',
     '    }',
     '  }',
+    '  /* Exempt surfaces (R6): the signature pad and the label sheet keep every',
+    '     classic token inside glass. */',
+    exemptBlocks(readClassicTokens(globalsCss)),
     '}',
     '}',
     '',
@@ -332,17 +422,10 @@ export function readSource() {
   return JSON.parse(readFileSync(SOURCE, 'utf8'));
 }
 
-export function presentSceneFiles() {
-  const names = ['scene-day', 'scene-night'].flatMap((b) =>
-    ['avif', 'webp', 'jpg'].map((e) => `${b}.${e}`),
-  );
-  return names.filter((n) => existsSync(join(PUBLIC_SCENE, n)));
-}
-
 export const OUTPUT_PATH = OUTPUT;
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  const css = generateTokensCss(readSource(), { sceneFiles: presentSceneFiles() });
+  const css = generateTokensCss(readSource());
   if (process.argv.includes('--check')) {
     const current = existsSync(OUTPUT) ? readFileSync(OUTPUT, 'utf8') : '';
     if (current !== css) {

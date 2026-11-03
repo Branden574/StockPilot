@@ -32,6 +32,15 @@ function drawingBox(): HTMLElement {
 }
 
 describe('SignaturePad chrome around the light canvas', () => {
+  it('keeps its classic tokens inside Liquid Glass: the whole pad is an exempt surface (R6)', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    const { container } = render(<SignaturePad />);
+    const root = container.querySelector('[data-slot="signature-pad"]')!;
+    expect(root).toHaveAttribute('data-appearance-exempt');
+    expect(root).toContainElement(drawingBox());
+    expect(root).toContainElement(screen.getByRole('button', { name: 'Clear' }));
+  });
+
   it('keeps the canvas light in dark mode, with touch-action none', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     document.documentElement.classList.add('dark');

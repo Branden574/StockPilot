@@ -133,6 +133,12 @@ const NON_SESSION: Record<string, NonSession> = {
     reason:
       'QA tooling behind the same BACKFILL_ADMIN_SECRET bearer, for an allowlist of demo addresses only. It reads no session.',
   },
+  'api/appearance/style/route.ts': {
+    methods: ['POST'],
+    auth: 'none',
+    reason:
+      "Liquid Glass (REVISION-DEFAULT R6): sets only the caller's own sp_style cookie to a validated Design, for 400 days. Same-origin browser headers and x-sp-appearance required. No session, no database.",
+  },
   'api/books/lookup/route.ts': {
     methods: ['GET'],
     auth: 'none',

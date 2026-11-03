@@ -1,38 +1,31 @@
 /**
- * "Use classic appearance" (Liquid Glass plan 5.6), with NO imports at all.
+ * "Use classic design" (Liquid Glass plan 5.6, plans/REVISION-DEFAULT.md R13),
+ * with NO imports at all.
  *
- * Every error boundary offers it while Liquid Glass is selected, so a person
- * can always get back to the classic look, even when the glass layer itself is
+ * Every error boundary offers it while Liquid Glass is shown, so a person can
+ * always get back to the classic design, even when the glass layer itself is
  * what threw. app/global-error.tsx replaces the root layout and must not
  * depend on anything that could be what broke: it imports only modules that
  * import nothing themselves (global-error.sign-out.test.tsx). So the storage
- * keys and the four words are written out here, and
- * appearance-recovery-plain.test.ts pins them to core's
- * APPEARANCE_STORAGE_KEYS and APPEARANCE_MODES so they cannot drift.
+ * keys, the route and the print-route pattern are written out here, and
+ * appearance-recovery-plain.test.ts pins them to core's APPEARANCE_STORAGE_KEYS
+ * and appearance-flag.ts's EXEMPT_PATHS so they cannot drift.
  * components/theme/appearance-cookie.ts delegates to this file, so there is
  * one implementation.
  */
 
-const COOKIE = 'sp_appearance';
+const COOKIE = 'sp_style';
 const DEVICE = 'sp-appearance';
 const SYNC = 'sp-appearance-sync';
 const FALLBACK = 'sp-lg-fallback';
-/** next-themes' storage key (theme-provider.tsx sets no storageKey). */
-const THEME = 'theme';
-const CLASSIC = ['dark', 'light', 'system'] as const;
-type Classic = (typeof CLASSIC)[number];
+/** appearance-flag.ts EXEMPT_PATHS, written out (pinned by the test). */
+const EXEMPT = /^\/dashboard\/orders\/[^/]+\/print\/?$/u;
+/** appearance-cookie.ts STYLE_COOKIE_ROUTE and STYLE_COOKIE_MAX_AGE, written out. */
+const ROUTE = '/api/appearance/style';
+const MAX_AGE = 34560000;
 
-const isClassic = (v: unknown): v is Classic =>
-  typeof v === 'string' && (CLASSIC as readonly string[]).includes(v);
-
-function cookieMode(): string | null {
-  try {
-    const m = new RegExp(`(?:^|; )${COOKIE}=([^;]*)`).exec(document.cookie);
-    return m ? m[1]! : null;
-  } catch {
-    return null;
-  }
-}
+const THEMES = ['light', 'dark', 'system'];
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 function readJson(store: Storage, key: string): Record<string, unknown> | null {
   try {
@@ -47,45 +40,60 @@ function readJson(store: Storage, key: string): Record<string, unknown> | null {
   }
 }
 
-/** The device's stored mode (localStorage record first, the cookie second), or null. */
-export function storedAppearanceWord(): string | null {
+/** The Design cookie's raw value, or null. */
+export function readStyleCookie(): string | null {
   try {
-    const record = readJson(window.localStorage, DEVICE);
-    if (record && typeof record.mode === 'string') return record.mode;
+    const m = new RegExp(`(?:^|; )${COOKIE}=([^;]*)`).exec(document.cookie);
+    return m ? m[1]! : null;
   } catch {
-    // Fall through to the cookie.
+    return null;
   }
-  return cookieMode();
-}
-
-/** True when this device's stored choice is Liquid Glass. */
-export function isLiquidGlassStored(): boolean {
-  return storedAppearanceWord() === 'liquid-glass';
 }
 
 /**
- * Return this device to the person's last classic choice (System when none is
- * known): the device record and its cookie, next-themes' stored theme, the
- * account sync record marked dirty so the account is updated after the
- * reload, the crash fallback cleared, and data-appearance off <html>. The
- * caller reloads. Never throws.
+ * Whether this build would show Liquid Glass on `pathname` for this cookie
+ * value (core's shownStyle with the rollout's default, written out):
+ *   off      never;
+ *   default  unless the cookie says classic;
+ *   opt-in   only when the cookie says liquid-glass;
+ * and never on the print route. For global-error.tsx, which sits outside
+ * every provider and decides from what the next load would paint.
  */
-export function switchToClassicOnThisDevice(): Classic {
-  let lastClassic: Classic = 'system';
+export function isGlassShown(
+  rollout: 'off' | 'opt-in' | 'default',
+  cookie: string | null,
+  pathname: string,
+): boolean {
+  if (EXEMPT.test(pathname)) return false;
+  if (rollout === 'default') return cookie !== 'classic';
+  if (rollout === 'opt-in') return cookie === 'liquid-glass';
+  return false;
+}
+
+/**
+ * Set this device's Design to Classic and keep its Theme: the device record
+ * (v2) and the Design cookie, then the server route that re-issues the cookie
+ * for 400 days (fire-and-forget). For the signed-in person (a v2 sync record
+ * naming them), the Design is marked dirty so the account is updated after
+ * the reload. The crash fallback is cleared and the glass attributes come off
+ * <html>. The caller reloads. Never throws.
+ */
+export function switchToClassicOnThisDevice(): void {
+  // The record: Classic, the Theme kept. A signed-out stamp is dropped: this
+  // is a recovery, not a choice to carry into a sign-in.
   try {
     const record = readJson(window.localStorage, DEVICE);
-    if (record && isClassic(record.lastClassic)) lastClassic = record.lastClassic;
-  } catch {
-    // System.
-  }
-  // localStorage first, then the cookie, so the two never disagree: the head
-  // script paints from the cookie and the provider applies the localStorage
-  // record. When the record cannot be written (a full quota), the Liquid
-  // Glass record is removed so the next load reads the classic cookie instead
-  // of putting glass back on.
-  try {
+    const next: Record<string, unknown> = { v: 2, style: 'classic' };
+    if (record && record.v === 2 && THEMES.includes(record.theme as string)) {
+      next.theme = record.theme;
+    }
+    // localStorage first, then the cookie, so the two never disagree: the
+    // head script paints from the cookie and the provider applies the
+    // localStorage record. When the record cannot be written (a full quota),
+    // the Liquid Glass record is removed so the next load reads the classic
+    // cookie instead of putting glass back on.
     try {
-      window.localStorage.setItem(DEVICE, JSON.stringify({ v: 1, mode: lastClassic, lastClassic }));
+      window.localStorage.setItem(DEVICE, JSON.stringify(next));
     } catch {
       window.localStorage.removeItem(DEVICE);
     }
@@ -94,18 +102,31 @@ export function switchToClassicOnThisDevice(): Classic {
   }
   try {
     const secure = window.location.protocol === 'https:' ? '; secure' : '';
-    document.cookie = `${COOKIE}=${lastClassic}; path=/; max-age=31536000; samesite=lax${secure}`;
+    document.cookie = `${COOKIE}=classic; path=/; max-age=${MAX_AGE}; samesite=lax${secure}`;
   } catch {
     // A blocked cookie jar: localStorage above still remembers it.
   }
   try {
-    window.localStorage.setItem(THEME, lastClassic);
+    void fetch(ROUTE, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-sp-appearance': '1' },
+      body: JSON.stringify({ style: 'classic' }),
+      credentials: 'same-origin',
+      cache: 'no-store',
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    // No fetch: the client cookie holds the choice for now.
+  }
+  try {
     const sync = readJson(window.localStorage, SYNC);
-    if (sync && sync.v === 1 && typeof sync.userId === 'string' && sync.userId) {
-      window.localStorage.setItem(SYNC, JSON.stringify({ ...sync, dirty: true }));
+    if (sync && sync.v === 2 && typeof sync.userId === 'string' && UUID.test(sync.userId)) {
+      const axes = Array.isArray(sync.dirtyAxes) ? sync.dirtyAxes : [];
+      const dirtyAxes = ['style', 'theme'].filter((a) => a === 'style' || axes.includes(a));
+      window.localStorage.setItem(SYNC, JSON.stringify({ ...sync, dirtyAxes }));
     }
   } catch {
-    // Storage blocked: the cookie carries the choice.
+    // Storage blocked: the device record and cookie carry the choice.
   }
   try {
     window.sessionStorage.removeItem(FALLBACK);
@@ -114,17 +135,17 @@ export function switchToClassicOnThisDevice(): Classic {
   }
   try {
     document.documentElement.removeAttribute('data-appearance');
+    document.documentElement.removeAttribute('data-lg-material');
   } catch {
     // Nothing to remove.
   }
-  return lastClassic;
 }
 
 /**
  * Hold this tab in classic from the next load on (the one-time crash
  * fallback, plan 5.6), without changing the stored choice. For a boundary
  * that replaced the whole document (global-error.tsx), where glass is no
- * longer on screen to be detected: the stored choice is what counts there.
+ * longer on screen to be detected.
  */
 export function holdClassicForThisTab(): void {
   try {

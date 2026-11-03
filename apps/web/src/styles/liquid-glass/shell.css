@@ -120,9 +120,11 @@
       background-color: transparent;
     }
     /* Reduce Transparency / High Contrast: the pane is the page, edge to edge
-       (sp.css:968). */
+       (sp.css:968). The .dark selector matches the Night pane's own shadow
+       rule above, which would otherwise keep its shadow here. */
     @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-      :root[data-appearance='liquid-glass'] [data-glass='main-column'] {
+      :root[data-appearance='liquid-glass'] [data-glass='main-column'],
+      :root[data-appearance='liquid-glass'].dark [data-glass='main-column'] {
         margin: 0;
         border-radius: 0;
         box-shadow: none;
@@ -130,6 +132,19 @@
       :root[data-appearance='liquid-glass'] [data-glass='topbar'] {
         background-color: var(--lg-bg);
       }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced";
+       plans/REVISION-DEFAULT.md R7), declaration for declaration
+       (glass-material-twins.guard.test.ts). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='main-column'],
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'].dark
+      [data-glass='main-column'] {
+      margin: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='topbar'] {
+      background-color: var(--lg-bg);
     }
     /* Phone (the artifact's 760 px): the pane loses its margin and radius. */
     @media (max-width: 760px) {
@@ -147,9 +162,14 @@
       --lg-glass-strong: rgba(26, 30, 29, 0.88);
     }
     @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
-      :root[data-appearance='liquid-glass'] [data-glass='navsheet'] {
+      :root[data-appearance='liquid-glass'] [data-glass='navsheet'],
+      :root[data-appearance='liquid-glass'].dark [data-glass='navsheet'] {
         --lg-glass-strong: var(--lg-chrome);
       }
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass='navsheet'],
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'].dark [data-glass='navsheet'] {
+      --lg-glass-strong: var(--lg-chrome);
     }
     :root[data-appearance='liquid-glass'] [data-glass='navsheet'] [data-glass='sidebar'] {
       background-color: transparent;
