@@ -310,6 +310,26 @@
       width: 28px;
       height: 28px;
     }
+    /* Books (.cover): the photo is a cover, as tall as the row's photo and
+       two thirds as wide, the spine corners tighter, with a paper shadow.
+       The photo inside is already cropped to fill (object-fit: cover). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      [data-slot='thumb'] {
+      width: calc(40px * 0.667);
+      border-radius: 3px 5px 5px 3px;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-density='compact']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      [data-slot='thumb'] {
+      width: calc(28px * 0.667);
+    }
     /* The rack (.loc): a 24 px chip on the third surface, 12.5 / 600; a
        row still in Staging or unplaced takes the warn wash (.loc.stg). */
     :root[data-appearance='liquid-glass']

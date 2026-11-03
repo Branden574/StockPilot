@@ -185,6 +185,17 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['selection bar (ink) on its glass', '--lg-ink', ['--lg-pane', '--lg-glass'], 4.5],
   ['filter chip (ink 2) on the field frost', '--lg-ink-2', ['--lg-pane', '--lg-field-fill'], 4.5],
   ['item header (ink) on the overlay glass', '--lg-ink', ['--lg-pane', '--lg-glass-strong'], 4.5],
+  ['tab (ink 3) on the item header', '--lg-ink-3', ['--lg-pane', '--lg-glass-strong'], 4.5],
+  [
+    'tab underline (accent) on the item header',
+    '--lg-accent',
+    ['--lg-pane', '--lg-glass-strong'],
+    3,
+  ],
+  ['SKU chip (ink 2) on the item header', '--lg-ink-2', ['--lg-pane', '--lg-glass-strong'], 4.5],
+  ['figure (ink) in its well', '--lg-ink', ['--lg-pane', '--lg-card-fill-2'], 4.5],
+  ['figure label (ink 3) in its well', '--lg-ink-3', ['--lg-pane', '--lg-card-fill-2'], 4.5],
+  ['card title (ink) on the card', '--lg-ink', ['--lg-pane', '--lg-card-fill'], 4.5],
   // Focus ring (R11)
   ['focus ring on the pane', '--lg-focus', ['--lg-pane'], 3],
   ['focus ring on the sidebar', '--lg-focus', ['--lg-glass'], 3],
