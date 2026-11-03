@@ -29,6 +29,59 @@ const SOURCES = readdirSync(UI)
   .filter((f) => f.endsWith('.tsx') && !f.endsWith('.test.tsx') && f !== 'signature-pad.tsx')
   .map((f) => ({ file: f, text: withoutComments(readFileSync(join(UI, f), 'utf8')) }));
 
+describe('components/ui and Liquid Glass (stage 2: inert hooks only)', () => {
+  /**
+   * Liquid Glass styles the primitives from styles/liquid-glass, scoped to
+   * :root[data-appearance="liquid-glass"]. The primitives themselves only
+   * gained inert data-glass* attributes: they read no appearance, branch on
+   * nothing, and carry no glass class, so the classic output is unchanged
+   * apart from those attributes (which the classic proof strips).
+   */
+  const KNOWN_HOOKS = new Set([
+    'badge',
+    'button',
+    'calendar',
+    'card',
+    'checkbox',
+    'dialog',
+    'input',
+    'menu',
+    'menu-item',
+    'pager',
+    'password',
+    'popover',
+    'radio',
+    'radio-group',
+    'scrim',
+    'select',
+    'sheet',
+    'skeleton',
+    'switch',
+    'table',
+    'table-scroll',
+  ]);
+
+  it('read no appearance and import nothing from the appearance layer', () => {
+    const readers = SOURCES.filter(({ text }) =>
+      /data-appearance|useAppearance|appearance-provider|appearance-select|liquid-glass/.test(text),
+    ).map((s) => s.file);
+    expect(readers).toEqual([]);
+  });
+
+  it('name only known glass hooks, as plain attributes', () => {
+    const hooks = SOURCES.flatMap(({ file, text }) =>
+      [...text.matchAll(/data-glass="([^"]+)"/g)].map((m) => ({ file, hook: m[1]! })),
+    );
+    expect(hooks.length).toBeGreaterThan(15);
+    expect(hooks.filter((h) => !KNOWN_HOOKS.has(h.hook))).toEqual([]);
+    // No glass class names and no glass Tailwind variant in the primitives.
+    const glassClasses = SOURCES.filter(({ text }) => /\blg-[\w-]+|glass:/.test(text)).map(
+      (s) => s.file,
+    );
+    expect(glassClasses).toEqual([]);
+  });
+});
+
 describe('components/ui redesign guards', () => {
   it('reads the primitives', () => {
     expect(SOURCES.map((s) => s.file)).toEqual(

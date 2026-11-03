@@ -97,7 +97,7 @@ export function toTriplet([r, g, b]) {
 // ── What maps to what ─────────────────────────────────────────────────────
 
 /** A token name, or `{ light, dark }` per scheme; a value starting with # is a literal. */
-const TRIPLETS = {
+export const TRIPLETS = {
   '--background': 'bg',
   '--foreground': 'ink',
   '--card': 'surface',
@@ -135,7 +135,7 @@ const TRIPLETS = {
 };
 
 /** Full colour values (translucency allowed) on the Tailwind colour properties. */
-const COLOUR_PROPERTIES = {
+export const COLOUR_PROPERTIES = {
   '--color-card': 'card-fill',
   '--color-popover': 'glass-strong',
   '--color-secondary': 'surface-3',
@@ -145,7 +145,7 @@ const COLOUR_PROPERTIES = {
 };
 
 /** The editorial raw tokens: full colours already (globals.css :root / .dark). */
-const EDITORIAL = {
+export const EDITORIAL = {
   '--ed-bg': 'bg',
   '--ed-bg-elev': 'surface',
   '--ed-bg-sunk': 'surface-3',
