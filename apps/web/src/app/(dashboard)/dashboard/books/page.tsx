@@ -65,6 +65,11 @@ import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 
+// The Liquid Glass list composition (Items.dc.html, Books.dc.html): every rule
+// is scoped to this page's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/items.css';
+
 // Lowered 50 → 30 in line with the inventory page. Book covers
 // average noticeably larger than item thumbnails (more variety of
 // remote sources, less cached on Vercel's image optimizer), so the

@@ -1,4 +1,7 @@
 // @vitest-environment node
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { AtRule, Rule } from 'postcss';
@@ -164,6 +167,82 @@ describe('styles/liquid-glass scope guard', () => {
       printSelectors.push(r.selector);
     });
     expect(printSelectors).toEqual(['[data-glass-only]']);
+  });
+
+  // Page compositions (plan 4.1, 4.6): imported by their own route, never
+  // globally, and every selector scoped to a page root the route draws, so a
+  // page's rules can never match another page that a client navigation shows
+  // while the stylesheet is still loaded.
+  describe('page compositions (pages/*.css)', () => {
+    const PAGES = FILES.filter((f) => f.file.startsWith('pages/'));
+    const APP = join(__dirname, '..', '..', 'app');
+    const routeFiles = (dir: string, out: string[] = []): string[] => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) routeFiles(p, out);
+        else if (/\.(tsx|ts)$/.test(e.name) && !/\.test\.tsx?$/.test(e.name)) out.push(p);
+      }
+      return out;
+    };
+    const importers = new Map<string, string[]>();
+    const nonRouteImporters: string[] = [];
+    const SRC = join(__dirname, '..', '..');
+    for (const file of routeFiles(SRC)) {
+      const text = readFileSync(file, 'utf8');
+      for (const m of text.matchAll(
+        /import\s+'@\/styles\/liquid-glass\/(pages\/[\w.-]+\.css)';/g,
+      )) {
+        const rel = relative(APP, file);
+        if (rel.startsWith('..') || !/(^|\/)page\.tsx$/.test(rel)) nonRouteImporters.push(rel);
+        importers.set(m[1]!, [...(importers.get(m[1]!) ?? []), rel]);
+      }
+    }
+
+    it('there are page compositions, and each is imported by at least one route page', () => {
+      expect(PAGES.map((p) => p.file)).toEqual(
+        expect.arrayContaining(['pages/items.css', 'pages/item-detail.css']),
+      );
+      for (const { file } of PAGES) expect(importers.get(file), file).toBeTruthy();
+    });
+
+    it('only route pages import them (never a layout, a component or app/globals.css)', () => {
+      expect(nonRouteImporters).toEqual([]);
+      const globals = readFileSync(join(APP, 'globals.css'), 'utf8');
+      expect(globals).not.toMatch(/liquid-glass\/pages\//);
+    });
+
+    it('the Items and item pages import exactly their own compositions', () => {
+      expect(importers.get('pages/items.css')?.sort()).toEqual([
+        '(dashboard)/dashboard/books/page.tsx',
+        '(dashboard)/dashboard/inventory/page.tsx',
+      ]);
+      expect(importers.get('pages/item-detail.css')?.sort()).toEqual([
+        '(dashboard)/dashboard/books/[id]/page.tsx',
+        '(dashboard)/dashboard/inventory/[id]/page.tsx',
+      ]);
+    });
+
+    for (const { file, text } of PAGES) {
+      it(`${file}: every selector is scoped to a [data-glass-page] root`, () => {
+        const root = parse(text, file);
+        const loose: string[] = [];
+        root.walkRules((rule: Rule) => {
+          if (inKeyframes(rule)) return;
+          for (const selector of splitSelectors(rule.selector)) {
+            if (!/\[data-glass-page=/.test(selector)) loose.push(selector);
+          }
+        });
+        expect(loose).toEqual([]);
+      });
+
+      it(`${file}: opens with the layer order, so lg stays after Tailwind's layers`, () => {
+        const first = parse(text, file).nodes.find((n) => n.type === 'atrule') as
+          AtRule | undefined;
+        expect(first?.name).toBe('layer');
+        expect(first?.params.replace(/\s+/g, ' ')).toBe('theme, base, components, utilities, lg');
+        expect(first?.nodes).toBeUndefined();
+      });
+    }
   });
 
   it('a planted leak fails it: an unscoped rule and a rule off screen', () => {

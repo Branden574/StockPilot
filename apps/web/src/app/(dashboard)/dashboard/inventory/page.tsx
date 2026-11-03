@@ -82,6 +82,11 @@ import { PageTour } from '@/components/onboarding/page-tour';
 import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
 
+// The Liquid Glass list composition (Items.dc.html, Books.dc.html): every rule
+// is scoped to this page's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/items.css';
+
 // Dropped from 50 → 30 after the Playwright speed sweep showed the
 // inventory list pulling ~3 MB and 6.2s to load on a warm cache. The
 // DB query + row render + per-row image fetch all scale ~linearly

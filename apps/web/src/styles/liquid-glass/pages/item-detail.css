@@ -1,0 +1,100 @@
+/* The item and book page under Liquid Glass (stage 3, items lane):
+   Item-Detail.dc.html and Book-Detail.dc.html ("photos and cost history keep
+   their current layouts with the new tokens"). The page keeps its classic
+   composition (header, figures, tabs, panels); glass gives it the board's
+   frame and materials. The figure strip, tabs, cards, badges, buttons, fields
+   and dialogs already take their glass from the shared hooks (materials.css,
+   primitives.css).
+
+   Imported by its own routes (app/(dashboard)/dashboard/inventory/[id]/page.tsx
+   and books/[id]/page.tsx), scoped to the root ItemDetail draws,
+   [data-glass-page=item-detail], an inert hook
+   (components/inventory/item-detail.redesign.test.tsx, classic parity). The
+   sticky header is found by the attribute it already carries,
+   [data-item-detail-header]. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── Page (.page): 1480 max, 28 px sides, 48 below ─────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='item-detail'] {
+      max-width: 1480px;
+      padding: 2px 28px 48px;
+    }
+    /* The sticky header keeps the page's text readable as rows scroll under
+       it: the overlay glass (74%, blur 30). Its negative margins follow the
+       page's 28 px sides. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header] {
+      margin-inline: -28px;
+      padding-inline: 28px;
+      background-color: var(--lg-glass-strong);
+      -webkit-backdrop-filter: blur(30px) saturate(160%);
+      backdrop-filter: blur(30px) saturate(160%);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+
+    /* ── Focus (R11): the glass ring on every control of the page ──────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      :focus-visible:not([data-glass='input'], [data-glass='select']) {
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+
+    /* ── Phone (≤760 px): 16 px sides, room for the home indicator ────── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='item-detail'] {
+        padding: 0 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        margin-inline: -16px;
+        padding-inline: 16px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
+
+    /* Reduce Transparency, Increase Contrast and the low-power material: the
+       header does not blur (its fill is opaque there, tokens.generated.css). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='item-detail']
+      [data-item-detail-header] {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        background: Canvas;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+  }
+}
