@@ -31,15 +31,31 @@ import { AppearanceDesignRadioGroup, useAppearanceChoice } from './appearance-se
  * from today in Classic (R5: the declared selector exception; item 46a).
  * Under the `off` rollout: origin/main's three items with their direct
  * setTheme, verbatim, so a rollback gives today's pixels (R5).
+ *
+ * The trigger's name (DECISIONS.md F6): while <html> shows Liquid Glass, the
+ * menu is named for what it holds, "Appearance: design and theme", as its
+ * accessible name and its tooltip. In Classic, in every rollout, it keeps
+ * origin/main's "Toggle theme" and no tooltip. The name follows the
+ * provider's glassApplied, which is false on the server and in the first
+ * client render, so the trigger hydrates as classic and is renamed after
+ * mount; nothing here reads the cookie or <html>. Only attributes of the one
+ * trigger change, never the tree, so an open menu, its focus and its return
+ * focus survive a switch made from inside it. The pair is listed in
+ * tests/e2e/appearance/glass-only-allowlist.json (a "renamed action").
  */
 export function ThemeToggle({ className }: { className?: string } = {}) {
   if (liquidGlassRollout() === 'off') return <ClassicThemeToggle className={className} />;
   return <GlassBuildThemeToggle className={className} />;
 }
 
+/** The trigger's name in Classic: origin/main's words. */
+const CLASSIC_NAME = 'Toggle theme';
+/** Its name and tooltip while <html> shows Liquid Glass (DECISIONS.md F6). */
+const GLASS_NAME = 'Appearance: design and theme';
+
 /** The menu in a build with Liquid Glass: the Design group, then origin/main's items. */
 function GlassBuildThemeToggle({ className }: { className?: string }) {
-  const { chooseTheme } = useAppearanceChoice();
+  const { chooseTheme, glassApplied } = useAppearanceChoice();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -47,7 +63,8 @@ function GlassBuildThemeToggle({ className }: { className?: string }) {
           id="theme-toggle-trigger"
           variant="ghost"
           size="icon"
-          aria-label="Toggle theme"
+          aria-label={glassApplied ? GLASS_NAME : CLASSIC_NAME}
+          title={glassApplied ? GLASS_NAME : undefined}
           className={className}
         >
           <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />

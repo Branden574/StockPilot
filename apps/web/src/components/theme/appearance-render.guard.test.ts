@@ -53,7 +53,8 @@ const MAY_USE_APPEARANCE = new Set([
   'components/theme/appearance-provider.tsx',
   'components/theme/appearance-select.tsx',
   // The selectors: they read the choices to mark the one in use, and branch
-  // nothing else on them.
+  // nothing else on them. The header menu also takes its trigger's glass name
+  // from the provider's state (DECISIONS.md F6; checked below).
   'components/theme/theme-toggle.tsx',
   'components/dashboard/user-menu.tsx',
   'components/settings/appearance-panel.tsx',
@@ -128,6 +129,20 @@ describe('appearance render guard', () => {
     const fallback = select.slice(select.indexOf('if (appearance) {'));
     expect(select.match(/\bsetTheme\(/gu)).toHaveLength(1);
     expect(fallback).toContain('chooseTheme: (next) => setTheme(next)');
+  });
+
+  it('the header menu’s trigger takes its glass name from the provider’s state, never from the cookie or <html> (F6: no hydration mismatch)', () => {
+    // The server cannot see the attribute or the stored Design, so a name read
+    // from either during render would differ between the server HTML and the
+    // first client render. glassApplied is false until the provider has
+    // written the attribute after mount, so the trigger hydrates as classic.
+    const toggle = FILES.find((f) => f.file === 'components/theme/theme-toggle.tsx')!.text;
+    expect(toggle).not.toMatch(
+      /\bdocument\b|\bwindow\b|cookie|sp_style|data-appearance|getAttribute|localStorage|isGlassShowing/u,
+    );
+    expect(toggle).toMatch(/\{\s*chooseTheme,\s*glassApplied\s*\}\s*=\s*useAppearanceChoice\(\)/u);
+    expect(toggle).toMatch(/aria-label=\{glassApplied \? GLASS_NAME : CLASSIC_NAME\}/u);
+    expect(toggle).toMatch(/title=\{glassApplied \? GLASS_NAME : undefined\}/u);
   });
 
   it('only the dashboard shell and the portal name the signed-in person to the appearance layer', () => {

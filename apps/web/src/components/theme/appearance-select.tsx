@@ -82,6 +82,12 @@ export interface AppearanceChoice {
   style: AppearanceStyle | undefined;
   /** The Theme to mark as selected, or undefined before it is known (server render). */
   theme: ThemeSetting | undefined;
+  /**
+   * <html> shows Liquid Glass (the provider's glassApplied): false on the
+   * server, in the first client render and with no provider, so what follows
+   * it changes only after mount (the header menu's trigger, DECISIONS.md F6).
+   */
+  glassApplied: boolean;
   chooseStyle: (style: AppearanceStyle) => void;
   chooseTheme: (theme: ThemeSetting) => void;
   status: AppearanceSyncStatus | null;
@@ -101,6 +107,7 @@ export function useAppearanceChoice(): AppearanceChoice {
       // that is already checked never fires its change).
       style: appearance.hydrated ? appearance.shownStyle : undefined,
       theme: appearance.theme,
+      glassApplied: appearance.glassApplied,
       chooseStyle: appearance.chooseStyle,
       chooseTheme: appearance.chooseTheme,
       status: appearance.status,
@@ -113,6 +120,7 @@ export function useAppearanceChoice(): AppearanceChoice {
     rollout: liquidGlassRollout(),
     style: undefined,
     theme: parseThemeSetting(theme) ?? undefined,
+    glassApplied: false,
     chooseStyle: () => {},
     chooseTheme: (next) => setTheme(next),
     status: null,

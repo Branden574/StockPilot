@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import * as React from 'react';
+import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -36,6 +37,7 @@ import {
   AppearanceProvider,
   INTRO_NOTICE,
   MarketingVariantGuard,
+  useAppearance,
   VARIANT_GUARD_TIMEOUT_MS,
 } from './appearance-provider';
 import { ThemeProvider } from './theme-provider';
@@ -422,6 +424,72 @@ describe('the kill switch: off is inert', () => {
     expect(document.cookie).toContain('sp_style=liquid-glass');
     expect(localStorage.getItem('sp-appearance-sync')).toBeNull();
     expect(toast).not.toHaveBeenCalled();
+  });
+});
+
+describe('glassApplied: the attribute as the provider wrote it, for the selectors (DECISIONS.md F6)', () => {
+  function Probe() {
+    return <p data-testid="glass-applied">{String(useAppearance()?.glassApplied)}</p>;
+  }
+  function Probed() {
+    return (
+      <ThemeProvider>
+        <AppearanceProvider>
+          <AppearancePanel />
+          <Probe />
+        </AppearanceProvider>
+      </ThemeProvider>
+    );
+  }
+  const applied = () => screen.getByTestId('glass-applied').textContent;
+
+  it('false on the server, even where glass will show (the first client render matches it)', () => {
+    expect(renderToString(<Probed />)).toContain('>false</p>');
+  });
+
+  it('true once mounted with glass on <html>, and it follows each Design choice', async () => {
+    render(<Probed />);
+    expect(glassOn()).toBe(true);
+    expect(applied()).toBe('true');
+    fireEvent.click(radio('Classic'));
+    await waitFor(() => expect(glassOn()).toBe(false));
+    expect(applied()).toBe('false');
+    fireEvent.click(radio('Liquid Glass'));
+    await waitFor(() => expect(glassOn()).toBe(true));
+    expect(applied()).toBe('true');
+  });
+
+  it('false on the print route, where the Design is glass but <html> is not', () => {
+    nav.pathname = '/dashboard/orders/abc/print';
+    const { rerender } = render(<Probed />);
+    expect(radio('Liquid Glass')).toBeChecked();
+    expect(glassOn()).toBe(false);
+    expect(applied()).toBe('false');
+    nav.pathname = '/dashboard/orders/abc';
+    rerender(<Probed />);
+    expect(glassOn()).toBe(true);
+    expect(applied()).toBe('true');
+  });
+
+  it('false during the crash fallback, true again when glass is turned back on', async () => {
+    localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'liquid-glass' }));
+    sessionStorage.setItem('sp-lg-fallback', 'pending');
+    render(<Probed />);
+    await waitFor(() => expect(toast).toHaveBeenCalledTimes(1));
+    expect(glassOn()).toBe(false);
+    expect(applied()).toBe('false');
+    act(() => (toast.mock.calls[0]![1] as { action: { onClick: () => void } }).action.onClick());
+    expect(glassOn()).toBe(true);
+    expect(applied()).toBe('true');
+  });
+
+  it('false under off, whatever is stored or already on <html>', async () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
+    localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'liquid-glass' }));
+    html().setAttribute('data-appearance', 'liquid-glass');
+    render(<Probed />);
+    await waitFor(() => expect(glassOn()).toBe(false));
+    expect(applied()).toBe('false');
   });
 });
 

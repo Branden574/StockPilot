@@ -78,12 +78,15 @@ import {
  * crash fallback) is Liquid Glass and the page is not the print route
  * (EXEMPT_PATHS). It is written in layout effects, on hydrate and on every
  * pathname change, so a client navigation into or out of the print route is
- * right before paint. Until hydrate the head script's attribute stands.
+ * right before paint. Until hydrate the head script's attribute stands. Each
+ * write is also kept as `glassApplied`, for the selectors (below).
  *
  * NO REMOUNT. The provider is mounted once in app/layout.tsx, renders its
  * children as given, never keys anything and never branches the tree on the
- * appearance. The context value does not depend on the pathname. Only the
- * selectors read this context (appearance-render.guard.test.ts).
+ * appearance. The context value does not depend on the pathname, except
+ * `glassApplied`, which changes only when the attribute does (into and out of
+ * the print route). Only the selectors read this context
+ * (appearance-render.guard.test.ts).
  *
  * PERSISTENCE AND SYNC follow core's pure reducer (packages/core/src/
  * appearance). This file performs its effects: the device record and the
@@ -114,6 +117,14 @@ export interface AppearanceContextValue {
   theme: ThemeSetting | undefined;
   /** The Design on screen: the choice through the rollout and the crash fallback. */
   shownStyle: AppearanceStyle;
+  /**
+   * <html> carries data-appearance="liquid-glass", as this provider last
+   * wrote it after hydrate (so false on the print route, and following a
+   * marketing page's twin). False on the server, in the first client render
+   * and under `off`: a name that follows it (the header menu's trigger,
+   * DECISIONS.md F6) hydrates as classic and changes only after mount.
+   */
+  glassApplied: boolean;
   /** This build's rollout (the kill switch). */
   rollout: GlassRollout;
   chooseStyle: (style: AppearanceStyle) => void;
@@ -232,6 +243,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   const [fallback, setFallback] = React.useState(false);
   /** The signed-in person's row was read (for the intro notice). */
   const [accountRead, setAccountRead] = React.useState<string | null>(null);
+  /** What the last write after hydrate put on <html> (the context's glassApplied). */
+  const [glassApplied, setGlassApplied] = React.useState(false);
 
   const writeAttributes = React.useCallback(() => {
     if (inert) {
@@ -244,6 +257,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     let on = shown === 'liquid-glass' && !EXEMPT_PATHS.test(pathnameRef.current);
     if (twinOverrideRef.current !== null) on = twinOverrideRef.current;
     setGlassAttributes(on);
+    // Only ever after a write in an effect or a handler, never in render.
+    setGlassApplied(on);
   }, [inert, rollout]);
 
   // dispatch and run are mutually recursive through the async effects.
@@ -558,6 +573,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
             style: null,
             theme,
             shownStyle: 'classic',
+            glassApplied: false,
             rollout,
             chooseStyle: noop,
             chooseTheme: noop,
@@ -571,6 +587,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
             style: snapshot.style,
             theme,
             shownStyle,
+            glassApplied,
             rollout,
             chooseStyle,
             chooseTheme,
@@ -586,6 +603,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       snapshot.status,
       theme,
       shownStyle,
+      glassApplied,
       rollout,
       chooseStyle,
       chooseTheme,

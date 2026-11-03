@@ -1,8 +1,9 @@
 {
-  "$comment": "Glass-only elements (Liquid Glass plan 4.4, 8.5; plans/REVISION-DEFAULT.md R13). The 8.5 action-inventory check (stage 4) fails on any glass-only action not listed here. A 'duplicate action' entry names the classic element it duplicates on the same route, behind the same gate; an 'appearance control (no data action)' entry has no classic twin: it changes only the viewer's own appearance and reads or writes no other data. appearance-render.guard.test.ts checks that every data-glass-only element in the source is listed.",
+  "$comment": "Glass-only elements (Liquid Glass plan 4.4, 8.5; plans/REVISION-DEFAULT.md R13). The 8.5 action-inventory check (stage 4) fails on any glass-only action not listed here. A 'duplicate action' entry names the classic element it duplicates on the same route, behind the same gate; an 'appearance control (no data action)' entry has no classic twin: it changes only the viewer's own appearance and reads or writes no other data; a 'renamed action' entry is a classic element that glass names differently (DECISIONS.md F6). appearance-render.guard.test.ts checks that every data-glass-only element in the source is listed; appearance-select.test.tsx checks the header menu's renamed trigger.",
   "kinds": {
     "duplicate action": "Goes where an existing classic element on the same route goes, behind the same permission gate; classicTwin names that element.",
-    "appearance control (no data action)": "The header appearance menu (Design and Theme). No classic twin on the route; no permission gate; touches only the viewer's own appearance (device record, Design cookie, own user_appearance row)."
+    "appearance control (no data action)": "The header appearance menu (Design and Theme). No classic twin on the route; no permission gate; touches only the viewer's own appearance (device record, Design cookie, own user_appearance row).",
+    "renamed action": "The classic element itself, with the same role, target, position and permission gate, under another accessible name (and tooltip) while <html> carries data-appearance=\"liquid-glass\". name is its glass name and classicTwin its classic name: the 8.5 check counts the two as one action, so walkers find it by either name and the classic name missing in glass is not a missing action."
   },
   "entries": [
     {
@@ -20,8 +21,38 @@
         "/r/track",
         "/r/confirm"
       ],
-      "$comment": "ExternalAppearanceCorner. ExternalShell draws it in its page frame when the page passes no top bar; app/r/layout.tsx draws it for /r/[token], /r/track and /r/confirm, whose columns use frame=\"column\" inside that layout. /invite/[token] and /onboarding pass a top bar that already holds the menu.",
+      "$comment": "ExternalAppearanceCorner. ExternalShell draws it in its page frame when the page passes no top bar; app/r/layout.tsx draws it for /r/[token], /r/track and /r/confirm, whose columns use frame=\"column\" inside that layout. /invite/[token] and /onboarding pass a top bar that already holds the menu. Its trigger is the header menu's, so in glass it is named \"Appearance: design and theme\" (entry header-appearance-menu-trigger).",
       "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "header-appearance-menu-trigger",
+      "source": "apps/web/src/components/theme/theme-toggle.tsx",
+      "selector": "#theme-toggle-trigger",
+      "role": "button",
+      "name": "Appearance: design and theme",
+      "kind": "renamed action",
+      "routes": [
+        "/",
+        "/contact",
+        "/pricing",
+        "/privacy",
+        "/security",
+        "/support",
+        "/terms",
+        "/signin",
+        "/signin/mfa",
+        "/signup",
+        "/reset",
+        "/reset/complete",
+        "/account-disabled",
+        "/invite/[token]",
+        "/onboarding",
+        "/dashboard",
+        "/dashboard/**"
+      ],
+      "$comment": "DECISIONS.md F6: the header appearance menu's trigger (ThemeToggle) opens the Design and the Theme, so while <html> shows Liquid Glass it is named, and titled, for both; in Classic, in every rollout, it is origin/main's \"Toggle theme\" with no tooltip. The routes are those whose classic page shows it: the marketing header (/, the 6 marketing pages), the sign-in layout, the invite and onboarding top bars, and the dashboard top bar on /dashboard and every route under it (/dashboard/**), where it is shown from a 680 px wide bar. On the /dashboard/orders/[id]/print route <html> is never glass, so it keeps its classic name there. The 8 external routes are entry external-appearance-menu: there it exists only in glass.",
+      "classicTwin": "Toggle theme",
       "gate": null
     }
   ]
