@@ -207,6 +207,8 @@ export function DigitalPick({
     <div
       className="border-border bg-card overflow-hidden rounded-lg border"
       data-testid="digital-pick"
+      data-glass="card"
+      data-glass-role="order-pick"
     >
       <ul className="divide-border divide-y">
         {initialLines.map((line) => {
@@ -289,6 +291,7 @@ export function DigitalPick({
           disabled={completing || !anyLinePicked}
           variant="default"
           className="max-sm:h-11 max-sm:px-5"
+          data-glass-role="order-primary"
         >
           {completing ? (
             <Loader2 className="h-4 w-4 animate-spin" />

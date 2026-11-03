@@ -1,22 +1,24 @@
 /* Liquid Glass, the order page (Order-Detail.dc.html and
-   Order-Detail-Mobile.dc.html), stage 3 orders lane. Imported only by its
-   route (app/(dashboard)/dashboard/orders/[id]/page.tsx), never globally
-   (plan 4.1).
+   Order-Detail-Mobile.dc.html) and its digital pick page (inferred:
+   iOS-Order.dc.html's pick lines in a web card, with Order-Detail.dc.html's
+   picking card), stage 3 orders lane. Imported only by those two routes
+   (app/(dashboard)/dashboard/orders/[id]/page.tsx and .../[id]/pick/page.tsx),
+   never globally (plan 4.1).
 
    Same DOM as Classic (plan M1): every rule restyles the classic markup
-   through the inert hooks the page carries (the page root
-   data-glass-page="order-detail"; data-glass="panel" on every card;
-   data-glass-role="order-lines", "order-manager-actions", ...), and every
-   rule is scoped to :root[data-appearance="liquid-glass"] inside @media
-   screen, so Classic Dark and Light never match one and printing never gets
-   one (glass-scope.guard.test.ts reads this folder too). App Router keeps a
-   route's stylesheet after a client navigation, so every selector also names
-   its page root: nothing here reaches another page. The dialogs the page
-   opens are portalled out of it, so their rules name the page root through
-   :root:has([data-glass-page="order-detail"]) and the dialog's own part
-   hooks (data-glass="dialog-header", "dialog-body", "dialog-footer").
+   through the inert hooks the pages carry (the page roots
+   data-glass-page="order-detail" and "order-pick"; data-glass="panel" on
+   every card; data-glass-role="order-lines", "order-manager-actions", ...),
+   and every rule is scoped to :root[data-appearance="liquid-glass"] inside
+   @media screen, so Classic Dark and Light never match one and printing
+   never gets one (glass-scope.guard.test.ts reads this folder too). App
+   Router keeps a route's stylesheet after a client navigation, so every
+   selector also names its page root: nothing here reaches another page. The
+   dialogs the pages open are portalled out of them, so their rules name the
+   page root through :root:has(...) and the dialog's own part hooks
+   (data-glass="dialog-header", "dialog-body", "dialog-footer").
 
-   What the board draws that this page cannot (recorded in
+   What the board draws that the order page cannot (recorded in
    stage3/orders-rows.md): Review by category and its Override dialog
    ([Proposed], not built), line photos (the page does not load them), the
    phone's bottom next-step bar, and Manager actions and the requester's note
@@ -560,14 +562,161 @@
       font-weight: 600;
     }
 
+    /* ── The digital pick (inferred: the pick lines in one web card; the
+          page box and head as the order page's, on the 880 px column) ──── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='order-pick'] {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass='page-header']
+      > div:first-child:has(> a) {
+      margin-bottom: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div {
+      margin-top: 4px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    /* A line (.pick-card's 14 / 16 / 12 inset): the item in 14 / 600, the
+       entry with the figure in the body face. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass-role='order-pick']
+      > ul
+      > li {
+      padding: 14px 16px 12px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass-role='order-pick']
+      > ul
+      > li
+      > div:first-child
+      > div:first-child
+      > div:first-child {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass-role='order-pick']
+      > ul
+      > li
+      > div:first-child
+      > div:last-child
+      > span {
+      color: var(--lg-ink-2);
+      font-family: inherit;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    /* From the small breakpoint the field, Save and the figure share one
+       36 px line; below it the classic 44 px phone targets stay. */
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-pick']
+        [data-glass-role='order-pick']
+        > ul
+        > li
+        [data-glass='input'] {
+        height: 36px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-pick']
+        [data-glass-role='order-pick']
+        > ul
+        > li
+        [data-glass='button'] {
+        height: 36px;
+        gap: 8px;
+        padding: 0 14px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass-role='order-pick']
+      > ul
+      > li
+      [data-glass='input'] {
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass-role='order-pick']
+      > div:last-child {
+      padding: 12px 16px;
+      border-top-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass-role='order-pick']
+      [data-glass-role='order-primary'] {
+      height: 44px;
+      padding: 0 18px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    /* Locked to another picker: the state card (.card.empty, the 56 px tile). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-glass='state-panel'] {
+      gap: 10px;
+      padding: 40px 24px;
+      border-color: var(--lg-card-line);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-slot='state-panel-icon'] {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: var(--lg-neutral-wash);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-pick']
+      [data-slot='state-panel-icon']
+      svg {
+      width: 26px;
+      height: 26px;
+    }
+
     /* ── The phone (≤ 760: 4 / 16 / 96 padding, 16 between, title 24 / 30) ── */
     @media (max-width: 760px) {
       :root[data-appearance='liquid-glass'] [data-glass-page='order-detail'] {
         gap: 16px;
         padding: 4px 16px 96px;
       }
+      :root[data-appearance='liquid-glass'] [data-glass-page='order-pick'] {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
       :root[data-appearance='liquid-glass']
-        [data-glass-page='order-detail']
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
         [data-glass='page-header']
         h1 {
         font-size: 24px;
@@ -575,14 +724,16 @@
       }
     }
 
-    /* ── The dialogs the page opens (.dialog: the head, the 62% reading
+    /* ── The dialogs the pages open (.dialog: the head, the 62% reading
           area inset 8 px, the foot) ──────────────────────────────────────
        Portalled to body: named by the page root on :root and by the parts
        each dialog marks (on the dialog itself or on the form that holds
        them). A dialog that marks its head lays out its own spacing: its
        parts take the board's insets, and anything it does not mark keeps the
        head's 24 px inset. */
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       [data-glass='dialog']:has(
         > [data-glass='dialog-header'],
         > form > [data-glass='dialog-header']
@@ -590,23 +741,31 @@
       gap: 0;
       padding: 0;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       [data-glass='dialog']
       > form:has(> [data-glass='dialog-header']) {
       gap: 0;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       [data-glass='dialog'][data-glass-role='order-deny-dialog'] {
       max-width: 480px;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-header'] {
       gap: 4px;
       padding: 20px 48px 14px 24px;
       text-align: left;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-header']
       > h2 {
@@ -616,14 +775,18 @@
       line-height: 26px;
       letter-spacing: -0.016em;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-header']
       > :not(h2) {
       font-size: 13px;
       line-height: 18px;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-body'] {
       margin: 0 8px;
@@ -632,7 +795,9 @@
       border-radius: 16px;
       background-color: var(--lg-field-fill);
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form):has(> [data-glass='dialog-header'])
       > :not(
         [data-glass='dialog-header'],
@@ -642,13 +807,17 @@
       ) {
       margin: 0 24px 14px;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-footer'] {
       gap: 10px;
       padding: 14px 16px 16px 24px;
     }
-    :root[data-appearance='liquid-glass']:has([data-glass-page='order-detail'])
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='order-detail'], [data-glass-page='order-pick'])
+      )
       :is([data-glass='dialog'], [data-glass='dialog'] > form)
       > [data-glass='dialog-footer']
       > [data-glass='button']:is([data-glass-size='default'], [data-glass-size='sm']) {

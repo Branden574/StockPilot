@@ -16,6 +16,10 @@ import type { FefoSuggestion } from '@/server/services/lots';
 import { OrderReadinessService } from '@/server/services/order-readiness';
 import { OrderRequestsService } from '@/server/services/order-requests';
 import { ServiceError } from '@/server/services/context';
+// Liquid Glass's composition of the order pages (the order and this pick),
+// scoped to the glass root and this page's data-glass-page root; inert in
+// Classic.
+import '@/styles/liquid-glass/pages/order-detail.css';
 
 export const dynamic = 'force-dynamic';
 
@@ -121,7 +125,10 @@ export default async function DigitalPickPage({ params }: { params: Promise<{ id
   // back link, then the pick card. The header is PageHeader's div, never a
   // <header> (the shell's top bar owns that element).
   return (
-    <div className="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="order-pick"
+      className="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/orders/${id}`}>← Back to order</PageHeaderBackLink>
