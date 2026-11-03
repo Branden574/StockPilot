@@ -47,6 +47,11 @@ const rn = vi.hoisted(() => ({
   scheme: 'light' as 'light' | 'dark' | null,
   fontScale: 1,
 }));
+// useTheme() reads the appearance context; this suite calls components as
+// plain functions with no React renderer (so no dispatcher), so the context
+// read is a stand-in too: no provider, which useTheme() answers with classic
+// System, today's look.
+vi.mock('../../lib/appearance/context', () => ({ useAppearanceTheme: () => null }));
 vi.mock('react-native', () => ({
   Pressable: 'Pressable',
   View: 'View',
