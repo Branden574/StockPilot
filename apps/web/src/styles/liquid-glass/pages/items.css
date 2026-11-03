@@ -16,13 +16,15 @@
    this file were to load before app/globals.css (it never should: the root
    layout's stylesheet comes first).
 
-   The selection bar floats at the foot of the frosted pane, centred, as the
-   board draws it (position: absolute against the pane, [data-glass=
-   main-column], the nearest positioned box, so it neither scrolls with the
-   list nor is clipped by it), and the toolbar and the count stay on screen
-   under it while rows are ticked, as on the board; classic swaps the bar into
-   the toolbar's place instead. The DOM order is unchanged, so the keyboard
-   still reaches the bar after the toolbar and before the table.
+   From 761 px the selection bar floats at the foot of the frosted pane,
+   centred, as the board draws it (position: absolute against the pane,
+   [data-glass=main-column], the nearest positioned box, so it neither
+   scrolls with the list nor is clipped by it), and the toolbar and the count
+   stay on screen under it while rows are ticked, as on the board; classic
+   swaps the bar into the toolbar's place instead, and so does a phone. The
+   toast dock rises clear of the floating bar (globals.glass.css). The DOM
+   order is unchanged, so the keyboard still reaches the bar after the
+   toolbar and before the table.
 
    Deviations from the boards, on purpose (stage3/items-rows.md): every
    classic column, filter and bulk action stays (no Available column is
@@ -111,33 +113,58 @@
       }
     }
 
-    /* ── Selection bar (.selbar.glass, Items.dc.html): floating glass at
-       the foot of the pane, 20 px up, centred, as wide as its actions and
-       never wider than the pane less 16 px a side; radius 18, 8 8 8 14.
-       It rises in when rows are ticked. ──────────────────────────────── */
-    :root[data-appearance='liquid-glass']
-      :is([data-glass-page='items'], [data-glass-page='books'])
-      [data-glass='selbar-layer'] {
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      z-index: 45;
-      width: max-content;
-      max-width: calc(100% - 32px);
-      transform: translateX(-50%);
+    /* ── Selection bar (.selbar.glass, Items.dc.html): from 761 px,
+       floating glass at the foot of the pane, 20 px up, centred, as wide as
+       its actions and never wider than the pane less 16 px a side; radius
+       18, 8 8 8 14. It rises in when rows are ticked. On a phone it stays
+       where classic swaps it in, over the toolbar (Items-Mobile draws no
+       bar, and a floating bar of every classic action would cover most of
+       a phone's list and its toasts). ─────────────────────────────────── */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='selbar-layer'] {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        z-index: 45;
+        width: max-content;
+        max-width: calc(100% - 32px);
+        transform: translateX(-50%);
+      }
+      /* The toolbar and the count stay on screen while rows are ticked. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        :is([data-glass='items-toolbar'], [data-glass='items-count'] > p) {
+        visibility: visible;
+      }
+      /* Room under the last row for the bar (.page.has-selbar), so the last
+         row can scroll clear of it. With every classic action the bar wraps
+         to two rows from 1280 px, three below, four below 1000 px (its top
+         then sits 104, 142 and 180 px above the pane's foot); fewer actions
+         leave a little more room than needed, never less. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --items-selbar-room: 128px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']):has(
+          [data-glass='selbar-layer'][data-glass-state='open']
+        ) {
+        padding-bottom: var(--items-selbar-room);
+      }
     }
-    /* The toolbar and the count stay on screen while rows are ticked. */
-    :root[data-appearance='liquid-glass']
-      :is([data-glass-page='items'], [data-glass-page='books'])
-      :is([data-glass='items-toolbar'], [data-glass='items-count'] > p) {
-      visibility: visible;
+    @media (min-width: 761px) and (max-width: 1279.98px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --items-selbar-room: 166px;
+      }
     }
-    /* Room under the last row for the bar (.page.has-selbar). */
-    :root[data-appearance='liquid-glass']
-      :is([data-glass-page='items'], [data-glass-page='books']):has(
-        [data-glass='selbar-layer'][data-glass-state='open']
-      ) {
-      padding-bottom: 128px;
+    @media (min-width: 761px) and (max-width: 999.98px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --items-selbar-room: 204px;
+      }
     }
     :root[data-appearance='liquid-glass']
       :is([data-glass-page='items'], [data-glass-page='books'])

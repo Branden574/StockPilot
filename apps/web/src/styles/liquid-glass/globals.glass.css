@@ -45,4 +45,37 @@
       transform: translateX(-50%);
     }
   }
+  /* While the Items or Books selection bar floats at the pane's foot (from
+     761 px, pages/items.css), the dock rises 12 px clear of it, so an error
+     toast never covers the bar's actions: with every classic action the
+     bar's top sits 104, 142 or 180 px above the pane's foot (two, three or
+     four rows: from 1280 px, below it, below 1000 px), and the pane's foot
+     is 10 px above the window's. */
+  @media (min-width: 761px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(126px + var(--sp-update-card-offset, 0px));
+    }
+  }
+  @media (min-width: 761px) and (max-width: 1279.98px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(164px + var(--sp-update-card-offset, 0px));
+    }
+  }
+  @media (min-width: 761px) and (max-width: 999.98px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(202px + var(--sp-update-card-offset, 0px));
+    }
+  }
 }
