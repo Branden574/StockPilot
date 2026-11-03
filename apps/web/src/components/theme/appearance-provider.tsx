@@ -17,6 +17,7 @@ import {
   type AppearanceSyncStatus,
 } from '@stockpilot/core';
 
+import { isControlFlow } from '@/lib/control-flow';
 import { getMyAppearanceAction, setMyAppearanceAction } from '@/server/actions/appearance';
 
 import {
@@ -219,7 +220,11 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
                 });
               }
             },
-            () => dispatchRef.current({ type: 'save-failed', userId, gen, reason: 'error' }),
+            (e: unknown) => {
+              // The router is already navigating (control flow): stop quietly.
+              if (isControlFlow(e)) return;
+              dispatchRef.current({ type: 'save-failed', userId, gen, reason: 'error' });
+            },
           );
           return;
         }
@@ -239,7 +244,10 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
                 });
               }
             },
-            () => dispatchRef.current({ type: 'fetch-failed', userId, gen, reason: 'error' }),
+            (e: unknown) => {
+              if (isControlFlow(e)) return;
+              dispatchRef.current({ type: 'fetch-failed', userId, gen, reason: 'error' });
+            },
           );
           return;
         }
