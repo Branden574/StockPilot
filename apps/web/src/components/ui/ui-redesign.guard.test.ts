@@ -43,6 +43,8 @@ describe('components/ui and Liquid Glass (stage 2: inert hooks only)', () => {
     'calendar',
     'card',
     'checkbox',
+    // Stage 3: the box itself, in the Checkbox and in rows that are the control.
+    'checkbox-glyph',
     'dialog',
     'input',
     'menu',

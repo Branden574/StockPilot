@@ -133,29 +133,34 @@
     :root[data-appearance='liquid-glass'] [data-glass='checkbox'] {
       border-radius: 5px;
     }
-    /* The checkbox's visible box is its first child (ui/checkbox.tsx
-       CheckboxGlyph), not the button, which also wraps any label text: the
-       box takes .cb (1.5 px line 3 on the surface; the accent with an
-       on-accent tick or bar when ticked or mixed), the button stays clear. */
-    :root[data-appearance='liquid-glass'] [data-glass='checkbox'] > span:first-child {
+    /* The checkbox's visible box is its glyph (ui/checkbox.tsx CheckboxGlyph,
+       hooked checkbox-glyph), never the button, which also wraps any label
+       text; the same glyph sits in rows that are themselves the control (a
+       filter option, an export field). It takes .cb: a 1.5 px line 3 on the
+       surface; ticked or mixed (state on), the accent with an on-accent tick
+       or bar. */
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] {
       border-width: 1.5px;
       border-color: var(--lg-line-3);
       background-color: var(--lg-surface);
     }
-    :root[data-appearance='liquid-glass']
-      [data-glass='checkbox']:is([aria-checked='true'], [aria-checked='mixed'])
-      > span:first-child {
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'][data-glass-state='on'] {
       border-color: var(--lg-accent);
       background-color: var(--lg-accent);
     }
-    :root[data-appearance='liquid-glass'] [data-glass='checkbox'] > span:first-child > span {
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span {
       border-color: var(--lg-on-accent);
     }
-    :root[data-appearance='liquid-glass']
-      [data-glass='checkbox']
-      > span:first-child
-      > span.rounded-full {
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span.rounded-full {
       background-color: var(--lg-on-accent);
+    }
+    /* Forced colours keep the mixed bar's own fill (it opts out of colour
+       adjustment, ui/checkbox.tsx), so it stays the system text colour there,
+       never the on-accent white on a Canvas box. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span.rounded-full {
+        background-color: CanvasText;
+      }
     }
     :root[data-appearance='liquid-glass'] [data-glass='switch']:is([aria-checked='true']) {
       background-color: var(--lg-accent);
