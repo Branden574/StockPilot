@@ -1,13 +1,20 @@
 -- 0432_user_appearance.sql
 -- ─────────────────────────────────────────────────────────────────────────────
--- A person's chosen appearance (Dark, Light, Liquid Glass or System), so the
--- choice follows the same account across the web and the phone. The number is
--- a placeholder: it is fixed at push time to the next free number, and nothing
+-- A person's chosen appearance, so the choice follows the same account across
+-- the web and the phone. Two separate choices: the Design (`style`: Liquid
+-- Glass or Classic) and the Theme (Light, Dark or System). The number is a
+-- placeholder: it is fixed at push time to the next free number, and nothing
 -- in this file names it.
 --
 -- Design: stockpilot-work/liquid-glass/IMPLEMENTATION-PLAN.md section 3.2
 -- (persistence) and 3.4 (how the device and the account are reconciled; the
--- pure reducer is packages/core/src/appearance/reconcile.ts).
+-- pure reducer is packages/core/src/appearance/reconcile.ts), as revised by
+-- plans/REVISION-DEFAULT.md R3. This file was rewritten in place for that
+-- revision (one `appearance` word became two nullable columns); it had never
+-- been pushed. Before it is pushed, `supabase migration list --linked` must
+-- show no user_appearance migration in production; if one ever had been
+-- pushed, this would instead be a forward migration (add the two columns,
+-- backfill from `appearance`, drop it).
 --
 -- WHY A TABLE OF ITS OWN
 --   user_profiles is read through a column-list SELECT grant (0402) and its
@@ -19,9 +26,15 @@
 --   smallest store that fits.
 --
 -- WHAT IT ADDS (tier A: additive only)
---   1. public.user_appearance: one row per person, the appearance as one of
---      four words (CHECK), and updated_at, which the shared tg_set_updated_at
---      trigger moves on every update (the clock the reconcile reads).
+--   1. public.user_appearance: one row per person; `style` ('liquid-glass' or
+--      'classic') and `theme` ('light', 'dark' or 'system'), each nullable,
+--      because a person may choose only one of them: null means "not chosen on
+--      any device", and each device then keeps its own value. CHECKs admit
+--      only the known words and refuse a row with neither. updated_at, which
+--      the shared tg_set_updated_at trigger moves on every update, is the
+--      clock the reconcile reads. The apps save only the column the person
+--      chose (an upsert naming only that column), so saving a Theme never
+--      clears a Design.
 --   2. Own-row RLS, the 0259 / 0353 shape: select, insert and update where
 --      user_id = auth.uid(); no delete policy. Like user_onboarding and
 --      user_release_state (see 0310's note) it carries no disabled-account
@@ -44,14 +57,19 @@
 
 create table public.user_appearance (
   user_id    uuid        primary key references auth.users(id) on delete cascade,
-  appearance text        not null,
+  style      text        null,
+  theme      text        null,
   updated_at timestamptz not null default now(),
-  constraint user_appearance_appearance_known
-    check (appearance in ('dark', 'light', 'liquid-glass', 'system'))
+  constraint user_appearance_style_known
+    check (style is null or style in ('liquid-glass', 'classic')),
+  constraint user_appearance_theme_known
+    check (theme is null or theme in ('light', 'dark', 'system')),
+  constraint user_appearance_something_chosen
+    check (style is not null or theme is not null)
 );
 
 comment on table public.user_appearance is
-  'A person''s chosen appearance (dark, light, liquid-glass or system), synced across web and phone. Own-row RLS; no delete policy.';
+  'A person''s chosen Design (style: liquid-glass or classic) and Theme (light, dark or system), each null until chosen, synced across web and phone. Own-row RLS; no delete policy.';
 
 alter table public.user_appearance enable row level security;
 
