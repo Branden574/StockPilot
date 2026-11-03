@@ -19,9 +19,10 @@ import {
  * TRANSITIONS ON THE ORDERS LANE (brief section 13; plan 8.2 cases 1 to 3).
  * Through Dark, Liquid Glass (Night, then Day), Light and Dark:
  *  - The Orders list: the open tab, the URL and the pane's scroll (within
- *    4 px) stay; no data request is made (the account save, the Design
- *    cookie route and the scene photo only); no realtime channel is joined
- *    again; no toast appears twice.
+ *    4 px) stay; no data request is made (the account save and no other
+ *    server action, the Design cookie route and the scene photo only:
+ *    switch-requests.ts); no realtime channel is joined again; no toast
+ *    appears twice.
  *  - Place an order: the cart's lines and units and a typed search stay;
  *    with the review sheet open the switch is made in a second tab, and the
  *    sheet stays open with focus inside it.
@@ -68,7 +69,7 @@ test('Orders list: the open tab, the URL and the scroll survive every switch, wi
   const scrollBefore = await pane.evaluate((main) => main.scrollTop);
   const toastsBefore = await toastTexts(page);
   const joinsBefore = joins.count();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
 
   for (const look of SEQUENCE) {
     await chooseLook(page, look);
@@ -107,7 +108,7 @@ test('Place an order: the cart and a typed search survive every switch; the revi
   const cartBefore = await totals.allInnerTexts();
   await search.fill('pa');
   await settle(page);
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
   requests.reset();
 
   for (const look of SEQUENCE) {
@@ -155,7 +156,7 @@ test('An order page: unsaved internal notes stay through every switch, with no s
   await settle(page);
   const url = page.url();
   const joinsBefore = joins.count();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
   for (const look of SEQUENCE) {
     await chooseLook(page, look);
     await settle(page);
@@ -185,7 +186,7 @@ test('An order page: the Deny dialog stays open with its reason and focus throug
   const reason = dialog.getByLabel('Reason');
   await reason.fill('Lab check: not sent');
   await reason.focus();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
 
   for (const look of SEQUENCE) {
     await chooseLookElsewhere(remote, page, look);
@@ -227,7 +228,7 @@ test('Manage order items: ticked rows and the open Review selection sheet stay t
   await open.click();
   const sheet = page.getByRole('dialog', { name: 'Review selection' });
   await expect(sheet).toBeVisible();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
 
   for (const look of SEQUENCE) {
     await chooseLookElsewhere(remote, page, look);
@@ -263,7 +264,7 @@ test('The digital pick: a typed, unsaved quantity stays in its field through eve
   await ready(page);
   await field.fill('1');
   const url = page.url();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
   for (const look of SEQUENCE) {
     await chooseLook(page, look);
     await settle(page);
