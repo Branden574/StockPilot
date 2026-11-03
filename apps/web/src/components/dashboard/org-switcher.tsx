@@ -97,11 +97,11 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
         className="border-border bg-card flex h-[34px] w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)]"
       >
         {mark}
-        <span className="text-foreground min-w-0 flex-1 truncate text-left">
+        <span className="text-foreground min-w-0 flex-1 truncate text-left" data-glass="ws-name">
           <span className="sr-only">Organization: </span>
           {active.name}
         </span>
-        <ChevronsUpDown aria-hidden className="size-3 shrink-0 opacity-30" />
+        <ChevronsUpDown aria-hidden data-glass="ws-chev" className="size-3 shrink-0 opacity-30" />
       </div>
     );
   }
@@ -115,9 +115,12 @@ export function OrgSwitcher({ orgs, activeId }: OrgSwitcherProps) {
         aria-label="Switch organization"
       >
         {pending ? <Loader2 aria-hidden className="size-3 shrink-0 animate-spin" /> : mark}
-        <span className="text-foreground min-w-0 flex-1 truncate text-left">{active.name}</span>
+        <span className="text-foreground min-w-0 flex-1 truncate text-left" data-glass="ws-name">
+          {active.name}
+        </span>
         <ChevronsUpDown
           aria-hidden
+          data-glass="ws-chev"
           strokeWidth={2}
           className="text-muted-foreground size-3 shrink-0"
         />

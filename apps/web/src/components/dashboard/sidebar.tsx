@@ -316,7 +316,9 @@ export function Sidebar({
                 data-glass="sb-sec-h"
                 className="text-muted-foreground hover:text-foreground group flex w-full items-center gap-1.5 rounded-md px-2.5 pb-1 pt-2 text-left text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em] transition-colors [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-0"
               >
-                <span className="min-w-0 flex-1">{section.label}</span>
+                <span className="min-w-0 flex-1" data-glass="sb-sec-label">
+                  {section.label}
+                </span>
                 {/* The chevron is what says a folded heading opens, so it
                     keeps 3:1 against the page (WCAG 1.4.11): ink 4, the
                     faintest ink DESIGN-SPEC 2.4 allows for an arrow (3.19:1
@@ -358,7 +360,7 @@ export function Sidebar({
         >
           {initials}
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1" data-glass="sb-foot-text">
           <div className="text-foreground truncate text-[13px] font-medium leading-[1.3]">
             {userName ?? '—'}
           </div>
@@ -424,7 +426,9 @@ function NavList({
                     : 'text-muted-foreground group-hover/item:text-foreground',
                 )}
               />
-              <span className="min-w-0 flex-1">{item.label}</span>
+              <span className="min-w-0 flex-1" data-glass="nav-label">
+                {item.label}
+              </span>
               {/* Pending indicator — turns on at click time via
                   useLinkStatus(), turns off when the new route
                   finishes rendering. Without this, a cold-cache
