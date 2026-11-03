@@ -123,6 +123,8 @@ describe('order screen: a malformed link id is "Order not found."', () => {
 
   // Mutation caught: the check deleted, or moved below the offline return or
   // the header read (the raw "invalid input syntax" text with Try again).
+  // The branch takes a load number first (S2 follow-up), so no earlier load
+  // still on its way shows an order over "Order not found.".
   it('checks it before the offline return and before any read, and shows the not-found state', () => {
     const check = at(load, 'if (!isUuid(id)) {');
     expect(at(load, 'if (!orgId || !id) return;')).toBeLessThan(check);
@@ -130,7 +132,7 @@ describe('order screen: a malformed link id is "Order not found."', () => {
     expect(check).toBeLessThan(at(load, "from('order_requests')"));
     expect(check).toBeLessThan(at(load, "from('order_request_lines')"));
     expect(between(load, 'if (!isUuid(id)) {', 'if (offline) {')).toMatch(
-      /^if \(!isUuid\(id\)\) \{ setOrder\(null\); setLoadError\(null\); setLoading\(false\); return; \} $/,
+      /^if \(!isUuid\(id\)\) \{ loads\.next\(\); setOrder\(null\); setLoadError\(null\); setLoading\(false\); return; \} $/,
     );
   });
 

@@ -29,6 +29,11 @@
  * just now, so nothing was changed. Try again." when its own read fails). The
  * server decides every action either way; this only decides what is offered.
  *
+ * AN ORDER READ UNDER OTHER PERMISSIONS OFFERS NOTHING THAT NEEDS THE READ
+ * (orderWarehouseAccessAsShown): the screen gates with the permissions it
+ * holds now, and an order whose load ran before they asked for the read
+ * carries none, which is not a failed read.
+ *
  * Pure apart from the read (the screen passes `supabase`), so vitest pins it.
  */
 
@@ -116,4 +121,41 @@ export function orderWarehouseAccess(input: {
   const has = (ids: readonly string[] | null): boolean =>
     ids === null || (typeof input.warehouseId === 'string' && ids.includes(input.warehouseId));
   return { writes: !isViewer && has(scope.writableIds), reads: has(scope.readableIds) };
+}
+
+/**
+ * What the viewer may do to the order ON SCREEN, by its warehouse, for the
+ * permissions the screen gates with now (S2 follow-up, lab walk of #378).
+ *
+ * A load reads the viewer's warehouses only when the permissions it ran with
+ * ask for them (needsOrderWarehouseScope), and it keeps what it read with the
+ * order. When the permissions now ask for them and the order on screen
+ * carries none, that order was read under other permissions (the saved set
+ * changed, or the role was not known yet, after its load started), and the
+ * load the change started has not landed: until it does, nothing the order's
+ * warehouse decides is offered. Before, such an order was "not read" and
+ * offered as before, so a staff approver from warehouse A was offered every
+ * approver control on warehouse B's order. A read that failed is not this
+ * case: it comes back unreadable and decides nothing, as before. Otherwise
+ * orderWarehouseAccess, unchanged.
+ */
+export function orderWarehouseAccessAsShown(input: {
+  role: Role | string | null | undefined;
+  warehouseId: string | null | undefined;
+  scope: OrderWarehouseScope | null | undefined;
+  /** The order's status, as its load read it. */
+  status: string | null | undefined;
+  /** The permissions the screen gates with now, as `load` passes them to
+   *  needsOrderWarehouseScope. */
+  canApproveOrders: boolean;
+  canPick: boolean;
+}): OrderWarehouseAccess {
+  const asked = needsOrderWarehouseScope({
+    role: input.role,
+    canApproveOrders: input.canApproveOrders,
+    canPick: input.canPick,
+    status: input.status,
+  });
+  if (asked && input.scope == null) return { writes: false, reads: false };
+  return orderWarehouseAccess(input);
 }
