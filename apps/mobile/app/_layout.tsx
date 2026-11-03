@@ -5,6 +5,7 @@ import { View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { AccountDisabledScreen } from '@/components/account-disabled-screen';
+import { AppearanceFallbackNotice } from '@/components/appearance-fallback-notice';
 import { BiometricLockScreen } from '@/components/biometric-lock-screen';
 import { ColdLaunchSplash } from '@/components/cold-launch-splash';
 import { AppErrorBoundary } from '@/components/error-boundary';
@@ -13,6 +14,8 @@ import { WhatsNew } from '@/components/onboarding/whats-new';
 import { UpdatePromptHost } from '@/components/update-prompt-host';
 import { clearSessionEnded, signedOutRoute } from '@/lib/account-eviction';
 import { installAlertHolds } from '@/lib/alert-holds';
+import { AppearanceProvider, useAppearance } from '@/lib/appearance/provider';
+import { AppearanceSessionBridge } from '@/lib/appearance/session-bridge';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
 import { ColdLaunchGateProvider } from '@/lib/cold-launch-gate';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
@@ -114,6 +117,11 @@ function RootLayout() {
   }, []);
 
   const fontsReady = useFontGate();
+  // The person's appearance is read from this phone before the first paint
+  // (one AsyncStorage read, capped like the fonts at 4 s, then System), so a
+  // Liquid Glass or a fixed Dark/Light choice never shows a frame of the
+  // device's look first.
+  const appearanceReady = useAppearance().ready;
   const { mode, c } = useTheme();
 
   // Cold-launch branded splash (fire-once). `isCold` is computed once; the
@@ -136,12 +144,19 @@ function RootLayout() {
     // a dark-mode reload is not lit up by a light frame.
     return <View style={{ flex: 1, backgroundColor: isCold ? SPLASH_GROUND : c.paper }} />;
   }
+  if (!appearanceReady) {
+    // The same held page as the font gate, for the appearance read.
+    return <View style={{ flex: 1, backgroundColor: isCold ? SPLASH_GROUND : c.paper }} />;
+  }
 
   return (
     <GestureHandlerRootView
       style={{ flex: 1, backgroundColor: splashVisible ? SPLASH_GROUND : c.paper }}
     >
       <AuthProvider>
+        {/* Tells the appearance who is signed in (adopt the account's choice,
+            or save this phone's), after the first paint. Renders nothing. */}
+        <AppearanceSessionBridge />
         <StatusBar style={splashVisible || mode === 'dark' ? 'light' : 'dark'} />
         <ColdLaunchGateProvider splashActive={splashActive}>
           <AppErrorBoundary>
@@ -149,6 +164,11 @@ function RootLayout() {
           </AppErrorBoundary>
         </ColdLaunchGateProvider>
       </AuthProvider>
+
+      {/* After a crash in Liquid Glass this launch opened classic once
+          (plan 5.6): say so, and offer Liquid Glass back or classic for good.
+          Renders nothing otherwise. */}
+      <AppearanceFallbackNotice />
 
       {/* Stacked ON TOP for a blank-frame-free crossfade: the splash fades its
           own opacity to 0, revealing RootGate (incl. the Face-ID lock) which is
@@ -163,9 +183,25 @@ function RootLayout() {
   );
 }
 
+/**
+ * The appearance (Dark, Light, Liquid Glass, System) sits above everything
+ * RootLayout draws, so useTheme() answers from the first render. It renders
+ * RootLayout once and never keys it: changing the appearance re-renders the
+ * tree like a device Light/Dark change, and RootLayout's mount-only effect
+ * (initDb, pruneRejected, the cycle-count sync engine) and RootGate's hooks
+ * (push registration, useSync, the account gate) are never restarted by it.
+ */
+function AppearanceRoot() {
+  return (
+    <AppearanceProvider>
+      <RootLayout />
+    </AppearanceProvider>
+  );
+}
+
 // Sentry.wrap enables the native error boundary + touch/navigation context on
 // the root. It is a transparent pass-through when Sentry has no DSN.
-export default Sentry.wrap(RootLayout);
+export default Sentry.wrap(AppearanceRoot);
 
 function RootGate() {
   const { session, loading, locked, mfaRequired } = useAuth();
