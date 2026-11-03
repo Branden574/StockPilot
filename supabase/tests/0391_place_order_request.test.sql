@@ -917,7 +917,12 @@ select is(
   -- Re-pinned by 0395 (was 47cabcd1fe4f52fb7b2b6b6b64b68da1): the requester may cancel only at
   -- pending approval, and the restock movements carry the order (0395 R1:
   -- removing both gives 0390's body exactly); nothing proven here reads either.
-  'cancel_order_request(uuid,text)|535fc49935f15adc8d7dfa78836a06af|true|{"search_path=public, extensions"}|postgres\n'
+  -- Re-pinned by 0416 (was 535fc49935f15adc8d7dfa78836a06af): slice E refuses an approver's
+  -- cancel outside the order's warehouses, counts an order with no requester account as
+  -- nobody's own, and gives the requester's cancel only to someone who may still place
+  -- orders in the organization (0416 R6: removing the three gives this body exactly); the
+  -- cancel and its restocks are unchanged.
+  'cancel_order_request(uuid,text)|dfbd31ed1083df82ae6de3cbb13b6c27|true|{"search_path=public, extensions"}|postgres\n'
   'create_order_request(jsonb,jsonb)|4d65cef6c569a8c2c699fd9d5c8b77d5|false|{search_path=public}|postgres\n'
   'has_org_role(uuid,text)|10422b29a6e15acd003d4f11ed28e90c|true|{search_path=public}|postgres\n'
   'has_permission(uuid,text)|cc0accdad7e2fdf4f88aa82aa887e85f|true|{search_path=public}|postgres\n'
@@ -952,7 +957,10 @@ select is(
   -- Re-pinned by 0395 (was 1683653e88f385f3b905640f92f3e6ac|8): only the md5s of
   -- _notify_order_request_changes and cancel_order_request moved (0395 R4, R1);
   -- the same rows with their old md5s give the old value.
-  '102d4154cf2075ebab96bc46f1a3bd00|8',
+  -- Re-pinned by 0416 (was 102d4154cf2075ebab96bc46f1a3bd00|8): only cancel_order_request's
+  -- md5 moved (0416 R6); the same query on the bodies without slice E's blocks gives the
+  -- old value.
+  'c2c2081cea37eb5ca075f8845e08a477|8',
   'Z2: the set fingerprint of the first eight (0385 Z1 form, grants included) equals production''s at build start (it moved from the plan''s 5992f083...|8 only by 0390''s cancel_order_request edit)');
 select is(
   (select string_agg(x.relname || '=' || x.v, E'\n' order by x.relname) from (

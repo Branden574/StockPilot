@@ -66,6 +66,9 @@ describe('the gates the check reads are the conditions that show the buttons', (
     { canApproveOrders: true, isViewerRole: true },
     { canApproveOrders: false, isManagerByRole: true },
     { isAssignedDriver: true, hasAssignedDriver: true },
+    // Security slice E: an approver outside the order's warehouse, offered
+    // neither button (the dialog then closes after a failure).
+    { canApproveOrders: true, writesOrderWarehouse: false },
   ];
 
   it('Deny is offered only where the section and Approve show; Reopen picking only in the section at its two statuses', () => {
@@ -80,6 +83,9 @@ describe('the gates the check reads are the conditions that show the buttons', (
               status,
               fulfillmentType,
               canApproveOrders: false,
+              // In the order's warehouse unless the viewer says otherwise
+              // (security slice E's required input).
+              writesOrderWarehouse: true,
               canAssignDelivery: false,
               isManagerByRole: false,
               isAssignedDriver: false,
@@ -259,6 +265,7 @@ describe("the order screen's reason dialogs after a failure", () => {
     status: undefined,
     fulfillmentType: undefined,
     canApproveOrders: true,
+    writesOrderWarehouse: true,
     canAssignDelivery: true,
     isManagerByRole: true,
     isAssignedDriver: false,
