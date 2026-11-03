@@ -79,6 +79,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { FONT, TYPE_CEILING, capTo, palette, space, type Palette } from '@/lib/theme';
+import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
 
 interface FoundItem {
@@ -164,6 +165,9 @@ function formatCurrency(n: number): string {
 
 export default function Scan() {
   const router = useRouter();
+  // A Design adopted from the account waits while this tab is focused, so the
+  // look never switches in the middle of a scan (Liquid Glass item 32).
+  useHoldAppearanceAdoptionWhileFocused('scan');
   const { user } = useAuth();
   // Decides whether the stock-in-other-warehouses read is needed at all:
   // managers and above see every holding and skip it (0371).

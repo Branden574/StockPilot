@@ -38,6 +38,7 @@ import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
+import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
 
 const AI_CONFIDENCE_THRESHOLD = 0.85;
@@ -133,6 +134,9 @@ function overrideNotACount(rl: ReviewLine): boolean {
  */
 export default function AiScanScreen() {
   const router = useRouter();
+  // A Design adopted from the account waits while a count is being scanned
+  // (Liquid Glass item 32).
+  useHoldAppearanceAdoptionWhileFocused('count');
   const { id: cycleCountId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();

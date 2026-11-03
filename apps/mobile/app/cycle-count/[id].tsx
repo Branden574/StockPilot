@@ -67,6 +67,7 @@ import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
+import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
 
 /** The joined item columns the variant label is built from. */
@@ -185,6 +186,9 @@ function withoutSavedDraft(
 
 export default function CycleCountDetail() {
   const router = useRouter();
+  // A Design adopted from the account waits while a count is being entered
+  // (Liquid Glass item 32).
+  useHoldAppearanceAdoptionWhileFocused('count');
   // The device's palette (it was the light-only legacy alias, so the screen
   // stayed light in dark mode under a sync badge that followed the device).
   const { c } = useTheme();

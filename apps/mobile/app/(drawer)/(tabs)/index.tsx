@@ -30,6 +30,7 @@ import {
   returnNumberLabels,
 } from '@stockpilot/core';
 
+import { AppearanceIntroNotice } from '@/components/appearance-intro-notice';
 import { Avatar } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -420,6 +421,9 @@ export default function Home() {
           />
         }
       >
+        {/* Liquid Glass is the default: a one-time card says the classic
+            design is one tap away (R13). Draws nothing in classic. */}
+        <AppearanceIntroNotice />
         {loading && !noWorkspace ? (
           <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
         ) : (

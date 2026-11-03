@@ -18,6 +18,9 @@ case "$channel" in
 esac
 shift
 
+# Never the Liquid Glass scene photos either, before FOLLOWUPS SC1 is settled.
+bash scripts/refuse-unconfirmed-scene.sh
+
 if [[ ! -f .env.local ]]; then
   echo "FATAL: apps/mobile/.env.local missing: the update would bundle without the app's public settings." >&2
   exit 1

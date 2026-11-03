@@ -438,16 +438,37 @@ export default function Settings() {
             onPress={() => router.push('/settings/customize-tabs' as never)}
           />
           <Hair inset={70} />
-          {/* Dark, Light, Liquid Glass or System (the default, which follows
-              the device as the phone always did). Every signed-in person can
-              change their own; it is a personal preference, not a permission. */}
-          <SettingRow
-            icon={Moon}
-            title="Appearance"
-            detail={appearanceLabel(appearance.choice, appearance.glassEnabled)}
-            chevron
-            onPress={() => router.push('/settings/appearance' as never)}
-          />
+          {/* Liquid Glass rollout opt-in or default: Appearance, the Design
+              (Liquid Glass or Classic) and the Theme (Light, Dark or System),
+              e.g. "Liquid Glass · System". Every signed-in person can change
+              their own; it is a personal preference, not a permission. With
+              the kill switch off: today's row and alert, verbatim (item 37). */}
+          {appearance.glassEnabled ? (
+            <SettingRow
+              icon={Moon}
+              title="Appearance"
+              detail={appearanceLabel(
+                appearance.chosenStyle,
+                appearance.chosenTheme,
+                appearance.rollout,
+              )}
+              chevron
+              onPress={() => router.push('/settings/appearance' as never)}
+            />
+          ) : (
+            <SettingRow
+              icon={Moon}
+              title="Theme"
+              detail="Auto"
+              chevron
+              onPress={() =>
+                Alert.alert(
+                  'Theme',
+                  'Mobile follows your device appearance (Light or Dark) automatically.',
+                )
+              }
+            />
+          )}
           <Hair inset={70} />
           <SettingRow
             icon={RefreshCcw}

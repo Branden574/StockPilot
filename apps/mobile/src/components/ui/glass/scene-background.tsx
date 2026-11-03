@@ -10,23 +10,20 @@ import { SCENE_IMAGES } from './scene-assets';
  * content, drawn once per screen, absolutely filling its parent, under
  * everything (pointerEvents none).
  *
- *   - glass / blur materials with the scene image present: the pre-blurred
- *     day or night image, cover, plus the scheme's veil (Day: a warm 2-6%
- *     wash; Night: an ink 18-30% wash);
- *   - otherwise (Reduce Transparency, Android, the images not added yet, or a
+ *   - the theme's `scene` on (Liquid Glass on iOS in the glass or blur
+ *     material, or a low-end iPhone whose chrome is opaque; material.ts
+ *     selectScene) and the photo installed: the pre-blurred day or night
+ *     image, cover, plus the scheme's veil (Day: a warm 2-6% wash; Night: an
+ *     ink 18-30% wash);
+ *   - otherwise (Reduce Transparency, Android, the photos not installed, or a
  *     classic screen): the opaque --bg, which is also what paints first while
  *     an image loads, so the first paint is never blank.
  *
  * Never a live BlurView: content cards read on their own card fill over this.
  */
 export function SceneBackground() {
-  const { style, material, mode, c } = useTheme();
-  const source =
-    style === 'liquid-glass' && material !== 'opaque'
-      ? mode === 'dark'
-        ? SCENE_IMAGES.night
-        : SCENE_IMAGES.day
-      : null;
+  const { scene, mode, c } = useTheme();
+  const source = scene ? (mode === 'dark' ? SCENE_IMAGES.night : SCENE_IMAGES.day) : null;
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: c.paper }]}>
       {source ? (
