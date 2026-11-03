@@ -105,3 +105,47 @@ export function classifyPasswordUpdateError(
   }
   return null;
 }
+
+/**
+ * How GoTrue answered an authenticator code check (auth.mfa.challenge or
+ * auth.mfa.verify) for the sign-in code, the step-up and the reset's code step
+ * (lib/auth/mfa-code-attempts.ts). The same rule as above: the structured
+ * `code`, the SDK's error `name` and the HTTP `status`, never the message.
+ *
+ *   refused        GoTrue judged the code wrong: mfa_verification_failed, and
+ *                  nothing else. Only this answer writes an mfa.code_refused
+ *                  row, so it is positive only.
+ *   session_gone   the session is gone: the SDK's session-missing error (auth-js
+ *                  raises it for GoTrue's session_not_found too), the
+ *                  session-gone codes above, bad_jwt, no_authorization
+ *   no_answer      no answer, or a 5xx (AuthRetryableFetchError)
+ *   limited        GoTrue's own rate limit: over_request_rate_limit, or 429
+ *   unchecked      anything else: an answer that is not JSON (AuthUnknownError,
+ *                  which carries no status), an expired challenge, an address
+ *                  mismatch, a factor not found, a code this does not know, a
+ *                  message alone, no error at all
+ *
+ * Only `refused` says anything about the code; every other answer never judged
+ * it.
+ */
+export type MfaCodeOutcome = 'refused' | 'session_gone' | 'no_answer' | 'limited' | 'unchecked';
+
+const MFA_SESSION_GONE_CODES: ReadonlySet<unknown> = new Set([
+  ...SESSION_GONE_CODES,
+  'bad_jwt',
+  'no_authorization',
+]);
+
+export function classifyMfaCodeError(
+  error: { code?: unknown; name?: unknown; status?: unknown; message?: unknown } | null | undefined,
+): MfaCodeOutcome {
+  const code = error?.code;
+  const name = error?.name;
+  if (code === 'mfa_verification_failed') return 'refused';
+  if (name === 'AuthSessionMissingError' || MFA_SESSION_GONE_CODES.has(code)) {
+    return 'session_gone';
+  }
+  if (name === 'AuthRetryableFetchError') return 'no_answer';
+  if (code === 'over_request_rate_limit' || error?.status === 429) return 'limited';
+  return 'unchecked';
+}

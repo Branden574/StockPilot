@@ -4,9 +4,12 @@ import { NextResponse } from 'next/server';
 
 import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 
+import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
+import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
+import { asReportableError } from '@/lib/error-text';
 
 /**
  * The sentence an API route answers for a failure it did not expect: the one
@@ -58,6 +61,13 @@ export interface InternalErrorResponseOptions {
  * Next.js control flow (redirect(), notFound()) is thrown again first, for
  * Next to answer (lib/control-flow.ts), never answered or reported here.
  *
+ * A permission or account-status check that could not run
+ * (PermissionsUnavailableError, AccountStatusUnavailableError: withApiContext
+ * throws them when its fallback read fails) answers its own fixed sentence,
+ * with the route's status and code, and is reported as a warning: the
+ * routes answered those sentences before S16, and the failed read is not the
+ * route's fault (S31).
+ *
  * The guard app/api/no-raw-error-text.guard.test.ts fails an API route that
  * answers an error's own text again.
  */
@@ -67,6 +77,13 @@ export function internalErrorResponse(
   opts: InternalErrorResponseOptions = {},
 ): NextResponse {
   rethrowControlFlow(e);
+  if (e instanceof PermissionsUnavailableError || e instanceof AccountStatusUnavailableError) {
+    void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
+    return NextResponse.json(
+      { ...opts.body, error: opts.code ?? 'internal_error', message: e.message },
+      { status: opts.status ?? 500, ...(opts.headers ? { headers: opts.headers } : {}) },
+    );
+  }
   void reportError(asError(e), reportContext(tag, opts));
   return NextResponse.json(
     {
@@ -123,15 +140,18 @@ export function unreadableRequestResponse(code = 'invalid_body'): NextResponse {
  * The thrown value as an Error for the report, with its text. A supabase-js
  * read returns its `error` as a plain object, and code that throws that
  * object as it is (`if (advErr) throw advErr;`) throws something whose
- * String() is "[object Object]".
+ * String() is "[object Object]". The reporter's own rule (lib/error-text.ts,
+ * docket C21): its message and code, never its details.
  */
 function asError(e: unknown): Error {
-  if (e instanceof Error) return e;
-  const message = (e as { message?: unknown } | null | undefined)?.message;
-  return new Error(typeof message === 'string' ? message : String(e));
+  return asReportableError(e);
 }
 
-function reportContext(tag: string, opts: InternalErrorResponseOptions): ErrorContext {
+/** The report's context from a helper's options (shared with action-error-result.ts). */
+export function reportContext(
+  tag: string,
+  opts: Pick<InternalErrorResponseOptions, 'organizationId' | 'userIdHash' | 'level' | 'extra'>,
+): ErrorContext {
   return {
     tag,
     ...(opts.organizationId !== undefined ? { organizationId: opts.organizationId } : {}),

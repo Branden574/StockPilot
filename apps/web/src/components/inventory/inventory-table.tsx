@@ -50,7 +50,11 @@ import { touchTargetClass } from '@/components/patterns/touch-target';
 import { usePerfUseful } from '@/components/perf/perf-useful';
 import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
-import { GENERIC_CHARTER_LABEL } from '@/lib/charter-display';
+import {
+  charterCellFor,
+  GENERIC_CHARTER_LABEL,
+  type CharterCellEntry,
+} from '@/lib/charter-display';
 import { useCountSelection } from '@/lib/cycle-counts/use-count-selection';
 import { ELSEWHERE_PLACEMENT_KIND, elsewhereSuffix } from '@/lib/placements';
 import {
@@ -250,9 +254,11 @@ interface Item {
 interface Lookups {
   categories: Map<string, { name: string; color: string | null }>;
   locations: Map<string, { name: string }>;
-  /** Charter id → display name + short code. Missing-key rows render
-   *  the "Generic" pill (any charter the warehouse services can use). */
-  charters?: Map<string, { name: string; code: string | null }>;
+  /** Charter id → display name + short code, and a status for an archived or
+   *  inactive charter (named for its records' label only, B97). A record with
+   *  no charter renders the "Generic" pill (any charter the warehouse
+   *  services can use); one whose charter is missing here renders nothing. */
+  charters?: Map<string, CharterCellEntry>;
 }
 
 /** One row the table body actually renders: either a plain placement
@@ -412,6 +418,10 @@ export interface InventoryTableProps {
   /** Viewer can place order requests AND the orders module is enabled. Enables
    *  the bulk 'Start an order' shortcut. Default false → hidden. */
   canStartOrder?: boolean;
+  /** Viewer holds items:export, the permission the export and its sample
+   *  answer (B68). Shows Export in the toolbar and in the bulk bar. Page
+   *  passes can(ctx, 'items:export'). Default false → hidden. */
+  canExport?: boolean;
   /** Viewer can start a cycle count (core countStartAllowed: a manager with
    *  cycle_counts:assign and stock:adjust, the module on). Enables the bulk
    *  'Cycle count' shortcut (B42). Default false → hidden. */
@@ -783,6 +793,7 @@ export function InventoryTable({
   canCreate = true,
   canSetPublicVisibility = false,
   canStartOrder = false,
+  canExport = false,
   canStartCount = false,
   canUngroup = false,
   canUnlinkFamilies = false,
@@ -2504,7 +2515,9 @@ export function InventoryTable({
           ) : (
             <CategoryLabel category={facts.category} />
           )}
-          <CharterLabel item={item} lookups={lookups} />
+          {charterShows(item.charter_id, lookups) ? (
+            <CharterLabel item={item} lookups={lookups} />
+          ) : null}
         </MetaLine>
       ),
       chip: entry.nested ? null : rowChip(entry, item),
@@ -2579,12 +2592,14 @@ export function InventoryTable({
       meta: (
         <MetaLine>
           <CategoryLabel category={f.category} />
-          <HeaderCharterContent
-            first={f.first}
-            distinctCharterIds={f.distinctCharterIds}
-            lookups={lookups}
-            multipleTitle="Sizes span multiple charters — expand to see each"
-          />
+          {headerCharterShows(f.first, f.distinctCharterIds, lookups) ? (
+            <HeaderCharterContent
+              first={f.first}
+              distinctCharterIds={f.distinctCharterIds}
+              lookups={lookups}
+              multipleTitle="Sizes span multiple charters — expand to see each"
+            />
+          ) : null}
         </MetaLine>
       ),
       status: (
@@ -2664,12 +2679,14 @@ export function InventoryTable({
           ) : (
             <CategoryLabel category={f.category} />
           )}
-          <HeaderCharterContent
-            first={f.first}
-            distinctCharterIds={f.distinctCharterIds}
-            lookups={lookups}
-            multipleTitle="Placements span multiple charters — expand to see each"
-          />
+          {headerCharterShows(f.first, f.distinctCharterIds, lookups) ? (
+            <HeaderCharterContent
+              first={f.first}
+              distinctCharterIds={f.distinctCharterIds}
+              lookups={lookups}
+              multipleTitle="Placements span multiple charters — expand to see each"
+            />
+          ) : null}
         </MetaLine>
       ),
       status: (
@@ -3088,10 +3105,12 @@ export function InventoryTable({
             label={stockView === 'placed' ? 'On hand: placed only' : 'On hand: total'}
           />
 
-          <ExportMenu
-            params={params}
-            itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
-          />
+          {canExport ? (
+            <ExportMenu
+              params={params}
+              itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
+            />
+          ) : null}
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -3177,6 +3196,7 @@ export function InventoryTable({
             locations={locations}
             tags={tags}
             canSetPublicVisibility={canSetPublicVisibility}
+            canExport={canExport}
             // Books tab and Items tab share this table (see the onCycleCount
             // itemType inference below) — thread the same signal into the
             // bulk Export dialog so a books bulk-selection gets ISBN/Author/
@@ -3895,16 +3915,23 @@ const PAGER_EDGE_DISABLED =
 // The Category cell (CategoryLabel) lives in ./category-label: it draws the
 // category's stored colour, which it checks first (docket T14).
 
-/** The Charter cell: the charter's code (its name as the title), or "Generic". */
+/**
+ * The Charter cell: the charter's code (its name as the title), marked
+ * (archived) or (inactive) when it is no longer active; "Generic" for a record
+ * with no charter; nothing for a charter the lookup does not name (B97: that
+ * was "Generic", which an archived charter's stock is not). The rule is
+ * lib/charter-display charterCellFor.
+ */
 function CharterLabel({ item, lookups }: { item: Item; lookups: Lookups }) {
-  const charter = item.charter_id ? (lookups.charters?.get(item.charter_id) ?? null) : null;
-  if (charter) {
+  const cell = charterCellFor(item.charter_id, lookups.charters);
+  if (cell.kind === 'charter') {
     return (
-      <span className="text-[var(--ed-ink-2)]" title={charter.name}>
-        {charter.code ?? charter.name}
+      <span className="text-[var(--ed-ink-2)]" title={cell.title}>
+        {cell.text}
       </span>
     );
   }
+  if (cell.kind === 'unknown') return null;
   // charter_id IS NULL = generic stock (any charter serviced by the
   // warehouse can pull from it).
   return (
@@ -4706,24 +4733,23 @@ function HeaderCharterContent({
   multipleTitle: string;
 }) {
   if (distinctCharterIds.size > 1) return <MultipleLabel title={multipleTitle} />;
-  if (first.charter_id) {
-    const charter = lookups.charters?.get(first.charter_id) ?? null;
-    return charter ? (
-      <span className="text-[var(--ed-ink-2)]" title={charter.name}>
-        {charter.code ?? charter.name}
-      </span>
-    ) : (
-      <span className="text-muted-foreground text-[12px] italic">{GENERIC_CHARTER_LABEL}</span>
-    );
-  }
-  return (
-    <span
-      className="text-muted-foreground text-[12px] italic"
-      title="Generic stock — any charter serviced by this warehouse can use it"
-    >
-      {GENERIC_CHARTER_LABEL}
-    </span>
-  );
+  // Every row shares the first's charter: its cell, as the rows show it.
+  return <CharterLabel item={first} lookups={lookups} />;
+}
+
+/** Whether a record's Charter cell shows anything (a grid card's meta line
+ *  leaves out a part with nothing in it, so no "·" is left dangling). */
+function charterShows(charterId: string | null | undefined, lookups: Lookups): boolean {
+  return charterCellFor(charterId, lookups.charters).kind !== 'unknown';
+}
+
+/** charterShows for a group header (HeaderCharterContent). */
+function headerCharterShows(
+  first: Item,
+  distinctCharterIds: Set<string>,
+  lookups: Lookups,
+): boolean {
+  return distinctCharterIds.size > 1 || charterShows(first.charter_id, lookups);
 }
 
 /** A SKU header's SKU cell; a named group's rolls its records' SKUs up. */

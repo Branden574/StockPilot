@@ -5,6 +5,7 @@ import { notFound, redirect } from 'next/navigation';
 import { ArchiveBundleButton } from '@/components/bundles/archive-bundle-button';
 import { AssembleBundleModal } from '@/components/bundles/assemble-bundle-modal';
 import { DistributeBundleModal } from '@/components/bundles/distribute-bundle-modal';
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
@@ -21,9 +22,11 @@ import {
 } from '@/components/ui/table';
 import { can, canDistributeBundles } from '@stockpilot/core';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { createClient } from '@/lib/supabase/server';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
+import { ServiceError } from '@/server/services/context';
 import { WarehousesService } from '@/server/services/warehouses';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
@@ -35,6 +38,12 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
   // A malformed id (a mistyped or cut-off link) is Page not found before
   // anything is read with it (B63).
   notFoundUnlessUuid(id);
+  // Bundles off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('bundles');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="bundles" access={moduleAccess} />;
+  }
   const ctx = await requireOrgContext();
   const canManage = can(ctx, 'bundles:manage');
   // Same visibility gate as the bundles list page — without it, an UNgranted
@@ -53,14 +62,18 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
   let detail;
   try {
     detail = await svc.get(id);
-  } catch {
-    notFound();
+  } catch (e) {
+    // Only a missing bundle is Page not found. A failed read reaches the error
+    // page, which says the page could not be loaded, offers Try again and
+    // reports it; it used to tell the person the bundle did not exist (B66).
+    if (e instanceof ServiceError && e.code === 'not_found') notFound();
+    throw e;
   }
 
   const [whs, recent, upcomingEvents] = await Promise.all([
     (await WarehousesService.forCurrentUser()).listNames(),
     svc.recentDistributions({ bundleId: id, limit: 20 }),
-    fetchUpcomingEvents(),
+    fetchUpcomingEvents(ctx.organizationId),
   ]);
 
   const warehouseMap = new Map(whs.map((w) => [w.id, w.name]));
@@ -287,9 +300,15 @@ export default async function BundleDetailPage({ params }: { params: Promise<{ i
   );
 }
 
-async function fetchUpcomingEvents(): Promise<
-  Array<{ id: string; title: string; startsAt: string }>
-> {
+/**
+ * The next month's open events of THIS organization, for Distribute's event
+ * picker. RLS (is_org_member) lets a member of two organizations read both,
+ * so the read names the page's organization: without it the other one's
+ * events were offered, and distribute_bundle refuses them (B92).
+ */
+async function fetchUpcomingEvents(
+  organizationId: string,
+): Promise<Array<{ id: string; title: string; startsAt: string }>> {
   try {
     const supabase = await createClient();
     const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -297,6 +316,7 @@ async function fetchUpcomingEvents(): Promise<
     const { data } = await supabase
       .from('schedule_events')
       .select('id, title, starts_at')
+      .eq('organization_id', organizationId)
       .gte('starts_at', sinceIso)
       .lte('starts_at', untilIso)
       .in('status', ['scheduled', 'in_progress'])

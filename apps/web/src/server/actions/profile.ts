@@ -5,11 +5,12 @@ import { z } from 'zod';
 
 import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
-import { getSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
+import { readSessionMemberships, requireOrgContext, requireSession } from '@/lib/auth/session';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
+import { DECODE_MAX_INPUT_PIXELS, readImageHeader } from '@/lib/image-decode';
 import { isSniffedKindAllowedInBucket, sniffImage } from '@/lib/image-signature';
 import { fetchObjectPrefix } from '@/lib/storage-object-prefix';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
@@ -42,6 +43,7 @@ import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { assertStepUpHeld, sessionChangedError } from '@/server/services/step-up-held';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, UNSAFE_DISPLAY_NAME_CHARS, type ActionResult } from '@stockpilot/core';
 
@@ -156,20 +158,35 @@ async function resolveSessionMfaPosture(
  * A member keeps the org gate EXACTLY as before: this is not a way around an
  * org's mfa_policy, only an answer for the case where there is no org to ask.
  */
-async function gateMfaForSelfService(userId: string): Promise<void> {
+async function gateMfaForSelfService(userId: string): Promise<'gated' | 'memberships_unreadable'> {
   // A second read of the session and its memberships: React.cache() does not
   // memoize inside a Server Action (lib/auth/session.ts), so this does not
   // share requireSession()'s. A session that does not verify as `userId` here
   // answers no memberships and takes the branch below, whose posture read is
-  // held to `userId` and refuses it.
-  const memberships = await getSessionMemberships();
-  if (memberships.length > 0) {
+  // held to `userId` and refuses it. A list that cannot be read is not "no
+  // membership": the action stops there and the person tries again.
+  const read = await readSessionMemberships();
+  if (!read.ok) return 'memberships_unreadable';
+  if (read.memberships.length > 0) {
     await gateMfa();
-    return;
+    return 'gated';
   }
   const supabase = await createClient();
   const posture = await resolveSessionMfaPosture(supabase, userId);
   if (posture.mfaRequired && !posture.mfaSatisfied) throw mfaGateError(posture);
+  return 'gated';
+}
+
+/**
+ * Account deletion's answer when the person's memberships could not be read:
+ * nothing was changed, try again. Reported with a fixed message (no ids).
+ */
+function membershipReadFailed(): ActionResult<never> {
+  void reportError(new Error('account deletion: membership read failed'), {
+    tag: 'account.delete.membership_read',
+    extra: { source: 'web' },
+  });
+  return err('internal_error', ACCOUNT_DELETE_RETRY_COPY);
 }
 
 /**
@@ -189,8 +206,7 @@ async function gateMfaForSelfService(userId: string): Promise<void> {
  */
 function actionErrorFrom(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
-  if (e instanceof ServiceError) return err(e.code, e.message, e.details);
-  return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+  return actionErrorResult(e, 'actions.profile');
 }
 
 export async function updateProfileNameAction(input: {
@@ -467,6 +483,29 @@ export async function setOrgLogoUrlAction(input: {
           'That file is not a PNG, JPG, WEBP or AVIF image. Pick a real image file.',
         );
       }
+      // S45: the branded PDFs draw a logo through the capped image decoder
+      // (lib/image-decode.ts), which refuses a PNG, JPEG or WebP of more
+      // pixels than DECODE_MAX_INPUT_PIXELS (50 million), so such a logo
+      // would never print. Say so now, with its size, and keep the current
+      // logo. PNG and JPEG sizes come from the sniff, WebP's from its header.
+      // An AVIF states its size in a box tree that is not read here; the PDF
+      // side holds it to its own cap. This is advice to the uploader, not the
+      // defence: the PDF side refuses the same files whenever they are read.
+      if (sniffed.kind === 'png' || sniffed.kind === 'jpeg' || sniffed.kind === 'webp') {
+        const size = sniffed.kind === 'webp' ? readImageHeader(head.prefix) : sniffed;
+        if (
+          size &&
+          size.width !== null &&
+          size.height !== null &&
+          size.width * size.height > DECODE_MAX_INPUT_PIXELS[sniffed.kind]
+        ) {
+          await logos.remove([objectPath]);
+          return err(
+            'validation_error',
+            `That logo is too large to print (${size.width} by ${size.height} pixels). Save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.`,
+          );
+        }
+      }
     }
     const supabase = await createClient();
     const { data: prev } = await supabase
@@ -544,7 +583,9 @@ export async function deleteOwnAccountAction(input: {
     const session = await requireSession();
     // SP-129 — NOT gateMfa(): a user with no membership must still be able to
     // delete their account. See gateMfaForSelfService.
-    await gateMfaForSelfService(session.userId);
+    if ((await gateMfaForSelfService(session.userId)) === 'memberships_unreadable') {
+      return membershipReadFailed();
+    }
     const supabase = await createClient();
     const admin = createAdminClient();
 
@@ -605,10 +646,12 @@ export async function deleteOwnAccountAction(input: {
     if (!rl.allowed) return err('rate_limited', ACCOUNT_DELETE_RETRY_COPY);
 
     // The organization the audit row is filed under, read BEFORE the delete
-    // removes the membership (null for a person with no membership, SP-129).
-    const memberships = await getSessionMemberships();
+    // removes the membership (null for a person with no membership, SP-129;
+    // a list that cannot be read stops the action: try again).
+    const read = await readSessionMemberships();
+    if (!read.ok) return membershipReadFailed();
     const auditOrganizationId =
-      memberships.length > 0 ? (await withContext()).organizationId : null;
+      read.memberships.length > 0 ? (await withContext()).organizationId : null;
 
     // Ask first (0388). Every answer but "deletable" changes nothing. There is
     // no profile tombstone any more: nothing reads user_profiles.deleted_at

@@ -23,7 +23,8 @@ import { ItemImagesService } from '@/server/services/item-images';
  *
  * AUTHORIZATION is unchanged. `order_request_top_skus_for_warehouse` is
  * SECURITY INVOKER and is called with the visitor's own session client, exactly
- * as the route does, so row level security decides which orders are counted.
+ * as the route did (retired in B20a), so row level security decides which
+ * orders are counted.
  * The answer is then narrowed to items present in the visitor's own catalog:
  * the browser receives no id it was not already given.
  *
@@ -34,10 +35,10 @@ import { ItemImagesService } from '@/server/services/item-images';
  * here must not take the storefront down with it.
  */
 
-/** The window and the size the storefront has always asked the route for. */
+/** The window and the size the storefront always asked the route for. */
 const DAYS = 30;
 const LIMIT = 10;
-/** Width of the fallback thumbnail, as the route signs it. */
+/** Width of the fallback thumbnail, as the route signed it. */
 const FALLBACK_THUMB_WIDTH = 200;
 
 export interface FrequentlyOrderedEntry {

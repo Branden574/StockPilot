@@ -14,7 +14,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  * once more that the verified session is that account's and owes no step-up,
  * so nothing read between the gate and the delete can stand in for it.
  *
- * Real: requireSession, getSessionMemberships and withContext
+ * Real: requireSession, readSessionMemberships and withContext
  * (lib/auth/session, services/context) with get_request_context(),
  * @supabase/ssr and auth-js against the fixture's Auth server, and a PostgREST
  * that answers as the bearer token's subject. The service role's calls are
@@ -122,6 +122,7 @@ vi.mock('@/lib/supabase/admin', () => ({
 
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { createClient } from '@/lib/supabase/server';
+import { ACCOUNT_DELETE_RETRY_COPY } from '@/server/lib/account-deletion';
 import {
   FIXTURE_EMAIL,
   FIXTURE_SESSION_ID,
@@ -191,6 +192,13 @@ let authCalls: string[];
 let contextAs: string[];
 /** The accounts with an organization: their role there. */
 let roles: Map<string, 'owner' | 'admin' | 'staff'>;
+/**
+ * get_request_context() fails, so the session is resolved with the legacy
+ * reads, and of those the membership read fails while the profile read works.
+ * Both failures are 500s: postgrest-js retries a GET answered 503 or 520 with
+ * real sleeps, which would outlast the test's timeout.
+ */
+let membershipReadFails: boolean;
 
 beforeAll(async () => {
   projectKey = await makeSigningKey('project-kid-1');
@@ -215,6 +223,7 @@ function subOf(jwt: string): string | null {
 /** PostgREST, answering as auth.uid(): the bearer token's subject. */
 function rest(url: URL, subject: string | null): Response {
   const name = url.pathname.replace('/rest/v1/', '');
+  if (membershipReadFails) return legacyReads(name, url, subject);
   if (name === 'rpc/get_request_context') {
     contextAs.push(subject ?? '(none)');
     if (!subject) return Response.json({ user_id: null, profile: null, memberships: [] });
@@ -260,6 +269,36 @@ function rest(url: URL, subject: string | null): Response {
   return Response.json({ message: `no fake for ${name}` }, { status: 404 });
 }
 
+/** PostgREST while membershipReadFails: see its comment. */
+function legacyReads(name: string, url: URL, subject: string | null): Response {
+  if (name === 'rpc/get_request_context') {
+    contextAs.push(subject ?? '(none)');
+    return Response.json({ code: 'XX000', message: 'internal' }, { status: 500 });
+  }
+  if (name === 'user_profiles') {
+    if (!subject) return Response.json([]);
+    return Response.json([
+      {
+        id: subject,
+        email: accountEmail(subject),
+        full_name: null,
+        avatar_url: null,
+        default_organization_id: roles.has(subject) ? ORG : null,
+        disabled_at: null,
+      },
+    ]);
+  }
+  if (name === 'organization_members') {
+    // The session loader's read embeds the organization; the sole-owner
+    // pre-check's does not, and finds nothing.
+    if (url.searchParams.get('select')?.includes('organizations:organization_id')) {
+      return Response.json({ code: '57014', message: 'timeout' }, { status: 500 });
+    }
+    return Response.json([]);
+  }
+  return Response.json({ message: `no fake for ${name}` }, { status: 404 });
+}
+
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-02T03:00:00.000Z'));
@@ -267,6 +306,7 @@ beforeEach(() => {
   authCalls = [];
   contextAs = [];
   roles = new Map([[MEMBER, 'staff']]);
+  membershipReadFails = false;
   state.admin = [];
   state.rateLimitMs = ROUND_TRIP_MS;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -493,5 +533,23 @@ describe('deleteOwnAccountAction: controls (deleted as before)', () => {
       error: { code: 'forbidden', details: { reason: 'aal2_required' } },
     });
     expect(deleted()).toEqual([]);
+  });
+});
+
+describe('deleteOwnAccountAction: a membership list that cannot be read', () => {
+  it('a member whose membership list cannot be read: nothing is deleted, try again', async () => {
+    membershipReadFails = true;
+    server.unenrolledUsers.add(MEMBER);
+    await signedIn(MEMBER, 'aal1', MEMBER_REFRESH, NEVER);
+    const { result, thrown } = await run();
+    expect(thrown).toBeUndefined();
+    expect(result).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: ACCOUNT_DELETE_RETRY_COPY },
+    });
+    expect(deleted()).toEqual([]);
+    // Each session read asked get_request_context() first, for the member.
+    expect(contextAs.length).toBeGreaterThan(0);
+    expect(new Set(contextAs)).toEqual(new Set([MEMBER]));
   });
 });

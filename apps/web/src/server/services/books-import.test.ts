@@ -52,7 +52,10 @@ vi.mock('@/lib/books/lookup', async () => {
   };
 });
 
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+
 import { lookupIsbn } from '@/lib/books/lookup';
+import { reportError } from '@/lib/error-reporter';
 
 import { BooksImportService } from './books-import';
 import { ServiceError } from './context';
@@ -383,5 +386,72 @@ describe('BooksImportService.execute', () => {
     const payload = itemInsertArgs[0]![0] as Array<Record<string, unknown>>;
     expect(payload).toHaveLength(1);
     expect(payload[0]!.barcode).toBe(ISBN_B);
+  });
+});
+
+// S31: a failed lookup's own text (a book source's quota words, a network
+// error) and the Postgres text of a duplicate went into the rows and the
+// conflict the assistant's import tools answer. They are reported now, and
+// the person reads the app's sentences.
+describe("BooksImportService: a failure's own text stays in the report (S31)", () => {
+  it('each failed lookup says the fixed sentence, and the preview sends ONE report', async () => {
+    const first = new Error('Google Books 429: quota exceeded for this project');
+    vi.mocked(lookupIsbn).mockImplementation(async (isbn: string) => {
+      throw isbn === ISBN_A ? first : new TypeError('fetch failed');
+    });
+    const stub = execStub();
+    const svc = new BooksImportService(makeServiceContext(stub.client));
+
+    const { rows } = await svc.preview([ISBN_A, ISBN_B]);
+
+    expect(rows.map((r) => [r.status, r.error])).toEqual([
+      ['lookup_failed', 'Could not look this ISBN up. Try again later.'],
+      ['lookup_failed', 'Could not look this ISBN up. Try again later.'],
+    ]);
+    expect(JSON.stringify(rows)).not.toMatch(/quota|fetch failed/);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
+      tag: 'books_import.lookup',
+      organizationId: 'org-test',
+      level: 'warning',
+      extra: { failed: 2 },
+    });
+  });
+
+  it('a book with no metadata keeps its own words and is not reported', async () => {
+    vi.mocked(lookupIsbn).mockImplementation(async () => null);
+    const svc = new BooksImportService(makeServiceContext(execStub().client));
+    const { rows } = await svc.preview([ISBN_A]);
+    expect(rows[0]!.error).toBe('No metadata found across sources.');
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a duplicate on the batch insert: the conflict carries no Postgres text, details are the batch size only', async () => {
+    const pgText = 'duplicate key value violates unique constraint "inventory_items_org_barcode_key"';
+    const stub = execStub({ insertError: { message: pgText, code: '23505' } });
+    const svc = new BooksImportService(makeServiceContext(stub.client));
+
+    let caught: ServiceError | null = null;
+    try {
+      await svc.execute([ISBN_A, ISBN_B], { warehouseId: WAREHOUSE_ID, defaultQuantity: 1 });
+    } catch (e) {
+      caught = e as ServiceError;
+    }
+    expect(caught).toBeInstanceOf(ServiceError);
+    expect(caught!.code).toBe('conflict');
+    expect(caught!.message).toBe(
+      'Import rejected: at least one book conflicts with an existing item (duplicate SKU or barcode). No books were imported.',
+    );
+    expect(caught!.details).toEqual({ batchSize: 2 });
+    expect(JSON.stringify({ m: caught!.message, d: caught!.details })).not.toContain('inventory_items');
+    expect(reportError).toHaveBeenCalledTimes(1);
+    const [reported, context] = vi.mocked(reportError).mock.calls[0]!;
+    expect((reported as Error).message).toBe(pgText);
+    expect(context).toEqual({
+      tag: 'books_import.conflict',
+      organizationId: 'org-test',
+      level: 'warning',
+      extra: { batchSize: 2 },
+    });
   });
 });

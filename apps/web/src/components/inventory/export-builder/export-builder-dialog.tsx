@@ -31,6 +31,7 @@ import {
   type InventoryExportRequest,
 } from '@/lib/download-export';
 import { isControlFlow } from '@/lib/control-flow';
+import { isExportRefused } from '@/lib/exports/export-refusal';
 import { exportItemTypeKind } from '@/lib/exports/export-request';
 import { droppedFieldsNote, type SharedExportPresetConfig } from '@/lib/exports/preset-config';
 import {
@@ -156,15 +157,20 @@ export function ExportBuilderDialog({
   const [previewAttempt, setPreviewAttempt] = React.useState(0);
   // The last answer, tagged with the request (and attempt) it answers. Only an
   // answer to the CURRENT request counts; anything else reads as loading.
-  // `preview: null` is a failed request.
+  // `preview: null` is a failed request; `refusal` is set when it was refused
+  // for good (B68: no permission to export, or the session ended), which the
+  // preview says instead of offering Try again.
   const [previewAnswer, setPreviewAnswer] = React.useState<{
     key: string;
     preview: ExportPreviewResponse | null;
+    refusal: string | null;
   } | null>(null);
   const currentAnswer =
     previewAnswer?.key === previewKeyOf(previewAttempt, previewRequestJson) ? previewAnswer : null;
   const preview = currentAnswer?.preview ?? null;
-  const previewFailed = currentAnswer !== null && currentAnswer.preview === null;
+  const previewRefusal = currentAnswer?.refusal ?? null;
+  const previewFailed =
+    currentAnswer !== null && currentAnswer.preview === null && previewRefusal === null;
   const [busy, setBusy] = React.useState(false);
   const [stage, setStage] = React.useState<ExportStage | null>(null);
   const [error, setError] = React.useState<string | null>(null);
@@ -219,13 +225,14 @@ export function ExportBuilderDialog({
     const key = previewKeyOf(previewAttempt, previewRequestJson);
     const controller = new AbortController();
     fetchExportPreview(JSON.parse(previewRequestJson) as ExportPreviewRequest, controller.signal)
-      .then((answer) => setPreviewAnswer({ key, preview: answer }))
-      .catch(() => {
+      .then((answer) => setPreviewAnswer({ key, preview: answer, refusal: null }))
+      .catch((e: unknown) => {
         // Superseded by a newer request, or the dialog closed: nothing failed.
         if (controller.signal.aborted) return;
         // A failed preview must never block an export: the preview says the
         // sample could not load and offers Try again; the on-screen count stays.
-        setPreviewAnswer({ key, preview: null });
+        // A refusal says why instead, with no Try again (it cannot help).
+        setPreviewAnswer({ key, preview: null, refusal: isExportRefused(e) ? e.message : null });
       });
     return () => controller.abort();
   }, [open, previewAttempt, previewRequestJson]);
@@ -838,6 +845,7 @@ export function ExportBuilderDialog({
               itemTypeKind={itemTypeKind}
               preview={preview}
               failed={previewFailed}
+              refusal={previewRefusal}
               onRetry={() => setPreviewAttempt((n) => n + 1)}
               rowCount={rowCount}
             />

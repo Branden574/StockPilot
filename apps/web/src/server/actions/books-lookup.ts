@@ -2,9 +2,8 @@
 
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { InventoryService } from '@/server/services/inventory';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 const schema = z.object({
@@ -36,8 +35,6 @@ export async function lookupBookByIsbnAction(
       })),
     });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.books_lookup.lookup_book_by_isbn');
   }
 }
