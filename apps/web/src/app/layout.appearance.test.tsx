@@ -27,6 +27,20 @@ vi.mock('@/server/actions/appearance', () => ({
   getMyAppearanceAction: vi.fn(),
   setMyAppearanceAction: vi.fn(),
 }));
+// Under opt-in and default the provider renders the marketing variant guard,
+// which asks for the router (it renders nothing on the server). Next mounts
+// the app router around every layout; this render has none, so it gets a stub.
+vi.mock('next/navigation', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('next/navigation')>()),
+  useRouter: () => ({
+    back: vi.fn(),
+    forward: vi.fn(),
+    prefetch: vi.fn(),
+    push: vi.fn(),
+    refresh: vi.fn(),
+    replace: vi.fn(),
+  }),
+}));
 
 import { appearanceScript } from '@/components/theme/appearance-script';
 import { scenePhotoCss } from '@/styles/liquid-glass/scene-photo';
