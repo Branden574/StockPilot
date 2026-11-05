@@ -1,0 +1,137 @@
+/* Liquid Glass, the returns pages (stage 4, operations lane): a return
+   (Return-Detail.dc.html) and the returns list (Routes-Gallery-1.dc.html
+   panel). The shared operations frame is pages/ops.css; this file adds what
+   these boards draw on top of it.
+
+   Same DOM as Classic (plan M1), found through the inert root hooks
+   (data-glass-page="ops" with data-glass-view="return" or "returns"), the
+   workbench's own landmarks (section[aria-label="Next step"]) and the
+   shared components' hooks. Every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen and names its
+   page root.
+
+   A return: the board's .cols-side (the record beside a 360 px column, 16
+   between, one column in a window 1100 px wide or narrower) is drawn here
+   by floating the workbench's Next step card to the right of the record:
+   Classic renders it second, right after the head, so it starts level with
+   the first card, and floating it (rather than placing it in a grid row)
+   keeps the record's cards at their own heights whatever the card holds.
+   In it the actions stack full width, the primary at the board's 44 px
+   (.btn-lg). Deviations, recorded (stage4/ops-rows.md): the board's
+   progress rail (.steps: Requested, Approved, Received, Closed) and its
+   destination and exchange radio cards are not drawn (the workbench says
+   the step in its status and its actions; a rail would be a glass-only
+   summary, FOLLOWUPS); the record keeps Classic's cards and their order.
+   Imported only by the returns pages. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── A return (Return-Detail.dc.html) ─────────────────────────────── */
+    /* The record takes the page's width (Classic caps it at 1040 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      > .max-w-\[1040px\] {
+      max-width: none;
+    }
+    @media (min-width: 1101px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col {
+        display: flow-root;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col
+        > *
+        + * {
+        margin-top: 20px;
+        margin-right: 376px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col
+        > section[aria-label='Next step'] {
+        float: right;
+        width: 360px;
+        margin-right: 0;
+        margin-left: 16px;
+      }
+      /* In the side column the actions stack, full width (.card-b col g10),
+         the primary at 44 px (.btn-lg), the "item is here" switch under
+         them. */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        padding: 16px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child
+        > [data-glass='button'] {
+        width: 100%;
+        height: 36px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child
+        > [data-glass='button'][data-glass-variant='default'] {
+        height: 44px;
+        border-radius: 12px;
+        font-size: 15px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child
+        > div {
+        margin-left: 0;
+        padding-top: 4px;
+      }
+    }
+    /* The RETURNING eyebrow (.eyebrow: 12/16, 600, ink 3). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      section[aria-label]
+      > h2.uppercase:first-child {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+    }
+
+    /* ── The list (Routes-Gallery-1.dc.html returns): the RMA number in
+       mono, strong, in the accent text; its order in ink 2 ─────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='returns']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:first-child
+      a {
+      color: var(--lg-accent-text);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='returns']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:nth-child(2)
+      a {
+      color: var(--lg-ink-2);
+    }
+  }
+}

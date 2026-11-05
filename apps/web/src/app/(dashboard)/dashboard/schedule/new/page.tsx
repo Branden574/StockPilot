@@ -12,6 +12,12 @@ import { WarehousesService } from '@/server/services/warehouses';
 
 import { can, resolveOrgTimezone } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const metadata = { title: 'New event · Schedule' };
 
 export default async function NewScheduleEventPage({
@@ -28,8 +34,7 @@ export default async function NewScheduleEventPage({
   // Pre-fill the date when the user clicked a day cell on the
   // calendar (?date=YYYY-MM-DD). Validation happens in the schema —
   // bad input falls through to "today" inside the form.
-  const initialDate =
-    params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : null;
+  const initialDate = params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : null;
 
   // The form's date and time are a wall clock in the ORGANIZATION's zone, as
   // the calendar and the event's page draw them (small fixes slice 8 review):
@@ -78,9 +83,16 @@ export default async function NewScheduleEventPage({
   const timeZone = await timeZoneRead;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="ops"
+      data-glass-view="schedule-new"
+      data-glass-width="form"
+    >
       <PageHeader
-        back={<PageHeaderBackLink href="/dashboard/schedule">← Back to calendar</PageHeaderBackLink>}
+        back={
+          <PageHeaderBackLink href="/dashboard/schedule">← Back to calendar</PageHeaderBackLink>
+        }
         title="New event"
       />
       <DetailSection title="Event details">

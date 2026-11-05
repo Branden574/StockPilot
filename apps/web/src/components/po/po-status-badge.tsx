@@ -1,6 +1,12 @@
 import { Badge } from '@/components/ui/badge';
 
-const MAP: Record<string, { variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'; label: string }> = {
+const MAP: Record<
+  string,
+  {
+    variant: 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline';
+    label: string;
+  }
+> = {
   draft: { variant: 'outline', label: 'Draft' },
   expected_inbound: { variant: 'secondary', label: 'Expected' },
   ordered: { variant: 'secondary', label: 'Ordered' },
@@ -11,5 +17,9 @@ const MAP: Record<string, { variant: 'default' | 'secondary' | 'success' | 'warn
 
 export function PoStatusBadge({ status }: { status: string }) {
   const cfg = MAP[status] ?? MAP.draft!;
-  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+  return (
+    <Badge variant={cfg.variant} data-glass-role="status" data-glass-state={status}>
+      {cfg.label}
+    </Badge>
+  );
 }

@@ -56,6 +56,8 @@ export function RentalStatusBadge({
       variant={TONES[status]}
       data-rental-status={status}
       data-tone={TONES[status]}
+      data-glass-role="status"
+      data-glass-state={status}
       className={className}
       suppressHydrationWarning
     >

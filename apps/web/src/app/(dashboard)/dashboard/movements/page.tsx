@@ -33,6 +33,12 @@ import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 
 import { can, isReceiptNoteSentinel, userMovementNote } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 // The tab says what the page is: "Stock movements · StockPilot" through the
 // (dashboard) layout's title template. With no title of its own the tab read
 // the group's default, "Dashboard · StockPilot" (CONFLICTS D16).
@@ -185,12 +191,9 @@ export default async function MovementsPage({
   // renders one round trip sooner.
   const [totalAll, speculativeAll] = await Promise.all([
     movementsSvc.count({ warehouseId }).catch(() => null),
-    movementsSvc
-      .list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId })
-      .catch(() => null),
+    movementsSvc.list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId }).catch(() => null),
   ]);
-  const instant =
-    totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP && speculativeAll != null;
+  const instant = totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP && speculativeAll != null;
 
   let instantRows: MovementDisplayRow[] = [];
   let visible: Awaited<ReturnType<typeof movementsSvc.list>> = [];
@@ -244,7 +247,9 @@ export default async function MovementsPage({
   );
 
   const exportQs = buildMovementsQueryString(activeFilters);
-  const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
+  const exportHref = exportQs
+    ? `/api/movements/export.csv?${exportQs}`
+    : '/api/movements/export.csv';
 
   // The instant ledger draws its own controls; an empty ledger has none.
   const instantLedger = instant && total !== 0;
@@ -258,7 +263,11 @@ export default async function MovementsPage({
     // The provider only shares the instant ledger's filters with the header's
     // Export CSV; it reads nothing.
     <MovementsInstantFiltersProvider>
-      <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <div
+        className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+        data-glass-page="ops"
+        data-glass-view="movements"
+      >
         {/* Performance marker. No Suspense split on this page: the ledger rows
             (instant or server mode) are awaited above, so this markup only
             exists once they are in hand. loading.tsx is the skeleton and never

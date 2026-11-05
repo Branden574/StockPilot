@@ -2,15 +2,29 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type { ReactNode } from 'react';
 
-import { can, formatMaintenanceRequestNumber, relatedLocationText, uuidSchema } from '@stockpilot/core';
+import {
+  can,
+  formatMaintenanceRequestNumber,
+  relatedLocationText,
+  uuidSchema,
+} from '@stockpilot/core';
 
-import { AssignOwnerSelect, type MaintenanceOwnerOption } from '@/components/maintenance/assign-owner-select';
+import {
+  AssignOwnerSelect,
+  type MaintenanceOwnerOption,
+} from '@/components/maintenance/assign-owner-select';
 import { MaintenanceEmailAction } from '@/components/maintenance/maintenance-email-action';
-import { MaintenanceNotesPanel, type MaintenanceNoteRow } from '@/components/maintenance/maintenance-notes-panel';
+import {
+  MaintenanceNotesPanel,
+  type MaintenanceNoteRow,
+} from '@/components/maintenance/maintenance-notes-panel';
 import { MaintenanceReview } from '@/components/maintenance/maintenance-review';
 import { MaintenanceStatusBadge } from '@/components/maintenance/maintenance-status-badge';
 import { MaintenanceShareLinkProvider } from '@/components/maintenance/share-link-context';
-import { ShareLinkPanel, type MaintenanceShareLinkStatus } from '@/components/maintenance/share-link-panel';
+import {
+  ShareLinkPanel,
+  type MaintenanceShareLinkStatus,
+} from '@/components/maintenance/share-link-panel';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
@@ -23,9 +37,18 @@ import { ServiceError, withContext } from '@/server/services/context';
 import { MaintenanceAttachmentsService } from '@/server/services/maintenance-attachments';
 import { fetchAcceptedMembers } from '@/server/lib/maintenance-members';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
-import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/server/services/maintenance-share-links';
+import {
+  MaintenanceShareLinksService,
+  maintenanceShareLinksEnabled,
+} from '@/server/services/maintenance-share-links';
 
 import { MaintenancePhotosPanelClient, MaintenanceRequestActions } from './detail-client';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
 
 export const dynamic = 'force-dynamic';
 
@@ -175,7 +198,7 @@ export default async function MaintenanceRequestDetailPage({
     // than nesting inside the two-column layout below (which would
     // duplicate every field it already shows).
     return (
-      <div className={PAGE_BOX}>
+      <div className={PAGE_BOX} data-glass-page="ops" data-glass-view="maintenance-request">
         <MaintenanceReview
           detail={detail}
           photos={photos}
@@ -200,7 +223,9 @@ export default async function MaintenanceRequestDetailPage({
   if (canManage) {
     [notes, members] = await Promise.all([svc.listNotes(id), fetchAcceptedMembers(ctx)]);
   }
-  const authorNames: Record<string, string> = Object.fromEntries(members.map((m) => [m.userId, m.name]));
+  const authorNames: Record<string, string> = Object.fromEntries(
+    members.map((m) => [m.userId, m.name]),
+  );
 
   // Real audit-log-driven timeline rows (fix wave Important 1) — every
   // viewer who reaches this branch already passed get()'s own view boundary
@@ -217,14 +242,15 @@ export default async function MaintenanceRequestDetailPage({
   // call — the MOST RECENT such event is the one that produced today's
   // value, so its timestamp is what "Local owner assigned" reports.
   const ownerAssignedAt =
-    timelineEvents.filter((e) => e.event === 'maintenance_request.owner_assigned').at(-1)?.createdAt ?? null;
+    timelineEvents.filter((e) => e.event === 'maintenance_request.owner_assigned').at(-1)
+      ?.createdAt ?? null;
 
   const requestNumber =
-    formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ?? String(detail.requestNumber);
-
+    formatMaintenanceRequestNumber(detail.requestNumber, detail.createdAt) ??
+    String(detail.requestNumber);
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass-page="ops" data-glass-view="maintenance-request">
       {/* The record header (DESIGN-SPEC 6.1, the item-detail variant without
           a photo): back link, the request number as the page's only h1 with
           its status and priority beside it, the subject line under it, and

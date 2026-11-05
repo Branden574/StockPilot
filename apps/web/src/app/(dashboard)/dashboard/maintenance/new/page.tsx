@@ -9,7 +9,10 @@ import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ServiceError, withContext, type ServiceContext } from '@/server/services/context';
 import { ChartersService } from '@/server/services/charters';
-import { ExceptionOccurrencesService, type ExceptionOccurrence } from '@/server/services/exception-occurrences';
+import {
+  ExceptionOccurrencesService,
+  type ExceptionOccurrence,
+} from '@/server/services/exception-occurrences';
 
 import {
   can,
@@ -28,6 +31,12 @@ import {
 
 import { EscalateRequestClient } from './escalate-request-client';
 import { NewMaintenanceRequestClient } from './new-request-client';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,8 +71,8 @@ async function readCategories(ctx: ServiceContext): Promise<string[]> {
     .eq('organization_id', ctx.organizationId)
     .eq('module_id', 'maintenance_requests')
     .maybeSingle();
-  const configuredCategories = (settingsRow.data as { settings?: { categories?: unknown } } | null)?.settings
-    ?.categories;
+  const configuredCategories = (settingsRow.data as { settings?: { categories?: unknown } } | null)
+    ?.settings?.categories;
   return Array.isArray(configuredCategories) &&
     configuredCategories.length > 0 &&
     configuredCategories.every((c) => typeof c === 'string')
@@ -123,7 +132,10 @@ export default async function NewMaintenanceRequestPage({
 
   const sites = charters.map((c) => ({ id: c.id, name: c.name }));
 
-  const assignment = assignmentRow.data as { charter_id: string | null; warehouse_id: string | null } | null;
+  const assignment = assignmentRow.data as {
+    charter_id: string | null;
+    warehouse_id: string | null;
+  } | null;
   const launchCharterId = readUuidParam(sp.charterId);
   // The Site defaults to the launch link's site, else the member's own. Only
   // one the select offers (active charters): the select is controlled by the
@@ -148,7 +160,12 @@ export default async function NewMaintenanceRequestPage({
   };
 
   return (
-    <div className={FORM_PAGE_BOX}>
+    <div
+      className={FORM_PAGE_BOX}
+      data-glass-page="ops"
+      data-glass-view="maintenance-new"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href="/dashboard/maintenance">
@@ -204,7 +221,12 @@ async function escalationPage(ctx: ServiceContext, occurrenceId: string) {
   const occurrence = read.ok ? read.occurrence : null;
 
   return (
-    <div className={FORM_PAGE_BOX}>
+    <div
+      className={FORM_PAGE_BOX}
+      data-glass-page="ops"
+      data-glass-view="maintenance-new"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/exceptions/${occurrenceId}`}>
@@ -246,7 +268,10 @@ async function escalationPage(ctx: ServiceContext, occurrenceId: string) {
 
 /** The form's prefill. The suggested category only when this organization's
  *  list has it (the Select shows nothing for a value it does not list). */
-function escalationDefaults(o: ExceptionOccurrence, categories: string[]): Partial<MaintenanceRequestFormValues> {
+function escalationDefaults(
+  o: ExceptionOccurrence,
+  categories: string[],
+): Partial<MaintenanceRequestFormValues> {
   const prefill = escalationPrefill({
     rule: o.rule,
     facts: o.facts,
@@ -319,7 +344,9 @@ function NotEscalatable({ occurrence: o }: { occurrence: ExceptionOccurrence }) 
     online: true,
   });
   const openHref =
-    o.escalateUnavailableReason === 'already_escalated' && e?.requestId && e.visibleToReader === true
+    o.escalateUnavailableReason === 'already_escalated' &&
+    e?.requestId &&
+    e.visibleToReader === true
       ? `/dashboard/maintenance/${e.requestId}`
       : null;
   return (

@@ -10,6 +10,12 @@ import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 /** The form page area (DESIGN-SPEC 4 and 5.3): the page box at a form's width. */
 const PAGE = 'mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
@@ -42,7 +48,12 @@ export default async function EditBundlePage({ params }: { params: Promise<{ id:
   }
 
   return (
-    <div className={PAGE}>
+    <div
+      className={PAGE}
+      data-glass-page="ops"
+      data-glass-view="bundle-edit"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/bundles/${id}`}>

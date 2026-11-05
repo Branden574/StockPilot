@@ -1,0 +1,254 @@
+/* Liquid Glass, the purchasing pages (stage 4, operations lane): the
+   purchase orders list (Routes-Gallery-1.dc.html panel), a purchase order
+   (Purchase-Order.dc.html with its Receive dialog), and the inferred
+   extensions: the PO form (new, edit), imports and an import, recurring
+   POs, reorder planning and suppliers (Routes-Gallery-2.dc.html panel). The
+   shared operations frame is pages/ops.css; this file adds what these
+   boards draw on top of it.
+
+   Same DOM as Classic (plan M1), found through the inert root hooks
+   (data-glass-page="ops" with data-glass-view="purchase-orders",
+   "purchase-order", ...), the shared components' hooks and data-slot
+   attributes and the page's own markup. Every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen and names its
+   page root; the Receive dialog is portalled, so its rules name the root
+   through :root:has(...).
+
+   Deviations, recorded (stage4/ops-rows.md): a purchase order keeps
+   Classic's line table (the photo, the item with its SKU, unit cost and
+   line total, and received against ordered over a bar; the board splits
+   Ordered, Received, Outstanding and a status into columns), the Subtotal
+   and Receive items at the foot of Line items (the board puts Receive in
+   the page head: it owns the dialog, so it is rendered once, where Classic
+   has it), the receipts as Classic writes them (each with its lines and
+   Reverse), and the attachments card; Print stays "Download PDF". The
+   staging card the board draws beside the lines is not built: the page
+   reads no staging placements (FOLLOWUPS: classic has none). The list keeps
+   Classic's table and figures (the board's panel draws compact rows).
+   Imported only by the purchasing pages. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── A purchase order (Purchase-Order.dc.html) ────────────────────── */
+    /* .cols-side: the lines beside a 300 to 360 px column, one column in a
+       window 1100 px wide or narrower (sp.css:291-292). */
+    @media (min-width: 1101px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+        > .\@container
+        > .grid {
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+      }
+    }
+    @media (max-width: 1100px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+        > .\@container
+        > .grid {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    /* Line items: the item in ink (14 px), its SKU line in mono xs ink 3,
+       received against ordered in the body face with tabular figures over
+       the board's 6 px bar (.prog). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td:nth-child(2)
+      > p:first-child {
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td:nth-child(2)
+      > p:nth-child(2) {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td:last-child
+      .font-mono {
+      font-family: inherit;
+      font-size: 14px;
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td:last-child
+      .font-mono
+      > span:first-child {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td:last-child
+      .font-mono
+      + div {
+      height: 6px;
+      border-radius: 3px;
+      background: var(--lg-surface-4);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td:last-child
+      .font-mono
+      + div
+      > div {
+      border-radius: 3px;
+      background: var(--lg-ok-fill);
+    }
+    /* The Subtotal at the lines' foot: its figure in the body face. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-slot='detail-section-footer']
+      .font-mono {
+      font-family: inherit;
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-slot='detail-section-footer']
+      [data-glass='button'][data-glass-size='default'] {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* The Receive dialog (Purchase-Order.dc.html: 680 px; the lines as
+       hairline rows in the inset reading area; the 36 px foot). Found by
+       its scrolling lines box, the only one of its kind on the page. */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+      )
+      [data-glass='dialog']:has(> .max-h-\[55vh\]) {
+      max-width: 680px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+      )
+      [data-glass='dialog']
+      > .max-h-\[55vh\] {
+      margin: 0 -16px;
+      padding: 6px 16px;
+      border: 1px solid var(--lg-card-line);
+      border-radius: 16px;
+      background: var(--lg-field-fill);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+      )
+      [data-glass='dialog']
+      > .max-h-\[55vh\]
+      > .bg-card.rounded-lg.border {
+      margin: 0;
+      padding: 12px 0;
+      border-width: 0 0 1px;
+      border-color: var(--lg-line);
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+      )
+      [data-glass='dialog']
+      > .max-h-\[55vh\]
+      > .bg-card.rounded-lg.border:last-child {
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+      )
+      [data-glass='dialog']
+      > .max-h-\[55vh\]
+      > .bg-card.rounded-lg.border
+      > div:first-child
+      > p:first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='purchase-order']
+      )
+      [data-glass='dialog']
+      > .max-h-\[55vh\]
+      > .bg-card.rounded-lg.border
+      label {
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      font-weight: 600;
+    }
+
+    /* ── The list (Routes-Gallery-1.dc.html purchase-orders) ──────────── */
+    /* The 52 px rows while the list is a table (its card 640 px wide or
+       more); narrower, components/po/po-list.css folds each row into flex
+       lines that size themselves. */
+    @container (width >= 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='purchase-orders']
+        table[data-slot='po-list']
+        > tbody
+        > tr {
+        height: var(--lg-row-h);
+      }
+    }
+    /* PO number (mono sm strong, the link in the accent text). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-orders']
+      table[data-slot='po-list']
+      > tbody
+      > tr
+      > td:first-child
+      a {
+      color: var(--lg-accent-text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    /* The supplier in ink at 600 (the panel's sm strong). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-orders']
+      table[data-slot='po-list']
+      > tbody
+      > tr
+      > td:nth-child(2) {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+    /* Placed and Expected: xs ink 3 with tabular figures. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-orders']
+      table[data-slot='po-list']
+      > tbody
+      > tr
+      > td:is(:nth-child(4), :nth-child(5)) {
+      color: var(--lg-ink-3);
+      font-size: 12.5px;
+    }
+
+    /* ── Imports and the form pages (inferred): the shared frame only ─── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']:is(
+        [data-glass-view='po-imports'],
+        [data-glass-view='po-recurring'],
+        [data-glass-view='planning'],
+        [data-glass-view='suppliers']
+      )
+      [data-glass='table']
+      > tbody
+      > tr
+      > td {
+      font-size: 13px;
+    }
+  }
+}

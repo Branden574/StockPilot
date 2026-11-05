@@ -27,6 +27,12 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { can, resolveOrgTimezone } from '@stockpilot/core';
 import { formatNumber } from '@/lib/utils';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export default async function RentalDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   // A malformed id (a mistyped or cut-off link) is Page not found before
@@ -104,7 +110,11 @@ export default async function RentalDetailPage({ params }: { params: Promise<{ i
     // work on it (actions, emails) the right, as the item and bundle pages lay
     // out; on a narrow one everything stacks in today's order: borrower,
     // emails, actions, items.
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="ops"
+      data-glass-view="rental"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/rentals">← Back to rentals</PageHeaderBackLink>}
         title="Rental detail"
