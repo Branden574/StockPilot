@@ -780,4 +780,55 @@ describe('the marketing variant guard (R8, round 2 finding 2)', () => {
     expect(hidden()).toBe(false);
     expect(setOverride).toHaveBeenLastCalledWith(null);
   });
+
+  // FOLLOWUPS F7: the rewrites take a marketing path with one trailing slash
+  // and in any case (Next's matcher), so the guard must check those addresses
+  // as it checks the path as written (appearance-flag.ts isMarketingPath).
+  for (const path of ['/pricing/', '/PRICING', '/Terms/']) {
+    it(`${path}: the classic page on screen while the cookie selects glass: hides and refreshes, as on the path as written`, async () => {
+      nav.pathname = path;
+      const { setOverride } = guard();
+      expect(hidden()).toBe(true);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      act(() => {
+        document.body.appendChild(marker());
+      });
+      await waitFor(() => expect(hidden()).toBe(false));
+      expect(setOverride).toHaveBeenLastCalledWith(null);
+    });
+  }
+
+  it('a percent-encoded spelling (/pric%69ng), which no rewrite takes, is not a marketing path: nothing', () => {
+    nav.pathname = '/pric%69ng';
+    const { setOverride } = guard();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(hidden()).toBe(false);
+    expect(setOverride).toHaveBeenLastCalledWith(null);
+  });
+
+  it('a restore from the back/forward cache at /PRICING/ keeps the attribute with the twin on screen until the guard has the right page', async () => {
+    window.history.replaceState(null, '', '/PRICING/');
+    try {
+      nav.pathname = '/PRICING/';
+      document.body.appendChild(marker());
+      render(<App />);
+      expect(glassOn()).toBe(true);
+      // Frozen while /signin chose Classic.
+      localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'classic' }));
+      document.cookie = 'sp_style=classic; path=/';
+      act(() => {
+        window.dispatchEvent(pageShow(true));
+      });
+      expect(glassOn()).toBe(true);
+      expect(hidden()).toBe(true);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      act(() => {
+        document.querySelectorAll('[data-lg-twin]').forEach((el) => el.remove());
+      });
+      await waitFor(() => expect(hidden()).toBe(false));
+      expect(glassOn()).toBe(false);
+    } finally {
+      window.history.replaceState(null, '', '/');
+    }
+  });
 });

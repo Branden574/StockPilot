@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { buildCustomRoute } from 'next/dist/lib/build-custom-route';
+import { modifyRouteRegex } from 'next/dist/lib/redirect-status';
 import { getPathMatch } from 'next/dist/shared/lib/router/utils/path-match';
 import { prepareDestination } from 'next/dist/shared/lib/router/utils/prepare-destination';
 import { GLASS_ROLLOUTS, parseRollout } from '@stockpilot/core';
@@ -11,6 +13,7 @@ import {
   EXEMPT_PATHS,
   glassSiteRedirects,
   isLiquidGlassEnabled,
+  isMarketingPath,
   LIQUID_GLASS_FLAG_NAME,
   liquidGlassRollout,
   MARKETING_PATH_PATTERN,
@@ -105,24 +108,126 @@ describe('the /glass-site/* redirect', () => {
   });
 });
 
-describe('MARKETING_PATH_PATTERN (the head script’s copy of the list)', () => {
-  it('matches exactly the 7 marketing paths', () => {
-    for (const path of MARKETING_PATHS) expect(MARKETING_PATH_PATTERN.test(path), path).toBe(true);
-    for (const path of [
-      '',
-      '//',
-      '/contact/',
-      '/contact/x',
-      '/contacts',
-      '/xcontact',
-      '/glass-site',
-      '/glass-site/contact',
-      '/signin',
-      '/dashboard',
-      '/support/tickets',
-      '/terms.txt',
-    ]) {
-      expect(MARKETING_PATH_PATTERN.test(path), path).toBe(false);
+/**
+ * Every spelling of a marketing path that the rewrites take (FOLLOWUPS F7).
+ * Next compiles each beforeFiles rule with no case and an optional trailing
+ * slash (/pricing: ^/pricing(?:/)?$, caseSensitive false), and next.config.ts
+ * sets skipTrailingSlashRedirect, so /pricing/ reaches the rule instead of a
+ * 308 to /pricing. The head script and the variant guard must take the same
+ * spellings, from one rule: one trailing slash dropped (never from / itself),
+ * compared without case, over the raw pathname.
+ */
+const MARKETING_SPELLINGS = [
+  ...MARKETING_PATHS,
+  '/pricing/',
+  '/Pricing',
+  '/PRICING/',
+  '/terms/',
+  '/Contact/',
+  '/sUpPoRt',
+  '/PRIVACY',
+  '/security/',
+  // The root rule is ^/(?:/)?$, so it takes // too (next start answers // with
+  // a 308 to / before any rule, as it does //pricing).
+  '//',
+];
+const NOT_MARKETING = [
+  '',
+  '///',
+  // A percent-encoded letter is not the letter: the rule reads the raw path.
+  '/pric%69ng',
+  '/%70ricing',
+  '/pricing%2F',
+  '/%2F',
+  // Only one trailing slash, and only at the end.
+  '/pricing//',
+  '//pricing',
+  '//pricing/',
+  // Case without Unicode folding, as Next's /i: U+017F (long s) is not s.
+  '/ſecurity',
+  '/contact/x',
+  '/contacts',
+  '/xcontact',
+  '/glass-site',
+  '/glass-site/contact',
+  '/signin',
+  '/dashboard',
+  '/support/tickets',
+  '/terms.txt',
+  ' /pricing',
+  '/pricing ',
+];
+
+/** The rule as written: one trailing slash dropped (never from /), no case. */
+function byTheRule(pathname: string): boolean {
+  const trimmed = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  return (MARKETING_PATHS as readonly string[]).includes(trimmed.toLowerCase());
+}
+
+describe('the marketing paths in every spelling the rewrites take (F7)', () => {
+  it('matches the 7 marketing paths as written', () => {
+    for (const path of MARKETING_PATHS) {
+      expect(MARKETING_PATH_PATTERN.test(path), path).toBe(true);
+      expect(isMarketingPath(path), path).toBe(true);
+    }
+  });
+
+  it('takes one trailing slash and any case: /pricing/, /Pricing, /PRICING/, /terms/ and /', () => {
+    // '/contact/' and '//' were asserted not to be marketing paths before F7.
+    // Both reach a twin: Next's /contact rule takes /contact/ (an optional
+    // trailing slash, and skipTrailingSlashRedirect lets it through), and its /
+    // rule takes //. So both are marketing paths now.
+    for (const path of MARKETING_SPELLINGS) {
+      expect(byTheRule(path), `the rule: ${path}`).toBe(true);
+      expect(MARKETING_PATH_PATTERN.test(path), `the head script's pattern: ${path}`).toBe(true);
+      expect(isMarketingPath(path), `the guard: ${path}`).toBe(true);
+    }
+  });
+
+  it('refuses a percent-encoded letter (/pric%69ng), a doubled slash (//pricing), a second trailing slash and every other path', () => {
+    for (const path of NOT_MARKETING) {
+      expect(byTheRule(path), `the rule: ${JSON.stringify(path)}`).toBe(false);
+      expect(
+        MARKETING_PATH_PATTERN.test(path),
+        `the head script's pattern: ${JSON.stringify(path)}`,
+      ).toBe(false);
+      expect(isMarketingPath(path), `the guard: ${JSON.stringify(path)}`).toBe(false);
+    }
+  });
+
+  it('agrees with Next’s own matchers for the rewrite rules on every spelling: next start’s and the routes-manifest’s', () => {
+    // next start: server/lib/router-utils/filesystem.js buildCustomRoute
+    // ('before_files_rewrite', item): getPathMatch strict, unnamed params
+    // removed, modifyRouteRegex (the optional trailing slash), and no
+    // caseSensitive argument, so no case.
+    // The routes-manifest (what Vercel reads): lib/build-custom-route.js's
+    // regex, matched without case because routes-manifest caseSensitive is
+    // !!experimental.caseSensitiveRoutes, which next.config.ts leaves unset.
+    const config = read('next.config.ts');
+    expect(config).not.toContain('caseSensitiveRoutes');
+    expect(config).toMatch(/^\s*skipTrailingSlashRedirect: true,$/mu);
+    for (const rollout of ['default', 'opt-in'] as const) {
+      const rules = marketingRewrites(rollout);
+      const nextStart = rules.map((rule) =>
+        getPathMatch(rule.source, {
+          strict: true,
+          removeUnnamedParams: true,
+          regexModifier: (regex: string) => modifyRouteRegex(regex),
+        }),
+      );
+      const manifest = rules.map(
+        (rule) => new RegExp(buildCustomRoute('rewrite', rule).regex, 'i'),
+      );
+      for (const path of [...MARKETING_SPELLINGS, ...NOT_MARKETING]) {
+        const at = `${rollout} ${JSON.stringify(path)}`;
+        const rewritten = nextStart.some((match) => match(path) !== false);
+        expect(
+          manifest.some((regex) => regex.test(path)),
+          `manifest ${at}`,
+        ).toBe(rewritten);
+        expect(isMarketingPath(path), at).toBe(rewritten);
+        expect(MARKETING_PATH_PATTERN.test(path), at).toBe(rewritten);
+      }
     }
   });
 });

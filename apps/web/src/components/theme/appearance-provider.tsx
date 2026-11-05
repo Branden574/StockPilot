@@ -44,8 +44,8 @@ import {
   writeSyncRecord,
 } from './appearance-cookie';
 import {
+  isMarketingPath,
   liquidGlassRollout,
-  MARKETING_PATHS,
   MARKETING_TWINS_BUILT,
   twinSelected,
 } from './appearance-flag';
@@ -526,10 +526,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     // paint).
     const onPageShow = (event: PageTransitionEvent) => {
       if (!event.persisted) return;
-      if (
-        MARKETING_TWINS_BUILT &&
-        (MARKETING_PATHS as readonly string[]).includes(window.location.pathname)
-      ) {
+      if (MARKETING_TWINS_BUILT && isMarketingPath(window.location.pathname)) {
         twinOverrideRef.current = document.querySelector(`[${TWIN_MARKER}]`) !== null;
       }
       const device = readDeviceRecordRaw();
@@ -661,9 +658,11 @@ export const VARIANT_GUARD_TIMEOUT_MS = 2000;
 /**
  * The marketing variant guard (R8, round 2 finding 2). The client router
  * cache and Back/Forward can show the twin of the other Design after a choice
- * made elsewhere. On the 7 marketing paths, after every pathname change and
- * every change of the shown Design, it compares the twin on screen (the
- * [data-lg-twin] marker) with the twin the cookie selects:
+ * made elsewhere. On the 7 marketing paths, in every spelling the rewrites
+ * take (isMarketingPath: one trailing slash and any case, so /pricing/,
+ * /Pricing and /PRICING/ as well as /pricing; FOLLOWUPS F7), after every
+ * pathname change and every change of the shown Design, it compares the twin
+ * on screen (the [data-lg-twin] marker) with the twin the cookie selects:
  *   - a match: nothing to do;
  *   - a mismatch: the page is hidden, router.refresh() asks for this URL with
  *     the current cookie, and the page is shown when the right twin arrives;
@@ -709,7 +708,7 @@ export function MarketingVariantGuard({
   }, []);
   React.useLayoutEffect(() => {
     if (!hydrated) return;
-    if (!(MARKETING_PATHS as readonly string[]).includes(pathname)) {
+    if (!isMarketingPath(pathname)) {
       setOverride(null);
       removeEarlyHide();
       return;

@@ -28,7 +28,9 @@ export { EXEMPT_PATHS };
  * page from the same cookie, so the two always agree. The provider repairs the
  * cookie from the device record after hydrate when they disagree.
  *
- * On the 7 marketing paths, when it turns glass on, it also hides the page
+ * On the 7 marketing paths, in every spelling the rewrites take (one trailing
+ * slash, any case: MARKETING_PATH_PATTERN, the rule the variant guard shares;
+ * FOLLOWUPS F7), when it turns glass on, it also hides the page
  * before its first paint (the variant guard's style, marked as early): the
  * document there may be a classic page that Back or Forward read again from
  * the HTTP cache after Liquid Glass was chosen elsewhere (a history load reuses

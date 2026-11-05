@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { APPEARANCE_STORAGE_KEYS } from '@stockpilot/core';
 
-import { EXEMPT_PATHS as FLAG_EXEMPT_PATHS, MARKETING_PATHS } from './appearance-flag';
+import {
+  EXEMPT_PATHS as FLAG_EXEMPT_PATHS,
+  isMarketingPath,
+  MARKETING_PATH_PATTERN,
+  MARKETING_PATHS,
+} from './appearance-flag';
 import {
   appearanceScript,
   EARLY_HIDE_ATTRIBUTE,
@@ -287,6 +292,79 @@ describe('the early hide on the marketing paths', () => {
     for (const node of hides()) node.remove();
     vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS);
     expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+  });
+});
+
+/**
+ * The spellings the rewrites take (FOLLOWUPS F7): Next matches each marketing
+ * rule with no case and an optional trailing slash, and skipTrailingSlashRedirect
+ * lets /pricing/ reach it, so /pricing/, /Pricing and /PRICING/ get the twin
+ * as /pricing does. The head script must hide exactly there too, from the one
+ * shared rule in appearance-flag.ts (isMarketingPath, MARKETING_PATH_PATTERN).
+ */
+describe('the early hide on every spelling the rewrites take (F7)', () => {
+  const hides = () => document.head.querySelectorAll(`style[${EARLY_HIDE_ATTRIBUTE}]`);
+  // An address with the page's own origin, so //pricing stays a path.
+  const at = (path: string) => `${window.location.origin}${path}`;
+
+  afterEach(() => {
+    document.head.innerHTML = '';
+  });
+
+  for (const path of ['/pricing/', '/Pricing', '/PRICING/', '/terms/', '/']) {
+    it(`${path}: glass and the early hide, as on the path as written`, () => {
+      run('default', at(path));
+      expect(window.location.pathname).toBe(path);
+      expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+      expect(hides()).toHaveLength(1);
+    });
+  }
+
+  for (const path of ['/pric%69ng', '//pricing', '/pricing//']) {
+    it(`${path}: no rewrite takes it, so glass without the hide`, () => {
+      run('default', at(path));
+      expect(window.location.pathname).toBe(path);
+      expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+      expect(hides()).toHaveLength(0);
+    });
+  }
+
+  it('hides exactly where isMarketingPath says so, under both rollouts that emit the script', () => {
+    const paths = [
+      ...MARKETING_PATHS,
+      '/pricing/',
+      '/Pricing',
+      '/PRICING/',
+      '/Contact/',
+      '/sUpPoRt',
+      '/terms/',
+      '//',
+      '/pric%69ng',
+      '/%70ricing',
+      '//pricing',
+      '/pricing//',
+      '/contact/x',
+      '/glass-site',
+      '/dashboard',
+    ];
+    for (const rollout of ['default', 'opt-in'] as const) {
+      for (const path of paths) {
+        document.head.innerHTML = '';
+        clearCookies();
+        if (rollout === 'opt-in') document.cookie = 'sp_style=liquid-glass; path=/';
+        run(rollout, at(path));
+        expect(hides().length, `${rollout} ${path}`).toBe(isMarketingPath(path) ? 1 : 0);
+      }
+    }
+  });
+
+  it('inlines the one shared pattern, and nothing is emitted under off', () => {
+    for (const rollout of ['default', 'opt-in'] as const) {
+      expect(appearanceScript(rollout)).toContain(
+        `if(${MARKETING_PATH_PATTERN.toString()}.test(location.pathname))`,
+      );
+    }
+    expect(appearanceScript('off')).toBeNull();
   });
 });
 

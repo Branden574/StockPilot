@@ -85,11 +85,33 @@ export const MARKETING_PATHS = [
 ] as const;
 
 /**
- * MARKETING_PATHS as one pattern over location.pathname, for the head script
- * (appearance-script.ts), which may carry no list: exactly those 7 paths
- * (appearance-flag.test.ts checks it against the list and its neighbours).
+ * The 7 marketing paths in every spelling the rewrites take: the ONE rule the
+ * head script, the variant guard and the rewrites share (FOLLOWUPS F7).
+ *
+ * Next compiles each beforeFiles rule with an optional trailing slash and no
+ * case: /pricing becomes ^/pricing(?:/)?$ and / becomes ^/(?:/)?$
+ * (lib/redirect-status.js modifyRouteRegex; server/lib/router-utils/
+ * filesystem.js passes no caseSensitive for a beforeFiles rule, and the
+ * routes-manifest says caseSensitive false), and next.config.ts sets
+ * skipTrailingSlashRedirect, so /pricing/, /Pricing and /PRICING/ reach the
+ * rule and get the twin as /pricing does. So: one trailing slash dropped
+ * (never from / itself), compared without case, over the raw pathname. A
+ * percent-encoded letter is not the letter (/pric%69ng is no marketing path:
+ * Next matches the raw path too and does not rewrite it), and neither is a
+ * doubled slash (//pricing; next start answers it with a 308 first). The `i`
+ * flag without `u` is Next's own, so no Unicode folding either.
+ *
+ * The head script (appearance-script.ts), which may carry no list, inlines
+ * this pattern; the provider's guard calls isMarketingPath, which is this
+ * pattern. appearance-flag.test.ts checks it against the list, the rule as
+ * written and Next's own matchers.
  */
-export const MARKETING_PATH_PATTERN = /^\/(?:contact|pricing|privacy|security|support|terms)?$/u;
+export const MARKETING_PATH_PATTERN = /^\/(?:contact|pricing|privacy|security|support|terms)?\/?$/i;
+
+/** Whether a pathname is one of the 7 marketing paths in a spelling the rewrites take. */
+export function isMarketingPath(pathname: string): boolean {
+  return MARKETING_PATH_PATTERN.test(pathname);
+}
 
 /**
  * Whether the glass twins exist. Stage 3 built them (app/(site-glass)/
