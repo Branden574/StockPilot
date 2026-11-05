@@ -94,6 +94,32 @@
       box-shadow: none;
     }
 
+    /* ── Keyboard focus (sp.css :focus-visible: the outline ring) ─────────
+       The classic ring is a box-shadow (globals.css :focus-visible and the
+       focus-visible:ring-* utilities), and any glass rule here that draws a
+       material shadow (the accent and outline buttons above, the lifted
+       segment below) replaces it, since layer lg beats both: those controls
+       showed no focus at all (WCAG 2.4.7). Glass draws the board's ring
+       instead, an outline of --lg-focus-w (2 px, 3 in the contrast
+       material) in --lg-focus, 2 px off the edge, and clears the classic ring
+       on the same controls so none draws two. An outline also survives forced
+       colours, which drop every box-shadow. */
+    :root[data-appearance='liquid-glass'] [data-glass='button']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    /* A segment sits on a track that scrolls sideways and clips anything
+       outside it (patterns/segmented-tabs.tsx draws its ring inside), so the
+       outline is drawn inside the segment's edge. */
+    :root[data-appearance='liquid-glass'] [data-glass='seg'] > :focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: calc(-1 * var(--lg-focus-w));
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+
     /* ── Fields (12.2): the 62% field frost, the input line, the focus halo ── */
     :root[data-appearance='liquid-glass'] :is([data-glass='input'], [data-glass='select']) {
       background-color: var(--lg-field-fill);

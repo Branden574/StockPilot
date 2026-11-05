@@ -50,7 +50,20 @@ describe('glass-only and classic-only elements', () => {
 
   // plans/REVISION-DEFAULT.md item 22: the appearance menu in the external
   // shell's corner (no data action; tests/e2e/appearance/glass-only-allowlist.json).
-  it('are listed: the external appearance menu only, so a new one is reviewed here first', () => {
-    expect(ELEMENTS.map((e) => e.file)).toEqual(['components/auth/external-shell.tsx']);
+  // Stage 3, orders lane: the Orders list's phone cards (one list of links
+  // to the rows' own orders) and the Export menu's icons, tab name and
+  // sub-lines (three per item, words only); the order page's fulfilment
+  // badge beside the status (words and an icon); the order page's
+  // requester note, Classic-only in the main column (the page) and a
+  // glass-only copy in the side column (words only, plan 4.6).
+  it('are listed, so a new one is reviewed here first', () => {
+    expect(ELEMENTS.map((e) => e.file)).toEqual([
+      'app/(dashboard)/dashboard/orders/[id]/page.tsx',
+      'components/auth/external-shell.tsx',
+      'components/orders/order-fulfilment-badge.tsx',
+      'components/orders/order-phone-cards.tsx',
+      'components/orders/order-requester-note-aside.tsx',
+      ...Array<string>(6).fill('components/orders/orders-export-menu.tsx'),
+    ]);
   });
 });

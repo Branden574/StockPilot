@@ -12,6 +12,7 @@ import {
   type HoldOrderStockResult,
 } from '@stockpilot/core';
 
+import { orderTimelineMarkerHooks } from '@/components/orders/order-timeline-marker';
 import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
@@ -397,6 +398,9 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
         return (
           <TimelineEntry
             key={row.id}
+            // Liquid Glass's toned marker and icon (inert hooks; Classic keeps
+            // its neutral dot): order-timeline-marker.ts.
+            {...orderTimelineMarkerHooks(row.event, row.metadata)}
             title={
               <>
                 <span className="font-medium">{label}</span>
