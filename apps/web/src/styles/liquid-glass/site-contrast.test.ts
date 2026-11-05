@@ -167,7 +167,22 @@ const PAIRS: Pair[] = [
   ],
   ['focus ring in the card', '--lg-focus', AUTH, ['--lg-glass', '--lg-card-fill'], 3],
   ['help links pill', '--lg-ink-2', AUTH, ['--lg-glass'], 4.5],
-  ['invite-only line on the ground', '--lg-ink-2', AUTH, [], 4.5],
+  // The kept invite-only line sits on the help pill's glass (stage 3 review,
+  // finding 8: on the bare photo it fell to 2.8:1 over a dark shelf band).
+  ['invite-only line on its glass', '--lg-ink-2', AUTH, ['--lg-glass'], 4.5],
+  // Remember me (.cb): the unticked box's edge, the ticked fill, its check.
+  [
+    'Remember me box edge',
+    '--lg-input-line',
+    AUTH,
+    ['--lg-glass', '--lg-card-fill', '--lg-surface'],
+    3,
+  ],
+  ['Remember me ticked box', '--lg-accent', AUTH, ['--lg-glass', '--lg-card-fill'], 3],
+  ['Remember me check', '--lg-on-accent', AUTH, ['--lg-accent'], 3],
+  // /support: every field edge on the glass card, and Send ticket.
+  ['support field edge', '--lg-input-line', SITE, ['--lg-card-fill', '--lg-field-fill'], 3],
+  ['support typed text', '--lg-ink', SITE, ['--lg-card-fill', '--lg-field-fill'], 4.5],
   ['Contact the team pill', '--lg-ink', AUTH, ['--lg-glass-strong'], 4.5],
   ['sign-in button', '--lg-on-accent', AUTH, ['--lg-accent'], 4.5],
 ];

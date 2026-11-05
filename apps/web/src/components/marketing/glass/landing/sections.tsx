@@ -56,7 +56,7 @@ import { Badge, Preview, Thumb } from './mock';
  * labelled image over demo data. Recorded deviations: the board's
  * "See a count in the prototype" link is not drawn (there is no prototype on
  * the site); the roles list uses the app's own role names (DECISIONS.md D10);
- * product photos are tinted tiles.
+ * product photos and book covers are tinted tiles.
  */
 
 function SectionHead({
@@ -64,14 +64,17 @@ function SectionHead({
   id,
   title,
   lede,
+  width,
 }: {
   eyebrow: string;
   id: string;
   title: string;
   lede: ReactNode;
+  /** The board's max width for a head that spans the section (How it works, Web & mobile). */
+  width?: 760 | 780;
 }) {
   return (
-    <div className="lgl-text flex flex-col gap-3">
+    <div className={`lgl-text${width ? ` lgl-text-${width}` : ''} flex flex-col gap-3`}>
       <span className="lgs-eyebrow lgs-accent text-xs font-semibold uppercase tracking-[0.06em]">
         {eyebrow}
       </span>
@@ -114,11 +117,11 @@ export function StorySection() {
           const Icon = QUESTION_ICON[item.icon];
           return (
             <div key={item.q} className="flex flex-col gap-3">
-              <span className="lgl-step-n" aria-hidden="true">
+              <span className="lgl-step-n lgl-q-n" aria-hidden="true">
                 <Icon />
               </span>
               <h3 className="lgl-q-t text-xl font-semibold">{item.q}</h3>
-              <p className="lgs-ink2">{item.a}</p>
+              <p className="lgs-ink2 lgl-q-a">{item.a}</p>
             </div>
           );
         })}
@@ -136,6 +139,7 @@ export function WorkflowSection() {
           id="lgl-wf-h"
           title="One request, from search to signature."
           lede="Find the stock, ask for it, approve it, hand it over—and keep a record of every unit that moved."
+          width={760}
         />
         <div className="lgl-steps grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <Step
@@ -295,7 +299,7 @@ export function ProductSection() {
             </Fact>
           </div>
         </div>
-        <Preview className="lgl-stage">
+        <Preview className="lgl-stage lgl-stage-item">
           <div className="lgs-card lgl-item-card">
             <div className="lgl-row">
               <Thumb kind="shirt" size="lg" />
@@ -346,6 +350,16 @@ export function ProductSection() {
               </span>
             </div>
           </div>
+          {/* The board's three book covers, fanned at the stage's bottom
+              right; hidden until the glass CSS shows them (no JavaScript:
+              classic CSS). */}
+          <span className="lgl-fan hidden">
+            {[0, 1, 2].map((cover) => (
+              <span key={cover} className="lgl-cover">
+                <BookOpen />
+              </span>
+            ))}
+          </span>
         </Preview>
       </div>
     </section>
@@ -546,6 +560,7 @@ export function MobileSection() {
           id="lgl-mob-h"
           title="The same order, built for where you’re standing."
           lede="The web app, iPad and iPhone share one account and one record. Each screen is shaped for the work done there, not shrunk from the desk."
+          width={780}
         />
         <div className="lgl-devices">
           <div className="lgl-dev lgl-desk">

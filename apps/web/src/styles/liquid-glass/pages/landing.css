@@ -561,6 +561,12 @@
       gap: 12px;
       align-items: flex-end;
     }
+    /* The calls to action (.lp-cta): a plain block holding the two
+       inline-flex buttons with a space between them, as the board renders
+       them; at 390 px they stay on one row. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cta {
+      display: block;
+    }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-pill {
       justify-self: start;
       height: 32px;
@@ -595,11 +601,15 @@
       color: var(--lg-ink-2);
       text-wrap: pretty;
     }
+    /* The hero note (p.sm.pretty.hero-note.glass-clear): 13 / 18. */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero-note {
       --lg-glass-clear: rgba(255, 255, 255, 0.46);
       padding: 10px 14px;
       border-radius: 16px;
+      font-size: 13px;
+      line-height: 18px;
       color: var(--lg-ink-2);
+      text-wrap: pretty;
     }
     :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-hero-note {
       --lg-glass-clear: rgba(20, 24, 23, 0.5);
@@ -811,12 +821,18 @@
       padding-left: 28px;
       border-left: 1px solid var(--lg-line);
     }
+    /* Each question: the .h2 at 24 / 30, the answer at 15 / 1.55. */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-q-t {
-      font-size: 20px;
-      line-height: 26px;
+      font-size: 24px;
+      line-height: 30px;
       font-weight: 650;
       letter-spacing: -0.016em;
       color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-q-a {
+      font-size: 15px;
+      line-height: 1.55;
+      text-wrap: pretty;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-n {
       width: 30px;
@@ -833,6 +849,18 @@
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-n svg {
       width: 16px;
       height: 16px;
+    }
+    /* The questions' icon discs are the accent tile (Landing.dc.html:91). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-n.lgl-q-n {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    /* Section heads that wrap as drawn (How it works 760, Web & mobile 780). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-text-760 {
+      max-width: 760px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-text-780 {
+      max-width: 780px;
     }
 
     /* ── Sections, splits and the stage panels ──────────────────────────── */
@@ -882,10 +910,12 @@
       .lgl-vig {
       --lgl-vp: 96% 60%;
     }
+    /* Step titles: .h3 (16 / 22 / 600). */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-t {
-      font-size: 17px;
-      line-height: 24px;
-      font-weight: 650;
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chain {
@@ -978,13 +1008,16 @@
       width: 18px;
       height: 18px;
     }
+    /* Fact titles .h4 (14 / 20 / 600), their words .sm (13 / 18). */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fact-t {
-      font-size: 15px;
-      line-height: 21px;
-      font-weight: 650;
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fact-d {
+      font-size: 13px;
+      line-height: 18px;
       color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage {
@@ -1015,6 +1048,64 @@
       flex-direction: column;
       gap: 16px;
       padding: 24px;
+    }
+    /* Inventory & books (Landing.dc.html:153-167): a 560 px stage, the item
+       card at 84% (22 px, radius 26, sh-3) at its top, and three book covers
+       fanned at its bottom right (tinted tiles: no photo is loaded). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage.lgl-stage-item {
+      position: relative;
+      justify-content: flex-start;
+      min-height: 560px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-stage-item
+      .lgs-card.lgl-item-card {
+      width: 84%;
+      padding: 22px;
+      border-radius: 26px;
+      box-shadow: var(--lg-sh-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fan {
+      position: absolute;
+      right: -6px;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover {
+      --lgl-cover: 150px;
+      height: var(--lgl-cover);
+      width: calc(var(--lgl-cover) * 0.667);
+      display: grid;
+      place-items: center;
+      flex: none;
+      border-radius: 3px 5px 5px 3px;
+      background-color: #e6dcc8;
+      color: #5a4320;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover svg {
+      width: 40%;
+      height: 40%;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover:nth-child(1) {
+      transform: rotate(-8deg) translate(30px, 10px);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover:nth-child(2) {
+      --lgl-cover: 158px;
+      z-index: 1;
+      transform: rotate(-2deg) translate(8px, 0);
+      background-color: #dfe6ee;
+      color: #24364f;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover:nth-child(3) {
+      z-index: 2;
+      transform: rotate(6deg) translate(-14px, 6px);
+      background-color: #dcefe6;
+      color: #1e5a44;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-shop {
       display: flex;
@@ -1116,41 +1207,57 @@
       gap: 28px;
       align-items: end;
     }
+    /* Each device: the preview, its .h4 caption and its .sm line, 14 px apart. */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dev {
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 14px;
       min-width: 0;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dev-t {
-      margin-top: 8px;
-      font-size: 15px;
-      line-height: 21px;
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dev-d {
+      font-size: 13px;
+      line-height: 18px;
       color: var(--lg-ink-2);
     }
+    /* At the desk: a card at radius 18 with sh-2, a full-width 34 px address
+       bar over a rule, and a 300 px body (the timeline on surface 2). */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-desk-card {
       display: flex;
       flex-direction: column;
-      gap: 10px;
-      padding: 12px;
-      border-radius: 20px;
+      gap: 0;
+      padding: 0;
+      overflow: hidden;
+      border-radius: 18px;
+      box-shadow: var(--lg-sh-2);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-bar {
-      padding: 4px 10px;
-      border-radius: 8px;
-      background-color: var(--lg-card-fill-2);
+      display: flex;
+      align-items: center;
+      height: 34px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--lg-line);
+      background-color: var(--lg-surface-2);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-desk-grid {
       display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-      gap: 12px;
+      grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+      gap: 0;
+      height: 300px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-desk-grid > * {
+      padding: 16px;
+      gap: 10px;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-timeline {
-      padding-left: 12px;
+      gap: 8px;
       border-left: 1px solid var(--lg-line);
+      background-color: var(--lg-surface-2);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl {
       display: flex;
@@ -1184,14 +1291,38 @@
       background-color: var(--lg-info-wash);
       box-shadow: none;
     }
+    /* On a tablet: an ink bezel (8 px, radius 26, sh-2) around a 302 px
+       screen on the page ground (radius 18), list beside detail. */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-ipad-card {
-      padding: 10px;
-      border-radius: 24px;
+      padding: 8px;
+      overflow: hidden;
+      border-color: transparent;
+      border-radius: 26px;
+      background-color: var(--lg-ink);
+      box-shadow: var(--lg-sh-2);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-grid {
       display: grid;
       grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-      gap: 10px;
+      gap: 0;
+      height: 302px;
+      overflow: hidden;
+      border-radius: 18px;
+      background-color: var(--lg-bg);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-grid > * {
+      padding: 12px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-ipad-grid
+      > :first-child {
+      gap: 4px;
+      border-right: 1px solid var(--lg-line);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-row {
       display: flex;
@@ -1215,33 +1346,49 @@
       width: 89%;
       background-color: var(--lg-accent);
     }
+    /* In the aisle: a 7 px ink bezel (radius 34, sh-2) around a 392 px
+       screen on the page ground (radius 28 inside it), the lines from 34 px
+       down and the glass action bar 8 px off the screen's bottom edge. */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-phone-frame {
+      position: relative;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
-      gap: 10px;
-      min-height: 360px;
-      padding: 14px 16px 10px;
+      height: 406px;
+      overflow: hidden;
+      padding: 34px 12px 0;
+      border: 7px solid var(--lg-ink);
       border-radius: 34px;
-      background-color: color-mix(in srgb, var(--lg-surface) 30%, transparent);
-      box-shadow:
-        inset 0 0 0 6px color-mix(in srgb, var(--lg-ink) 85%, transparent),
-        var(--lg-sh-3);
+      background-color: var(--lg-bg);
+      box-shadow: var(--lg-sh-2);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-phone-frame .lgl-gap {
+      gap: 8px;
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-phone-line {
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 6px;
+      gap: 8px;
+      padding: 8px;
       border-radius: 12px;
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-phone-bar {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
       display: flex;
       gap: 6px;
       padding: 6px;
-      border-radius: 16px;
+      border-radius: 20px;
       background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
     }
 
     /* ── Access: the roles ───────────────────────────────────────────────── */
@@ -1266,9 +1413,11 @@
       margin: 0;
       padding: 0;
     }
+    /* Role names: .h4 (14 / 20 / 600). */
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-role-name {
-      font-size: 15px;
-      line-height: 21px;
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-av {
@@ -1464,9 +1613,6 @@
         height: auto;
         min-height: 200px;
       }
-      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cta > * {
-        flex: 1 1 100%;
-      }
       :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq summary {
         min-height: 64px;
         font-size: 16px;
@@ -1511,7 +1657,9 @@
       :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-window {
         background-color: var(--lg-bg);
       }
-      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-float-card {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        :is(.lgl-float-card, .lgl-phone-bar) {
         background-color: var(--lg-surface);
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
@@ -1566,7 +1714,7 @@
     }
     :root[data-appearance='liquid-glass'][data-lg-material='reduced']
       [data-glass-page='landing']
-      .lgl-float-card {
+      :is(.lgl-float-card, .lgl-phone-bar) {
       background-color: var(--lg-surface);
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
@@ -1581,6 +1729,7 @@
           .lgl-close.lgs-glass,
           .lgl-band,
           .lgl-float-card,
+          .lgl-phone-bar,
           .lgl-window,
           .lgl-table,
           .lgl-toast,

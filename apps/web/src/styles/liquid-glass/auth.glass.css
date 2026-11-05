@@ -97,9 +97,14 @@
   :root[data-appearance='liquid-glass'] .auth-shell .auth-glass-contact:active {
     transform: scale(0.97);
   }
+  /* The column ends with the card: the help links follow it 22 px below
+     (Auth-SignIn.dc.html:66, the nav inside main at margin-top 22) instead of
+     sitting at the foot of the window, so the footer takes the rest of the
+     height and keeps its content at its top. */
   :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-main {
+    flex: 0 0 auto;
     align-items: flex-start;
-    padding: 12px 16px 40px;
+    padding: 12px 16px 0;
   }
   /* The glass ring around the card. */
   :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-col {
@@ -118,8 +123,46 @@
       0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
       var(--lg-glass-shadow);
   }
+  /* The ring's specular edge (sp.css:97, .glass::before) on the ring, the
+     help pill, the invite-only line and the Contact pill (each positioned
+     above), and the card's own (sp.css:977, .card::after). The reduced and
+     contrast token sets make the edges none; forced colours hide them. */
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    :is(.auth-panel-col, .auth-glass-contact)::before,
+  :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-foot :is(nav, p)::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--lg-glass-edge);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+  :root[data-appearance='liquid-glass'] .auth-shell [data-slot='auth-card']::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    z-index: 1;
+    padding: 1px;
+    border-radius: inherit;
+    background: var(--lg-card-edge);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    pointer-events: none;
+  }
   /* The card: the board's .card inside the ring, no shadow of its own. */
   :root[data-appearance='liquid-glass'] .auth-shell [data-slot='auth-card'] {
+    position: relative;
     border: var(--lg-b-w) solid var(--lg-card-line);
     border-radius: 23px;
     background-color: var(--lg-card-fill);
@@ -152,19 +195,39 @@
   /* Fields (.field, .label, .input-lg): 13 / 600 labels in ink 2, 44 px
      inputs in 15 px at radius 12 on the field fill with the stronger 3:1
      edge; focus as .input:focus, the accent edge and the 3 px halo (auth.css
-     is unlayered, so the input primitive's own rule cannot reach here). */
-  :root[data-appearance='liquid-glass'] .auth-shell .auth-field label {
+     is unlayered, so the input primitive's own rule cannot reach here). On
+     every card of the shell (Auth-States.dc.html draws /reset and
+     /reset/complete with the same input-lg as /signin), so the selectors
+     key on the card and the shared Input's own hook, not on the sign-in
+     form's .auth-field (the reset forms do not carry it, and adding it would
+     change their classic markup). The labels are the ones tied to a field
+     (`for`); the Remember me label wraps its checkbox and has none. */
+  :root[data-appearance='liquid-glass'] .auth-shell [data-slot='auth-card'] label[for] {
     font-size: 13px;
     line-height: 18px;
     font-weight: 600;
     color: var(--lg-ink-2);
   }
-  :root[data-appearance='liquid-glass'] .auth-shell .auth-field input {
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    [data-slot='auth-card']
+    input[data-glass='input'] {
     height: 44px;
     font-size: 15px;
     border-radius: 12px;
     border-color: var(--lg-input-line);
     background-color: var(--lg-field-fill);
+  }
+  /* Below 640 px the fields keep the Input's 16 px (input.tsx max-sm), so iOS
+     Safari does not zoom the page when one takes focus; the board's 15 px
+     holds from 640 px up. */
+  @media (width < 40rem) {
+    :root[data-appearance='liquid-glass']
+      .auth-shell
+      [data-slot='auth-card']
+      input[data-glass='input'] {
+      font-size: 16px;
+    }
   }
   :root[data-appearance='liquid-glass']
     .auth-shell
@@ -172,10 +235,16 @@
     input:not(:focus-visible) {
     background-color: var(--lg-field-fill);
   }
-  :root[data-appearance='liquid-glass'] .auth-shell .auth-field input:hover {
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    [data-slot='auth-card']
+    input[data-glass='input']:hover {
     border-color: var(--lg-input-line-hover);
   }
-  :root[data-appearance='liquid-glass'] .auth-shell .auth-field input:focus-visible {
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    [data-slot='auth-card']
+    input[data-glass='input']:focus-visible {
     border-color: var(--lg-accent);
     outline: none;
     box-shadow: 0 0 0 3px var(--lg-focus-halo);
@@ -191,6 +260,65 @@
   }
   :root[data-appearance='liquid-glass'] .auth-shell .auth-field a[href='/reset']:hover {
     text-decoration-thickness: 2px;
+  }
+  /* Remember me (.cb): 18 px at radius 5, the accent fill and an on-accent
+     check when ticked, 24 px for coarse pointers. Its edge is the 3:1 field
+     line (the artifact's own WCAG 1.4.11 decision for fields), not the
+     board's fainter line 3, so the unticked box is found (R11). Forced
+     colours get the native box back. */
+  :root[data-appearance='liquid-glass'] .auth-shell [data-slot='auth-card'] input[type='checkbox'] {
+    appearance: none;
+    -webkit-appearance: none;
+    display: inline-grid;
+    place-content: center;
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    border: 1.5px solid var(--lg-input-line);
+    border-radius: 5px;
+    background-color: var(--lg-surface);
+    cursor: pointer;
+    transition:
+      background-color var(--lg-d-1) var(--lg-ease),
+      border-color var(--lg-d-1) var(--lg-ease);
+  }
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    [data-slot='auth-card']
+    input[type='checkbox']::after {
+    content: '';
+    width: 12px;
+    height: 12px;
+    background-color: var(--lg-on-accent);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+      center / contain no-repeat;
+    transform: scale(0);
+    transition: transform var(--lg-d-1) var(--lg-ease);
+  }
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    [data-slot='auth-card']
+    input[type='checkbox']:checked {
+    border-color: var(--lg-accent);
+    background-color: var(--lg-accent);
+  }
+  :root[data-appearance='liquid-glass']
+    .auth-shell
+    [data-slot='auth-card']
+    input[type='checkbox']:checked::after {
+    transform: scale(1);
+  }
+  @media (pointer: coarse) {
+    :root[data-appearance='liquid-glass']
+      .auth-shell
+      [data-slot='auth-card']
+      input[type='checkbox'] {
+      width: 24px;
+      height: 24px;
+    }
   }
   /* The authenticator code (Auth-SignIn.dc.html, the MFA step): 56 px, the
      digits 28 px mono, spaced .5em and centred, radius 14. */
@@ -209,17 +337,36 @@
     outline: var(--lg-focus-w) solid var(--lg-focus);
     outline-offset: 2px;
   }
-  /* The help links: a glass pill under the column. */
+  /* The help links: a glass pill 22 px under the card, then the kept
+     invite-only line (the board draws none) on the same glass, so no text
+     sits on the bare photo (R11). The pill comes first on screen; the line
+     is not focusable, so the keyboard order is unchanged. */
   :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-foot {
+    flex: 1 0 auto;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: flex-start;
     gap: 14px;
-    padding: 0 16px 32px;
+    padding: 22px 16px 40px;
   }
   :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-foot p {
+    position: relative;
+    isolation: isolate;
+    order: 1;
+    margin: 0;
+    padding: 6px 14px;
+    border-radius: 16px;
     font-size: 13px;
+    line-height: 18px;
+    text-align: center;
     color: var(--lg-ink-2);
+    background-color: var(--lg-glass);
+    -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+    backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+    box-shadow:
+      var(--lg-glass-inner),
+      0 0 0 var(--lg-ring-w) var(--lg-glass-ring);
   }
   :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-foot nav {
     position: relative;
@@ -258,7 +405,7 @@
      pill is taller than the board's (recorded deviation: touch targets win). */
   @media (max-width: 780px) {
     :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-main {
-      padding: 12px 16px 40px;
+      padding: 12px 16px 0;
     }
     :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-col {
       margin-top: clamp(0.25rem, 2vh, 1rem);
@@ -279,7 +426,7 @@
   @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
     :root[data-appearance='liquid-glass']
       .auth-shell
-      :is(.auth-panel-col, .auth-panel-foot nav, .auth-glass-contact) {
+      :is(.auth-panel-col, .auth-panel-foot nav, .auth-panel-foot p, .auth-glass-contact) {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
     }
@@ -287,7 +434,10 @@
   /* Increase Contrast: the halo is transparent there, so a focused field
      shows the contrast focus ring instead. */
   @media (prefers-contrast: more) {
-    :root[data-appearance='liquid-glass'] .auth-shell .auth-field input:focus-visible {
+    :root[data-appearance='liquid-glass']
+      .auth-shell
+      [data-slot='auth-card']
+      input[data-glass='input']:focus-visible {
       outline: var(--lg-focus-w) solid var(--lg-focus);
       outline-offset: 1px;
     }
@@ -296,7 +446,7 @@
      declaration for declaration (site-pages.guard.test.ts). */
   :root[data-appearance='liquid-glass'][data-lg-material='reduced']
     .auth-shell
-    :is(.auth-panel-col, .auth-panel-foot nav, .auth-glass-contact) {
+    :is(.auth-panel-col, .auth-panel-foot nav, .auth-panel-foot p, .auth-glass-contact) {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
@@ -305,13 +455,39 @@
   @media (forced-colors: active) {
     :root[data-appearance='liquid-glass']
       .auth-shell
-      :is(.auth-panel-col, .auth-panel-foot nav, .auth-glass-contact, [data-slot='auth-card']) {
+      :is(
+        .auth-panel-col,
+        .auth-panel-foot nav,
+        .auth-panel-foot p,
+        .auth-glass-contact,
+        [data-slot='auth-card']
+      ) {
       background: Canvas;
       color: CanvasText;
       border: 1px solid CanvasText;
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
       box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      .auth-shell
+      :is(.auth-panel-col, .auth-glass-contact)::before,
+    :root[data-appearance='liquid-glass'] .auth-shell .auth-panel-foot :is(nav, p)::before,
+    :root[data-appearance='liquid-glass'] .auth-shell [data-slot='auth-card']::after {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass']
+      .auth-shell
+      [data-slot='auth-card']
+      input[type='checkbox'] {
+      appearance: auto;
+      -webkit-appearance: auto;
+    }
+    :root[data-appearance='liquid-glass']
+      .auth-shell
+      [data-slot='auth-card']
+      input[type='checkbox']::after {
+      display: none;
     }
   }
 }

@@ -1,9 +1,15 @@
 /* Liquid Glass for the card the invite and onboarding pages draw
    (components/auth/auth-card.tsx inside ExternalShell; app/invite/[token],
    app/onboarding): the sign-in card of Auth-SignIn.dc.html and
-   Auth-States.dc.html (the invitation state) as content glass on the scene
-   ground those pages already show in glass (globals.glass.css .bg-mesh),
-   radius 24, 32/28/28 px. The sign-in shell's own card is auth.glass.css.
+   Auth-States.dc.html (the invitation and workspace-access cards) as content
+   glass on the scene ground those pages already show in glass
+   (globals.glass.css .bg-mesh): radius 24, 26 px all round with 14 px
+   between header and body (.card.col.g14, padding 26), the title as the
+   board's .h2 (20 / 26), and content glass's edge. The sign-in shell's own
+   card is auth.glass.css. Recorded deviations (stage3/site-rows.md): the
+   valid invitation's 7 px glass ring and the accepted and expired states'
+   icon tiles and centred layout are not drawn (one card holds every state,
+   and a ring or a tile needs an element the classic page does not have).
 
    Imported by those two pages only; every selector is scoped to the page
    root they name (ExternalShell glassPage="access": the inert
@@ -30,17 +36,17 @@
       [data-glass-page='access']
       [data-slot='auth-card']
       > header {
-      padding: 32px 28px 0;
+      padding: 26px 26px 0;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='access']
       [data-slot='auth-card']
       > header
       h1 {
-      font-size: 28px;
-      line-height: 34px;
+      font-size: 20px;
+      line-height: 26px;
       font-weight: 650;
-      letter-spacing: -0.022em;
+      letter-spacing: -0.016em;
       color: var(--lg-ink);
     }
     :root[data-appearance='liquid-glass']
@@ -55,7 +61,7 @@
       [data-slot='auth-card']
       > header
       + div {
-      padding: 20px 28px 28px;
+      padding: 14px 26px 26px;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='access']
@@ -63,7 +69,7 @@
       > header
       + div
       + div {
-      padding: 16px 28px;
+      padding: 16px 26px;
       border-top-color: var(--lg-line);
       border-radius: 0 0 23px 23px;
       background-color: var(--lg-card-fill-2);
@@ -77,28 +83,24 @@
       outline-offset: 2px;
     }
 
-    @media (max-width: 640px) {
-      :root[data-appearance='liquid-glass']
-        [data-glass-page='access']
-        [data-slot='auth-card']
-        > header {
-        padding: 24px 20px 0;
-      }
-      :root[data-appearance='liquid-glass']
-        [data-glass-page='access']
-        [data-slot='auth-card']
-        > header
-        + div {
-        padding: 18px 20px 22px;
-      }
-      :root[data-appearance='liquid-glass']
-        [data-glass-page='access']
-        [data-slot='auth-card']
-        > header
-        + div
-        + div {
-        padding: 14px 20px;
-      }
+    /* Content glass's edge (sp.css:977, .card::after); none in the reduced
+       and contrast token sets, hidden under forced colours. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='access']
+      [data-slot='auth-card']::after {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      z-index: 1;
+      padding: 1px;
+      border-radius: inherit;
+      background: var(--lg-card-edge);
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
     }
 
     @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
@@ -124,6 +126,11 @@
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
         box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='access']
+        [data-slot='auth-card']::after {
+        display: none;
       }
     }
   }

@@ -50,7 +50,9 @@ export function LandingHero() {
               <AppEntryLink where="hero-sign-in" className={buttonClass('primary', 'xl')}>
                 Sign in
                 <ArrowRight className="size-[18px]" aria-hidden="true" />
-              </AppEntryLink>
+              </AppEntryLink>{' '}
+              {/* The space the board's markup has between the two buttons: in
+                  glass the row is a plain block, as the board's .lp-cta is. */}
               <a href="#story" className={buttonClass('glass', 'xl')}>
                 Explore StockPilot
                 <ArrowDown className="size-[18px]" aria-hidden="true" />

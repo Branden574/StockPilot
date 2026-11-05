@@ -109,8 +109,10 @@
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-eyebrow.lgs-accent {
       color: var(--lg-accent-text);
     }
+    /* The date line: .sm (13 / 18). */
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-date {
-      font-size: 14px;
+      font-size: 13px;
+      line-height: 18px;
       color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-ink2 {
@@ -163,6 +165,27 @@
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-glass-clear {
       background-color: var(--lg-glass-clear);
+    }
+    /* The specular edge (sp.css:97, .glass::before): a 1 px masked gradient
+       ring. Every element above is positioned (relative, or sticky by its own
+       rule), so the ring changes no containing block. The reduced and contrast
+       token sets make the edge none; forced colours hide it below. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      :is(.lgs-nav, .lgs-menu, .lgs-glass, .lgs-glass-clear, .lgs-btn-glass)::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      padding: 1px;
+      border-radius: inherit;
+      background: var(--lg-glass-edge);
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
     }
 
     /* ── SiteNav ─────────────────────────────────────────────────────────── */
@@ -361,6 +384,22 @@
       -webkit-backdrop-filter: blur(22px) saturate(160%);
       backdrop-filter: blur(22px) saturate(160%);
     }
+    /* Content glass's edge (sp.css:977, .card::after), over the hairline. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-card::after {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      z-index: 1;
+      padding: 1px;
+      border-radius: inherit;
+      background: var(--lg-card-edge);
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-tile {
       border-radius: 18px;
       background-color: var(--lg-accent-wash);
@@ -391,8 +430,11 @@
       text-decoration: underline;
       text-underline-offset: 2.5px;
     }
+    /* The general-support note (p.sm.ink2.glass): 13 / 18. */
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-note {
       border-radius: 16px;
+      font-size: 13px;
+      line-height: 18px;
       color: var(--lg-ink-2);
     }
 
@@ -548,24 +590,89 @@
       -webkit-backdrop-filter: blur(22px) saturate(160%);
       backdrop-filter: blur(22px) saturate(160%);
     }
-    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support select {
-      height: 44px;
+    /* Every field as the board's input input-lg (Site-Support.dc.html): 44 px,
+       15 px, radius 12 on the field fill with the 3:1 edge; the details box
+       keeps its own height. Focus as .input:focus: the accent edge and the
+       3 px halo, no outline (an outline in --lg-focus under more contrast,
+       where the halo is transparent). The honeypot carries no hook and stays
+       hidden. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      :is(input[data-glass='input'], textarea[data-glass='input'], select) {
       border-radius: 12px;
       border-color: var(--lg-input-line);
       background-color: var(--lg-field-fill);
       color: var(--lg-ink);
       font-size: 15px;
     }
-    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support select:hover {
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      :is(input[data-glass='input'], select) {
+      height: 44px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      :is(input[data-glass='input'], textarea[data-glass='input'], select):hover {
       border-color: var(--lg-input-line-hover);
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='site']
       .lgs-support
-      select:focus-visible {
-      outline: var(--lg-focus-w) solid var(--lg-focus);
-      outline-offset: 0;
+      :is(input[data-glass='input'], textarea[data-glass='input'], select):focus-visible {
+      border-color: var(--lg-accent);
+      outline: none;
       box-shadow: 0 0 0 3px var(--lg-focus-halo);
+    }
+    @media (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='site']
+        .lgs-support
+        :is(input[data-glass='input'], textarea[data-glass='input'], select):focus-visible {
+        outline: var(--lg-focus-w) solid var(--lg-focus);
+        outline-offset: 1px;
+      }
+    }
+    /* Below 640 px the fields keep 16 px (the Input's and the select's
+       max-sm:text-base), so iOS Safari does not zoom the page when one takes
+       focus; the board's 15 px holds from 640 px up. */
+    @media (width < 40rem) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='site']
+        .lgs-support
+        :is(input[data-glass='input'], textarea[data-glass='input'], select) {
+        font-size: 16px;
+      }
+    }
+    /* Send ticket: the board's btn btn-primary btn-lg (the accent fill, 44 px,
+       15 px, radius 12), through the shared Button's hook. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      [data-glass='button'][type='submit'] {
+      height: 44px;
+      padding: 0 18px;
+      border-radius: 12px;
+      font-size: 15px;
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      [data-glass='button'][type='submit']:hover:not(:disabled) {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      [data-glass='button'][type='submit']:active:not(:disabled) {
+      background-color: var(--lg-accent-press);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support label {
       font-size: 13px;
@@ -579,7 +686,10 @@
       border-top: 1px solid var(--lg-line);
       background-color: color-mix(in srgb, var(--lg-surface) 40%, transparent);
     }
+    /* The brand line (p.sm.muted): 13 / 18. */
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-line {
+      font-size: 13px;
+      line-height: 18px;
       color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-link {
@@ -722,6 +832,12 @@
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
         box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='site']
+        :is(.lgs-nav, .lgs-menu, .lgs-glass, .lgs-glass-clear, .lgs-btn-glass)::before,
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-card::after {
+        display: none;
       }
     }
   }
