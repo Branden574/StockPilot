@@ -99,7 +99,7 @@ test('Items: ticked rows, an open group and the scroll survive every switch, wit
   if (openedGroup) expect(before.expanded.length).toBeGreaterThanOrEqual(1);
   const toastsBefore = await toastTexts(page);
   const joinsBefore = joins.count();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
 
   for (const look of SEQUENCE) {
     await chooseLook(page, look);
@@ -131,7 +131,7 @@ test('Item edit: an unsaved name stays in its field through every switch', async
   const typed = `${await name.inputValue()} (unsaved draft)`;
   await name.fill(typed);
   const url = page.url();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
   for (const look of SEQUENCE) {
     await chooseLook(page, look);
     await settle(page);
@@ -162,7 +162,7 @@ test('Item page: the Adjust stock dialog stays open with its quantity and focus 
   const quantity = dialog.getByLabel('Quantity');
   await quantity.fill('3');
   await quantity.focus();
-  const requests = watchDataRequests(page);
+  const requests = await watchDataRequests(page);
 
   for (const look of SEQUENCE) {
     await chooseLookElsewhere(remote, page, look);
@@ -222,7 +222,7 @@ test('Command palette: open with a query through switches made in another tab; E
   const input = palette.getByRole('combobox');
   await expect(input).toBeFocused();
   await input.fill('lab');
-  const requestsBefore = watchDataRequests(page);
+  const requestsBefore = await watchDataRequests(page);
   // Typing searched; only the switches are measured from here.
   await settle(page);
   requestsBefore.reset();

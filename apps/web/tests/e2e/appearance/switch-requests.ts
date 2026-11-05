@@ -3,7 +3,7 @@
  * request during a switch, apart from the appearance save and the scene
  * images"). Pure, so a unit test proves the rules
  * (src/test/appearance-switch-requests.test.ts); the transition specs feed it
- * Playwright's requests through orders-look.ts.
+ * Playwright's requests through orders-look.ts and look.ts (the items lane).
  *
  * Allowed while the look changes:
  *  - the account save, and only it: a server action POST whose body is
