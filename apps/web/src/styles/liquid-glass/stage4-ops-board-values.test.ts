@@ -201,6 +201,52 @@ const ENTRIES: Entry[] = [
     'width',
     'min(380px, 100%)',
   ],
+  // A count's summary card (Cycle-Count-Detail.dc.html: .prog at 8 px, 16 px
+  // under the figures, on the surface 4 track with the ok fill).
+  [
+    'count summary bar height',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} [data-glass='stat-strip'] [data-glass='count-progress']`),
+    'height',
+    '8px',
+  ],
+  [
+    'count summary bar track',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} [data-glass='stat-strip'] [data-glass='count-progress']`),
+    'background',
+    'var(--lg-surface-4)',
+  ],
+  [
+    'count summary bar fill',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} [data-glass='stat-strip'] [data-glass='count-progress'] > span`),
+    'background',
+    'var(--lg-ok-fill)',
+  ],
+  [
+    'count summary bar 16 px under the figures (18 px card padding, 8 px bar)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='stat-strip'] > div:has(> [data-glass='count-progress'])`,
+    ),
+    'padding-bottom',
+    '42px',
+  ],
+  [
+    "Classic's small bar under Counted hidden",
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='stat-strip'] [data-slot='stat-strip-item'] > div:has(> [data-slot='count-progress'])`,
+    ),
+    'display',
+    'none',
+  ],
   // A count (Cycle-Count-Detail.dc.html: the 96 x 34 count field).
   [
     'count field width',

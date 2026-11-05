@@ -210,6 +210,8 @@ const PAIRS: Array<[string, string, string[], number]> = [
     ['--lg-pane', '--lg-warn-wash'],
     4.5,
   ],
+  ['count summary bar fill (ok) on its track', '--lg-ok-fill', [...CARD, '--lg-surface-4'], 3],
+  ['Lines that differ figure (ink) on the card', '--lg-ink', CARD, 4.5],
   // Purchasing (pages/po.css)
   ['PO number (accent text) on the card', '--lg-accent-text', CARD, 4.5],
   ['received figure (ink) on the card', '--lg-ink', CARD, 4.5],

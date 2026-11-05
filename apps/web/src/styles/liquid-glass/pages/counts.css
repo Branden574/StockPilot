@@ -21,9 +21,11 @@
    counted figures (the board puts them in the page head): they own the two
    dialogs and the busy state, so they are rendered once, where Classic has
    them; the side column (assignee, linked exceptions) stays, as the board
-   draws no counterpart; the four Classic figures stay four (the board adds
-   "Lines that differ", a figure the strip does not print), and the bar
-   stays under Counted. Imported only by the three cycle count pages. */
+   draws no counterpart. The board's fifth figure, "Lines that differ", and
+   its wide bar under the figures are glass-only elements of the count
+   (components/cycle-counts/count-glass-summary.tsx); Classic's small bar
+   under Counted is hidden in their place. Imported only by the three cycle
+   count pages. */
 @layer theme, base, components, utilities, lg;
 
 @layer lg {
@@ -159,6 +161,54 @@
       clip: auto;
       clip-path: none;
       white-space: pre;
+    }
+    /* The Count summary card (section.card, 18 / 20): five figures in the
+       auto-fit grid (ops.css draws them as the board's .stat), the glass-only
+       "Lines that differ" among them (components/cycle-counts/
+       count-glass-summary.tsx), and under them the board's one wide bar
+       (.prog, 8 px, 16 px below the figures: the surface 4 track and the ok
+       fill, radius 3). The bar is placed out of the grid's flow, so the
+       auto-fit columns stretch over the five figures alone, as the board
+       lays them out; the grid keeps room under the figures for it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      > div:has(> [data-glass='count-progress']) {
+      position: relative;
+      padding-bottom: 42px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-glass='count-progress'] {
+      display: flex;
+      position: absolute;
+      right: 20px;
+      bottom: 18px;
+      left: 20px;
+      height: 8px;
+      overflow: hidden;
+      border-width: 0;
+      border-radius: 3px;
+      background: var(--lg-surface-4);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-glass='count-progress']
+      > span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+      background: var(--lg-ok-fill);
+    }
+    /* Classic's small bar under Counted: the wide bar stands for it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-slot='stat-strip-item']
+      > div:has(> [data-slot='count-progress']) {
+      display: none;
     }
     /* The lines card's head (status, counted figures, the two actions) as
        the board's card head (12 x 16, 52 px), and its toolbar (12 x 14):

@@ -66,12 +66,15 @@ describe('glass-only and classic-only elements', () => {
   // badge beside the status (words and an icon); the order page's
   // requester note, Classic-only in the main column (the page) and a
   // glass-only copy in the side column (words only, plan 4.6).
+  // Stage 4, operations lane: a cycle count's fifth figure and its wide
+  // progress bar (words and a bar from the summary the page loads).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
       ...Array<string>(2).fill('app/(auth)/layout.tsx'),
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       'components/auth/external-shell.tsx',
+      ...Array<string>(2).fill('components/cycle-counts/count-glass-summary.tsx'),
       'components/dashboard/sidebar.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
