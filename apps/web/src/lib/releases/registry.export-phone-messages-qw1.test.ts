@@ -45,6 +45,11 @@ const MESSAGES_ID = 'clearer-web-messages-2026-11';
 const QW1_ID = 'invites-calendar-record-pages-2026-11';
 const NEW_IDS = [EXPORT_ID, PHONE_ID, MESSAGES_ID, QW1_ID];
 const WEB_FIXES_ID = 'web-fixes-2026-11-02';
+// Added by docs/whats-new-2026-11-05 (2026-11-05): the S2 release, published
+// later, at the top, above these four. It reaches whoever approves orders or
+// picks where Orders is on (an owner with every permission and module among
+// them), not a member with no permission.
+const S2_ID = 'approver-controls-own-warehouses-2026-11';
 const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
 const entry = (releaseId: string, entryId: string) =>
   byId(releaseId).entries.find((e) => e.id === entryId)!;
@@ -185,8 +190,10 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       expect(byId(id).revision, id).toBe(1);
       expect(byId(id).withdrawnNote, id).toBeUndefined();
     }
-    expect(RELEASES.slice(0, 5).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(EXPORT_ID);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    expect(RELEASES.slice(1, 6).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(S2_ID);
     expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
   });
 
@@ -206,7 +213,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // #483 went live at 22:28:58Z.
     expect(at(QW1_ID)).toBeGreaterThan(Date.parse('2026-11-02T22:28:58Z'));
     for (let i = 0; i < NEW_IDS.length; i += 1) {
-      for (const r of RELEASES.slice(i + 1)) {
+      // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+      for (const r of RELEASES.slice(i + 2)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -232,25 +240,28 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
   });
 
   it('is the notice in date order for an owner, and the three that reach every member come first for a member', () => {
-    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(EXPORT_ID);
-    expect(buildReleaseList(RELEASES, everyone, [read(EXPORT_ID)], null).latestUnread?.id).toBe(
-      PHONE_ID,
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: each read set without it): the S2 release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
+    expect(buildReleaseList(RELEASES, everyone, [read(S2_ID)], null).latestUnread?.id).toBe(
+      EXPORT_ID,
     );
     expect(
-      buildReleaseList(RELEASES, everyone, [read(EXPORT_ID), read(PHONE_ID)], null).latestUnread
-        ?.id,
+      buildReleaseList(RELEASES, everyone, [read(S2_ID), read(EXPORT_ID)], null).latestUnread?.id,
+    ).toBe(PHONE_ID);
+    expect(
+      buildReleaseList(RELEASES, everyone, [read(S2_ID), read(EXPORT_ID), read(PHONE_ID)], null)
+        .latestUnread?.id,
     ).toBe(MESSAGES_ID);
     expect(
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(EXPORT_ID), read(PHONE_ID), read(MESSAGES_ID)],
+        [read(S2_ID), read(EXPORT_ID), read(PHONE_ID), read(MESSAGES_ID)],
         null,
       ).latestUnread?.id,
     ).toBe(QW1_ID);
-    expect(buildReleaseList(RELEASES, everyone, NEW_IDS.map(read), null).latestUnread?.id).toBe(
-      WEB_FIXES_ID,
-    );
+    expect(
+      buildReleaseList(RELEASES, everyone, [S2_ID, ...NEW_IDS].map(read), null).latestUnread?.id,
+    ).toBe(WEB_FIXES_ID);
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(EXPORT_ID);
   });
 });

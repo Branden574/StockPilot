@@ -149,12 +149,14 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
       expect(byId(id).revision, id).toBe(1);
     }
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(RELEASES[4]?.id).toBe(WEB_FIXES_ID);
-    expect(RELEASES[5]?.id).toBe(CHARTERS_ID);
-    expect(RELEASES[6]?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[5]?.id).toBe(WEB_FIXES_ID);
+    expect(RELEASES[6]?.id).toBe(CHARTERS_ID);
+    expect(RELEASES[7]?.id).toBe(AUTH_CODE_ID);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'export-items-permission-2026-11',
+      'approver-controls-own-warehouses-2026-11',
     );
   });
 
@@ -171,9 +173,10 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     expect(charters).toBeGreaterThan(Date.parse('2026-11-02T18:29:46Z'));
     expect(web).toBeGreaterThan(charters);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every release): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top, so it is the newest from position 4 on.
-    expect(web).toBe(Math.max(...RELEASES.slice(4).map((r) => Date.parse(r.publishedAt))));
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    expect(web).toBe(Math.max(...RELEASES.slice(5).map((r) => Date.parse(r.publishedAt))));
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    for (const r of RELEASES.slice(6)) {
+    for (const r of RELEASES.slice(7)) {
       expect(charters, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -232,6 +235,8 @@ describe('the web fixes release (B20a and S45)', () => {
     expect(entriesFor(WEB_FIXES_ID, member)).toBeUndefined();
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: with nothing read): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top, and reach an owner, so they are read first.
     const nightReads = [
+      // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+      'approver-controls-own-warehouses-2026-11',
       'export-items-permission-2026-11',
       'mobile-app-fixes-2026-11-02',
       'clearer-web-messages-2026-11',
