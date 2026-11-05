@@ -144,7 +144,7 @@ export const RELEASES: Release[] = [
     // (order-other-warehouse-words) limits its audience by role too.
     status: 'published',
     title:
-      'Order actions show only on orders of the warehouses you work in, on the web and in the mobile app',
+      'Approve, Cancel and the other order steps show only on orders of your warehouses, on the web and in the mobile app',
     summary:
       'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, changes to its items or the other steps that move it on, on the web or in the mobile app. In the mobile app, Claim picking and Release show only on orders of your warehouses, as on the web. Owners, admins and managers see no change. In the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
     publishedAt: '2026-11-05T13:54:00Z',
@@ -153,7 +153,7 @@ export const RELEASES: Release[] = [
         id: 'approver-controls-own-warehouses',
         category: 'fixed',
         area: 'Orders',
-        title: 'Order actions show only on orders of the warehouses you work in',
+        title: 'Approve, Cancel and the other order steps show only on orders of your warehouses',
         whatChanged:
           'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, Add items, changes to its items or the other steps that move it on, on the web or in the mobile app. On the web, its internal notes are hidden too, and its Manager actions card, when it shows, offers only Print pick slip, Print customer slip and View signature. In the mobile app, Change beside its needed-by date is hidden too, and Claim picking and Release show only on orders of your warehouses, as on the web, for everyone who picks.',
         whyItMatters:
