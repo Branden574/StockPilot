@@ -28,7 +28,10 @@ export interface GlassLook extends ThemeValue {
  */
 export function useGlass(): GlassLook | null {
   const theme = useTheme();
-  return theme.g !== null && theme.ios !== null && theme.type !== null
+  return theme.style === 'liquid-glass' &&
+    theme.g != null &&
+    theme.ios != null &&
+    theme.type != null
     ? (theme as GlassLook)
     : null;
 }

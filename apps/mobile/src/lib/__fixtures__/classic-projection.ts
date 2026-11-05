@@ -86,7 +86,7 @@ function projector(nothingSet: WeakSet<ts.Node>): ts.TransformerFactory<ts.Sourc
       return isEmptyValue(out) ? (nothingSet.add(out), out) : out;
     };
 
-    const visit = (node: ts.Node): ts.VisitResult<ts.Node> => {
+    const visit = (node: ts.Node): ts.VisitResult<ts.Node | undefined> => {
       if (ts.isVariableStatement(node)) {
         const decls = node.declarationList.declarations;
         const kept = decls.filter(
@@ -106,7 +106,7 @@ function projector(nothingSet: WeakSet<ts.Node>): ts.TransformerFactory<ts.Sourc
       if (ts.isIfStatement(node)) {
         // The kept arm stands where the `if` stood; a block's statements are
         // spliced in, so `if (lg) {...} else { x }` is exactly `x`.
-        const arm = (st: ts.Statement | undefined): ts.VisitResult<ts.Node> => {
+        const arm = (st: ts.Statement | undefined): ts.VisitResult<ts.Node | undefined> => {
           if (!st) return undefined;
           const out = ts.visitNode(st, visit) as ts.Statement;
           return ts.isBlock(out) ? [...out.statements] : out;

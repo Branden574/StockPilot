@@ -27,7 +27,23 @@ import { classicHash, projectionLeaks } from '../__fixtures__/classic-projection
 const MOBILE_ROOT = path.resolve(__dirname, '../../..');
 
 /** File (from apps/mobile) -> classic-projection SHA-256 of that file at b64bd37cc. */
-export const CLASSIC_PINS: Readonly<Record<string, string>> = {};
+export const CLASSIC_PINS: Readonly<Record<string, string>> = {
+  'src/components/ui/button.tsx':
+    'd1936a64984533be2a5de3a9349c3c9e6f6f3ea2957dc35c13feb0afff95552a',
+  'src/components/ui/card.tsx': 'f7bf1fb3df499eb495654304861a7369dba3ad1e2a9d5420b7a8028debd0f482',
+  'src/components/ui/checkbox.tsx':
+    '669b366ab3016eb0eef7ef4d9d384690ad64ee3e39a4fae068a0c0ab28d47c29',
+  'src/components/ui/chip.tsx': '493ad4c5d9bbae50305e3f459bbdf3a8a85b80bb335ebb0907797f27e1272807',
+  'src/components/ui/field.tsx': 'e599499010052ccf0a8fbc136f9287dd3049b5fdb16a1e9b6c73e932b2d189f7',
+  'src/components/ui/pill.tsx': 'b2ca71fad4c7075e8b947cc598425e621c399cb48483b2eee0a118509f74427b',
+  'src/components/ui/row.tsx': '8dcbe2c6f6ba5f7aebad5699c14dcd874012da27a075fd5fb5351d5a28a3afa9',
+  'src/components/ui/stat-card.tsx':
+    '025911e6aecd5bd96cb55761bb3a0d40503cfe80d521406b802a47768eb82deb',
+  'src/components/ui/text.tsx': '334e3569741e110ad6d5ba6e2e1bf3a931c2677fa4a8a83a6c6901de9c3d43bc',
+  'src/components/ui/thumb.tsx': 'f4d2621d886f4d549cb2cf539e5cbaad27d3cc8959a5e0cc0092a68892c617ae',
+  'src/components/ui/toggle.tsx':
+    '0f94a5d9eef3cc588556141111590fb16586e13b31dde062d0bb1b1b42aa2786',
+};
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {

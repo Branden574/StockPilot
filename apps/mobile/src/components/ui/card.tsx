@@ -4,6 +4,9 @@ import { StyleSheet, View, type ViewStyle } from 'react-native';
 import { RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
+import { glassCardStyle, glassHairStyle } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
+
 /**
  * Card surface — 1px hairline border, flat: the reference draws cards with a
  * hairline and no shadow (only floating layers, sheets and toasts, cast
@@ -21,6 +24,7 @@ export function Card({
   style?: ViewStyle | ViewStyle[];
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View
       style={[
@@ -31,6 +35,9 @@ export function Card({
           borderRadius: hero ? RADIUS.cardHero : RADIUS.card,
           padding,
         },
+        // Liquid Glass: the grouped content surface (card fill over the
+        // scene, radius 24, .5pt edge; opaque under Reduce Transparency).
+        lg && glassCardStyle(lg),
         style,
       ]}
     >
@@ -40,14 +47,9 @@ export function Card({
 }
 
 /** Thin 1px hairline divider used inside cards and lists. */
-export function Hair({
-  inset = 0,
-  style,
-}: {
-  inset?: number;
-  style?: ViewStyle;
-}) {
+export function Hair({ inset = 0, style }: { inset?: number; style?: ViewStyle }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View
       style={[
@@ -56,6 +58,8 @@ export function Hair({
           backgroundColor: c.hair,
           marginLeft: inset,
         },
+        // Liquid Glass: the grouped list's .5pt --line-2 separator.
+        lg && glassHairStyle(lg),
         style,
       ]}
     />

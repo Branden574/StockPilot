@@ -5,6 +5,9 @@ import { Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } fro
 // loads this file in the node test runner, which does not resolve `@/`.
 import { FONT, TYPE_CEILING, capTo } from '../../lib/theme';
 import { useTheme } from '../../lib/use-theme';
+
+import { glassButtonDrawn, glassButtonLabel } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { BUTTON_RADIUS, buttonTone, type ButtonVariant } from './tones';
 
 type Variant = ButtonVariant;
@@ -81,6 +84,7 @@ export function Button({
   accessibilityHint?: string;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const tone = buttonTone(variant, c);
 
   const minHeight = size === 'sm' ? 36 : 52;
@@ -88,18 +92,23 @@ export function Button({
   const fontSize = size === 'sm' ? 13 : 15.5;
   const framed = size === 'sm';
 
-  const drawn = (pressed: boolean): ViewStyle => ({
-    // minHeight, not height: the label is allowed to grow to the 22pt
-    // control ceiling, and the button grows with it instead of clipping.
-    minHeight,
-    paddingVertical: 6,
-    paddingHorizontal: padH,
-    borderRadius: BUTTON_RADIUS[size],
-    backgroundColor: tone.bg,
-    borderColor: tone.border,
-    opacity: disabled ? 0.5 : 1,
-    transform: [{ scale: pressed ? 0.98 : 1 }],
-  });
+  const drawn = (pressed: boolean): ViewStyle =>
+    // Liquid Glass: the iOS button (.ios-btn): 50pt, radius 25, the solid
+    // accent for primary, the gray fill for outline, 17pt 600.
+    lg
+      ? glassButtonDrawn(lg, variant, size, pressed, disabled)
+      : {
+          // minHeight, not height: the label is allowed to grow to the 22pt
+          // control ceiling, and the button grows with it instead of clipping.
+          minHeight,
+          paddingVertical: 6,
+          paddingHorizontal: padH,
+          borderRadius: BUTTON_RADIUS[size],
+          backgroundColor: tone.bg,
+          borderColor: tone.border,
+          opacity: disabled ? 0.5 : 1,
+          transform: [{ scale: pressed ? 0.98 : 1 }],
+        };
   const blockWidth: ViewStyle | null = block ? { width: '100%' } : null;
   const split = framed ? splitButtonStyle(style) : null;
 
@@ -132,6 +141,7 @@ export function Button({
                   color: tone.fg,
                   fontSize,
                 },
+                lg && glassButtonLabel(lg, variant, size),
               ]}
               numberOfLines={wrap ? undefined : 1}
               maxFontSizeMultiplier={capTo(fontSize, TYPE_CEILING.control)}
