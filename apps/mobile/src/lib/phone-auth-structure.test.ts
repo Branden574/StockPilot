@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { printClassic } from './__fixtures__/classic-projection';
 import { TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
 /**
@@ -606,7 +607,14 @@ describe('the Face ID opt-in sheet', () => {
   });
 
   it('the grabber is the faint ink token, the pip the accent, the settings path in the body face', () => {
-    expect(sheet).toContain('<View style={[styles.grabber, { backgroundColor: c.ink5 }]} />');
+    // Classic's grabber, read off the Classic projection (Liquid Glass draws
+    // it in --ios-sep in its own branch).
+    expect(flat(printClassic(sourceOf(OPT_IN), OPT_IN))).toMatch(
+      /<View style=\{\[styles\.grabber, \{ backgroundColor: c\.ink5 \}\]\}\s*\/>/,
+    );
+    expect(sheet).toContain(
+      '<View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />',
+    );
     expect(sheet).toContain('<View style={[styles.pip, { backgroundColor: c.accent }]} />');
     expect(sheet).toContain(
       '<Body color={c.ink} style={{ fontFamily: FONT.display }}> Settings · Security </Body>',

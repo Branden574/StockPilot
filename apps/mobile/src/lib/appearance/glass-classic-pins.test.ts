@@ -34,6 +34,19 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '42d3d7a1d8a26a6355eb062ae63537bd64e44208d7facb712190217ccd319750',
   'app/(drawer)/(tabs)/scan.tsx':
     '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
+  'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
+  'src/components/biometric-optin-sheet.tsx':
+    '2a1823f24f727ab701e3f4383bd35b5be640ee2076cb8f683d8ea2dcb902b30e',
+  'src/components/filter-sheet.tsx':
+    '9c7be38b2ee7fe64a52b2928ef53f717683cfc2515fe7f08a95888018ceb29ce',
+  'src/components/item-history-sheet.tsx':
+    'f45c312e1ae17412cc7ae710614d90bfb53ec2e5e4ad4a9a67ba5d7e6482d239',
+  'src/components/move-stock-modal.tsx':
+    '442d384a7e794906c762f077534015fe4e25ec9ef64a4e22c5f13b7c26c392f2',
+  'src/components/remove-from-rack-modal.tsx':
+    '2dcc3e3ea4adda35b9d57f7f08ae469e87e80141bb06f2400202a7bff5f5ee6a',
+  'src/components/workspace-switcher.tsx':
+    '1c57753f88c7a6fb973ff9e842cd2267bbafb742df4233fbbc5d6cd072f8fcbb',
   'src/components/AddBookCard.tsx':
     '9264f450228d533b6b939f22fc0115baed0ba832cbf2d981fbb80965acd8e372',
   'src/components/AddItemCard.tsx':

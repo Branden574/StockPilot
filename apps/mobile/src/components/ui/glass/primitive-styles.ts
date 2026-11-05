@@ -423,3 +423,64 @@ export const glassGrabber = cached((lg): ViewStyle => ({
   borderRadius: 3,
   backgroundColor: lg.ios.sep,
 }));
+
+/** The sheet's own padding (.ios-sheet [740]: 8 top, 18 sides, 22 foot). */
+export const GLASS_SHEET_PADDING: ViewStyle = {
+  paddingTop: GLASS_METRICS.sheet.paddingTop,
+  paddingHorizontal: GLASS_METRICS.sheet.paddingHorizontal,
+  paddingBottom: GLASS_METRICS.sheet.paddingBottom,
+};
+
+/**
+ * The segmented control's chosen segment (.ios-seg > .on [724, 1051-1052]):
+ * white 92% in Day, white 18% in Night, the iOS card under Reduce
+ * Transparency. The app's segments keep their 44pt height (the boards draw
+ * 32), so the corners follow it.
+ */
+const SEG_ON = { light: 'rgba(255,255,255,.92)', dark: 'rgba(255,255,255,.18)' } as const;
+
+/** The segmented track (.ios-seg [722, 1050]): --ios-fill, no ring, 2pt between segments. */
+export const glassSegTrack = cached((lg): ViewStyle => ({
+  backgroundColor: lg.ios.fill,
+  borderWidth: 0,
+  borderColor: 'transparent',
+  borderRadius: 25,
+  gap: GLASS_METRICS.segmented.gap,
+}));
+
+/**
+ * One segment. The chosen one keeps Classic's ink-3 ring as well as the
+ * board's fill, so which segment is open never rests on a faint fill alone
+ * (the fill is about 1.2:1 against the track; the ring is over 3:1).
+ */
+export function glassSegment(lg: GlassLook, on: boolean): ViewStyle {
+  return {
+    borderRadius: 22,
+    backgroundColor: on ? (isOpaqueLook(lg) ? lg.ios.card : SEG_ON[lg.mode]) : 'transparent',
+  };
+}
+
+/** The segment's words: the system face, 14/600 (.ios-seg > button [723]). */
+export const glassSegLabel = cached((lg): TextStyle => ({
+  ...lg.font.displaySemi,
+  fontSize: 14,
+  letterSpacing: 0,
+}));
+
+/** A tinted step button (.ios-btn.tinted [718]): the accent wash, no ring, radius 20. */
+export const glassTintedStep = cached((lg): ViewStyle => ({
+  backgroundColor: lg.g.accentWash,
+  borderColor: 'transparent',
+  borderWidth: 0,
+  borderRadius: 20,
+}));
+
+/** The tinted step's words: the system face 18/600 in the accent ink, tabular. */
+export const glassTintedStepLabel = cached((lg): TextStyle => ({
+  ...lg.font.displaySemi,
+  fontSize: 18,
+  letterSpacing: 0,
+  color: lg.g.accentText,
+  fontVariant: ['tabular-nums'],
+  flexShrink: 1,
+}));
