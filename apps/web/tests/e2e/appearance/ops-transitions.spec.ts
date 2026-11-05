@@ -33,6 +33,11 @@ import {
  *    typed quantity, stays open with the quantity and focus inside through
  *    switches made in a second tab.
  *  - A return: the Next step actions and the scroll stay; no data request.
+ *  - The glass-only parts the lane draws (a count's fifth figure and wide
+ *    bar, a purchase order's receiving summary and line columns, a return's
+ *    progress rail) are on screen only in Liquid Glass, and the Classic parts
+ *    they stand for (the small bar under Counted, the "Received / ordered"
+ *    column) only in Classic, after every switch.
  *
  * Needs a running server and a signed-in lab user who manages inventory
  * (cycle counts, purchase orders, returns), in an organisation with a cycle
@@ -78,6 +83,29 @@ async function ready(page: Page): Promise<void> {
  *  CSS guard caught it). */
 async function visibleGlassOnly(page: Page): Promise<number> {
   return page.locator('[data-glass-only]').filter({ visible: true }).count();
+}
+
+/**
+ * Each part is on screen in the one design it belongs to: `glass` parts only
+ * in Liquid Glass, `classic` parts only in Classic. A part the page did not
+ * render for this record (no lines, a draft order, a denied return) is
+ * skipped.
+ */
+async function expectShownIn(
+  page: Page,
+  parts: { glass?: string[]; classic?: string[] },
+  inGlass: boolean,
+  where: string,
+): Promise<void> {
+  for (const [selector, shown] of [
+    ...(parts.glass ?? []).map((sel) => [sel, inGlass] as const),
+    ...(parts.classic ?? []).map((sel) => [sel, !inGlass] as const),
+  ]) {
+    const part = page.locator(selector).first();
+    if ((await part.count()) === 0) continue;
+    if (shown) await expect(part, `${selector} shown ${where}`).toBeVisible();
+    else await expect(part, `${selector} hidden ${where}`).toBeHidden();
+  }
 }
 
 /** The lane's page root, or null where the route drew another page (a
@@ -204,6 +232,15 @@ test('A cycle count: a typed count stays through every switch; Review & post sta
     await chooseLook(page, look);
     await settle(page);
     await expect(field).toHaveValue('7');
+    await expectShownIn(
+      page,
+      {
+        glass: ['[data-glass="count-differ"]', '[data-glass="count-progress"]'],
+        classic: ['[data-testid="count-stat-counted"] [data-slot="count-progress"]'],
+      },
+      look.design === 'liquid-glass',
+      `after ${look.design} ${look.theme}`,
+    );
   }
 
   const post = page.getByRole('button', { name: /Review & post/u });
@@ -267,6 +304,15 @@ test('A purchase order: the Receive dialog keeps its typed quantity, and focus i
       `focus inside Receive ${where}`,
     ).toBe(true);
     expect(requests.list(), `data requests ${where}`).toEqual([]);
+    await expectShownIn(
+      page,
+      {
+        glass: ['[data-glass="po-progress"]', '[data-testid="po-line"] > td[data-glass-only]'],
+        classic: ['[data-testid="po-line"] > td[data-classic-only]'],
+      },
+      look.design === 'liquid-glass',
+      where,
+    );
   }
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
@@ -305,5 +351,11 @@ test('A return: the Next step actions and the scroll survive every switch, with 
       Math.abs((await pane.evaluate((main) => main.scrollTop)) - scrollBefore),
     ).toBeLessThanOrEqual(4);
     expect(requests.list(), `data requests ${where}`).toEqual([]);
+    await expectShownIn(
+      page,
+      { glass: ['ol[aria-label="Return progress"]'] },
+      look.design === 'liquid-glass',
+      where,
+    );
   }
 });
