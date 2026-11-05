@@ -24,8 +24,8 @@ import { GLASS_MIN_IOS, iosMajor } from './ios-version';
  * live blur behind lists, whenever `selectScene` says so: in the glass and
  * blur materials, and on a low-end iPhone too (its chrome is opaque, the
  * photo is a plain image and costs nothing to scroll); never with Reduce
- * Transparency, on Android or in classic. Without the photo files (they are
- * installed locally, not committed; scene-assets.ts) it is the opaque --bg.
+ * Transparency, on Android or in classic, where it is the opaque --bg. The
+ * illustration files are committed (scene-assets.ts).
  */
 export type GlassMaterial = 'glass' | 'blur' | 'opaque';
 

@@ -5,10 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * The root layout and the Liquid Glass rollout (plan 2.1; REVISION-DEFAULT
  * R5, R6). Under `off` the server HTML carries no appearance script and no
  * data-appearance at all; under `opt-in` and `default`, the rollout's one head
- * script, recognised by its text, is the only addition (plus the scene photo
- * style when the build found the photos), and <html> still carries no
- * appearance on the server (the script sets it in the browser, from the
- * cookie). No route reads the cookie on the server, so the HTML is the same
+ * script, recognised by its text, is the only addition, and <html> still
+ * carries no appearance on the server (the script sets it in the browser,
+ * from the cookie). The scene illustration is named by the glass stylesheet
+ * alone (styles/liquid-glass/scene.css), never by a head style, an element or
+ * a preload. No route reads the cookie on the server, so the HTML is the same
  * for every visitor (appearance-render.guard.test.ts).
  */
 
@@ -43,7 +44,6 @@ vi.mock('next/navigation', async (importOriginal) => ({
 }));
 
 import { appearanceScript } from '@/components/theme/appearance-script';
-import { scenePhotoCss } from '@/styles/liquid-glass/scene-photo';
 
 import RootLayout from './layout';
 
@@ -64,13 +64,11 @@ const escaped = (text: string) =>
     .replace(/<\/script>$/u, '');
 
 describe('root layout and the Liquid Glass rollout (REVISION-DEFAULT R5, R6; item 40)', () => {
-  it('off: no appearance script, no scene style and no data-appearance in the server HTML', () => {
+  it('off: no appearance script and no data-appearance in the server HTML', () => {
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
-    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS_SCENE', '1');
     const markup = page();
     expect(markup).not.toContain('sp_style');
     expect(markup).not.toContain('data-appearance');
-    expect(markup).not.toContain('--lg-scene-photo');
     // React writes an empty <head> when the layout gives none; Next fills it.
     expect(markup).not.toMatch(/<head>.+<\/head>/u);
     expect(markup).toContain('<p>the page</p>');
@@ -101,17 +99,13 @@ describe('root layout and the Liquid Glass rollout (REVISION-DEFAULT R5, R6; ite
     }
   });
 
-  it('the scene photo style is emitted only when the build found the installed photos', () => {
-    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
-    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS_SCENE', '');
-    expect(page()).not.toContain('--lg-scene-photo');
-    expect(page()).not.toContain('/liquid-glass/scene-');
-    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS_SCENE', '1');
-    const markup = page();
-    const css = renderToStaticMarkup(
-      <style dangerouslySetInnerHTML={{ __html: scenePhotoCss() }} />,
-    );
-    expect(markup).toContain(css);
-    expect(markup.indexOf(css)).toBeLessThan(markup.indexOf('<body'));
-  });
+  it.each(['', 'opt-in', 'default'] as const)(
+    'rollout "%s": no style, link or scene file in the server HTML (the scene is the glass stylesheet’s alone)',
+    (rollout) => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      const markup = page();
+      expect(markup).not.toMatch(/<style\b|<link\b/u);
+      expect(markup).not.toMatch(/liquid-glass\/scene-|scene-(light|dark)[-.]|--lg-scene-photo/u);
+    },
+  );
 });

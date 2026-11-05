@@ -12,8 +12,9 @@
    <main data-glass-page="landing">. The previews are decoration over demo
    data: no photo is loaded (tinted tiles stand in for the board's product
    photos), and the stage panels, the step vignettes, the band and the closing
-   call show the scene photo only when the build has one (var(--lg-scene-img)
-   is `none` otherwise: the panels fall back to their veils and fills).
+   call show the scene illustration through var(--lg-scene-img) (scene.css;
+   `none` in the opaque materials, where the panels fall back to their veils
+   and fills).
    Reduce Transparency, Increase Contrast and the low-power material: opaque,
    unblurred, no scene; forced colours: system colours; reduced motion: the
    FAQ marker does not turn. */

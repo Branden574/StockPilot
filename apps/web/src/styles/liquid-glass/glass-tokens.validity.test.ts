@@ -17,7 +17,6 @@ import {
 } from '../../../scripts/liquid-glass/gen-tokens.mjs';
 
 import { enclosing, glassSourceFiles } from './glass-css';
-import { scenePhotoCss } from './scene-photo';
 
 /**
  * Glass token validity (Liquid Glass plan 4.2, review finding R6), the unit
@@ -42,7 +41,7 @@ const VARIANT_SELECTOR =
 
 describe('tokens.generated.css', () => {
   it('is what the generator makes from tokens.source.json (never edited by hand)', () => {
-    // The same with or without the installed scene photos: they are never committed.
+    // The scene files never enter it: scene.css names them in --lg-scene-photo.
     expect(GENERATED).toBe(generateTokensCss(readSource()));
   });
 
@@ -117,9 +116,8 @@ describe('tokens.generated.css', () => {
       for (const m of text.matchAll(/(--lg-[\w-]+)\s*:/g)) defined.add(m[1]!);
       for (const m of text.matchAll(/var\((--lg-[\w-]+)/g)) used.add(m[1]!);
     }
-    // --lg-scene-photo is set by the inline style app/layout.tsx emits only
-    // when the photos are installed; every use of it has a fallback.
-    for (const m of scenePhotoCss().matchAll(/(--lg-[\w-]+)\s*:/g)) defined.add(m[1]!);
+    // --lg-scene-photo among them: scene.css declares it (scene-photo.test.ts).
+    expect(defined.has('--lg-scene-photo')).toBe(true);
     expect([...used].filter((t) => !defined.has(t))).toEqual([]);
   });
 

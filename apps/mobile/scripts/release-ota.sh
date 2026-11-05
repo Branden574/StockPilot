@@ -15,9 +15,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# The Liquid Glass scene photos never ship before the owner confirms where
-# they came from (FOLLOWUPS SC1): refused while installed but not committed.
-bash scripts/refuse-unconfirmed-scene.sh
+# The Liquid Glass scene illustrations ship only as the committed files the
+# manifest pins: refused when one is missing or differs.
+bash scripts/refuse-uncommitted-scene.sh
 
 if [[ ! -f .env.local ]]; then
   echo "FATAL: apps/mobile/.env.local missing — the OTA would ship without the Sentry DSN." >&2

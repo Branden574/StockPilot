@@ -7,8 +7,11 @@ import tailwindcss from '@tailwindcss/postcss';
 import postcss, { type Rule } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
+import { SCENE_OUTPUTS } from '../../../../../scripts/liquid-glass/install-scene.mjs';
+
 import {
   GLASS_ROOT,
+  enclosing,
   inKeyframes,
   inMedia,
   isClassicHideRule,
@@ -31,7 +34,10 @@ import {
  *     after `pnpm --filter web build`).
  * It fails when a rule that selects data-appearance or data-glass is outside
  * @media screen (the print rule: @media print; the classic hide rule: by
- * text), or when a rule selects [data-glass...] without the glass root.
+ * text), or when a rule selects [data-glass...] without the glass root. And
+ * the scene illustration's files are named only where scene.css names them:
+ * by --lg-scene-photo on the Day and Night glass roots, inside @layer lg and
+ * @media screen, with the URLs the browser fetches left as written.
  */
 
 const WEB = join(__dirname, '..', '..', '..');
@@ -59,6 +65,47 @@ function glassLeaks(css: string): string[] {
   });
   return out;
 }
+
+/** The scene files the glass stylesheet names, as the browser fetches them, by scheme. */
+const SCENE_URLS = Object.fromEntries(
+  (['light', 'dark'] as const).map((scheme) => [
+    scheme,
+    SCENE_OUTPUTS.filter((o) => o.app === 'web' && o.scheme === scheme)
+      .map((o) => `/${o.path.split('/').slice(3).join('/')}`)
+      .sort(),
+  ]),
+) as Record<'light' | 'dark', string[]>;
+
+/**
+ * Every rule of a compiled stylesheet that names a scene file, as
+ * "<selector> | <property> | <at-rules around it> | <the files it names>",
+ * quotes dropped (minifiers drop them).
+ */
+function sceneNames(css: string): string[] {
+  const out: string[] = [];
+  postcss.parse(css).walkDecls((decl) => {
+    const urls = [...decl.value.matchAll(/url\(\s*['"]?([^'")\s]+)['"]?\s*\)/gu)]
+      .map((m) => m[1]!)
+      .filter((url) => /scene-(light|dark)[-.]/u.test(url));
+    if (urls.length === 0 && !/scene-(light|dark)[-.]/u.test(decl.value)) return;
+    const rule = decl.parent as Rule;
+    out.push(
+      [
+        rule.selector.replace(/["']/gu, ''),
+        decl.prop,
+        enclosing(rule).join(' < '),
+        [...urls].sort().join(' '),
+      ].join(' | '),
+    );
+  });
+  return out;
+}
+
+/** What sceneNames must give: the Day and Night declarations of scene.css, nothing else. */
+const SCENE_NAMES = [
+  `:root[data-appearance=liquid-glass] | --lg-scene-photo | @media screen < @layer lg | ${SCENE_URLS.light.join(' ')}`,
+  `:root[data-appearance=liquid-glass].dark | --lg-scene-photo | @media screen < @layer lg | ${SCENE_URLS.dark.join(' ')}`,
+];
 
 async function compileGlobals(): Promise<string> {
   const input = readFileSync(GLOBALS, 'utf8').replace(
@@ -135,6 +182,24 @@ describe('compiled CSS guard', () => {
     const css = await compileGlobals();
     expect(css).toContain('data-appearance');
     expect(glassLeaks(css)).toEqual([]);
+  });
+
+  it('names the scene files only in --lg-scene-photo on the Day and Night glass roots, as Tailwind builds globals.css and as the production minifiers leave it', async () => {
+    expect(SCENE_URLS.light).toHaveLength(5);
+    expect(SCENE_URLS.dark).toHaveLength(5);
+    expect(sceneNames(await compileGlobals())).toEqual(SCENE_NAMES);
+    const minified = await minifiedForProduction(
+      GLOBALS,
+      readFileSync(GLOBALS, 'utf8').replace(
+        "@import 'tailwindcss';",
+        "@import 'tailwindcss' source(none);",
+      ),
+    );
+    expect(sceneNames(minified)).toEqual(SCENE_NAMES);
+    // The check can fail: a scene file named by a classic rule, or by a glass rule outside scene.css.
+    expect(sceneNames(`.hero{background:url(/liquid-glass/scene-light-1x.avif)}`)).toEqual([
+      '.hero | background |  | /liquid-glass/scene-light-1x.avif',
+    ]);
   });
 
   it('the glass layer comes after Tailwind’s utilities layer', async () => {
@@ -214,6 +279,14 @@ describe('compiled CSS guard', () => {
       expect(leaks).toEqual([]);
       const all = built.map((f) => readFileSync(f, 'utf8')).join('\n');
       expect(all).toMatch(/data-appearance=["']?liquid-glass/);
+    },
+  );
+  it.runIf(built.length > 0)(
+    'next build named the scene files only as scene.css does, with the URLs unchanged',
+    () => {
+      const names = built.flatMap((f) => sceneNames(readFileSync(f, 'utf8')));
+      expect(names.length).toBeGreaterThanOrEqual(SCENE_NAMES.length);
+      expect([...new Set(names)].sort()).toEqual([...SCENE_NAMES].sort());
     },
   );
 });

@@ -136,11 +136,3 @@ secrets/
 # Python bytecode from the simulator smoke driver
 __pycache__/
 *.pyc
-
-# Liquid Glass scene photos and their derived sizes. The repository is public
-# and the photos' source is not confirmed yet (owner, FOLLOWUPS SC1): they are
-# installed locally by scripts/liquid-glass/install-scene.mjs (sha-checked)
-# and must never be committed until that is settled. Without them the apps
-# show the opaque --bg fallback.
-apps/web/public/liquid-glass/scene-*
-apps/mobile/assets/liquid-glass/scene-*

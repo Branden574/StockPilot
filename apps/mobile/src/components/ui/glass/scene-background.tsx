@@ -12,12 +12,12 @@ import { SCENE_IMAGES } from './scene-assets';
  *
  *   - the theme's `scene` on (Liquid Glass on iOS in the glass or blur
  *     material, or a low-end iPhone whose chrome is opaque; material.ts
- *     selectScene) and the photo installed: the pre-blurred day or night
- *     image, cover, plus the scheme's veil (Day: a warm 2-6% wash; Night: an
- *     ink 18-30% wash);
- *   - otherwise (Reduce Transparency, Android, the photos not installed, or a
- *     classic screen): the opaque --bg, which is also what paints first while
- *     an image loads, so the first paint is never blank.
+ *     selectScene): the pre-blurred day or night illustration (committed,
+ *     scene-assets.ts), cover, plus the scheme's veil (Day: a warm 2-6% wash;
+ *     Night: an ink 18-30% wash);
+ *   - otherwise (Reduce Transparency, Android, or a classic screen): the
+ *     opaque --bg, which is also what paints first while an image loads, so
+ *     the first paint is never blank.
  *
  * Never a live BlurView: content cards read on their own card fill over this.
  */

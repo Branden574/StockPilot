@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -8,20 +9,25 @@ import * as vm from 'node:vm';
 import * as ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 
-import { REPO_ROOT, SCENE_OUTPUTS } from '../../../../../../scripts/liquid-glass/install-scene.mjs';
+import {
+  REPO_ROOT,
+  SCENE_MANIFEST,
+  SCENE_OUTPUTS,
+  checkScene,
+  ignoredOutputs,
+} from '../../../../../../scripts/liquid-glass/install-scene.mjs';
 
 vi.mock('react-native', () => ({}));
 
 /**
- * The phone's scene photos (FOLLOWUPS SC1, standing rule): the repository is
- * public and the photos' source is not confirmed, so they are never
- * committed. scripts/liquid-glass/install-scene.mjs writes the pre-blurred
- * phone copies into apps/mobile/assets/liquid-glass/ (git-ignored), and the
- * app loads them from exactly there through OPTIONAL requires: Metro (Expo
- * sets allowOptionalDependencies) bundles a require inside a try block even
- * when the file is missing, and it throws at run time instead, so a checkout
- * without the photos (CI, any clone) builds and draws the opaque --bg, as
- * before.
+ * The phone's scene illustrations. They were made for StockPilot by Claude
+ * Design during the Liquid Glass design work (confirmed 2026-11-05), and the
+ * pre-blurred phone copies are committed in apps/mobile/assets/liquid-glass/
+ * (scripts/liquid-glass/install-scene.mjs writes them and pins their SHA-256
+ * in scripts/liquid-glass/scene-files.sha256). The app requires them with
+ * plain requires, so Metro bundles both and a missing file fails the bundle
+ * instead of leaving the scene off; both phone update scripts first refuse a
+ * file that is missing or is not the committed, pinned one.
  */
 const HERE = __dirname;
 const SOURCE = readFileSync(path.join(HERE, 'scene-assets.ts'), 'utf8');
@@ -34,8 +40,8 @@ const DARK = '../../../../assets/liquid-glass/scene-dark.jpg';
  * Metro as this app runs it: the app's own metro.config.js (Expo's config,
  * wrapped by Sentry's) and the Metro its Expo resolves, whose
  * collectDependencies decides at build time which requires may stay
- * unresolved (`isOptional`); buildSubgraph drops an optional one it cannot
- * resolve instead of failing the build.
+ * unresolved (`isOptional`); buildSubgraph fails the bundle on a required one
+ * it cannot resolve.
  */
 function appMetro() {
   const mobileRoot = path.resolve(HERE, '../../../..');
@@ -82,9 +88,7 @@ function metroDependencies(source: string): { name: string; optional: boolean }[
 
 /**
  * Runs scene-assets.ts with Metro's run-time `require` played by `load`: an
- * asset Metro bundled is its asset registry id (a number); an optional
- * dependency Metro could not resolve is serialized as a null module id, for
- * which metro-runtime's require throws "Cannot find module".
+ * asset Metro bundled is its asset registry id (a number).
  */
 function sceneImagesWith(load: (spec: string) => unknown): unknown {
   const js = ts.transpileModule(SOURCE, {
@@ -101,66 +105,54 @@ const missing = (spec: string): never => {
 
 const phone = SCENE_OUTPUTS.filter((o) => o.app === 'phone');
 
-describe('the phone scene photos', () => {
-  it('are required from exactly the paths the install script writes, one optional require per scheme', () => {
+describe('the phone scene illustrations', () => {
+  it('are required from exactly the paths the install script writes, one plain require per scheme', () => {
     expect(phone.map((o) => o.scheme).sort()).toEqual(['dark', 'light']);
     for (const output of phone) {
       const rel = path.relative(HERE, path.join(REPO_ROOT, output.path)).split(path.sep).join('/');
-      const call = `require('${rel}')`;
-      expect(code, output.scheme).toContain(call);
-      // Directly inside a try block (Metro's optional-dependency rule).
-      const at = code.indexOf(call);
-      const before = code.slice(0, at);
-      expect(before.lastIndexOf('try {'), output.scheme).toBeGreaterThan(before.lastIndexOf('}'));
+      expect(code, output.scheme).toContain(`require('${rel}')`);
     }
     expect((code.match(/require\(/g) ?? []).length).toBe(phone.length);
+    // Never inside a try block: a missing file must fail the bundle, not turn the scene off.
+    expect(code).not.toMatch(/\btry\s*\{/u);
   });
 
-  it('are never committed: every phone path is ignored by git and not tracked', () => {
-    for (const output of phone) {
-      expect(() =>
-        execFileSync('git', ['-C', REPO_ROOT, 'check-ignore', '-q', output.path], {
-          stdio: 'ignore',
-        }),
-      ).not.toThrow();
-      const tracked = execFileSync('git', ['-C', REPO_ROOT, 'ls-files', '--', output.path], {
-        encoding: 'utf8',
-      });
-      expect(tracked, output.path).toBe('');
-    }
+  it('are committed: git tracks both, no .gitignore rule keeps one out, and each is the pre-blurred 1200x750 JPEG the manifest pins, with no metadata', async () => {
+    const paths = phone.map((o) => o.path);
+    expect(ignoredOutputs(REPO_ROOT, phone)).toEqual([]);
+    const tracked = execFileSync('git', ['-C', REPO_ROOT, 'ls-files', '--', ...paths], {
+      encoding: 'utf8',
+    });
+    expect(tracked.split('\n').filter(Boolean).sort()).toEqual([...paths].sort());
+    expect(await checkScene({ app: 'phone', decode: false })).toEqual([]);
   });
 
-  it('Metro, as this app configures it, takes both requires as optional: a bundle without the files builds', () => {
-    expect(appMetro().config.transformer.allowOptionalDependencies).toBe(true);
+  it('Metro, as this app configures it, takes both requires as required: a bundle without either file fails', () => {
     expect(metroDependencies(SOURCE)).toEqual([
-      { name: LIGHT, optional: true },
-      { name: DARK, optional: true },
-    ]);
-    // The check can fail: a require moved out of its try block is required,
-    // and a bundle without the photo would not build.
-    const outside = SOURCE.replace(
-      /try \{\s*(day = require\([^)]*\)[^;]*;)\s*\} catch \{\s*day = null;\s*\}/,
-      '$1',
-    );
-    expect(outside).not.toBe(SOURCE);
-    expect(metroDependencies(outside)).toEqual([
       { name: LIGHT, optional: false },
-      { name: DARK, optional: true },
+      { name: DARK, optional: false },
+    ]);
+    // The check can fail: inside a try block (the form used while the files
+    // were not committed) a require turns optional, and a bundle without the
+    // file would build without the scene.
+    const optional = SOURCE.replace(
+      /const day = (require\([^)]*\)[^;]*);/u,
+      'let day = null;\ntry {\n  day = $1;\n} catch {\n  day = null;\n}',
+    );
+    expect(optional).not.toBe(SOURCE);
+    expect(metroDependencies(optional)).toEqual([
+      { name: LIGHT, optional: true },
+      { name: DARK, optional: false },
     ]);
   });
 
-  it('at run time: no files, no scene (SceneBackground draws the opaque --bg); files bundled, both drawn', () => {
-    expect(sceneImagesWith(missing)).toEqual({ day: null, night: null });
+  it('at run time: both bundled, the day file for Day and the night file for Night; no silent fallback', () => {
     const ids: Record<string, number> = { [LIGHT]: 11, [DARK]: 12 };
     expect(sceneImagesWith((spec) => ids[spec] ?? missing(spec))).toEqual({ day: 11, night: 12 });
-    // Each on its own: one file alone gives one scheme.
-    expect(sceneImagesWith((spec) => (spec === DARK ? 12 : missing(spec)))).toEqual({
-      day: null,
-      night: 12,
-    });
+    expect(() => sceneImagesWith(missing)).toThrow(/Cannot find module/u);
   });
 
-  it('SceneBackground draws a photo only when the theme says so and the file is there', () => {
+  it('SceneBackground draws one of them only when the theme says so: Day the day file, Night the night file', () => {
     const bg = readFileSync(path.join(HERE, 'scene-background.tsx'), 'utf8').replace(/\s+/g, ' ');
     expect(bg).toContain('const { scene, mode, c } = useTheme();');
     expect(bg).toContain(
@@ -171,66 +163,114 @@ describe('the phone scene photos', () => {
   });
 });
 
-describe('a phone update never ships them before the owner confirms where they came from (SC1)', () => {
+describe('a phone update ships the scene only as the committed files the manifest pins', () => {
   const MOBILE = path.resolve(HERE, '../../../..');
-  const GUARD = path.join(MOBILE, 'scripts', 'refuse-unconfirmed-scene.sh');
+  const GUARD = path.join(MOBILE, 'scripts', 'refuse-uncommitted-scene.sh');
+  const FILES = ['assets/liquid-glass/scene-light.jpg', 'assets/liquid-glass/scene-dark.jpg'];
+  const git = (dir: string, ...args: string[]) =>
+    execFileSync(
+      'git',
+      [
+        '-C',
+        dir,
+        '-c',
+        'user.name=Scene Test',
+        '-c',
+        'user.email=scene@example.test',
+        '-c',
+        'commit.gpgsign=false',
+        ...args,
+      ],
+      { stdio: 'ignore' },
+    );
+  const sha = (text: string) => createHash('sha256').update(text).digest('hex');
 
-  /** A throwaway app checkout (its own git repository) holding these files. */
-  function checkout(files: { path: string; committed?: boolean }[]): string {
+  /**
+   * A throwaway app checkout (its own git repository) whose two scene files
+   * and manifest are committed; `change` then alters the working tree.
+   */
+  function guard(change: (dir: string) => void = () => {}) {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'scene-guard-'));
-    execFileSync('git', ['init', '-q', dir]);
-    for (const file of files) {
-      mkdirSync(path.dirname(path.join(dir, file.path)), { recursive: true });
-      writeFileSync(path.join(dir, file.path), 'not a photo');
-      if (file.committed) execFileSync('git', ['-C', dir, 'add', '--', file.path]);
-    }
-    return dir;
-  }
-
-  function guard(files: { path: string; committed?: boolean }[]) {
-    const dir = checkout(files);
     try {
+      execFileSync('git', ['init', '-q', dir]);
+      let manifest = '';
+      for (const file of FILES) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), `the ${file}`);
+        manifest += `${sha(`the ${file}`)}  ${file}\n`;
+      }
+      mkdirSync(path.join(dir, path.dirname(SCENE_MANIFEST)), { recursive: true });
+      writeFileSync(path.join(dir, SCENE_MANIFEST), manifest);
+      git(dir, 'add', '-A');
+      git(dir, 'commit', '-q', '-m', 'scene');
+      change(dir);
       return spawnSync('bash', [GUARD, dir], { encoding: 'utf8' });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   }
 
-  it('refuses while a scene photo is installed and not committed', () => {
-    for (const name of ['scene-light.jpg', 'scene-dark.jpg']) {
-      const result = guard([
-        { path: 'assets/liquid-glass/scene-light.jpg', committed: name !== 'scene-light.jpg' },
-        { path: 'assets/liquid-glass/scene-dark.jpg', committed: name !== 'scene-dark.jpg' },
-      ]);
-      expect(result.status, name).toBe(1);
-      expect(result.stderr, name).toContain(
-        `assets/liquid-glass/${name} is installed but not committed`,
-      );
-      expect(result.stderr, name).toContain('FOLLOWUPS SC1');
-    }
+  it('lets an update go when both files are the committed, pinned ones', () => {
+    const result = guard();
+    expect(result.stderr).toBe('');
+    expect(result.status).toBe(0);
   });
 
-  it('lets an update go with no photo installed, or with the photos committed once SC1 is settled', () => {
-    expect(guard([{ path: 'assets/other.png' }]).status).toBe(0);
-    expect(
-      guard([
-        { path: 'assets/liquid-glass/scene-light.jpg', committed: true },
-        { path: 'assets/liquid-glass/scene-dark.jpg', committed: true },
-      ]).status,
-    ).toBe(0);
+  it('refuses a missing file, a changed one, an uncommitted one, and one the manifest does not pin', () => {
+    const cases: [string, (dir: string) => void, string][] = [
+      ['missing', (dir) => rmSync(path.join(dir, FILES[0]!)), `${FILES[0]} is missing`],
+      [
+        'changed',
+        (dir) => writeFileSync(path.join(dir, FILES[1]!), 'another picture'),
+        `${FILES[1]} differs from the committed file`,
+      ],
+      [
+        'uncommitted',
+        (dir) => {
+          // Still on disk, no longer in the commit.
+          git(dir, 'rm', '-q', '--cached', '--', FILES[0]!);
+          git(dir, 'commit', '-q', '-m', 'stop tracking the picture');
+        },
+        `${FILES[0]} is not committed`,
+      ],
+      [
+        'unpinned',
+        (dir) => {
+          writeFileSync(path.join(dir, FILES[1]!), 'another picture');
+          git(dir, 'commit', '-q', '-a', '-m', 'change the picture, not the manifest');
+        },
+        `${FILES[1]} is not the file scripts/liquid-glass/scene-files.sha256 pins`,
+      ],
+      [
+        'no manifest',
+        (dir) => rmSync(path.join(dir, SCENE_MANIFEST)),
+        'scripts/liquid-glass/scene-files.sha256 is missing',
+      ],
+    ];
+    for (const [name, change, message] of cases) {
+      const result = guard(change);
+      expect(result.status, name).toBe(1);
+      expect(result.stderr, name).toContain(message);
+    }
   });
 
   it('both OTA scripts run it first, before the env file is loaded and before eas-cli publishes', () => {
     for (const script of ['release-ota.sh', 'release-ota-test.sh']) {
       const text = readFileSync(path.join(MOBILE, 'scripts', script), 'utf8');
-      const check = text.indexOf('\nbash scripts/refuse-unconfirmed-scene.sh\n');
+      const check = text.indexOf('\nbash scripts/refuse-uncommitted-scene.sh\n');
       expect(check, script).toBeGreaterThan(text.indexOf('set -euo pipefail'));
       expect(check, script).toBeLessThan(text.indexOf('source .env.local'));
       expect(check, script).toBeLessThan(text.indexOf('eas-cli@'));
     }
-    // The paths it checks are the paths .gitignore keeps out of the repository.
-    const gitignore = readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8');
-    expect(gitignore).toContain('\napps/mobile/assets/liquid-glass/scene-*\n');
-    expect(readFileSync(GUARD, 'utf8')).toContain('for photo in assets/liquid-glass/scene-*; do');
+  });
+
+  it('checks exactly the phone files install-scene.mjs writes, against its manifest', () => {
+    const text = readFileSync(GUARD, 'utf8');
+    expect(text).toContain('for name in scene-light.jpg scene-dark.jpg; do');
+    expect(text).toContain('file="assets/liquid-glass/$name"');
+    expect(phone.map((o) => path.relative(MOBILE, path.join(REPO_ROOT, o.path))).sort()).toEqual(
+      [...FILES].sort(),
+    );
+    expect(text).toContain(`manifest="$top/${SCENE_MANIFEST}"`);
   });
 });

@@ -11,7 +11,6 @@ import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { AppearanceProvider } from '@/components/theme/appearance-provider';
 import { appearanceScript } from '@/components/theme/appearance-script';
 import { ThemeProvider } from '@/components/theme/theme-provider';
-import { isScenePhotoBuilt, scenePhotoCss } from '@/styles/liquid-glass/scene-photo';
 
 import { APP_DESCRIPTION, APP_NAME } from '@stockpilot/core';
 
@@ -129,16 +128,13 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         liquid-glass), and touches nothing otherwise. Not emitted under `off`
         (the kill switch, appearance-flag.ts). No route reads the cookie on
         the server, so every page's HTML is the same for everyone and caching
-        is unchanged. With it, when the build found the installed scene
-        photos (styles/liquid-glass/scene-photo.ts; never committed), the one
-        style that lets the glass material draw them.
+        is unchanged. It is the only thing glass adds to <head>: the scene
+        illustration is named by the glass stylesheet alone
+        (styles/liquid-glass/scene.css), never by an element or a preload.
       */}
       {glassScript ? (
         <head>
           <script dangerouslySetInnerHTML={{ __html: glassScript }} />
-          {isScenePhotoBuilt() ? (
-            <style dangerouslySetInnerHTML={{ __html: scenePhotoCss() }} />
-          ) : null}
         </head>
       ) : null}
       <body className="bg-background min-h-screen font-sans antialiased">

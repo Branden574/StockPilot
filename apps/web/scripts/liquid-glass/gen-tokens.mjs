@@ -38,12 +38,13 @@
  *      signature pad, the label sheet) every token glass overrides is declared
  *      again with its classic value, read from app/globals.css, and the
  *      Tailwind colour formulas of its @theme are computed again from them.
- * The scene photo: the glass material's --lg-scene-img is
- * var(--lg-scene-photo, none). --lg-scene-photo is set only by the inline
- * style app/layout.tsx emits when the build found the installed photos
- * (styles/liquid-glass/scene-photo.ts); the photos are never in the
- * repository (FOLLOWUPS SC1), so this file is the same with or without them,
- * and without them the opaque --bg shows (the documented fallback).
+ * The scene illustration: the glass material's --lg-scene-img is
+ * var(--lg-scene-photo, none), and styles/liquid-glass/scene.css declares
+ * --lg-scene-photo on the glass root (Day the light files, Night the dark
+ * ones). The illustrations were made for StockPilot by Claude Design during
+ * the Liquid Glass design work (confirmed 2026-11-05) and are committed in
+ * apps/web/public/liquid-glass; this file never names one, and the opaque
+ * materials set --lg-scene-img to none, so they never draw or request it.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -223,8 +224,9 @@ function tripletOf(tokens, ref, scheme) {
 }
 
 /**
- * The glass material draws the photo when the page set --lg-scene-photo (the
- * installed photos, app/layout.tsx); the opaque materials never do.
+ * The glass material draws the scene illustration scene.css names in
+ * --lg-scene-photo; the opaque materials never do. The none fallback leaves
+ * the opaque ground wherever the property is not declared.
  */
 export const SCENE_IMAGE = 'var(--lg-scene-photo, none)';
 
