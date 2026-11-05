@@ -12,10 +12,10 @@ import {
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { Field } from '@/components/ui/field';
-import { GlassBackdrop } from '@/components/ui/glass/glass-backdrop';
 import { withGlass } from '@/components/ui/glass/merge-styles';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
 import { glassFieldLabel } from '@/components/ui/glass/primitive-styles';
-import { ADD_CARD_RADIUS, glassAddCardStyles } from '@/components/ui/glass/screens/add-cards';
+import { glassAddCardStyles } from '@/components/ui/glass/screens/add-cards';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Mono } from '@/components/ui/text';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
@@ -113,7 +113,7 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
   if (isExisting) {
     return (
       <View style={styles.card}>
-        {lg ? <GlassBackdrop variant="overlay" radius={ADD_CARD_RADIUS} /> : null}
+        {lg ? <GlassSheetBackdrop /> : null}
         {lg ? <View style={glassAddCardStyles(lg).grabber} /> : null}
         <Text style={styles.title}>Already in inventory</Text>
         <Text style={styles.body}>
@@ -170,7 +170,7 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
 
   return (
     <View style={styles.card}>
-      {lg ? <GlassBackdrop variant="overlay" radius={ADD_CARD_RADIUS} /> : null}
+      {lg ? <GlassSheetBackdrop /> : null}
       {lg ? <View style={glassAddCardStyles(lg).grabber} /> : null}
       <View style={styles.headerRow}>
         {meta.coverUrl ? (

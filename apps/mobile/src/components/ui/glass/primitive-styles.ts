@@ -390,3 +390,36 @@ export const glassSearchInput = cached((lg): TextStyle => ({
   fontSize: GLASS_METRICS.search.fontSize,
   letterSpacing: 0,
 }));
+
+/** The bottom sheets' corner (.ios-sheet [740]: radius 36). */
+export const GLASS_SHEET_RADIUS = GLASS_METRICS.sheet.radius;
+
+/**
+ * A bottom sheet's card in Liquid Glass (.ios-sheet [740]): 8pt in from the
+ * sides and the foot, radius 36 all round, no fill, ring or shadow of its own;
+ * its material is a GlassSheetBackdrop (components/ui/glass/parts.tsx) drawn as
+ * the card's first child. The card's own padding stays Classic's.
+ */
+export const GLASS_SHEET_CARD: ViewStyle = {
+  backgroundColor: 'transparent',
+  borderColor: 'transparent',
+  borderWidth: 0,
+  borderRadius: GLASS_SHEET_RADIUS,
+  borderTopLeftRadius: GLASS_SHEET_RADIUS,
+  borderTopRightRadius: GLASS_SHEET_RADIUS,
+  marginHorizontal: GLASS_METRICS.sheet.inset,
+  marginBottom: GLASS_METRICS.sheet.inset,
+  shadowOpacity: 0,
+  elevation: 0,
+};
+
+/** The scrim behind a sheet (--scrim): it tints the page and never blurs it. */
+export const glassScrim = cached((lg): ViewStyle => ({ backgroundColor: lg.g.scrim }));
+
+/** The sheet's grabber (.ios-grabber [742]): 36 x 5, radius 3, --ios-sep. */
+export const glassGrabber = cached((lg): ViewStyle => ({
+  width: GLASS_METRICS.sheet.grabberWidth,
+  height: GLASS_METRICS.sheet.grabberHeight,
+  borderRadius: 3,
+  backgroundColor: lg.ios.sep,
+}));

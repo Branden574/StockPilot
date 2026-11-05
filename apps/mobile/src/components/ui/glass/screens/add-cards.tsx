@@ -24,9 +24,6 @@ function cached<T>(build: (lg: GlassLook) => T): (lg: GlassLook) => T {
   };
 }
 
-/** The sheet's corner (.ios-sheet [740]). */
-export const ADD_CARD_RADIUS = GLASS_METRICS.sheet.radius;
-
 export const glassAddCardStyles = cached((lg: GlassLook) => {
   const m = GLASS_METRICS.sheet;
   const text = (size: number, weight: TextStyle['fontWeight'], color: string): TextStyle => ({

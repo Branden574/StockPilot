@@ -42,8 +42,8 @@ import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
-import { GlassBackdrop } from '@/components/ui/glass/glass-backdrop';
 import { withGlass } from '@/components/ui/glass/merge-styles';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import {
   GLASS_RETICLE,
@@ -1138,7 +1138,7 @@ export default function Scan() {
             </View>
           ) : !cardUp ? (
             <View style={styles.coverCta} pointerEvents="auto">
-              {lg ? <GlassBackdrop variant="overlay" radius={GLASS_SHEET_RADIUS} /> : null}
+              {lg ? <GlassSheetBackdrop /> : null}
               <Text style={styles.coverHint}>
                 Snap a clear photo of the front cover. Vision will read the
                 title and author.
@@ -1157,7 +1157,7 @@ export default function Scan() {
 
         {item && (
           <View style={styles.sheet}>
-            {lg ? <GlassBackdrop variant="overlay" radius={GLASS_SHEET_RADIUS} /> : null}
+            {lg ? <GlassSheetBackdrop /> : null}
             {lg ? <View style={glassScanStyles(lg).grabber} /> : null}
             <ScrollView contentContainerStyle={styles.sheetContent}>
               <View style={styles.headerRow}>
@@ -1378,7 +1378,7 @@ export default function Scan() {
 
         {placementChoices && (
           <View style={styles.sheet}>
-            {lg ? <GlassBackdrop variant="overlay" radius={GLASS_SHEET_RADIUS} /> : null}
+            {lg ? <GlassSheetBackdrop /> : null}
             {lg ? <View style={glassScanStyles(lg).grabber} /> : null}
             <ScrollView contentContainerStyle={styles.sheetContent}>
               <Text style={styles.pickerTitle}>Multiple placements found</Text>
@@ -1643,9 +1643,6 @@ const SCAN_LINE_BOTTOM = RETICLE_HEIGHT - 12;
 
 /** The bottom tab bar is drawn over this screen; sheets end above it. */
 const TAB_BAR_CLEARANCE = 90;
-
-/** Liquid Glass: the sheets' corner (.ios-sheet [740], radius 36). */
-const GLASS_SHEET_RADIUS = 36;
 
 /** A mode segment is 36pt; this takes its target to the track's 44pt edge. */
 const SEGMENT_SLOP = { top: 4, bottom: 4 } as const;

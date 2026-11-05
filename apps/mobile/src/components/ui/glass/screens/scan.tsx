@@ -183,7 +183,7 @@ export const glassScanStyles = cached((lg: GlassLook) => {
     reticleLabel: { ...lg.font.displaySemi, fontSize: 13, letterSpacing: 0, color: cam.ink },
     hint: { ...lg.font.displayRegular, fontSize: 13, letterSpacing: 0, color: cam.ink },
     // .ios-sheet [740] over the camera: 8pt in from the sides, radius 36, the
-    // 8/18/22 padding; its material is a GlassBackdrop (overlay) behind it.
+    // 8/18/22 padding; its material is a GlassSheetBackdrop drawn inside it.
     sheet: {
       position: 'absolute',
       left: m.inset,

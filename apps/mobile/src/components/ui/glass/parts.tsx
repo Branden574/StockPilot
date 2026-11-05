@@ -13,6 +13,7 @@ import { TYPE_CEILING, capTo } from '../../../lib/theme';
 import { useTheme } from '../../../lib/use-theme';
 
 import { GlassBackdrop } from './glass-backdrop';
+import { GlassSurface } from './glass-surface';
 import { GLASS_METRICS } from './metrics';
 
 /**
@@ -166,6 +167,28 @@ export function GlassButtonLook({
       >
         {label}
       </Text>
+    </View>
+  );
+}
+
+/**
+ * A bottom sheet's material (.ios-sheet.glass-strong [740, 95]): the overlay
+ * glass with the --glass-strong fill over it (white 74% Day, ink 70% Night;
+ * the opaque --chrome under Reduce Transparency), so the sheet's words read
+ * at AA over any page. Drawn as the sheet card's first child, filling it and
+ * passing touches through; the card keeps its element and children.
+ */
+export function GlassSheetBackdrop({ radius = GLASS_METRICS.sheet.radius }: { radius?: number }) {
+  const { g } = useTheme();
+  return (
+    <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+      <GlassSurface variant="overlay" radius={radius} style={StyleSheet.absoluteFill} />
+      <View
+        style={[
+          StyleSheet.absoluteFill,
+          { borderRadius: radius, backgroundColor: g?.glassStrong ?? 'transparent' },
+        ]}
+      />
     </View>
   );
 }
