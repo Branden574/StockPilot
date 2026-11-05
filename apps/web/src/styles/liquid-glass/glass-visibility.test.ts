@@ -27,9 +27,15 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+// An opening tag, read up to its closing `>`; the `=>` of an arrow function in
+// a prop (onFocus={() => ...}) is part of the tag, not its end, or a tag with
+// a handler before its data-glass-only (the sidebar's Place an order) would
+// never be found.
+const TAG = /<[\w.]+\s(?:=>|[^>])*?\bdata-(glass|classic)-only\b(?:=>|[^>])*>/g;
+
 const ELEMENTS = walk(SRC).flatMap((file) => {
   const text = readFileSync(file, 'utf8');
-  return [...text.matchAll(/<[\w.]+\s[^>]*\bdata-(glass|classic)-only\b[^>]*>/g)].map((m) => ({
+  return [...text.matchAll(TAG)].map((m) => ({
     file: relative(SRC, file),
     tag: m[0],
   }));
@@ -50,6 +56,8 @@ describe('glass-only and classic-only elements', () => {
 
   // plans/REVISION-DEFAULT.md item 22: the appearance menu in the external
   // shell's corner (no data action; tests/e2e/appearance/glass-only-allowlist.json).
+  // Stage 3, items lane: the sidebar's tinted Place an order (a duplicate of
+  // the Orders list's own Place order, behind the sidebar's Orders entry).
   // Stage 3, site lane: the sign-in shell's "Contact the team" link and the
   // span around its Security help link (public page links).
   // Stage 3, orders lane: the Orders list's phone cards (one list of links
@@ -64,6 +72,7 @@ describe('glass-only and classic-only elements', () => {
       ...Array<string>(2).fill('app/(auth)/layout.tsx'),
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       'components/auth/external-shell.tsx',
+      'components/dashboard/sidebar.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',
