@@ -32,9 +32,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     'c7144f5a0865d66f458dd685ecea28ac618b126f43cd2828a53e0e999e710f51',
   'app/(drawer)/(tabs)/inventory.tsx':
     '42d3d7a1d8a26a6355eb062ae63537bd64e44208d7facb712190217ccd319750',
+  'app/(drawer)/(tabs)/receive.tsx':
+    '6d32450d4607d50dfe274dc2c06b9fc3d655c40dbe673efa8f546910de3b43f6',
   'app/(drawer)/(tabs)/scan.tsx':
     '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
   'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
+  'app/po/[id].tsx': 'ae76a1de33a4ed14e77b401349006835bb401d9c8f8c77f036f384a989496e74',
   'src/components/biometric-optin-sheet.tsx':
     '2a1823f24f727ab701e3f4383bd35b5be640ee2076cb8f683d8ea2dcb902b30e',
   'src/components/filter-sheet.tsx':

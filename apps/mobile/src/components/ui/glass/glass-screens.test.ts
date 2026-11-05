@@ -132,3 +132,56 @@ describe.each(SCREENS)(
     });
   },
 );
+
+/**
+ * glassRecipe: a screen's own Classic recipe (makeStyles(c: Palette)) run on
+ * the glass palette, so no Classic colour can survive it by construction;
+ * each Classic face swapped for the glass face of the same role (the system
+ * face; references stay mono); then the screen's glass shape laid over it.
+ */
+describe('glassRecipe: the Classic recipe drawn in the glass palette and faces', async () => {
+  const { glassRecipe } = await import('./merge-styles');
+  const { palette, FONT } = await import('../../../lib/theme');
+  const make = (c: ReturnType<typeof palette>) => ({
+    root: { flex: 1, backgroundColor: c.paper },
+    title: { color: c.ink, fontFamily: FONT.display, fontSize: 20 },
+    sku: { color: c.ink3, fontFamily: FONT.monoRegular, fontSize: 11 },
+    semi: { color: c.ink, fontFamily: FONT.displaySemi, fontWeight: '600' as const },
+    card: { backgroundColor: c.card, borderColor: c.hair, borderWidth: 1 },
+  });
+  const shape = (lg: Look) => ({ card: { borderRadius: 24, backgroundColor: lg.g.cardFill } });
+
+  it.each(LOOKS)('%s: every colour is the glass palette, every face the glass role', (_n, lg) => {
+    const s = glassRecipe(lg, make, shape);
+    const classicColours = new Set(
+      (['light', 'dark'] as const).flatMap((m) => Object.values(palette(m))),
+    );
+    const glassColours = new Set([...Object.values(lg.c), ...Object.values(lg.g)]);
+    for (const [key, style] of Object.entries(s)) {
+      for (const [prop, value] of Object.entries(style as Record<string, unknown>)) {
+        if (!/color$/i.test(prop)) continue;
+        expect(glassColours.has(value as string), `${key}.${prop} = ${String(value)}`).toBe(true);
+        if (!glassColours.has(value as string))
+          expect(classicColours.has(value as string)).toBe(false);
+      }
+    }
+    expect(s.title).toMatchObject({ ...lg.font.display, fontSize: 20 });
+    expect(s.semi).toMatchObject(lg.font.displaySemi);
+    // References keep the bundled mono face.
+    expect(s.sku.fontFamily).toBe(FONT.monoRegular);
+    expect(s.card).toMatchObject({
+      borderRadius: 24,
+      backgroundColor: lg.g.cardFill,
+      borderWidth: 1,
+    });
+  });
+
+  it('is made once per look and recipe, and never writes to Classic', () => {
+    const [, day] = LOOKS[0]!;
+    expect(glassRecipe(day, make, shape)).toBe(glassRecipe(day, make, shape));
+    const classic = make(palette('light'));
+    glassRecipe(day, () => classic);
+    expect(classic.title.fontFamily).toBe(FONT.display);
+    expect(classic.root.backgroundColor).toBe(palette('light').paper);
+  });
+});
