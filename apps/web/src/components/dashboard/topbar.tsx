@@ -155,6 +155,7 @@ export function Topbar({
   return (
     <header
       ref={headerRef}
+      data-glass="topbar"
       className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 max-[390px]:gap-1 sm:gap-3 sm:px-6"
       style={{ height: 56 }}
     >
@@ -175,7 +176,10 @@ export function Topbar({
           data-slot={TRAIL_SLOT}
           className="@min-[520px]:flex hidden min-w-0"
         >
-          <ol className="text-muted-foreground flex min-w-0 items-center gap-2 text-[13.5px] leading-5">
+          <ol
+            data-glass="crumbs"
+            className="text-muted-foreground flex min-w-0 items-center gap-2 text-[13.5px] leading-5"
+          >
             {crumbs.map((c, i) => {
               if (i < firstShown) return null;
               const isLast = i === crumbs.length - 1;
@@ -188,7 +192,11 @@ export function Topbar({
                   )}
                 >
                   {i > firstShown && (
-                    <span aria-hidden className="shrink-0 text-[var(--ed-ink-4)]">
+                    <span
+                      aria-hidden
+                      data-glass="crumb-sep"
+                      className="shrink-0 text-[var(--ed-ink-4)]"
+                    >
                       /
                     </span>
                   )}
@@ -238,7 +246,10 @@ export function Topbar({
       {/* Where the trail can show (520px up) the picker never shrinks, so
           "All warehouses" and a short name stay whole and a long one keeps
           its 160px; under 520px it is the one control that yields. */}
-      <div className="@min-[520px]:shrink-0 ml-auto flex min-w-0 items-center gap-2">
+      <div
+        className="@min-[520px]:shrink-0 ml-auto flex min-w-0 items-center gap-2"
+        data-glass="tb-tools"
+      >
         {warehouseFilter && warehouseFilter.warehouses.length > 0 && (
           <WarehouseFilterPicker
             warehouses={warehouseFilter.warehouses}
@@ -251,6 +262,8 @@ export function Topbar({
 
       <button
         type="button"
+        data-glass="tb-icon"
+        data-glass-variant="search"
         className={cn(ICON_BUTTON, '@min-[400px]:grid @min-[960px]:hidden hidden')}
         aria-label="Open command palette"
         onClick={openCommandPalette}
@@ -260,19 +273,23 @@ export function Topbar({
 
       <button
         type="button"
+        data-glass="tb-search"
         className="border-border bg-card text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background @min-[960px]:flex hidden h-8 min-w-[240px] max-w-[340px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[13px] transition-colors hover:border-[var(--ed-line-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
         aria-label="Open command palette"
         onClick={openCommandPalette}
       >
         <Search aria-hidden strokeWidth={1.8} className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">Search items, POs, suppliers…</span>
-        <span className="text-muted-foreground shrink-0 rounded border border-[var(--ed-line-strong)] px-[5px] py-px font-mono text-[11px] leading-4">
+        <span
+          data-glass="kbd"
+          className="text-muted-foreground shrink-0 rounded border border-[var(--ed-line-strong)] px-[5px] py-px font-mono text-[11px] leading-4"
+        >
           ⌘K
         </span>
       </button>
 
       {/* The icon cluster sits tight (2px), as one group, apart from the rest. */}
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="flex shrink-0 items-center gap-0.5" data-glass="tb-cap">
         <NotificationBell userId={userId} organizationId={organizationId} />
 
         <WhatsNewButton />

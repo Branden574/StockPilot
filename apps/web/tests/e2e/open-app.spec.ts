@@ -22,6 +22,14 @@ import { expect, test, type Page } from '@playwright/test';
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
+// This file tests the classic landing. Under the Liquid Glass rollouts that
+// offer the glass twin, / serves the twin unless the visitor chose Classic
+// (plans/REVISION-DEFAULT.md R8), so every test here chooses Classic first.
+// The twin's own entries: tests/e2e/appearance/twin-structure.spec.ts.
+test.beforeEach(async ({ context, baseURL }) => {
+  await context.addCookies([{ name: 'sp_style', value: 'classic', url: baseURL! }]);
+});
+
 const APP_ENTRY = '/dashboard';
 
 /** Get past the branded intro so the nav is clickable. */
@@ -86,7 +94,12 @@ test.describe('open app — redirect safety', () => {
    * Exhaustive input coverage lives in safe-redirect.test.ts (30 cases). This
    * asserts the browser-level outcome: the page stays on this origin.
    */
-  for (const hostile of ['//evil.example', '/\\evil.example', 'https://evil.example', 'javascript:alert(1)']) {
+  for (const hostile of [
+    '//evil.example',
+    '/\\evil.example',
+    'https://evil.example',
+    'javascript:alert(1)',
+  ]) {
     test(`stays on this origin when handed ${hostile}`, async ({ page, baseURL }) => {
       const expectedOrigin = new URL(baseURL as string).origin;
       await page.goto(`/signin?redirect=${encodeURIComponent(hostile)}`);
@@ -129,10 +142,9 @@ test.describe('open app — signed in', () => {
 
     // Either straight through, or into a MANDATORY gate. Both are correct; what
     // must never happen is landing back on the marketing page.
-    await page.waitForURL(
-      /\/dashboard|\/signin\/mfa|\/onboarding|\/account-disabled/,
-      { timeout: 20_000 },
-    );
+    await page.waitForURL(/\/dashboard|\/signin\/mfa|\/onboarding|\/account-disabled/, {
+      timeout: 20_000,
+    });
     expect(new URL(page.url()).pathname).not.toBe('/');
   });
 

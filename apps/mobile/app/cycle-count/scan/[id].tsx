@@ -32,6 +32,7 @@ import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
+import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
 
 interface SheetState {
@@ -83,6 +84,9 @@ export default function CycleCountScanScreen() {
 
 function CycleCountScanScreenInner() {
   const router = useRouter();
+  // A Design adopted from the account waits while a count is being scanned
+  // (Liquid Glass item 32).
+  useHoldAppearanceAdoptionWhileFocused('count');
   const { id } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();

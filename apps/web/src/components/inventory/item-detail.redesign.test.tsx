@@ -1,5 +1,7 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
 
 /**
  * The redesigned item page (redesign P3.3, DESIGN-SPEC 7.4) keeps what the page
@@ -533,4 +535,64 @@ describe('the dialog hosts stay mounted through the refresh after their change',
     expect(screen.getByTestId('make-own-host')).toHaveTextContent('dialog-open');
     expect(screen.getByTestId('group-host')).toHaveTextContent('dialog-open');
   });
+});
+
+/**
+ * CLASSIC PARITY (Liquid Glass stage 3, items lane; IMPLEMENTATION-PLAN.md
+ * 4.6 and 4.7 item 3). Glass draws the item page (ItemDetail.dc.html) from
+ * inert hooks on this markup. The page's own markup, every inert hook
+ * stripped, must stay the file under __parity__ that was written before the
+ * stage 3 hooks went in: under the `off` rollout with no glass-only element at
+ * all, and under `default` too.
+ */
+describe('classic parity of the item page', () => {
+  const BOOK = {
+    item_type: 'book',
+    name: 'Example Reader, Grade 3',
+    sku: '9780000000011',
+    custom_fields: {
+      book_rack_number: '38',
+      book_rack_row: 'A',
+      book_crate_color: 'blue',
+      book_crate_number: '4',
+      book_grade: '3',
+    },
+  };
+  const CASES: Array<[name: string, arrange: () => void, tab?: string]> = [
+    [
+      'item-detail-overview',
+      () => {
+        reserved.map = new Map([[ITEM_ID, 12]]);
+        ctxHolder.permissions = new Set(['items:update', 'stock:adjust']);
+      },
+    ],
+    [
+      'item-detail-book',
+      () => {
+        inventoryGet.mockResolvedValue(itemFixture(BOOK));
+        groups.map = new Map([[ITEM_ID, { id: 'g1', name: 'Readers', version: 1 }]]);
+      },
+    ],
+    ['item-detail-movements', () => {}, 'movements'],
+  ];
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  for (const [name, arrange, tab] of CASES) {
+    it(`${name}: the off rollout renders no glass-only element and today's markup`, async () => {
+      arrange();
+      const { container } = render(await page(tab));
+      expect(glassOnlyElements(container)).toEqual([]);
+      await expect(classicMarkup(container)).toMatchFileSnapshot(`./__parity__/${name}.html`);
+    });
+
+    it(`${name}: the default rollout's markup, inert hooks stripped, is the same`, async () => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+      arrange();
+      const { container } = render(await page(tab));
+      await expect(classicMarkup(container)).toMatchFileSnapshot(`./__parity__/${name}.html`);
+    });
+  }
 });

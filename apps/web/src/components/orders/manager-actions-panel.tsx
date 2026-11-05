@@ -770,6 +770,7 @@ export function ManagerActionsPanel({
     // (core availableOrderActions and the page's gates).
     <DetailSection
       data-tour="manager-actions"
+      data-glass-role="order-manager-actions"
       title="Manager actions"
       aside={
         <DetailSectionMeta>Move this request through the fulfillment pipeline.</DetailSectionMeta>
@@ -785,7 +786,12 @@ export function ManagerActionsPanel({
               timeZone={orgTimeZone}
               hasRequesterNote={hasRequesterNote}
             />
-            <Button variant="default" onClick={approve} disabled={busy !== null}>
+            <Button
+              variant="default"
+              onClick={approve}
+              disabled={busy !== null}
+              data-glass-role="order-primary"
+            >
               {busy === 'approve' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
@@ -810,6 +816,7 @@ export function ManagerActionsPanel({
               className="text-destructive hover:text-destructive"
               onClick={() => setDenyOpen(true)}
               disabled={busy !== null}
+              data-glass-role="order-deny"
             >
               <X className="h-3.5 w-3.5" />
               Deny
@@ -818,7 +825,12 @@ export function ManagerActionsPanel({
         )}
 
         {status === 'approved' && approves && !pickBlocked && (
-          <Button variant="default" onClick={generatePickSlip} disabled={busy !== null}>
+          <Button
+            variant="default"
+            onClick={generatePickSlip}
+            disabled={busy !== null}
+            data-glass-role="order-primary"
+          >
             {busy === 'generate-pick-slip' ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -1182,6 +1194,7 @@ export function ManagerActionsPanel({
           role="status"
           className="text-warning flex flex-wrap items-center gap-2 text-[12.5px]"
           data-testid="order-stock-notice"
+          data-glass="order-notice"
         >
           <span>{stockNotice}</span>
           {stockGates.canRetry && (
@@ -1202,7 +1215,11 @@ export function ManagerActionsPanel({
         </div>
       )}
       {shortNotice && (
-        <p className="text-warning text-[12.5px]" data-testid="approve-short-notice">
+        <p
+          className="text-warning text-[12.5px]"
+          data-testid="approve-short-notice"
+          data-glass="order-notice"
+        >
           {shortNotice}
         </p>
       )}
@@ -1271,7 +1288,7 @@ export function ManagerActionsPanel({
           data-testid="completion-confirm"
           onCloseAutoFocus={landOnLineAfterClose}
         >
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{completionConfirm?.title}</DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-2">
@@ -1281,7 +1298,7 @@ export function ManagerActionsPanel({
               </div>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => {
@@ -1322,11 +1339,11 @@ export function ManagerActionsPanel({
           data-testid="departure-confirm"
           onCloseAutoFocus={landOnLineAfterClose}
         >
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{departure?.risk.title}</DialogTitle>
             <DialogDescription>{departure?.risk.message}</DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => {
@@ -1362,15 +1379,15 @@ export function ManagerActionsPanel({
       ) : null}
 
       <Dialog open={denyOpen} onOpenChange={closeDenyDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-md" data-glass-role="order-deny-dialog">
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Deny this request?</DialogTitle>
             <DialogDescription>
               The requester will be notified with the reason you provide. This action can&apos;t be
               undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-glass="dialog-body">
             <Label htmlFor="deny-reason">Reason</Label>
             <Textarea
               id="deny-reason"
@@ -1382,7 +1399,7 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => closeDenyDialog(false)}
@@ -1408,7 +1425,7 @@ export function ManagerActionsPanel({
           window.prompt(). */}
       <Dialog open={reopenOpen} onOpenChange={closeReopenDialog}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Reopen picking?</DialogTitle>
             <DialogDescription>
               Sends this order back to picking so the count can be corrected. The picked quantities
@@ -1421,7 +1438,7 @@ export function ManagerActionsPanel({
               A signed order can&apos;t be reopened. This is recorded in the audit log.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-glass="dialog-body">
             <Label htmlFor="reopen-reason">Reason</Label>
             <Textarea
               id="reopen-reason"
@@ -1433,7 +1450,7 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => closeReopenDialog(false)}
@@ -1463,7 +1480,7 @@ export function ManagerActionsPanel({
         }}
       >
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>
               {orderLabel
                 ? `Record a physical signature for ${orderLabel}`
@@ -1475,7 +1492,7 @@ export function ManagerActionsPanel({
               signature as physical — no image is stored.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-glass="dialog-body">
             <Label htmlFor="physical-signer">Signer&apos;s name</Label>
             <Textarea
               id="physical-signer"
@@ -1487,7 +1504,7 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => setPhysicalSigOpen(false)}
@@ -1520,14 +1537,14 @@ export function ManagerActionsPanel({
         }}
       >
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Close as delivered-partial?</DialogTitle>
             <DialogDescription>
               This ends the order and keeps the record of what was already delivered. The remaining
               backordered units will NOT be fulfilled. You can&apos;t reopen the order afterward.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => setClosePartialOpen(false)}
@@ -1546,7 +1563,7 @@ export function ManagerActionsPanel({
       {/* View signature */}
       <Dialog open={sigOpen} onOpenChange={setSigOpen}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Customer signature</DialogTitle>
             <DialogDescription>
               {signedByName ? `Signed by ${signedByName}` : 'Signed'}
@@ -1571,7 +1588,7 @@ export function ManagerActionsPanel({
           ) : (
             <p className="text-muted-foreground text-sm">No signature on file.</p>
           )}
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button variant="outline" onClick={() => setSigOpen(false)}>
               Close
             </Button>

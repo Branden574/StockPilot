@@ -1,0 +1,122 @@
+/* UNLAYERED companion (Liquid Glass plan 4.1, review finding R22). A rule in
+   a cascade layer always loses to an unlayered rule for the same property, so
+   the glass rules that restyle UNLAYERED CSS live here, outside every layer:
+   the unlayered rules of app/globals.css (from its marketing and auth ground
+   on) and sonner's own injected stylesheet. app/layout.tsx imports this file
+   on the line after globals.css, so it also comes later in source order.
+
+   Every selector starts with :root[data-appearance="liquid-glass"], so it is
+   always more specific than the classic selector it overrides, and every rule
+   sits inside @media screen (glass-scope.guard.test.ts). Classic !important
+   declarations that no normal rule can beat (and a layered !important beats
+   an unlayered one): the toast shadow and focus rings in components/ui/sonner.tsx
+   stay as they are; recorded for the stage 2 PR. */
+@media screen {
+  /* The invite and onboarding ground (.bg-mesh): glass shows the scene there,
+     not the accent washes and the hairline rules. */
+  :root[data-appearance='liquid-glass'] .bg-mesh {
+    background-color: transparent;
+    background-image: none;
+  }
+  :root[data-appearance='liquid-glass'] .bg-mesh::before {
+    background-image: none;
+  }
+
+  /* Toasts: the artifact's 14 px radius (sonner sets its own radius from its
+     --border-radius variable in an unlayered rule) and its 14 / 500 type. The
+     ink fill already follows the glass --primary. */
+  :root[data-appearance='liquid-glass'] ol[data-sonner-toaster] li[data-sonner-toast] {
+    border-radius: 14px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  /* The toast dock (DS-Components "Feedback", sp.css .toast-dock and .toast;
+     stage 3, the shell): bottom centre, 84 px up, so the one-time intro
+     notice (plans/REVISION-DEFAULT.md R13) and every other toast land where
+     the eye already is, clear of the pane's corner. Above sonner's 600 px
+     phone layout only, where its stack is full width. It still lifts over the
+     product-update card (app/globals.css), whose height UpdateCenter puts in
+     --sp-update-card-offset while the card is up.
+     In the dashboard from 761 px the board docks it in the workspace pane
+     (.toast-dock is absolute in .app-main, Items.dc.html), so it is centred
+     on the pane and 84 px above the pane's foot, not the window's: the pane
+     starts after the sidebar column (the 256 px panel or the 84 px rail,
+     10 px in from the window's edge; none when the sidebar is hidden) and its
+     own 12 px margin, ends 10 px in from the window's right edge, and its
+     foot is 10 px above the window's. Reduce Transparency, Increase Contrast
+     and the low-power material take the pane's margins away (shell.css). */
+  @media (min-width: 601px) {
+    :root[data-appearance='liquid-glass'] ol[data-sonner-toaster][data-y-position='bottom'] {
+      right: auto;
+      bottom: calc(84px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
+      left: calc(50% + var(--lg-dock-shift, 0px));
+      transform: translateX(-50%);
+    }
+  }
+  @media (min-width: 761px) {
+    :root[data-appearance='liquid-glass']:has([data-glass='shell']) {
+      --lg-dock-col: 0px;
+      --lg-dock-pane-l: 12px;
+      --lg-dock-pane-r: 10px;
+      --lg-dock-lift: 10px;
+      --lg-dock-shift: calc(
+        (var(--lg-dock-col) + var(--lg-dock-pane-l) - var(--lg-dock-pane-r)) / 2
+      );
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass='shell'] > [data-glass='sidebar']) {
+      --lg-dock-col: 266px;
+    }
+  }
+  @media (min-width: 761px) and (max-width: 1180px) {
+    :root[data-appearance='liquid-glass']:has([data-glass='shell'] > [data-glass='sidebar']) {
+      --lg-dock-col: 94px;
+    }
+  }
+  @media (min-width: 761px) and (prefers-reduced-transparency: reduce),
+    (min-width: 761px) and (prefers-contrast: more) {
+    :root[data-appearance='liquid-glass']:has([data-glass='shell']) {
+      --lg-dock-pane-l: 0px;
+      --lg-dock-pane-r: 0px;
+      --lg-dock-lift: 0px;
+    }
+  }
+  @media (min-width: 761px) {
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']:has([data-glass='shell']) {
+      --lg-dock-pane-l: 0px;
+      --lg-dock-pane-r: 0px;
+      --lg-dock-lift: 0px;
+    }
+  }
+  /* While the Items or Books selection bar floats at the pane's foot (from
+     761 px, pages/items.css), the dock rises 12 px clear of it, so an error
+     toast never covers the bar's actions: with every classic action the
+     bar's top sits 104, 142 or 180 px above the pane's foot (two, three or
+     four rows: from 1280 px, below it, below 1000 px). */
+  @media (min-width: 761px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(116px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
+    }
+  }
+  @media (min-width: 761px) and (max-width: 1279.98px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(154px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
+    }
+  }
+  @media (min-width: 761px) and (max-width: 999.98px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(192px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
+    }
+  }
+}

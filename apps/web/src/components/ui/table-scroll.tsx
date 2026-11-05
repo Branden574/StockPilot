@@ -50,6 +50,7 @@ export function TableScroll({
   return (
     <div
       ref={ref}
+      data-glass="table-scroll"
       className="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0"
       role={named ? 'region' : undefined}
       aria-label={label || undefined}

@@ -49,18 +49,72 @@ interface PaletteCommand {
 }
 
 const NAV_COMMANDS: PaletteCommand[] = [
-  { id: 'nav-dashboard', label: 'Overview', href: '/dashboard', Icon: Home, keywords: 'home dashboard' },
-  { id: 'nav-inventory', label: 'Inventory items', href: '/dashboard/inventory', Icon: Boxes, keywords: 'items stock' },
-  { id: 'nav-books', label: 'Books', href: '/dashboard/books', Icon: Package, keywords: 'textbooks isbn' },
+  {
+    id: 'nav-dashboard',
+    label: 'Overview',
+    href: '/dashboard',
+    Icon: Home,
+    keywords: 'home dashboard',
+  },
+  {
+    id: 'nav-inventory',
+    label: 'Inventory items',
+    href: '/dashboard/inventory',
+    Icon: Boxes,
+    keywords: 'items stock',
+  },
+  {
+    id: 'nav-books',
+    label: 'Books',
+    href: '/dashboard/books',
+    Icon: Package,
+    keywords: 'textbooks isbn',
+  },
   { id: 'nav-categories', label: 'Categories', href: '/dashboard/categories', Icon: LayoutGrid },
-  { id: 'nav-movements', label: 'Movements', href: '/dashboard/movements', Icon: Truck, keywords: 'stock movements log' },
-  { id: 'nav-pos', label: 'Purchase orders', href: '/dashboard/purchase-orders', Icon: ClipboardList, keywords: 'po purchase orders' },
-  { id: 'nav-suppliers', label: 'Suppliers', href: '/dashboard/suppliers', Icon: Truck, keywords: 'vendors' },
+  {
+    id: 'nav-movements',
+    label: 'Movements',
+    href: '/dashboard/movements',
+    Icon: Truck,
+    keywords: 'stock movements log',
+  },
+  {
+    id: 'nav-pos',
+    label: 'Purchase orders',
+    href: '/dashboard/purchase-orders',
+    Icon: ClipboardList,
+    keywords: 'po purchase orders',
+  },
+  {
+    id: 'nav-suppliers',
+    label: 'Suppliers',
+    href: '/dashboard/suppliers',
+    Icon: Truck,
+    keywords: 'vendors',
+  },
   { id: 'nav-locations', label: 'Locations', href: '/dashboard/locations', Icon: Warehouse },
-  { id: 'nav-cycle-counts', label: 'Cycle counts', href: '/dashboard/cycle-counts', Icon: Receipt, keywords: 'count audit' },
-  { id: 'nav-procedures', label: 'Procedures', href: '/dashboard/procedures', Icon: BookOpen, keywords: 'sop knowledge how-to guide procedure' },
+  {
+    id: 'nav-cycle-counts',
+    label: 'Cycle counts',
+    href: '/dashboard/cycle-counts',
+    Icon: Receipt,
+    keywords: 'count audit',
+  },
+  {
+    id: 'nav-procedures',
+    label: 'Procedures',
+    href: '/dashboard/procedures',
+    Icon: BookOpen,
+    keywords: 'sop knowledge how-to guide procedure',
+  },
   { id: 'nav-reports', label: 'Reports', href: '/dashboard/reports', Icon: Tags },
-  { id: 'nav-team', label: 'Team', href: '/dashboard/team', Icon: Users, keywords: 'members invites' },
+  {
+    id: 'nav-team',
+    label: 'Team',
+    href: '/dashboard/team',
+    Icon: Users,
+    keywords: 'members invites',
+  },
   { id: 'nav-settings', label: 'Settings', href: '/dashboard/settings', Icon: Settings },
 ];
 
@@ -69,9 +123,27 @@ const NAV_COMMANDS: PaletteCommand[] = [
 // happen via dialogs on the list page, so they live under "Jump to" and
 // the user picks the affordance there.
 const ACTION_COMMANDS: PaletteCommand[] = [
-  { id: 'act-new-item', label: 'New item', href: '/dashboard/inventory/new', Icon: Plus, keywords: 'create add sku product' },
-  { id: 'act-new-po', label: 'New purchase order', href: '/dashboard/purchase-orders/new', Icon: Plus, keywords: 'create add po order' },
-  { id: 'act-new-cycle-count', label: 'New cycle count', href: '/dashboard/cycle-counts/new', Icon: Plus, keywords: 'create add count audit' },
+  {
+    id: 'act-new-item',
+    label: 'New item',
+    href: '/dashboard/inventory/new',
+    Icon: Plus,
+    keywords: 'create add sku product',
+  },
+  {
+    id: 'act-new-po',
+    label: 'New purchase order',
+    href: '/dashboard/purchase-orders/new',
+    Icon: Plus,
+    keywords: 'create add po order',
+  },
+  {
+    id: 'act-new-cycle-count',
+    label: 'New cycle count',
+    href: '/dashboard/cycle-counts/new',
+    Icon: Plus,
+    keywords: 'create add count audit',
+  },
 ];
 
 export interface CommandPaletteProps {
@@ -150,19 +222,21 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        data-glass-variant="command"
         className="gap-0 overflow-hidden p-0 sm:max-w-[640px] sm:p-0"
         aria-describedby={undefined}
       >
         <DialogTitle className="sr-only">Search</DialogTitle>
-        <Command
-          shouldFilter={value.trim().length < 2}
-          className="flex h-full flex-col"
-        >
+        <Command shouldFilter={value.trim().length < 2} className="flex h-full flex-col">
           {/* The focus mark is the row's 2px ink underline, not a ring offset
               around the bare input. pr-12 leaves the dialog's close button
               its own corner. */}
           <div className="border-border flex items-center gap-2.5 border-b pl-4 pr-12 focus-within:shadow-[inset_0_-2px_0_hsl(var(--ring))]">
-            <Search aria-hidden strokeWidth={1.8} className="text-muted-foreground size-4 shrink-0" />
+            <Search
+              aria-hidden
+              strokeWidth={1.8}
+              className="text-muted-foreground size-4 shrink-0"
+            />
             <Command.Input
               data-cmdk="true"
               placeholder="Search items, POs, suppliers, or jump to…"
@@ -170,9 +244,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
               onValueChange={setValue}
               className="placeholder:text-muted-foreground flex h-12 w-full bg-transparent text-base outline-none focus-visible:ring-0 focus-visible:ring-offset-0 sm:text-[14px]"
             />
-            {loading && (
-              <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />
-            )}
+            {loading && <Loader2 className="text-muted-foreground h-3.5 w-3.5 animate-spin" />}
           </div>
 
           <Command.List className="max-h-[60vh] overflow-y-auto p-1.5">
@@ -197,10 +269,8 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
                       itemId={i.id}
                     />
                     <span className="flex-1 truncate">{i.name}</span>
-                    <span className="text-muted-foreground font-mono text-[11px]">
-                      {i.sku}
-                    </span>
-                    <span className="text-muted-foreground tabular-nums text-[11px]">
+                    <span className="text-muted-foreground font-mono text-[11px]">{i.sku}</span>
+                    <span className="text-muted-foreground text-[11px] tabular-nums">
                       {i.quantity}
                     </span>
                   </Command.Item>

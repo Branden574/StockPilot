@@ -2,6 +2,7 @@ import Link from 'next/link';
 
 import { ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
 import { PortalShop } from '@/components/portal/portal-shop';
+import { AppearanceAccountSync } from '@/components/theme/appearance-provider';
 import { Button } from '@/components/ui/button';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import {
@@ -23,6 +24,12 @@ export const dynamic = 'force-dynamic';
  * portal is the frame's column at the portal's own width (max-w-4xl, as
  * before) under the supplier's brand: logo, name, "Ordering portal ·
  * <customer>". No new reads; the header shows what it showed.
+ *
+ * Appearance (Liquid Glass, plans/REVISION-DEFAULT.md R13): the signed-in
+ * customer is named to the appearance layer from the context this page
+ * already resolved (no new read), so their Design and Theme are saved to
+ * their own account and they get the one-time notice. The sign-in prompt
+ * names nobody: a choice there stays on the device.
  */
 export default async function PortalPage() {
   const ctx = await resolvePortalContext();
@@ -58,6 +65,7 @@ export default async function PortalPage() {
 
   return (
     <ExternalShell className="max-w-4xl">
+      <AppearanceAccountSync userId={ctx.userId} />
       <header className="border-border mb-8 flex items-center gap-3 border-b pb-4">
         {ctx.orgLogoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element -- external org logo, sized fixed

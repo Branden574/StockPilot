@@ -1,10 +1,12 @@
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { AvatarUploader } from '@/components/settings/avatar-uploader';
 import { DeleteAccountButton } from '@/components/settings/delete-account-button';
 import { DELETE_ACCOUNT_CARD_COPY } from '@/components/settings/delete-account-copy';
 import { EmailSettingsCard } from '@/components/settings/email-settings-card';
 import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
@@ -89,6 +91,23 @@ export default async function ProfileSettingsPage({
           justChanged={justChanged}
         />
       </SettingsPanel>
+
+      {/* Personal and ungated: every signed-in person chooses their own look,
+          and the choice changes nobody else's (components/theme). Only when
+          this build has Liquid Glass: under the `off` rollout this page is
+          origin/main's. The wrapper draws no box (display: contents); it lets
+          the classic parity check take exactly this panel out
+          (plans/REVISION-DEFAULT.md R5, item 46). */}
+      {liquidGlassRollout() !== 'off' ? (
+        <div data-appearance-panel="" className="contents">
+          <SettingsPanel
+            title="Appearance"
+            description="Choose how StockPilot looks to you. It changes at once, on every page; the line below says where it is saved."
+          >
+            <AppearancePanel />
+          </SettingsPanel>
+        </div>
+      ) : null}
 
       {/* The danger zone: set apart below the everyday cards, destructive in
           its edge, its title and its button, and in its words. */}

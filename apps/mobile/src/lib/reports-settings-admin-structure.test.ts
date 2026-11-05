@@ -771,7 +771,12 @@ describe('Settings: the account screen', () => {
       "Linking.openURL('https://stockpilotusa.com/dashboard/settings/security')",
       'title="Customize tab bar" detail="Home + up to 5"',
       "router.push('/settings/customize-tabs' as never)",
+      // The Theme row ("Auto", an alert) is Appearance while Liquid Glass is
+      // rolled out (opt-in or default), and today's row verbatim when it is off.
+      'title="Appearance" detail={appearanceLabel( appearance.chosenStyle, appearance.chosenTheme, appearance.rollout, )}',
+      "router.push('/settings/appearance' as never)",
       'title="Theme" detail="Auto"',
+      "'Mobile follows your device appearance (Light or Dark) automatically.',",
       'title="Sync" detail="Wi-Fi + cellular"',
       "router.push('/settings/rejected-work' as never)",
       'title="Offline cache" detail="Tap to clear"',

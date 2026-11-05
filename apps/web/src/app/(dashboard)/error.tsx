@@ -4,6 +4,7 @@ import { AlertTriangle, RefreshCw } from 'lucide-react';
 import Link from 'next/link';
 import * as React from 'react';
 
+import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
 // The isomorphic reporter: this module is in a browser bundle, and
 // @/lib/error-reporter is server-only (see error-reporter-core.ts).
@@ -71,8 +72,8 @@ export default function DashboardError({
               Something broke loading this page
             </h1>
             <p className="text-muted-foreground mt-1.5 text-[13.5px] leading-relaxed">
-              The page hit an error mid-render. Try again, and if it keeps
-              happening, sign out and back in.
+              The page hit an error mid-render. Try again, and if it keeps happening, sign out and
+              back in.
             </p>
             {error.digest && (
               <p className="text-muted-foreground mt-2 font-mono text-[11.5px]">
@@ -97,6 +98,8 @@ export default function DashboardError({
           <Button type="button" variant="ghost" onClick={signOutAndBackIn}>
             Sign out and back in
           </Button>
+          {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
+          <AppearanceRecovery error={error} />
         </div>
       </div>
     </div>

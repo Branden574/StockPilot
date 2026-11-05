@@ -10,6 +10,7 @@ import { PAD_INK_QUIET, SignaturePad, type SignaturePadHandle } from './signatur
 afterEach(() => {
   document.documentElement.classList.remove('dark');
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 function hexToLuminance(hex: string): number {
@@ -32,6 +33,27 @@ function drawingBox(): HTMLElement {
 }
 
 describe('SignaturePad chrome around the light canvas', () => {
+  it.each(['default', 'opt-in'])(
+    '%s: keeps its classic tokens inside Liquid Glass: the whole pad is an exempt surface (R6)',
+    (rollout) => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+      const { container } = render(<SignaturePad />);
+      const root = container.querySelector('[data-slot="signature-pad"]')!;
+      expect(root).toHaveAttribute('data-appearance-exempt');
+      expect(root).toContainElement(drawingBox());
+      expect(root).toContainElement(screen.getByRole('button', { name: 'Clear' }));
+    },
+  );
+
+  it('off: no exempt marker, so the pad is origin/main’s markup (R5: the kill switch gives today’s DOM)', () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    const { container } = render(<SignaturePad />);
+    expect(container.querySelector('[data-slot="signature-pad"]')).not.toBeNull();
+    expect(container.innerHTML).not.toContain('data-appearance-exempt');
+  });
+
   it('keeps the canvas light in dark mode, with touch-action none', () => {
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     document.documentElement.classList.add('dark');

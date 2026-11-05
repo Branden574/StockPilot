@@ -82,6 +82,11 @@ import { PageTour } from '@/components/onboarding/page-tour';
 import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
 
+// The Liquid Glass list composition (Items.dc.html, Books.dc.html): every rule
+// is scoped to this page's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/items.css';
+
 // Dropped from 50 → 30 after the Playwright speed sweep showed the
 // inventory list pulling ~3 MB and 6.2s to load on a warm cache. The
 // DB query + row render + per-row image fetch all scale ~linearly
@@ -220,7 +225,10 @@ export default async function InventoryPage({
   return (
     // The page box every redesigned dashboard page shares (max 1320, 28 / 32
     // / 64 padding, 16 px gutters on a phone; the route skeleton draws it too).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="items"
+    >
       <PageHeader
         title={heading}
         subline={

@@ -5,6 +5,7 @@ import * as React from 'react';
 
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
+import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
 // The isomorphic reporter: this module is in a browser bundle, and
 // @/lib/error-reporter is server-only (see error-reporter-core.ts).
@@ -53,9 +54,13 @@ export default function BookOrderTotalsError({
           ) : undefined
         }
         action={
-          <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
-            <RefreshCw aria-hidden /> {BOOK_REPORT_UI.tryAgain}
-          </Button>
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
+              <RefreshCw aria-hidden /> {BOOK_REPORT_UI.tryAgain}
+            </Button>
+            {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
+            <AppearanceRecovery error={error} size="sm" />
+          </>
         }
       />
     </div>

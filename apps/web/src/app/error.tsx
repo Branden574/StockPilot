@@ -2,10 +2,17 @@
 
 import { useEffect } from 'react';
 
+import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
 import { isSharePath } from '@/lib/share-paths';
 
-export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+export default function GlobalError({
+  error,
+  reset,
+}: {
+  error: Error & { digest?: string };
+  reset: () => void;
+}) {
   useEffect(() => {
     console.error(error);
     // Crash beacon: surface production client crashes in the server-side
@@ -41,11 +48,14 @@ export default function GlobalError({ error, reset }: { error: Error & { digest?
         Something went wrong
       </h1>
       <p className="text-muted-foreground max-w-md text-[13.5px] leading-relaxed">
-        We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact support.
+        We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact
+        support.
       </p>
       <Button onClick={reset} className="mt-2">
         Try again
       </Button>
+      {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
+      <AppearanceRecovery error={error} />
     </div>
   );
 }

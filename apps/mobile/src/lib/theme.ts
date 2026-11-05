@@ -7,14 +7,25 @@
  * borders, flat surfaces. Light and dark are two complete palettes with one
  * structure: only values change between modes, never layout or weight.
  *
- * The mode follows the device (use-theme.ts); there is no in-app override.
+ * The mode comes from the person's appearance choice (use-theme.ts): System
+ * follows the device, as it always did; Dark and Light are fixed.
  *
  * Type pairing is loaded at runtime via expo-font in app/_layout.tsx:
  *   - Inter Tight (display and body)
  *   - Instrument Serif Italic (emphasis spans)
  *   - JetBrains Mono (eyebrows, SKUs, numerics)
+ *
+ * Liquid Glass, the opt-in third appearance, adds its own palettes and type
+ * below (GLASS_*); the classic tokens are not changed by it.
  */
 
+import {
+  GLASS_TOKENS,
+  GLASS_TYPE_TOKENS,
+  type GlassTokens,
+} from './appearance/glass-tokens.generated';
+
+/** The colour scheme only: light or dark. Never 'liquid-glass' (that is a style). */
 export type ThemeMode = 'light' | 'dark';
 
 /**
@@ -136,6 +147,70 @@ export function palette(mode: ThemeMode): Palette {
   return mode === 'dark' ? DARK : LIGHT;
 }
 
+/**
+ * Liquid Glass (the opt-in third appearance; stockpilot-work/liquid-glass/
+ * IMPLEMENTATION-PLAN.md 5.1). The same Palette shape, so every screen that
+ * reads `c` draws in glass colours without a branch, mapped from the generated
+ * artifact tokens (appearance/glass-tokens.generated.ts), never retyped:
+ *   paper --bg, paper2 --card-fill-2 (the well), card --surface (OPAQUE),
+ *   sunk --surface-3 (segmented tracks), ink..ink4 --ink..--ink-4, ink5
+ *   --line-3, hair --line, hair2 --line-2, accent --accent, accentInk
+ *   --on-accent, accentWash --accent-wash, warn/crit --warn/--danger and
+ *   their washes.
+ * `card` is the opaque --surface, not the translucent --card-fill: about a
+ * hundred existing files paint sheets, sticky bars and menus with
+ * `backgroundColor: c.card` over a light scrim, and a 46% fill with no blur
+ * behind it would show the page's text through them (the web keeps its
+ * --card triplet opaque for the same reason, plan 4.2). The frosted content
+ * card is GlassSurface variant="content", which reads g.cardFill itself;
+ * stage 4 moves each overlay onto GlassSurface. In the opaque twins --surface
+ * and --card-fill are the same value, so those palettes do not change.
+ * Day glass is the light scheme and Night glass the dark one; the OPAQUE twins
+ * are the artifact's reduced material (Reduce Transparency, Android). These are
+ * module-level constants, one per (scheme, material), so memoised rows keep
+ * stable references exactly as the classic two do. Classic LIGHT and DARK above
+ * are untouched.
+ */
+function glassPaletteOf(t: GlassTokens): Palette {
+  return {
+    paper: t.bg,
+    paper2: t.cardFill2,
+    card: t.surface,
+    sunk: t.surface3,
+    ink: t.ink,
+    ink2: t.ink2,
+    ink3: t.ink3,
+    ink4: t.ink4,
+    ink5: t.line3,
+    hair: t.line,
+    hair2: t.line2,
+    accent: t.accent,
+    accentInk: t.onAccent,
+    accentWash: t.accentWash,
+    warnText: t.warn,
+    warnWash: t.warnWash,
+    critText: t.danger,
+    critWash: t.dangerWash,
+  };
+}
+
+export const GLASS_DAY: Palette = glassPaletteOf(GLASS_TOKENS.day);
+export const GLASS_NIGHT: Palette = glassPaletteOf(GLASS_TOKENS.night);
+export const GLASS_DAY_OPAQUE: Palette = glassPaletteOf(GLASS_TOKENS.dayOpaque);
+export const GLASS_NIGHT_OPAQUE: Palette = glassPaletteOf(GLASS_TOKENS.nightOpaque);
+
+/** The glass palette for a scheme, translucent or opaque (same reference every call). */
+export function glassPalette(mode: ThemeMode, opaque: boolean): Palette {
+  if (mode === 'dark') return opaque ? GLASS_NIGHT_OPAQUE : GLASS_NIGHT;
+  return opaque ? GLASS_DAY_OPAQUE : GLASS_DAY;
+}
+
+/** The raw glass tokens (materials, scrims, fields) for a scheme and material. */
+export function glassTokens(mode: ThemeMode, opaque: boolean): GlassTokens {
+  if (mode === 'dark') return opaque ? GLASS_TOKENS.nightOpaque : GLASS_TOKENS.night;
+  return opaque ? GLASS_TOKENS.dayOpaque : GLASS_TOKENS.day;
+}
+
 export const FONT = {
   display: 'InterTight_500Medium',
   displayRegular: 'InterTight_400Regular',
@@ -144,6 +219,58 @@ export const FONT = {
   mono: 'JetBrainsMono_500Medium',
   monoRegular: 'JetBrainsMono_400Regular',
 };
+
+/** One face as a style fragment: a family, a weight, or both. */
+export interface FontFace {
+  fontFamily?: string;
+  fontWeight?: '400' | '500' | '600' | '700';
+  fontStyle?: 'italic';
+}
+
+/** The six faces a screen draws with, by role (the FONT keys). */
+export type FontSet = Readonly<Record<keyof typeof FONT, FontFace>>;
+
+/** Classic: today's families, each weight its own family (FONT, unchanged). */
+export const CLASSIC_FONT: FontSet = {
+  display: { fontFamily: FONT.display },
+  displayRegular: { fontFamily: FONT.displayRegular },
+  displaySemi: { fontFamily: FONT.displaySemi },
+  serifItalic: { fontFamily: FONT.serifItalic },
+  mono: { fontFamily: FONT.mono },
+  monoRegular: { fontFamily: FONT.monoRegular },
+};
+
+/**
+ * Liquid Glass type families (plan 5.3 "Native typography"): the system face
+ * on Apple platforms (fontFamily left unset gives San Francisco, Text or
+ * Display chosen by size) and the platform default, Roboto, on Android, with
+ * the weight carried by fontWeight. Glass never uses Inter Tight or Instrument
+ * Serif: the serif emphasis role is the system face in italic. References
+ * (SKU, ISBN) keep the bundled JetBrains Mono: the artifact's stack is
+ * ui-monospace, "SF Mono", "JetBrains Mono", and React Native cannot select SF
+ * Mono by name, so the artifact's own next fallback is used (recorded).
+ */
+export const GLASS_FONT: FontSet = {
+  // fontFamily is PRESENT and undefined on purpose: placed after a primitive's
+  // own family in a style array, it clears it, so the system face draws.
+  display: { fontFamily: undefined, fontWeight: '500' },
+  displayRegular: { fontFamily: undefined, fontWeight: '400' },
+  displaySemi: { fontFamily: undefined, fontWeight: '600' },
+  serifItalic: { fontFamily: undefined, fontWeight: '400', fontStyle: 'italic' },
+  mono: { fontFamily: FONT.mono },
+  monoRegular: { fontFamily: FONT.monoRegular },
+};
+
+/**
+ * The Liquid Glass native type scale (generated from the artifact's
+ * typography.native): large title 34/41 700, section heading 20/25 700, nav
+ * title 17 600, rows 16/21 with 13/17 sub-lines, buttons 17 600, tab labels
+ * 10.5 600, segmented 14 600, stepper 19 700 tabular, and the Material 3 roles
+ * for Android. Dynamic Type keeps TYPE_CEILING and capTo with these sizes as
+ * the base.
+ */
+export const GLASS_TYPE = GLASS_TYPE_TOKENS;
+export type GlassTypeScale = typeof GLASS_TYPE;
 
 /**
  * Dynamic Type ceilings, in POINTS — the largest a given class of chrome is

@@ -126,6 +126,19 @@ describe('AddItemsDialog', () => {
     );
   });
 
+  // Liquid Glass: the order page's dialog foot rules (order-detail.css) reach
+  // a foot that is the dialog's child, or its form's, or this wrapper's: the
+  // wrapper carries the add-items-body hook, so the foot here gets the same
+  // 36 px buttons and 14 / 16 / 16 / 24 foot as every other order dialog.
+  it('keeps its foot in the add-items-body wrapper, the dialog’s own child', async () => {
+    await open();
+    const dialog = screen.getByRole('dialog');
+    const foot = within(dialog).getByRole('button', { name: 'Cancel' }).parentElement!;
+    expect(foot).toHaveAttribute('data-glass', 'dialog-footer');
+    expect(foot.parentElement).toHaveAttribute('data-glass', 'add-items-body');
+    expect(foot.parentElement!.parentElement).toBe(dialog);
+  });
+
   // ── Warehouse pinning ────────────────────────────────────────────
   it('pins the browse search to THIS order’s warehouse and never offers a switcher', async () => {
     fetchSpy.mockResolvedValue(jsonResponse([row({ id: 'a', name: 'Alpha Charger' })]));
@@ -340,7 +353,12 @@ describe('AddItemsDialog', () => {
         added: 1,
         merged: 0,
         pickSlipStale: false,
-        hold: { ok: false, reason: 'busy', message: 'Someone else is changing this order or its items right now. Try again in a moment.' },
+        hold: {
+          ok: false,
+          reason: 'busy',
+          message:
+            'Someone else is changing this order or its items right now. Try again in a moment.',
+        },
       },
     });
     const user = await open();
@@ -352,7 +370,8 @@ describe('AddItemsDialog', () => {
       expect(toastMock.warning).toHaveBeenCalledWith(
         'Added. Stock was not held for it; use Hold available stock.',
         expect.objectContaining({
-          description: 'Someone else is changing this order or its items right now. Try again in a moment.',
+          description:
+            'Someone else is changing this order or its items right now. Try again in a moment.',
         }),
       );
     });
@@ -368,7 +387,13 @@ describe('AddItemsDialog', () => {
         added: 1,
         merged: 0,
         pickSlipStale: false,
-        hold: { ok: true, held: [{ itemId: 'a', added: 1 }], stillShort: [], hiddenHeldItems: 0, hiddenShortItems: 0 },
+        hold: {
+          ok: true,
+          held: [{ itemId: 'a', added: 1 }],
+          stillShort: [],
+          hiddenHeldItems: 0,
+          hiddenShortItems: 0,
+        },
       },
     });
     const user = await open();
@@ -421,10 +446,7 @@ describe('AddItemsDialog', () => {
 
   async function stageTwoAndAdd() {
     fetchSpy.mockResolvedValue(
-      jsonResponse([
-        row({ id: 'a', name: 'Widget' }),
-        row({ id: 'b', name: 'Gadget' }),
-      ]),
+      jsonResponse([row({ id: 'a', name: 'Widget' }), row({ id: 'b', name: 'Gadget' })]),
     );
     const user = await open();
     await user.click(await screen.findByRole('button', { name: 'Select Widget' }));
@@ -435,20 +457,29 @@ describe('AddItemsDialog', () => {
 
   function expectPicksIntact() {
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByRole('spinbutton', { name: 'Quantity for Widget' })).toBeInTheDocument();
-    expect(within(dialog).getByRole('spinbutton', { name: 'Quantity for Gadget' })).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('spinbutton', { name: 'Quantity for Widget' }),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole('spinbutton', { name: 'Quantity for Gadget' }),
+    ).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /add to order/i })).toBeEnabled();
   }
 
   it('keeps the dialog and the staged tray intact for a refusal that wrote nothing and can be fixed in place', async () => {
     addLines.mockResolvedValue({
       ok: false,
-      error: { code: 'validation_error', message: "Gadget isn't stocked at this order's warehouse." },
+      error: {
+        code: 'validation_error',
+        message: "Gadget isn't stocked at this order's warehouse.",
+      },
     });
     await stageTwoAndAdd();
 
     await vi.waitFor(() => {
-      expect(toastMock.error).toHaveBeenCalledWith("Gadget isn't stocked at this order's warehouse.");
+      expect(toastMock.error).toHaveBeenCalledWith(
+        "Gadget isn't stocked at this order's warehouse.",
+      );
     });
     expect(refreshSpy).not.toHaveBeenCalled();
     expectPicksIntact();
@@ -476,7 +507,11 @@ describe('AddItemsDialog', () => {
   it('after a partial answer, closes the dialog, drops the picks and reloads the order, so nothing saved is added twice', async () => {
     addLines.mockResolvedValue({
       ok: false,
-      error: { code: 'conflict', message: PARTIAL, details: { reason: 'partial', retryable: false } },
+      error: {
+        code: 'conflict',
+        message: PARTIAL,
+        details: { reason: 'partial', retryable: false },
+      },
     });
     const user = await stageTwoAndAdd();
 
@@ -535,9 +570,7 @@ describe('AddItemsDialog', () => {
     const user = await open();
     await screen.findByText('Local Widget');
 
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse([row({ id: 'c', name: 'Second Page Widget' })], 5),
-    );
+    fetchSpy.mockResolvedValueOnce(jsonResponse([row({ id: 'c', name: 'Second Page Widget' })], 5));
     await user.click(screen.getByRole('button', { name: /load more/i }));
 
     expect(await screen.findByText('Second Page Widget')).toBeInTheDocument();
@@ -565,9 +598,7 @@ describe('AddItemsDialog', () => {
     // And the copy does not claim the warehouse is empty.
     expect(screen.getByText(/load more to keep looking/i)).toBeInTheDocument();
 
-    fetchSpy.mockResolvedValueOnce(
-      jsonResponse([row({ id: 'c', name: 'Second Page Widget' })], 5),
-    );
+    fetchSpy.mockResolvedValueOnce(jsonResponse([row({ id: 'c', name: 'Second Page Widget' })], 5));
     await user.click(loadMore);
 
     expect(await screen.findByText('Second Page Widget')).toBeInTheDocument();
@@ -578,9 +609,7 @@ describe('AddItemsDialog', () => {
     fetchSpy.mockResolvedValue(jsonResponse([], 0));
     await open();
 
-    expect(
-      await screen.findByText(/ask an administrator for access to it/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/ask an administrator for access to it/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
   });
 });

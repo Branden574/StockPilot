@@ -65,6 +65,11 @@ import { effectiveNavLabel } from '@/lib/nav-labels';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { getWarehousesForRequest } from '@/lib/dashboard/request-cache';
 
+// The Liquid Glass list composition (Items.dc.html, Books.dc.html): every rule
+// is scoped to this page's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/items.css';
+
 // Lowered 50 → 30 in line with the inventory page. Book covers
 // average noticeably larger than item thumbnails (more variety of
 // remote sources, less cached on Vercel's image optimizer), so the
@@ -207,7 +212,10 @@ export default async function BooksPage({
   return (
     // The page box every redesigned dashboard page shares (max 1320, 28 / 32
     // / 64 padding, 16 px gutters on a phone; the route skeleton draws it too).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="books"
+    >
       <PageHeader
         title={heading}
         subline={

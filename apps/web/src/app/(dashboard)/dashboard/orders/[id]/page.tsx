@@ -18,6 +18,8 @@ import { MemberReturnDialog } from '@/components/returns/member-return-dialog';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
+import { OrderFulfilmentBadge } from '@/components/orders/order-fulfilment-badge';
+import { OrderRequesterNoteAside } from '@/components/orders/order-requester-note-aside';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReplacementBanner } from '@/components/orders/replacement-banner';
@@ -150,6 +152,9 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
 import { HelpTip } from '@/components/onboarding/help-tip';
+// Liquid Glass's composition of this page (Order-Detail.dc.html), scoped to
+// the glass root and this page's data-glass-page root; inert in Classic.
+import '@/styles/liquid-glass/pages/order-detail.css';
 
 /** The record page's frame, as the purchase order's (DESIGN-SPEC 5.3). */
 const ORDER_PAGE =
@@ -1319,7 +1324,7 @@ export default async function OrderDetailPage({
   // squeezed); then the lines and the pipeline in the main column beside an
   // aside of facts (Dates, Details), one column below about 856 px of content.
   return (
-    <div className={ORDER_PAGE}>
+    <div data-glass-page="order-detail" className={ORDER_PAGE}>
       <OrderRealtimeRefresh orderId={id} />
       <ReviseNeededByDialog change={neededByChange} trigger={false} />
       <DraftShortfallPoDialog offer={shortfallPoOffer} />
@@ -1340,10 +1345,20 @@ export default async function OrderDetailPage({
           </>
         }
         titleAside={
-          <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
-            <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
-            {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
-          </span>
+          <>
+            {/* Liquid Glass draws the fulfilment beside the status (glass-only
+                words; nothing under the off rollout). Between the title and
+                the status in the DOM, where it moves no Classic element among
+                its siblings; glass shows it after the status. */}
+            <OrderFulfilmentBadge fulfillmentType={request.fulfillment_type} />
+            <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
+              <OrderStatusBadge
+                status={request.status}
+                fulfillmentType={request.fulfillment_type}
+              />
+              {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
+            </span>
+          </>
         }
         subline={
           <>
@@ -1425,13 +1440,17 @@ export default async function OrderDetailPage({
       />
 
       <div className="@container min-w-0">
-        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+        <div
+          data-glass="order-detail-columns"
+          className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4"
+        >
           <div className="flex min-w-0 flex-col gap-4">
             <DetailSection
               headingId="order-lines-heading"
               title={`Lines (${lines.length})`}
               flush
               data-testid="order-lines"
+              data-glass-role="order-lines"
               aside={
                 <div className="flex items-center gap-3">
                   <p className="text-muted-foreground text-[12.5px] tabular-nums">
@@ -1945,8 +1964,16 @@ export default async function OrderDetailPage({
               </DetailSection>
             )}
 
+            {/* Liquid Glass shows the note in the side column instead
+                (OrderRequesterNoteAside, a glass-only copy: the note is words
+                only), so this one is Classic-only. */}
             {request.notes && (
-              <DetailSection title="Requester note" data-testid="order-requester-note">
+              <DetailSection
+                title="Requester note"
+                data-testid="order-requester-note"
+                data-glass-role="order-requester-note"
+                data-classic-only=""
+              >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.notes}</p>
               </DetailSection>
             )}
@@ -2046,12 +2073,17 @@ export default async function OrderDetailPage({
                 title={<span className="text-destructive">Denied</span>}
                 className="border-destructive/40"
                 data-testid="order-denied"
+                data-glass-role="order-denied"
               >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.denied_reason}</p>
               </DetailSection>
             )}
 
-            <DetailSection title="Timeline" data-testid="order-timeline">
+            <DetailSection
+              title="Timeline"
+              data-testid="order-timeline"
+              data-glass-role="order-timeline"
+            >
               {/* Async RSC (audit_logs + user_profiles) — Suspense lets the rest
                 of the order page flush immediately and the timeline stream in,
                 instead of its queries blocking every render (including each
@@ -2078,7 +2110,7 @@ export default async function OrderDetailPage({
           {/* The facts rail (the tour's `main aside`): label and value rows
             (DESIGN-SPEC 6.7). Below the two-column width it follows the main
             column, as before. */}
-          <aside className="flex min-w-0 flex-col gap-4">
+          <aside data-glass="order-detail-aside" className="flex min-w-0 flex-col gap-4">
             <DetailSection title="Dates" flush>
               <KeyValueList>
                 {(neededBy || neededByChangeInDates) && (
@@ -2113,6 +2145,12 @@ export default async function OrderDetailPage({
                 })}
               </KeyValueList>
             </DetailSection>
+
+            {/* Liquid Glass draws the requester note here, after Details
+                (glass-only; order-detail.css orders it last). Between Dates
+                and Details in the DOM, so no Classic element moves among its
+                siblings. */}
+            <OrderRequesterNoteAside notes={request.notes} />
 
             <DetailSection title="Details" flush>
               <KeyValueList>

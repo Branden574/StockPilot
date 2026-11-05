@@ -1,6 +1,28 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { NextConfig } from 'next';
+
+import {
+  glassSiteRedirects,
+  liquidGlassRollout,
+  marketingRewrites,
+} from './src/components/theme/appearance-flag';
+import { isScenePhotoInstalled } from './src/styles/liquid-glass/scene-photo';
+
+// ── Liquid Glass scene photo ─────────────────────────────────────────────────
+// The photos are never committed (the repository is public and their source
+// is not confirmed yet; FOLLOWUPS SC1). scripts/liquid-glass/install-scene.mjs
+// puts them in public/liquid-glass on a machine that has them. This build
+// turns the photo on only when every file is there; otherwise the glass
+// material shows its opaque ground and nothing requests a photo
+// (styles/liquid-glass/scene-photo.ts). `next build` runs in this folder.
+const LIQUID_GLASS_SCENE = isScenePhotoInstalled((name) =>
+  existsSync(join(process.cwd(), 'public', 'liquid-glass', name)),
+)
+  ? '1'
+  : '';
 
 // ── Build identity (update detection) ────────────────────────────────────────
 // "Which build is THIS bundle?" has to be answered at BUILD time and baked into
@@ -103,6 +125,8 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_SP_BUILD: SP_BUILD,
     NEXT_PUBLIC_SP_BUILT_AT: SP_BUILT_AT,
+    // See "Liquid Glass scene photo" at the top of this file.
+    NEXT_PUBLIC_LIQUID_GLASS_SCENE: LIQUID_GLASS_SCENE,
   },
   // PostHog reverse proxy. Analytics is routed through our OWN origin
   // (/ingest/*) instead of calling us.i.posthog.com directly. Two reasons:
@@ -220,9 +244,33 @@ const nextConfig: NextConfig = {
 
   transpilePackages: ['@stockpilot/core'],
 
-  // No rewrites. /ingest (PostHog) is proxied by a route handler that copies
-  // no cookie, never by a rewrite: see the skipTrailingSlashRedirect note
-  // above.
+  // The only rewrites are the Liquid Glass marketing twins' (components/theme/
+  // appearance-flag.ts, plans/REVISION-DEFAULT.md R8). /ingest (PostHog) is
+  // never rewritten: a route handler that copies no cookie proxies it (see
+  // the skipTrailingSlashRedirect note above; src/test/ingest-proxy.guard.
+  // test.ts fails on an /ingest rewrite).
+  //
+  // Each of the 7 marketing paths (/, /contact, /pricing, /privacy, /security,
+  // /support, /terms) is served from its twin under app/(site-glass)/
+  // glass-site when the rollout and the sp_style cookie select glass:
+  //   default  unless sp_style=classic (no cookie, a crawler included: glass);
+  //   opt-in   only with sp_style=liquid-glass;
+  //   off      no rewrite at all (MARKETING_TWINS_BUILT is true there).
+  // beforeFiles, so the rewrite resolves before the filesystem and the cache:
+  // both variants stay static, each cached under its own destination. The
+  // rollout is read when this file is evaluated, at build time.
+  async rewrites() {
+    return { beforeFiles: marketingRewrites(liquidGlassRollout()), afterFiles: [], fallback: [] };
+  },
+
+  // Liquid Glass (components/theme/appearance-flag.ts): a direct
+  // /glass-site/* URL redirects to its public path in every rollout, so a
+  // twin URL is never indexed and never forces glass. Redirects run before
+  // rewrites and only on the address asked for, so the rewrites above still
+  // reach the twins. No other redirect exists.
+  async redirects() {
+    return glassSiteRedirects();
+  },
 
   async headers() {
     // CSP — see SECURITY.md for the full rationale. Notable choices:

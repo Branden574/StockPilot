@@ -1,6 +1,8 @@
 import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
+
 /**
  * The Books page's server chain before rows: the two module checks run
  * together, the books gate still answers before any book is read, and the
@@ -1092,5 +1094,30 @@ describe('Books page: Cycle count in the bulk bar only for someone who can start
     );
     render(await callPage());
     expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+});
+
+/**
+ * CLASSIC PARITY (Liquid Glass stage 3, items lane; IMPLEMENTATION-PLAN.md
+ * 4.6 and 4.7 item 3). The page's own markup (its frame, header and notices;
+ * the table is mocked here and has its own parity file in
+ * components/inventory/items.classic-parity.test.tsx), every inert hook
+ * stripped, must stay the file written before the stage 3 hooks went in.
+ */
+describe('Books page: classic parity of its own markup', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("the off rollout renders no glass-only element and today's markup", async () => {
+    const { container } = render(await callPage());
+    expect(glassOnlyElements(container)).toEqual([]);
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
+  });
+
+  it("the default rollout's markup, inert hooks stripped, is the same", async () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const { container } = render(await callPage());
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
   });
 });

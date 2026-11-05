@@ -1,0 +1,368 @@
+import type { Metadata } from 'next';
+
+import type { LegalDocument } from './parts';
+
+import { PRIVACY_EMAIL } from '@/lib/site';
+
+/**
+ * The privacy policy's words and metadata, shared by the classic /privacy page
+ * and its glass twin (see ./parts.ts). Plain-language privacy policy. Required
+ * for App Store submission (Apple needs a live privacy-policy URL on the
+ * listing) and for Google Play. This page is intentionally written for end
+ * users; if any of the sections grow legally complex they should be reviewed by
+ * counsel before public launch.
+ */
+export const PRIVACY_METADATA: Metadata = {
+  // The root layout's title template adds " · StockPilot" (CONFLICTS D15).
+  title: 'Privacy Policy',
+  description:
+    'How StockPilot collects, stores, and protects the data you and your organization put into the app.',
+};
+
+export const PRIVACY: LegalDocument = {
+  heading: 'Privacy Policy',
+  dateLabel: 'Effective',
+  date: 'June 9, 2026',
+  sections: [
+    {
+      title: 'Summary',
+      // prettier-ignore
+      body: () => (
+        <>
+          StockPilot is an inventory-management application used by organizations to
+          track items, locations, purchase orders, and related operations. We
+          collect only what is necessary to run the service. We do not sell your
+          data. We do not show third-party advertising. You can delete your
+          account at any time from inside the app or the web dashboard.
+        </>
+      ),
+    },
+    {
+      title: 'What we collect',
+      // prettier-ignore
+      body: ({ List }) => (
+        <>
+          <List>
+            <li>
+              <strong>Account information:</strong> email, full name, and an
+              optional profile photo you upload yourself.
+            </li>
+            <li>
+              <strong>Organization data:</strong> inventory items, categories,
+              locations, suppliers, purchase orders, cycle counts, and related
+              records your organization creates while using the app.
+            </li>
+            <li>
+              <strong>Device information:</strong> when you sign in on a mobile
+              device, we record a push-notification token (so we can deliver app
+              notifications), the device model, and the operating-system version.
+              Push tokens are stored only while the device is registered; they
+              are removed when you sign out or when the OS rotates the token.
+            </li>
+            <li>
+              <strong>Authentication metadata:</strong> session timestamps and
+              sign-in IP address (used only for security review of suspicious
+              access).
+            </li>
+            <li>
+              <strong>Audit log entries:</strong> a record of significant actions
+              you perform (creating a PO, deleting an item, etc.) so your
+              organization can review history.
+            </li>
+          </List>
+        </>
+      ),
+    },
+    {
+      title: 'What we do not collect',
+      // prettier-ignore
+      body: ({ List }) => (
+        <>
+          <List>
+            <li>We do not collect contacts, photos outside the ones you attach to inventory items, microphone audio, or precise location.</li>
+            <li>We do not run third-party advertising or analytics SDKs inside the mobile app.</li>
+            <li>We do not sell or rent your personal information to anyone.</li>
+          </List>
+        </>
+      ),
+    },
+    {
+      title: 'How we use the data',
+      // prettier-ignore
+      body: ({ List }) => (
+        <>
+          <List>
+            <li>To operate the service — show your inventory, deliver push notifications you subscribed to, sync changes between web and mobile.</li>
+            <li>To enforce access controls (only your organization can see your organization’s data).</li>
+            <li>To investigate security incidents and abuse.</li>
+            <li>To improve the service through aggregated, non-identifying usage signals (e.g., which features are used most).</li>
+          </List>
+        </>
+      ),
+    },
+    {
+      title: 'Where the data lives',
+      // prettier-ignore
+      body: () => (
+        <>
+          <p>
+            StockPilot stores data with our hosting providers Supabase
+            (PostgreSQL database, storage buckets, authentication) and Vercel
+            (web hosting). Both providers maintain SOC 2 Type II certified
+            infrastructure. Data is encrypted in transit (TLS) and at rest.
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Push notifications',
+      // prettier-ignore
+      body: () => (
+        <>
+          <p>
+            Push tokens are forwarded to Apple’s APNs service (iOS) and Google’s
+            FCM service (Android) only to deliver notifications you have opted
+            into. Notification payloads contain only the minimum needed to render
+            the alert (subject, short body, deep-link path).
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Your rights',
+      // prettier-ignore
+      body: ({ List }) => (
+        <>
+          <List>
+            <li>
+              <strong>Access:</strong> you can see every item, PO, and audit row
+              attached to your organization from inside the dashboard.
+            </li>
+            <li>
+              <strong>Export:</strong> CSV export is available from the inventory
+              and reports surfaces.
+            </li>
+            <li>
+              <strong>Deletion:</strong> you can permanently delete your account
+              from inside the mobile app (Settings → Delete my account) or the
+              web app (Settings → Account). Deletion removes your profile, your
+              push tokens, and your access. Records you authored that are still
+              needed by your organization (audit history, PO authorship, etc.)
+              are tombstoned with a deleted-user marker rather than erased, so
+              your organization can audit the history.
+            </li>
+            <li>
+              <strong>Correction:</strong> profile fields can be edited at any
+              time from Settings → Profile.
+            </li>
+          </List>
+        </>
+      ),
+    },
+    {
+      title: 'Your California privacy rights (CCPA/CPRA)',
+      short: 'California (CCPA/CPRA)',
+      id: 'california',
+      // prettier-ignore
+      body: ({ List, Sub, Statement, Follow, Link }) => (
+        <>
+            <p>
+              If you are a California resident, the California Consumer Privacy Act
+              (CCPA), as amended by the California Privacy Rights Act (CPRA), gives
+              you the rights described below over the personal information we
+              process about you as an individual user.
+            </p>
+            <Statement>
+              We do not sell or share your personal information.
+            </Statement>
+            <Follow>
+              We have never sold personal information, and we do not “share” it for
+              cross-context behavioral advertising, as those terms are defined under
+              the CCPA/CPRA. Because we do neither, there is no “Do Not Sell or
+              Share My Personal Information” action you need to take — it is our
+              default.
+            </Follow>
+
+            <Sub>Categories we collect</Sub>
+            <List>
+              <li>
+                <strong>Identifiers</strong> — name, email, account ID, and sign-in
+                IP address.
+              </li>
+              <li>
+                <strong>Commercial / operational records</strong> — the inventory,
+                order, and purchasing data your organization creates.
+              </li>
+              <li>
+                <strong>Internet or network activity</strong> — session timestamps
+                and basic device / OS information.
+              </li>
+              <li>
+                <strong>Geolocation</strong> — only coarse location inferred from IP
+                for security review. We do not collect precise GPS location unless
+                you are an assigned driver who turns on live delivery sharing.
+              </li>
+            </List>
+            <Follow>
+              We collect these directly from you and from your use of the app, and
+              disclose them only to the service providers that host and run the app
+              (e.g., Supabase and Vercel) under contracts that prohibit using the
+              data for their own purposes. We do not disclose personal information
+              for money or for advertising.
+            </Follow>
+
+            <Sub>Your rights</Sub>
+            <List>
+              <li><strong>Right to know / access</strong> the personal information we hold about you and how we use it.</li>
+              <li><strong>Right to delete</strong> your personal information, subject to legal exceptions.</li>
+              <li><strong>Right to correct</strong> inaccurate personal information.</li>
+              <li><strong>Right to opt out</strong> of the sale or sharing of personal information — already our default, since we do neither.</li>
+              <li><strong>Right to limit</strong> the use of sensitive personal information — we do not use sensitive personal information for any purpose beyond running the service.</li>
+              <li><strong>Right to non-discrimination</strong> — we will never deny service, charge a different price, or lower service quality because you exercised a privacy right.</li>
+            </List>
+
+            <Sub>How to exercise your rights</Sub>
+            <p>
+              Email{' '}
+              <Link href={`mailto:${PRIVACY_EMAIL}`}>
+                {PRIVACY_EMAIL}
+              </Link>{' '}
+              from the address on your account, or use the in-app controls (Settings
+              → Account to delete; Settings → Profile to correct). We verify each
+              request against your account and respond within 45 days (extendable
+              once by another 45 days where permitted). You may use an authorized
+              agent; we may ask the agent for proof of authorization. Exercising
+              these rights is always free.
+            </p>
+
+            <Sub>Shine the Light</Sub>
+            <p>
+              California Civil Code § 1798.83 lets California residents request
+              information about disclosures of personal information to third parties
+              for their direct-marketing purposes. We do not disclose personal
+              information to third parties for their direct marketing, so there is
+              nothing to report.
+            </p>
+        </>
+      ),
+    },
+    {
+      title: 'Other U.S. state privacy rights',
+      short: 'Other U.S. states',
+      // prettier-ignore
+      body: ({ Link }) => (
+        <>
+          <p>
+            Residents of other U.S. states with comprehensive privacy laws —
+            including Virginia, Colorado, Connecticut, Utah, Texas, Oregon, and
+            others — have similar rights to access, correct, delete, and obtain a
+            copy of their personal information, and to opt out of targeted
+            advertising, sale, or certain profiling. We do not engage in targeted
+            advertising, sell personal information, or conduct profiling that
+            produces legal or similarly significant effects. To exercise any of
+            these rights, email{' '}
+            <Link href={`mailto:${PRIVACY_EMAIL}`}>
+              {PRIVACY_EMAIL}
+            </Link>
+            .
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Schools & student data (FERPA / COPPA)',
+      short: 'Schools & student data',
+      // prettier-ignore
+      body: ({ List, Link }) => (
+        <>
+          <p>
+            StockPilot is an inventory- and operations-management tool. It is{' '}
+            <strong>not</strong> a student information system and is not designed to
+            collect, store, or process student education records. When a school,
+            district, or education organization uses StockPilot, the data involved is
+            operational — inventory items, locations, suppliers, purchase orders, and
+            the staff accounts that manage them.
+          </p>
+          <List>
+            <li>
+              We do <strong>not</strong> request or require student names, student IDs,
+              grades, or any other student personally identifiable information, and the
+              product has no feature that asks for it.
+            </li>
+            <li>
+              Because we do not handle student education records, StockPilot does not act
+              as a “school official” with access to education records under{' '}
+              <strong>FERPA</strong>, and is not directed to children under 13 under{' '}
+              <strong>COPPA</strong>.
+            </li>
+            <li>
+              Education customers that require a Data Processing Addendum or a
+              student-data-privacy agreement for their procurement process can request one
+              at{' '}
+              <Link href={`mailto:${PRIVACY_EMAIL}`}>
+                {PRIVACY_EMAIL}
+              </Link>
+              .
+            </li>
+          </List>
+        </>
+      ),
+    },
+    {
+      title: 'Analytics',
+      // prettier-ignore
+      body: () => (
+        <>
+          <p>
+            We use first-party, privacy-respecting product analytics to understand how the
+            web app is used (which features are used, where people get stuck) so we can
+            improve it. This is aggregate, usage-level data tied to an account — never sold,
+            never shared with advertisers, and not used for cross-site tracking. We do not
+            embed third-party advertising or analytics SDKs in the mobile app.
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Children',
+      // prettier-ignore
+      body: () => (
+        <>
+          <p>
+            StockPilot is a business-operations tool and is not directed at
+            children under 13. We do not knowingly collect data from anyone
+            under 13.
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Changes to this policy',
+      // prettier-ignore
+      body: () => (
+        <>
+          <p>
+            We may update this policy as the product evolves. Material changes
+            will be announced in-app and via email to organization owners at
+            least 14 days before they take effect.
+          </p>
+        </>
+      ),
+    },
+    {
+      title: 'Contact',
+      // prettier-ignore
+      body: ({ Link }) => (
+        <>
+          <p>
+            Questions about this policy? Email{' '}
+            <Link href={`mailto:${PRIVACY_EMAIL}`}>
+              {PRIVACY_EMAIL}
+            </Link>
+            .
+          </p>
+        </>
+      ),
+    },
+  ],
+};
