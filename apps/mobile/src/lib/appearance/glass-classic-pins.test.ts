@@ -28,6 +28,8 @@ const MOBILE_ROOT = path.resolve(__dirname, '../../..');
 
 /** File (from apps/mobile) -> classic-projection SHA-256 of that file at b64bd37cc. */
 export const CLASSIC_PINS: Readonly<Record<string, string>> = {
+  'app/(drawer)/(tabs)/index.tsx':
+    'c7144f5a0865d66f458dd685ecea28ac618b126f43cd2828a53e0e999e710f51',
   'src/components/ui/button.tsx':
     'd1936a64984533be2a5de3a9349c3c9e6f6f3ea2957dc35c13feb0afff95552a',
   'src/components/ui/card.tsx': 'f7bf1fb3df499eb495654304861a7369dba3ad1e2a9d5420b7a8028debd0f482',

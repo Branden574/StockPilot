@@ -268,8 +268,10 @@ describe('the one-time "new look" card on Home (R13, item 39)', () => {
       "import { AppearanceIntroNotice } from '@/components/appearance-intro-notice';",
     );
     expect(home).toContain('refreshControl={ <RefreshControl');
+    // Both Designs keep the tab bar's room under the content (Liquid Glass
+    // adds the board's section spacing to the same container).
     const scroll = home.indexOf(
-      '<ScrollView contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}',
+      '<ScrollView contentContainerStyle={ lg ? [GLASS_HOME.scroll, { paddingBottom: tabBarHeight + 24 }] : { paddingBottom: tabBarHeight + 24 } }',
     );
     const card = home.indexOf('<AppearanceIntroNotice />');
     const firstContent = home.indexOf('{loading && !noWorkspace ? (');
