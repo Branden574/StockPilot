@@ -30,19 +30,28 @@ import {
  *     chosen design, within 180 s (the marketing links to /signin are
  *     whole-document loads, so history is the client way back to /);
  *  2. the reverse direction;
- *  3. back/forward cache: / then the whole-document Sign in link, choose on
- *     /signin, Back: the restored page is refreshed to the chosen design;
+ *  3. Back after a whole-document link: / then SiteNav's Sign in (a
+ *     whole-document link), choose Classic on /signin, Back. Playwright starts
+ *     Chromium with --disable-back-forward-cache, so here Back reads the
+ *     document again, from the HTTP cache: the twin's HTML under the classic
+ *     cookie (a history load reuses the cached response, which does not vary
+ *     on the cookie). The twin layout's first-paint check
+ *     (components/theme/twin-first-paint.ts) hides it before it paints and
+ *     the guard refreshes it to the classic page. A browser that keeps the
+ *     page in its back/forward cache restores it frozen instead; that restore
+ *     (pageshow persisted) is the unit half's;
  *  4. offline: the refresh cannot land, so within 2 s the page is shown as it
  *     is, its attribute following the twin on screen (coherent), and the
  *     choice applies at the next navigation.
  * Each frame painted while <html> is visible on a marketing path is sampled
  * (requestAnimationFrame): a frame showing the twin the cookie does not select
  * is "wrong", and one whose glass attribute disagrees with the twin on screen
- * is "incoherent". Cases 1 and 2 allow neither; 3 and 4 allow no incoherent
- * frame (a restored or offline page shows its own design until it can change).
+ * is "incoherent". Cases 1, 2 and 3 allow neither; 4 allows no incoherent
+ * frame (an offline page shows its own design until it can change).
  *
  * Needs a running server: the integrator's lab run. Unit half:
- * components/theme/appearance-provider.test.tsx (the guard's states).
+ * components/theme/appearance-provider.test.tsx (the guard's states, the
+ * back/forward cache restore) and components/theme/twin-first-paint.test.tsx.
  */
 
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -104,7 +113,7 @@ for (const from of ['liquid-glass', 'classic'] as const) {
   });
 }
 
-test('back/forward cache: Back to a frozen landing after choosing on /signin refreshes it to the chosen design', async ({
+test('Back to a landing left by a whole-document link, after Classic was chosen on /signin: no frame of the twin, then the classic page', async ({
   page,
   baseURL,
 }) => {
@@ -122,7 +131,9 @@ test('back/forward cache: Back to a frozen landing after choosing on /signin ref
   await page.waitForURL((url) => url.pathname === '/');
   await waitForTwin(page, 'classic');
   expect((await shownLook(page)).design).toBe('classic');
-  expect((await flaggedFrames(page)).incoherent).toEqual([]);
+  const frames = await flaggedFrames(page);
+  expect(frames.wrongTwin, 'a frame of the glass twin under Classic').toEqual([]);
+  expect(frames.incoherent, 'the twin on the classic CSS').toEqual([]);
 });
 
 test('offline: when the refresh cannot land, the page is shown within 2 s as it is, attribute and twin agreeing', async ({

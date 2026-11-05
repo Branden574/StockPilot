@@ -58,6 +58,7 @@ import {
   LOW_POWER_ATTRIBUTE_VALUE,
   type LowPowerNavigator,
 } from './appearance-script';
+import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-paint';
 
 /**
  * The appearance layer next to next-themes (Liquid Glass plan 1-3, as revised
@@ -673,7 +674,11 @@ export const VARIANT_GUARD_TIMEOUT_MS = 2000;
  *     follows the twin on screen;
  *   - a page restored from the back/forward cache (Back to a marketing page
  *     left by a whole-document link) runs the check again: the cookie may
- *     have changed while the page was frozen.
+ *     have changed while the page was frozen;
+ *   - a twin document read again from the HTTP cache under a cookie that no
+ *     longer selects it was hidden before its first paint by the twin layout's
+ *     script (twin-first-paint.ts); the guard removes that hide once it has
+ *     decided, as it removes its own.
  * Rendered by the provider only once the twins exist (MARKETING_TWINS_BUILT).
  */
 export function MarketingVariantGuard({
@@ -704,6 +709,7 @@ export function MarketingVariantGuard({
     if (!hydrated) return;
     if (!(MARKETING_PATHS as readonly string[]).includes(pathname)) {
       setOverride(null);
+      removeEarlyHide();
       return;
     }
     const twinOnScreen = () => document.querySelector(`[${TWIN_MARKER}]`) !== null;
@@ -718,10 +724,13 @@ export function MarketingVariantGuard({
       setOverride(null);
       return true;
     };
-    if (settled()) return;
+    if (settled()) {
+      removeEarlyHide();
+      return;
+    }
 
     const hide = document.createElement('style');
-    hide.setAttribute('data-lg-variant-guard', '');
+    hide.setAttribute(VARIANT_GUARD_STYLE_ATTRIBUTE, '');
     hide.appendChild(document.createTextNode('html{visibility:hidden!important}'));
     document.head.appendChild(hide);
     let done = false;
@@ -738,6 +747,7 @@ export function MarketingVariantGuard({
       observer.disconnect();
       window.clearTimeout(timer);
       hide.remove();
+      removeEarlyHide();
     }
     observer.observe(document.body, { childList: true, subtree: true, attributes: true });
     router.refresh();
