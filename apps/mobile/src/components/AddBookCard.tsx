@@ -12,6 +12,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Chip } from '@/components/ui/chip';
 import { Field } from '@/components/ui/field';
+import { GlassBackdrop } from '@/components/ui/glass/glass-backdrop';
+import { withGlass } from '@/components/ui/glass/merge-styles';
+import { glassFieldLabel } from '@/components/ui/glass/primitive-styles';
+import { ADD_CARD_RADIUS, glassAddCardStyles } from '@/components/ui/glass/screens/add-cards';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Mono } from '@/components/ui/text';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
@@ -78,7 +83,11 @@ interface Props {
  */
 export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
   const { mode, c } = useTheme();
-  const styles = CARD_STYLES[mode];
+  // Liquid Glass (iOS-Scan.dc.html unknown-barcode sheet): the glass sheet's
+  // frame, grabber and heading type laid over Classic's style keys, around
+  // the same form.
+  const lg = useGlass();
+  const styles = lg ? withGlass(CARD_STYLES[mode], glassAddCardStyles(lg)) : CARD_STYLES[mode];
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
   const isExisting = Boolean(result.existingItem);
   const meta = result.metadata ?? {};
@@ -104,6 +113,8 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
   if (isExisting) {
     return (
       <View style={styles.card}>
+        {lg ? <GlassBackdrop variant="overlay" radius={ADD_CARD_RADIUS} /> : null}
+        {lg ? <View style={glassAddCardStyles(lg).grabber} /> : null}
         <Text style={styles.title}>Already in inventory</Text>
         <Text style={styles.body}>
           {result.existingItem!.name} — currently {result.existingItem!.quantityOnHand} on hand.
@@ -159,6 +170,8 @@ export function AddBookCard({ user, result, onCancel, onCreated }: Props) {
 
   return (
     <View style={styles.card}>
+      {lg ? <GlassBackdrop variant="overlay" radius={ADD_CARD_RADIUS} /> : null}
+      {lg ? <View style={glassAddCardStyles(lg).grabber} /> : null}
       <View style={styles.headerRow}>
         {meta.coverUrl ? (
           <Image source={{ uri: meta.coverUrl }} style={styles.cover} />
@@ -267,10 +280,18 @@ function FieldBlock({
   color: string;
   children: React.ReactNode;
 }) {
+  const lg = useGlass();
   return (
     <View style={FIELD_BLOCK}>
       {/* The shared Field's label, so every label on the card reads alike. */}
-      <Mono size={10} tracking={0.12} upper color={color}>
+      <Mono
+        size={10}
+        tracking={0.12}
+        upper
+        color={color}
+        // Liquid Glass: the glass Field's label (13/18 600), as above.
+        style={lg ? glassFieldLabel(lg) : undefined}
+      >
         {label}
       </Mono>
       {children}

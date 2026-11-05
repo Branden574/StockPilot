@@ -42,6 +42,15 @@ import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
+import { GlassBackdrop } from '@/components/ui/glass/glass-backdrop';
+import { withGlass } from '@/components/ui/glass/merge-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import {
+  GLASS_RETICLE,
+  glassReticleCorner,
+  glassScanStyles,
+} from '@/components/ui/glass/screens/scan';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -186,7 +195,14 @@ export default function Scan() {
   // The cards and sheets follow the device's mode; the camera chrome is dark
   // in both (CAMERA, below). `colors` is the mode's palette, for icons.
   const { mode: themeMode, c: colors } = useTheme();
-  const styles = SCAN_STYLES[themeMode];
+  // Liquid Glass (iOS-Scan.dc.html): the camera chrome as the board's dark
+  // glass over the camera, the result and add sheets as glass sheets, every
+  // element in its place with Classic's style keys (the glass values laid
+  // over them); every control, figure and message Classic shows stays.
+  const lg = useGlass();
+  const styles = lg
+    ? withGlass(SCAN_STYLES[themeMode], glassScanStyles(lg))
+    : SCAN_STYLES[themeMode];
   // The light status bar goes with the dark camera bar, and only while this
   // tab is the one on screen (tabs stay mounted behind each other) with
   // nothing over the bar. The drawer and the packing-slip signature pad cover
@@ -909,6 +925,7 @@ export default function Scan() {
   if (!permission.granted) {
     return (
       <SafeAreaView style={styles.page} edges={['top']}>
+        {lg ? <SceneBackground /> : null}
         <View style={styles.permission}>
           <Text style={styles.permTitle}>Camera access needed</Text>
           <Text style={styles.permBody}>
@@ -1112,7 +1129,7 @@ export default function Scan() {
               <ScanReticle />
               <View style={styles.caption}>
                 <Text style={styles.reticleLabel} maxFontSizeMultiplier={EYEBROW_CAP}>
-                  — ALIGN BARCODE
+                  {lg ? 'ALIGN BARCODE' : '— ALIGN BARCODE'}
                 </Text>
                 {scanning && !item ? (
                   <Text style={styles.hint}>Point at a barcode or QR code</Text>
@@ -1121,6 +1138,7 @@ export default function Scan() {
             </View>
           ) : !cardUp ? (
             <View style={styles.coverCta} pointerEvents="auto">
+              {lg ? <GlassBackdrop variant="overlay" radius={GLASS_SHEET_RADIUS} /> : null}
               <Text style={styles.coverHint}>
                 Snap a clear photo of the front cover. Vision will read the
                 title and author.
@@ -1139,6 +1157,8 @@ export default function Scan() {
 
         {item && (
           <View style={styles.sheet}>
+            {lg ? <GlassBackdrop variant="overlay" radius={GLASS_SHEET_RADIUS} /> : null}
+            {lg ? <View style={glassScanStyles(lg).grabber} /> : null}
             <ScrollView contentContainerStyle={styles.sheetContent}>
               <View style={styles.headerRow}>
                 {item.image_url ? (
@@ -1358,6 +1378,8 @@ export default function Scan() {
 
         {placementChoices && (
           <View style={styles.sheet}>
+            {lg ? <GlassBackdrop variant="overlay" radius={GLASS_SHEET_RADIUS} /> : null}
+            {lg ? <View style={glassScanStyles(lg).grabber} /> : null}
             <ScrollView contentContainerStyle={styles.sheetContent}>
               <Text style={styles.pickerTitle}>Multiple placements found</Text>
               <Text style={styles.pickerSubtitle}>{scanPickerSubtitle(placementChoices)}</Text>
@@ -1445,6 +1467,7 @@ function useReduceMotion(): boolean | null {
  */
 function ScanReticle() {
   const styles = useScanStyles();
+  const lg = useGlass();
   const reduceMotion = useReduceMotion();
   // 0 = top, 1 = bottom — interpolated to translateY across the reticle's
   // interior so the line never crosses the corner brackets.
@@ -1476,15 +1499,25 @@ function ScanReticle() {
   }, [t, reduceMotion]);
   const translateY = t.interpolate({
     inputRange: [0, 1],
-    outputRange: [SCAN_LINE_TOP, SCAN_LINE_BOTTOM],
+    // Liquid Glass: the board's 150pt-tall finder, the same 10 / 12 insets.
+    outputRange: lg
+      ? [SCAN_LINE_TOP, GLASS_RETICLE.height - 12]
+      : [SCAN_LINE_TOP, SCAN_LINE_BOTTOM],
   });
+  // Liquid Glass: the board's finder (white corners, the mint beam).
   return (
-    <View style={styles.reticle}>
-      <View style={[styles.corner, styles.cornerTL]} />
-      <View style={[styles.corner, styles.cornerTR]} />
-      <View style={[styles.corner, styles.cornerBL]} />
-      <View style={[styles.corner, styles.cornerBR]} />
-      <Animated.View style={[styles.scanLine, { transform: [{ translateY }] }]} />
+    <View style={[styles.reticle, lg && glassScanStyles(lg).reticle]}>
+      <View style={[styles.corner, styles.cornerTL, lg && glassReticleCorner(lg, 'TL')]} />
+      <View style={[styles.corner, styles.cornerTR, lg && glassReticleCorner(lg, 'TR')]} />
+      <View style={[styles.corner, styles.cornerBL, lg && glassReticleCorner(lg, 'BL')]} />
+      <View style={[styles.corner, styles.cornerBR, lg && glassReticleCorner(lg, 'BR')]} />
+      <Animated.View
+        style={[
+          styles.scanLine,
+          lg && glassScanStyles(lg).scanLine,
+          { transform: [{ translateY }] },
+        ]}
+      />
     </View>
   );
 }
@@ -1497,16 +1530,18 @@ function ScanReticle() {
  */
 function LocRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   const styles = useScanStyles();
+  const lg = useGlass();
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
   return (
     <View style={[styles.locRow, stacked && styles.locRowStacked]}>
-      <Text style={styles.locLabel}>{label}</Text>
+      <Text style={[styles.locLabel, lg && glassScanStyles(lg).locLabel]}>{label}</Text>
       {/* locValueFit: a value longer than the row ("+12 in other warehouses",
           a long rack name, or any value at a large text size) wraps inside
           the row instead of running past the sheet's edge. */}
       <Text
         style={[
           styles.locValue,
+          lg && glassScanStyles(lg).locValue,
           styles.locValueFit,
           stacked && styles.locValueStacked,
           mono && styles.locValueMono,
@@ -1529,6 +1564,7 @@ function ActionBtn({
   disabled?: boolean;
 }) {
   const styles = useScanStyles();
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -1537,11 +1573,15 @@ function ActionBtn({
       accessibilityState={{ disabled: Boolean(disabled) }}
       style={({ pressed }) => [
         styles.actionBtn,
+        lg && glassScanStyles(lg).actionBtn,
         pressed && styles.pressed,
         disabled && styles.disabled,
       ]}
     >
-      <Text style={styles.actionLabel} maxFontSizeMultiplier={STEP_CAP}>
+      <Text
+        style={[styles.actionLabel, lg && glassScanStyles(lg).actionLabel]}
+        maxFontSizeMultiplier={STEP_CAP}
+      >
         {label}
       </Text>
     </Pressable>
@@ -1550,9 +1590,11 @@ function ActionBtn({
 
 function CenterMessage({ children }: { children: React.ReactNode }) {
   const styles = useScanStyles();
+  const lg = useGlass();
   return (
-    <View style={[styles.page, styles.center]}>
-      <Text style={styles.centerText}>{children}</Text>
+    <View style={[styles.page, styles.center, lg && glassScanStyles(lg).page]}>
+      {lg ? <SceneBackground /> : null}
+      <Text style={[styles.centerText, lg && glassScanStyles(lg).centerText]}>{children}</Text>
     </View>
   );
 }
@@ -1601,6 +1643,9 @@ const SCAN_LINE_BOTTOM = RETICLE_HEIGHT - 12;
 
 /** The bottom tab bar is drawn over this screen; sheets end above it. */
 const TAB_BAR_CLEARANCE = 90;
+
+/** Liquid Glass: the sheets' corner (.ios-sheet [740], radius 36). */
+const GLASS_SHEET_RADIUS = 36;
 
 /** A mode segment is 36pt; this takes its target to the track's 44pt edge. */
 const SEGMENT_SLOP = { top: 4, bottom: 4 } as const;

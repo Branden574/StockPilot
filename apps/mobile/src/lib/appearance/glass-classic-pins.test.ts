@@ -32,6 +32,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     'c7144f5a0865d66f458dd685ecea28ac618b126f43cd2828a53e0e999e710f51',
   'app/(drawer)/(tabs)/inventory.tsx':
     '42d3d7a1d8a26a6355eb062ae63537bd64e44208d7facb712190217ccd319750',
+  'app/(drawer)/(tabs)/scan.tsx':
+    '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
+  'src/components/AddBookCard.tsx':
+    '9264f450228d533b6b939f22fc0115baed0ba832cbf2d981fbb80965acd8e372',
+  'src/components/AddItemCard.tsx':
+    '302328f53fa9f62117bf2c1d103336872622802ed06d13aa5e9a19b8fb8ba22f',
   'src/components/ui/button.tsx':
     'd1936a64984533be2a5de3a9349c3c9e6f6f3ea2957dc35c13feb0afff95552a',
   'src/components/ui/card.tsx': 'f7bf1fb3df499eb495654304861a7369dba3ad1e2a9d5420b7a8028debd0f482',
