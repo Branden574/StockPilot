@@ -224,6 +224,20 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['RETURNING eyebrow (ink 3) on the pane', '--lg-ink-3', ['--lg-pane'], 4.5],
   ['primary action (on accent) on the accent', '--lg-on-accent', [...CARD, '--lg-accent'], 4.5],
   ['secondary action (ink) on the button frost', '--lg-ink', [...CARD, '--lg-field-fill'], 4.5],
+  ['progress step (ink 3) on the rail', '--lg-ink-3', CARD, 4.5],
+  ['current step (ink) on the rail', '--lg-ink', CARD, 4.5],
+  [
+    'done step check (accent text) on its wash',
+    '--lg-accent-text',
+    [...CARD, '--lg-accent-wash'],
+    4.5,
+  ],
+  [
+    'current step number (on accent) on the accent',
+    '--lg-on-accent',
+    [...CARD, '--lg-accent'],
+    4.5,
+  ],
   // Focus ring (R11)
   ['focus ring on the pane', '--lg-focus', ['--lg-pane'], 3],
   ['focus ring on a card', '--lg-focus', CARD, 3],

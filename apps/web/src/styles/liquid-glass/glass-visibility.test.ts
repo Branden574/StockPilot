@@ -67,7 +67,8 @@ describe('glass-only and classic-only elements', () => {
   // requester note, Classic-only in the main column (the page) and a
   // glass-only copy in the side column (words only, plan 4.6).
   // Stage 4, operations lane: a cycle count's fifth figure and its wide
-  // progress bar (words and a bar from the summary the page loads).
+  // progress bar (words and a bar from the summary the page loads); a
+  // return's progress rail (words and marks from its status).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
@@ -80,6 +81,7 @@ describe('glass-only and classic-only elements', () => {
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',
       ...Array<string>(6).fill('components/orders/orders-export-menu.tsx'),
+      'components/returns/return-progress-rail.tsx',
     ]);
   });
 });

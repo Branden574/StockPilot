@@ -201,6 +201,16 @@
       "$comment": "Cycle-Count-Detail.dc.html's wide bar under the figures (.prog, role progressbar, \"Lines counted\"): counted out of the items in scope, the two figures the strip and the lines card head already print. Glass hides Classic's small aria-hidden bar under Counted in its place (pages/counts.css). Not rendered under off, nor for a count with no lines.",
       "classicTwin": null,
       "gate": null
+    },
+    {
+      "id": "return-progress-rail",
+      "source": "apps/web/src/components/returns/return-progress-rail.tsx",
+      "selector": "[data-glass=\"return-rail\"]",
+      "kind": "summary block (no action)",
+      "routes": ["/dashboard/returns/[id]"],
+      "$comment": "Return-Detail.dc.html's progress rail under the page head (.steps, \"Return progress\"): Requested, Approved, Received, Processed, the steps before the return's status done, its status current (aria-current=\"step\"). Words and marks from the return's own status, which the workbench already has (the status badge beside the title says the same). None for a denied or cancelled return. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
     }
   ]
 }
