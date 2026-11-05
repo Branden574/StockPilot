@@ -115,7 +115,9 @@ export const RELEASES: Release[] = [
     // show only when the order has a print or a signature to offer; "each of
     // these was refused" is "for most of them"; the other steps that move an
     // order on are named; a delivery's driver keeps the hand-over; the
-    // update words are the current ones.
+    // update words are the current ones; whyItMatters ends on "these
+    // controls", not "only what you can do on it"; and the audience leaves
+    // out viewers (below).
     // Left out: #487's Orders list and Returns list changes (a read started
     // before a permission change or a workspace switch no longer lands after
     // it): only seen while a permission or the workspace changes during a
@@ -123,9 +125,23 @@ export const RELEASES: Release[] = [
     // refusing what the app already refused is not visible to anyone using
     // the app, so it has no entry. A phone whose warehouse read fails offers
     // as before, and the server refuses.
-    // Who is told: whoever approves orders or picks (orders:approve or
-    // items:update) where Orders is on, the people the entry speaks of;
-    // owners, admins and managers are told that nothing changes for them.
+    // Not every control follows the warehouse, so whyItMatters says "these
+    // controls", not every one: Create return on a completed order asks no
+    // warehouse on the web (page.tsx:1105-1113; returnableLinesForOrder,
+    // server/services/returns.ts:729) or the phone (showCreateReturn
+    // :759-760), and create_return_request refuses it there
+    // (0394_returns_lifecycle_original_rack.sql:1293-1295).
+    // Who is told: owners, admins, managers and staff who approve orders or
+    // pick (orders:approve or items:update) where Orders is on, the people the
+    // entry speaks of; owners, admins and managers are told that nothing
+    // changes for them. Not a viewer, even one granted orders:approve or
+    // items:update: neither app offered a viewer Approve, Deny or the other
+    // steps, before #378 or after (panel :341, order-manager-actions.ts:124),
+    // and the warehouse write that Cancel, Hold and Claim picking now ask is
+    // never a viewer's on any order (page.tsx:310-311 approverWritesHere,
+    // lib/auth/warehouse.ts:222; order-warehouse-scope.ts:118), so the words
+    // would be wrong for them. The 2026-10-06 entry on the same subject
+    // (order-other-warehouse-words) limits its audience by role too.
     status: 'published',
     title:
       'Order actions show only on orders of the warehouses you work in, on the web and in the mobile app',
@@ -141,12 +157,16 @@ export const RELEASES: Release[] = [
         whatChanged:
           'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, Add items, changes to its items or the other steps that move it on, on the web or in the mobile app. On the web, its internal notes are hidden too, and its Manager actions card, when it shows, offers only Print pick slip, Print customer slip and View signature. In the mobile app, Change beside its needed-by date is hidden too, and Claim picking and Release show only on orders of your warehouses, as on the web, for everyone who picks.',
         whyItMatters:
-          "Before, these controls were offered on such an order and every tap was refused, for most of them with “This order is in a warehouse you don't work in, so you can't change it. Ask a manager.” Now an order offers you only what you can do on it.",
+          "Before, these controls were offered on such an order and every tap was refused, for most of them with “This order is in a warehouse you don't work in, so you can't change it. Ask a manager.” Now these controls show only on orders of the warehouses you work in.",
         howItAffectsYou:
           'Owners, admins and managers work in every warehouse, so nothing changes for them. A request you placed yourself can still be cancelled while it waits for approval, wherever it is, but its items can be changed only in a warehouse you work in. As the driver of a delivery, you can still hand it over, wherever it is. When an order of another warehouse needs a change, ask a manager.',
         whatToDo:
           'No action needed on the web. To load the latest update in the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
-        audience: { anyPermission: ['orders:approve', 'items:update'], modules: ['orders'] },
+        audience: {
+          roles: ['owner', 'admin', 'manager', 'staff'],
+          anyPermission: ['orders:approve', 'items:update'],
+          modules: ['orders'],
+        },
       },
     ],
   },

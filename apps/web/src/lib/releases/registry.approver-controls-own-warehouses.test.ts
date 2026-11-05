@@ -81,6 +81,18 @@ const defaultViewer: ReleaseViewer = {
   permissions: [...ROLE_PERMISSIONS.viewer],
   enabledModules: ORDERS,
 };
+/** A viewer granted orders:approve and items:update, where Orders is on:
+ *  never offered the steps, before or after, so the words do not fit them. */
+const viewerApprover: ReleaseViewer = {
+  role: 'viewer',
+  permissions: ['orders:approve'],
+  enabledModules: ORDERS,
+};
+const viewerPicker: ReleaseViewer = {
+  role: 'viewer',
+  permissions: ['items:update'],
+  enabledModules: ORDERS,
+};
 /** An approver where Orders is off. */
 const approverOrdersOff: ReleaseViewer = {
   role: 'staff',
@@ -203,16 +215,32 @@ describe('the S2 release: what it says', () => {
 });
 
 describe('the S2 release: who is told', () => {
-  it('reaches whoever approves orders or picks where Orders is on, and nobody else', () => {
+  it('reaches whoever approves orders or picks where Orders is on, above the viewer role, and nobody else', () => {
     expect(entry().audience).toEqual({
+      roles: ['owner', 'admin', 'manager', 'staff'],
       anyPermission: ['orders:approve', 'items:update'],
       modules: ['orders'],
     });
     for (const v of [everyone, staffApprover, staffPicker, defaultStaff]) {
       expect(told(v), v.role).toEqual([ENTRY_ID]);
     }
-    for (const v of [member, defaultViewer, approverOrdersOff]) {
-      expect(told(v), v.role).toBeUndefined();
+    for (const role of ['admin', 'manager'] as const) {
+      const v: ReleaseViewer = {
+        role,
+        permissions: [...ROLE_PERMISSIONS[role]],
+        enabledModules: ORDERS,
+      };
+      expect(told(v), role).toEqual([ENTRY_ID]);
+    }
+    const notTold: [string, ReleaseViewer][] = [
+      ['member', member],
+      ['defaultViewer', defaultViewer],
+      ['viewerApprover', viewerApprover],
+      ['viewerPicker', viewerPicker],
+      ['approverOrdersOff', approverOrdersOff],
+    ];
+    for (const [name, v] of notTold) {
+      expect(told(v), name).toBeUndefined();
     }
     // Staff pick by default (the phone's pick gate is a manager or
     // items:update), so every staff member where Orders is on is told.
@@ -274,6 +302,12 @@ describe('the S2 release: the code its words rest on', () => {
     expect(source('app/api/v1/orders/[id]/transition/route.ts')).toContain(
       "return NextResponse.json({ error: 'forbidden', message: e.message }, { status: 403 });",
     );
+    // Not "only what you can do on it": Create return on a completed order
+    // asks no warehouse in either app, and the database refuses it there.
+    expect(entry().whyItMatters).toMatch(
+      /Now these controls show only on orders of the warehouses you work in\.$/,
+    );
+    expect(entry().whyItMatters).not.toContain('only what you can do');
     // "for most of them": the warehouse slip refuses in its own words.
     expect(entry().whyItMatters).toContain('for most of them with');
     expect(source('app/api/orders/[id]/packing-slip-warehouse.pdf/route.tsx')).toContain(
