@@ -244,6 +244,27 @@ const PAIRS: Array<[string, string, string[], number]> = [
     [...CARD, '--lg-accent'],
     4.5,
   ],
+  // The procedures list (pages/ops.css): the video count on the panel's dark
+  // chip, at its weakest over a white poster frame.
+  [
+    'procedure video count (white) on its chip over a white poster',
+    '#FFFFFF',
+    [...CARD, '#FFFFFF', 'rgba(0, 0, 0, 0.68)'],
+    4.5,
+  ],
+  ['procedure meta (ink 3) on the card', '--lg-ink-3', CARD, 4.5],
+  // The tags list rows (pages/ops.css): the count and the hovered name on a
+  // hovered row.
+  ['tag count (ink 3) on a hovered row', '--lg-ink-3', [...CARD, '--lg-card-hover'], 4.5],
+  [
+    'hovered tag name (accent text) on a hovered row',
+    '--lg-accent-text',
+    [...CARD, '--lg-card-hover'],
+    4.5,
+  ],
+  // The exceptions list rows (pages/ops.css): the detail in ink 2 on a row
+  // Classic tints on hover (bg-muted, surface 3 in glass).
+  ['exception detail (ink 2) on a hovered row', '--lg-ink-2', [...CARD, '--lg-surface-3'], 4.5],
   // Focus ring (R11)
   ['focus ring on the pane', '--lg-focus', ['--lg-pane'], 3],
   ['focus ring on a card', '--lg-focus', CARD, 3],

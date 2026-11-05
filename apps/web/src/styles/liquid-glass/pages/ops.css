@@ -484,6 +484,172 @@
       font-weight: 600;
     }
 
+    /* ── The procedures list (Routes-Gallery-2.dc.html panel
+       "/dashboard/procedures"): each procedure is the panel's card (.card
+       col with its own radius 14 and no drop shadow: the card fill and line,
+       never Classic's opaque page fill), 10 px apart, the media an 86 px band
+       (.proc-thumb: the accent wash into surface 3 where there is no video
+       poster), the title sm strong (13/18, 600) and the meta lines xs muted
+       (12/16, ink 3). The video count sits where the panel puts the length,
+       on its dark chip at the band's foot (.proc-thumb .xs: radius 6, white
+       600 on black 68%). The card's border strengthens on hover, as in
+       Classic (the board draws no hover). Kept from Classic: the grid's
+       column rule, the category pill, the title's second line and the
+       comments line (the panel draws none of them). ─────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-grid'] {
+      gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card'] {
+      border-color: var(--lg-card-line);
+      border-radius: 14px;
+      background-color: var(--lg-card-fill);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']:hover {
+      border-color: var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card-media'] {
+      height: 86px;
+      aspect-ratio: auto;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card-media']
+      > [data-slot='procedure-fallback-band'] {
+      background: linear-gradient(135deg, var(--lg-accent-wash), var(--lg-surface-3));
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card-media']
+      > span:not([data-slot]) {
+      top: auto;
+      right: 8px;
+      bottom: 6px;
+      padding: 1px 6px;
+      border-color: transparent;
+      border-radius: 6px;
+      background-color: rgba(0, 0, 0, 0.68);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']
+      h3 {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']
+      h3
+      ~ p {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+
+    /* ── The tags list (Routes-Gallery-1.dc.html, the categories and tags
+       panel: its list rows, .li: 56 px at least, 12 x 16, 12 apart, on the
+       hairline, the card hover; the name sm strong, the count xs muted in
+       the body face with tabular figures). The panel shows the tags as
+       chips under the categories; this page lists them as the panel's rows,
+       because each row keeps its count and its Edit and Delete. ─────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li {
+      min-height: 56px;
+      gap: 12px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li
+      > button {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    /* The name opens the tag's dialog; it keeps Classic's accent on hover. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li
+      > button:hover {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li
+      > span:not([aria-hidden]) {
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 16px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── The exceptions list (Routes-Gallery-1.dc.html panel
+       "/dashboard/exceptions": in each row the reference mono xs strong in
+       ink beside the title sm strong, the detail xs in ink 2). Every row
+       keeps Classic's link, chips, time and chevron. ──────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='exceptions']
+      li
+      a[href^='/dashboard/exceptions/']
+      > div
+      > p:first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='exceptions']
+      li
+      a[href^='/dashboard/exceptions/']
+      > div
+      > p:first-child
+      > .font-mono {
+      color: var(--lg-ink);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='exceptions']
+      li
+      a[href^='/dashboard/exceptions/']
+      > div
+      > p:nth-child(2) {
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      line-height: 16px;
+    }
+
     /* ── Phones (sp.css 760 px: 4 / 16 / 96, 16 between, the 24/30 title) */
     @media (max-width: 760px) {
       :root[data-appearance='liquid-glass'] [data-glass-page='ops'] {
