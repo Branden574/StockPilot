@@ -69,6 +69,8 @@ const integrator: ReleaseViewer = {
  * audience), so they are read or seen with the releases below them.
  */
 const NIGHT_IDS = [
+  // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+  'approver-controls-own-warehouses-2026-11',
   'export-items-permission-2026-11',
   'mobile-app-fixes-2026-11-02',
   'clearer-web-messages-2026-11',
@@ -173,14 +175,16 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft at 0, a draft, this release at 1 and the integration retries release at 2): each moves up one place, and the lists-delivery-sites-and-fixes release is at 2.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(RELEASES[6]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[6]?.status).toBe('published');
-    expect(RELEASES[7]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[8]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[7]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[7]?.status).toBe('published');
+    expect(RELEASES[8]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[9]?.id).toBe(LISTS_ID);
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: AUTH_CODE_ID): the web fixes release is published later, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'export-items-permission-2026-11',
+      'approver-controls-own-warehouses-2026-11',
     );
   });
 
@@ -196,8 +200,9 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: dated before RELEASES[0], the B44 phone update draft, and after RELEASES.slice(2)): the draft is folded into the update-ready-and-fixes release, dated 04:21Z, so no release is dated later than this one, the newest, at 0, and every release from 1 on is dated earlier.
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: RELEASES): the two releases at 0 and 1 are published later, so the newest from 2 on.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(at).toBe(Math.max(...RELEASES.slice(6).map((r) => Date.parse(r.publishedAt))));
-    for (const r of RELEASES.slice(7)) {
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    expect(at).toBe(Math.max(...RELEASES.slice(7).map((r) => Date.parse(r.publishedAt))));
+    for (const r of RELEASES.slice(8)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -360,9 +365,10 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES[1] to [3], below the B44 phone update draft at 0): the draft is folded into the update-ready-and-fixes release, published below the lists-delivery-sites-and-fixes release, so each moves up one place.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(RELEASES[6]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[7]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[8]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[7]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[8]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[9]?.id).toBe(LISTS_ID);
   });
 
   it('is dated in the past on a whole minute, a minute before the authenticator code release, after #454 merged, and after every release below it', () => {
@@ -373,7 +379,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     expect(Date.parse(byId(AUTH_CODE_ID).publishedAt) - at).toBe(60_000);
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES.slice(3)): this release is at 1 now, so every release from 2 on is below it.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    for (const r of RELEASES.slice(8)) {
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    for (const r of RELEASES.slice(9)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
