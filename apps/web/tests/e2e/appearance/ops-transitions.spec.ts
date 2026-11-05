@@ -72,6 +72,14 @@ async function ready(page: Page): Promise<void> {
   await chooseLook(page, START);
 }
 
+/** Glass-only parts on screen. Written with filter(), never as one
+ *  ":visible" selector string: Tailwind scans this folder for class names, and
+ *  that string compiled to a stray rule in the app's global CSS (the compiled
+ *  CSS guard caught it). */
+async function visibleGlassOnly(page: Page): Promise<number> {
+  return page.locator('[data-glass-only]').filter({ visible: true }).count();
+}
+
 /** The lane's page root, or null where the route drew another page (a
  *  module that is off, a refusal). */
 async function laneRoot(page: Page) {
@@ -90,7 +98,7 @@ for (const route of LIST_ROUTES) {
     if (!root) test.skip(true, `${route} drew no operations page for this user.`);
 
     // Classic: the page's own width and no glass-only part rendered.
-    expect(await page.locator('[data-glass-only]:visible').count()).toBe(0);
+    expect(await visibleGlassOnly(page)).toBe(0);
     const classicWidth = await root!.evaluate((node) => getComputedStyle(node).maxWidth);
     expect(classicWidth).not.toBe('1480px');
 
@@ -134,7 +142,7 @@ for (const route of LIST_ROUTES) {
         if (glass.form !== 'form') expect(glass.width, `page width ${where}`).toBe('1480px');
         expect(['26px', '24px'], `title size ${where}`).toContain(glass.title);
       } else {
-        expect(await page.locator('[data-glass-only]:visible').count(), where).toBe(0);
+        expect(await visibleGlassOnly(page), where).toBe(0);
         expect(await root!.evaluate((node) => getComputedStyle(node).maxWidth), where).toBe(
           classicWidth,
         );
