@@ -41,6 +41,7 @@ import {
   VARIANT_GUARD_TIMEOUT_MS,
 } from './appearance-provider';
 import { ThemeProvider } from './theme-provider';
+import { EARLY_HIDE_ATTRIBUTE, twinFirstPaintScript } from './twin-first-paint';
 
 const USER = '11111111-1111-4111-8111-111111111111';
 const STAMP = '2026-11-02T10:00:00.000001+00:00';
@@ -577,8 +578,16 @@ describe('an open dialog survives every switch', () => {
   });
 });
 
+/** A pageshow event; jsdom's PageTransitionEvent ignores `persisted` in its init. */
+function pageShow(persisted: boolean): Event {
+  const event = new Event('pageshow');
+  Object.defineProperty(event, 'persisted', { value: persisted });
+  return event;
+}
+
 describe('the marketing variant guard (R8, round 2 finding 2)', () => {
   const hidden = () => document.head.querySelector('style[data-lg-variant-guard]') !== null;
+  const earlyHidden = () => document.head.querySelector(`style[${EARLY_HIDE_ATTRIBUTE}]`) !== null;
   const marker = () => {
     const el = document.createElement('div');
     el.setAttribute('data-lg-twin', '');
@@ -654,6 +663,114 @@ describe('the marketing variant guard (R8, round 2 finding 2)', () => {
     const { setOverride } = guard({ fallback: true });
     expect(refresh).not.toHaveBeenCalled();
     expect(setOverride).toHaveBeenLastCalledWith(true);
+  });
+
+  it('a marketing page restored from the back/forward cache checks again: Classic chosen while it was frozen refreshes it', () => {
+    nav.pathname = '/';
+    document.body.appendChild(marker());
+    guard();
+    expect(refresh).not.toHaveBeenCalled();
+    // Frozen in the cache while /signin (a whole-document load) chose Classic.
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(true));
+    });
+    expect(hidden()).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('a restored landing whose Design changed while frozen never shows its twin on the other design: the attribute follows the twin on screen until the guard has the right one', async () => {
+    nav.pathname = '/';
+    document.body.appendChild(marker());
+    render(<App />);
+    expect(glassOn()).toBe(true);
+    // Frozen while /signin chose Classic.
+    localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'classic' }));
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(true));
+    });
+    // The glass twin is still on screen: the attribute stays with it, the page is hidden and asked for again.
+    expect(glassOn()).toBe(true);
+    expect(hidden()).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // The classic page arrives: shown, in classic.
+    act(() => {
+      document.querySelectorAll('[data-lg-twin]').forEach((el) => el.remove());
+    });
+    await waitFor(() => expect(hidden()).toBe(false));
+    expect(glassOn()).toBe(false);
+    expect(mounts).toBe(1);
+  });
+
+  it('a twin read again from the HTTP cache under Classic: the layout’s early hide holds until the guard has the classic page, then both hides go', async () => {
+    nav.pathname = '/';
+    document.cookie = 'sp_style=classic; path=/';
+    // What the server's twin HTML did before it painted (twin-first-paint.ts).
+    new Function(twinFirstPaintScript('default')!)();
+    document.body.appendChild(marker());
+    expect(earlyHidden()).toBe(true);
+    const { setOverride } = guard({ shownStyle: 'classic' });
+    expect(hidden()).toBe(true);
+    expect(earlyHidden()).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    act(() => {
+      document.querySelectorAll('[data-lg-twin]').forEach((el) => el.remove());
+    });
+    await waitFor(() => expect(hidden()).toBe(false));
+    expect(earlyHidden()).toBe(false);
+    expect(setOverride).toHaveBeenLastCalledWith(null);
+  });
+
+  it('an early hide with nothing left to decide (the cookie selects the twin on screen) goes at once', () => {
+    nav.pathname = '/';
+    document.cookie = 'sp_style=classic; path=/';
+    new Function(twinFirstPaintScript('default')!)();
+    document.cookie = 'sp_style=liquid-glass; path=/';
+    document.body.appendChild(marker());
+    guard();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(hidden()).toBe(false);
+  });
+
+  it('no answer within 2 s: the early hide goes with the guard’s own', () => {
+    nav.pathname = '/';
+    document.cookie = 'sp_style=classic; path=/';
+    // Its own 2 s timer runs on the real clock, so only the guard can remove it here.
+    new Function(twinFirstPaintScript('default')!)();
+    vi.useFakeTimers();
+    document.body.appendChild(marker());
+    const { setOverride } = guard({ shownStyle: 'classic' });
+    expect(hidden()).toBe(true);
+    act(() => {
+      vi.advanceTimersByTime(VARIANT_GUARD_TIMEOUT_MS);
+    });
+    expect(hidden()).toBe(false);
+    expect(setOverride).toHaveBeenLastCalledWith(true);
+  });
+
+  it('an ordinary page load (not from the cache) does not check again', () => {
+    nav.pathname = '/';
+    document.body.appendChild(marker());
+    guard();
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(false));
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('the provider re-reads the device record on a restore from the cache, so <html> follows a choice made while frozen', () => {
+    nav.pathname = '/dashboard';
+    render(<App />);
+    expect(glassOn()).toBe(true);
+    localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'classic' }));
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(true));
+    });
+    expect(glassOn()).toBe(false);
+    expect(mounts).toBe(1);
   });
 
   it('off the 7 marketing paths it clears any override and does nothing else', () => {

@@ -150,6 +150,49 @@ describe('ExternalShell: the way back to Classic (plans/REVISION-DEFAULT.md R13,
   });
 });
 
+describe('ExternalShell: the page root a Liquid Glass composition is scoped to', () => {
+  const root = (container: HTMLElement) =>
+    container.querySelector('[data-slot="external-shell"]') as HTMLElement;
+
+  it('a page that names its composition (invite, onboarding: pages/access.css) gets the inert data-glass-page hook on the frame root', () => {
+    const { container } = render(
+      <ExternalShell glassPage="access" topBar={<span>Brand</span>}>
+        <p>Body</p>
+      </ExternalShell>,
+    );
+    expect(root(container)).toHaveAttribute('data-glass-page', 'access');
+  });
+
+  it('without it the frame carries no hook, and with it nothing else changes', () => {
+    const plain = render(
+      <ExternalShell topBar={<span>Brand</span>}>
+        <p>Body</p>
+      </ExternalShell>,
+    ).container;
+    expect(root(plain).hasAttribute('data-glass-page')).toBe(false);
+    const hooked = render(
+      <ExternalShell glassPage="access" topBar={<span>Brand</span>}>
+        <p>Body</p>
+      </ExternalShell>,
+    ).container;
+    root(hooked).removeAttribute('data-glass-page');
+    expect(hooked.innerHTML).toBe(plain.innerHTML);
+  });
+
+  it('the invite and onboarding pages name pages/access.css, and import it themselves', () => {
+    const app = join(__dirname, '..', '..', 'app');
+    for (const page of [
+      join(app, 'invite', '[token]', 'page.tsx'),
+      join(app, 'onboarding', 'page.tsx'),
+    ]) {
+      const source = readFileSync(page, 'utf8');
+      expect(source.match(/<ExternalShell\b/g), page).toHaveLength(1);
+      expect(source, page).toMatch(/<ExternalShell\s+glassPage="access"/);
+      expect(source, page).toContain("import '@/styles/liquid-glass/pages/access.css';");
+    }
+  });
+});
+
 describe('ExternalHeader, ExternalCard and ExternalStatusCard', () => {
   it('the header is the page h1 with its eyebrow and line', () => {
     render(

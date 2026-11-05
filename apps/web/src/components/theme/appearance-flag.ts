@@ -60,9 +60,17 @@ export interface GlassSiteRedirect {
  * rewrites, so the rewrite still works, a twin URL is never indexed and a
  * shared twin link never forces Liquid Glass on anyone. Temporary (307), so
  * no browser caches it for good.
+ *
+ * The landing twin's own address, /glass-site, has a rule of its own first:
+ * under `/:path*` an empty path gives an empty Location header (next start
+ * answered `location: ` with nothing after it), which a browser resolves to
+ * the address it asked for, so it would redirect to itself.
  */
 export function glassSiteRedirects(): GlassSiteRedirect[] {
-  return [{ source: '/glass-site/:path*', destination: '/:path*', permanent: false }];
+  return [
+    { source: '/glass-site', destination: '/', permanent: false },
+    { source: '/glass-site/:path*', destination: '/:path*', permanent: false },
+  ];
 }
 
 /** The 7 marketing pages that have a glass twin (plan 4.6, M3). */
@@ -77,13 +85,20 @@ export const MARKETING_PATHS = [
 ] as const;
 
 /**
- * Whether the glass twins exist yet. They are built in stage 3; until then
- * next.config.ts has no marketing rewrites and the provider's variant guard
- * does nothing (it would otherwise see "twin selected, none on screen" on
- * every marketing page). Stage 3 sets this to true in the same change that
- * wires `rewrites()` (appearance-flag.test.ts checks the two agree).
+ * MARKETING_PATHS as one pattern over location.pathname, for the head script
+ * (appearance-script.ts), which may carry no list: exactly those 7 paths
+ * (appearance-flag.test.ts checks it against the list and its neighbours).
  */
-export const MARKETING_TWINS_BUILT = false;
+export const MARKETING_PATH_PATTERN = /^\/(?:contact|pricing|privacy|security|support|terms)?$/u;
+
+/**
+ * Whether the glass twins exist. Stage 3 built them (app/(site-glass)/
+ * glass-site) and, in the same change, wired next.config.ts's `rewrites()` to
+ * marketingRewrites(liquidGlassRollout()); with this true the provider renders
+ * the variant guard on the 7 marketing paths (appearance-flag.test.ts checks
+ * the flag and next.config.ts agree).
+ */
+export const MARKETING_TWINS_BUILT = true;
 
 interface CookieCondition {
   type: 'cookie';

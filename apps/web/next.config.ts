@@ -4,7 +4,11 @@ import { join } from 'node:path';
 
 import type { NextConfig } from 'next';
 
-import { glassSiteRedirects } from './src/components/theme/appearance-flag';
+import {
+  glassSiteRedirects,
+  liquidGlassRollout,
+  marketingRewrites,
+} from './src/components/theme/appearance-flag';
 import { isScenePhotoInstalled } from './src/styles/liquid-glass/scene-photo';
 
 // ── Liquid Glass scene photo ─────────────────────────────────────────────────
@@ -240,17 +244,30 @@ const nextConfig: NextConfig = {
 
   transpilePackages: ['@stockpilot/core'],
 
-  // No rewrites. /ingest (PostHog) is proxied by a route handler that copies
-  // no cookie, never by a rewrite: see the skipTrailingSlashRedirect note
-  // above. That note is about /ingest only: the Liquid Glass marketing twins
-  // get their cookie rewrites, marketingRewrites(liquidGlassRollout()) from
-  // components/theme/appearance-flag.ts, in stage 3 of that plan, when the
-  // twins themselves are built (MARKETING_TWINS_BUILT there says so).
+  // The only rewrites are the Liquid Glass marketing twins' (components/theme/
+  // appearance-flag.ts, plans/REVISION-DEFAULT.md R8). /ingest (PostHog) is
+  // never rewritten: a route handler that copies no cookie proxies it (see
+  // the skipTrailingSlashRedirect note above; src/test/ingest-proxy.guard.
+  // test.ts fails on an /ingest rewrite).
+  //
+  // Each of the 7 marketing paths (/, /contact, /pricing, /privacy, /security,
+  // /support, /terms) is served from its twin under app/(site-glass)/
+  // glass-site when the rollout and the sp_style cookie select glass:
+  //   default  unless sp_style=classic (no cookie, a crawler included: glass);
+  //   opt-in   only with sp_style=liquid-glass;
+  //   off      no rewrite at all (MARKETING_TWINS_BUILT is true there).
+  // beforeFiles, so the rewrite resolves before the filesystem and the cache:
+  // both variants stay static, each cached under its own destination. The
+  // rollout is read when this file is evaluated, at build time.
+  async rewrites() {
+    return { beforeFiles: marketingRewrites(liquidGlassRollout()), afterFiles: [], fallback: [] };
+  },
 
   // Liquid Glass (components/theme/appearance-flag.ts): a direct
   // /glass-site/* URL redirects to its public path in every rollout, so a
-  // twin URL is never indexed and never forces glass. No other redirect
-  // exists.
+  // twin URL is never indexed and never forces glass. Redirects run before
+  // rewrites and only on the address asked for, so the rewrites above still
+  // reach the twins. No other redirect exists.
   async redirects() {
     return glassSiteRedirects();
   },

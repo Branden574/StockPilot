@@ -7,7 +7,8 @@
     "decoration (no action)": "Glass-only icons or words inside an element Classic already has, holding no link, button or field of their own: the element keeps its role, accessible name, target and permission gate in both designs. The 8.5 check has no action to pair; the classic proof drops them under default and they are not rendered under off.",
     "replaced below a width": "A glass-only element that glass shows only in windows maxWidth px wide or narrower, where it hides the classic elements listed in replaces; each goes to the same target (href) behind the same permission gate. At those widths the 8.5 check counts a replaced classic action as present in glass when a glass element of the same role goes to the same target, and at wider sizes it expects the classic elements as they are (the glass-only one is hidden there).",
     "hidden in a width band (target on screen)": "A classic control (not glass-only) that glass does not draw in windows from minWidth to maxWidth px wide, because what it reaches is already on screen there and the board draws no such control at those widths. The 8.5 check skips it in glass in that band only and expects it at every other width.",
-    "moved block (no action)": "A stateless block (words only: no link, button or field) that glass draws in another place on the page (plan 4.6): this glass-only copy, while the classic block carries data-classic-only and is hidden in glass, so exactly one of the two is shown in either design and the page holds the block, and its heading, once. The 8.5 check has no action to pair; the classic proof drops the copy under default and it is not rendered under off."
+    "moved block (no action)": "A stateless block (words only: no link, button or field) that glass draws in another place on the page (plan 4.6): this glass-only copy, while the classic block carries data-classic-only and is hidden in glass, so exactly one of the two is shown in either design and the page holds the block, and its heading, once. The 8.5 check has no action to pair; the classic proof drops the copy under default and it is not rendered under off.",
+    "public page link (no data action)": "A plain link, drawn by the board's frame, to one of the 7 public marketing pages (/contact, /security, ...), which every visitor may open: no data, no form, no permission gate, nothing the viewer could not reach in classic from the same route through the shell's StockPilot home link and the marketing pages' own navigation. classicTwin names that classic path; the 8.5 check counts the entry as navigation, never as a missing or extra action."
   },
   "entries": [
     {
@@ -141,6 +142,44 @@
       "maxWidth": 1280,
       "classicTwin": null,
       "gate": "Place an order's own gate"
+    },
+    {
+      "id": "auth-contact-the-team",
+      "source": "apps/web/src/app/(auth)/layout.tsx",
+      "selector": ".auth-panel-head a.auth-glass-contact[data-glass-only]",
+      "role": "link",
+      "name": "Contact the team",
+      "kind": "public page link (no data action)",
+      "routes": [
+        "/signin",
+        "/signin/mfa",
+        "/signup",
+        "/reset",
+        "/reset/complete",
+        "/account-disabled"
+      ],
+      "$comment": "Auth-SignIn.dc.html's top bar: btn-glass btn-pill \"Contact the team\" to /contact (COVERAGE row app/(auth)/layout.tsx; IMPLEMENTATION-PLAN.md 8.5 names it). Glass-only, after the header appearance menu; not rendered under the off rollout (auth-layout.glass.test.tsx). In classic the same page is reached from these routes through the StockPilot home link (/) and the marketing header there.",
+      "classicTwin": "StockPilot home link (/), then Contact in the marketing header",
+      "gate": null
+    },
+    {
+      "id": "auth-help-security",
+      "source": "apps/web/src/app/(auth)/layout.tsx",
+      "selector": ".auth-panel-foot nav [data-glass-only] a[href=\"/security\"]",
+      "role": "link",
+      "name": "Security",
+      "kind": "public page link (no data action)",
+      "routes": [
+        "/signin",
+        "/signin/mfa",
+        "/signup",
+        "/reset",
+        "/reset/complete",
+        "/account-disabled"
+      ],
+      "$comment": "Auth-SignIn.dc.html's help pill: Privacy, Terms, Security, Support. The classic help links (Support, Privacy, Terms) keep their order (the DOM order wins over the board's, plan 4.6), and Security, glass-only, comes last, inside a glass-only span because auth.css gives every help link a display at phone width. Not rendered under the off rollout. In classic /security is reached through the StockPilot home link (/) and the marketing header and footer there.",
+      "classicTwin": "StockPilot home link (/), then Security in the marketing header",
+      "gate": null
     }
   ]
 }

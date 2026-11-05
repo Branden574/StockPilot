@@ -3,6 +3,8 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { getPathMatch } from 'next/dist/shared/lib/router/utils/path-match';
+import { prepareDestination } from 'next/dist/shared/lib/router/utils/prepare-destination';
 import { GLASS_ROLLOUTS, parseRollout } from '@stockpilot/core';
 
 import {
@@ -11,6 +13,7 @@ import {
   isLiquidGlassEnabled,
   LIQUID_GLASS_FLAG_NAME,
   liquidGlassRollout,
+  MARKETING_PATH_PATTERN,
   MARKETING_PATHS,
   MARKETING_TWINS_BUILT,
   marketingRewrites,
@@ -65,10 +68,62 @@ describe('the Liquid Glass rollout flag', () => {
 });
 
 describe('the /glass-site/* redirect', () => {
-  it('is one unconditional rule in every rollout, so a twin URL never forces glass and is never indexed', () => {
+  it('is unconditional in every rollout, so a twin URL never forces glass and is never indexed', () => {
     expect(glassSiteRedirects()).toEqual([
+      { source: '/glass-site', destination: '/', permanent: false },
       { source: '/glass-site/:path*', destination: '/:path*', permanent: false },
     ]);
+    for (const rule of glassSiteRedirects()) {
+      expect(Object.keys(rule).sort(), rule.source).toEqual(['destination', 'permanent', 'source']);
+    }
+  });
+
+  it('sends every twin address, the landing twin’s bare /glass-site included, to a non-empty public path (Next’s own matcher, first rule wins)', () => {
+    // An empty destination becomes an empty Location header, which a browser
+    // resolves to the address it asked for: /glass-site redirected to itself.
+    const twins = [
+      ...MARKETING_PATHS.map((path) => [path === '/' ? '/glass-site' : `/glass-site${path}`, path]),
+      ['/glass-site/contact/anything', '/contact/anything'],
+    ];
+    for (const [twin, publicPath] of twins) {
+      let destination: string | null = null;
+      for (const rule of glassSiteRedirects()) {
+        const params = getPathMatch(rule.source, { removeUnnamedParams: true, strict: true })(
+          twin!,
+        );
+        if (!params) continue;
+        destination = prepareDestination({
+          appendParamsToQuery: false,
+          destination: rule.destination,
+          params,
+          query: {},
+        }).newUrl;
+        break;
+      }
+      expect(destination, twin).toBe(publicPath);
+    }
+  });
+});
+
+describe('MARKETING_PATH_PATTERN (the head script’s copy of the list)', () => {
+  it('matches exactly the 7 marketing paths', () => {
+    for (const path of MARKETING_PATHS) expect(MARKETING_PATH_PATTERN.test(path), path).toBe(true);
+    for (const path of [
+      '',
+      '//',
+      '/contact/',
+      '/contact/x',
+      '/contacts',
+      '/xcontact',
+      '/glass-site',
+      '/glass-site/contact',
+      '/signin',
+      '/dashboard',
+      '/support/tickets',
+      '/terms.txt',
+    ]) {
+      expect(MARKETING_PATH_PATTERN.test(path), path).toBe(false);
+    }
   });
 });
 

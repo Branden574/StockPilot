@@ -98,3 +98,63 @@ export function inKeyframes(rule: Rule): boolean {
 
 export const inMedia = (rule: Rule, query: 'screen' | 'print') =>
   enclosing(rule).some((a) => a.replace(/\s+/g, ' ').trim() === `@media ${query}`);
+
+/** One rule of a glass stylesheet, for matching against rendered markup. */
+export interface CssRule {
+  selectors: string[];
+  decls: Record<string, string>;
+  /** The @media queries around the rule, apart from `screen`. */
+  media: string[];
+}
+
+/** Every rule of a glass stylesheet (a path under styles/liquid-glass), keyframe steps left out. */
+export function cssRules(file: string): CssRule[] {
+  const out: CssRule[] = [];
+  parse(readFileSync(join(GLASS_DIR, file), 'utf8'), file).walkRules((rule: Rule) => {
+    if (inKeyframes(rule)) return;
+    const media = enclosing(rule)
+      .filter((a) => a.startsWith('@media '))
+      .map((a) => a.slice('@media '.length).replace(/\s+/g, ' ').trim())
+      .filter((m) => m !== 'screen');
+    const decls: Record<string, string> = {};
+    for (const node of rule.nodes) if (node.type === 'decl') decls[node.prop] = node.value;
+    out.push({ selectors: splitSelectors(rule.selector), decls, media });
+  });
+  return out;
+}
+
+/** Rules outside any @media but `screen` (the default look). */
+export const NO_MEDIA = (media: string[]) => media.length === 0;
+
+/**
+ * The value the last rule matching `el` gives `prop` (rules in source order;
+ * enough for these files, whose overrides come later or are more specific).
+ * `pseudo` reads a ::before or ::after rule of the element instead; selectors
+ * with a state (hover, focus, checked...) or another pseudo-element are left
+ * out. The caller puts the glass attribute on <html>.
+ */
+export function declaredFor(
+  el: Element,
+  rules: CssRule[],
+  prop: string,
+  media: (media: string[]) => boolean = NO_MEDIA,
+  pseudo?: '::before' | '::after',
+): string | undefined {
+  let value: string | undefined;
+  for (const rule of rules) {
+    if (!media(rule.media) || rule.decls[prop] === undefined) continue;
+    const hit = rule.selectors.some((raw) => {
+      let selector = raw.replace(/\s+/g, ' ');
+      if (pseudo) {
+        if (!selector.endsWith(pseudo)) return false;
+        selector = selector.slice(0, -pseudo.length);
+      }
+      if (/::|:(hover|focus|focus-visible|focus-within|active|checked|disabled)\b/.test(selector)) {
+        return false;
+      }
+      return el.matches(selector);
+    });
+    if (hit) value = rule.decls[prop];
+  }
+  return value;
+}

@@ -9,6 +9,8 @@ import { IconMark } from '@/components/ui/icon-mark';
 import { getServerSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+// Liquid Glass's card on this page (styles/liquid-glass/pages/access.css): inert in Classic.
+import '@/styles/liquid-glass/pages/access.css';
 
 import { AcceptInviteButton } from './accept-button';
 import {
@@ -116,6 +118,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   // ground (no mesh), the brand link and the theme menu above one column.
   return (
     <ExternalShell
+      glassPage="access"
       width="md"
       topBar={
         <>

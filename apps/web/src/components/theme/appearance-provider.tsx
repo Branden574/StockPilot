@@ -58,6 +58,7 @@ import {
   LOW_POWER_ATTRIBUTE_VALUE,
   type LowPowerNavigator,
 } from './appearance-script';
+import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-paint';
 
 /**
  * The appearance layer next to next-themes (Liquid Glass plan 1-3, as revised
@@ -515,12 +516,33 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       const { status } = stateRef.current;
       if (status === 'failed') dispatchRef.current({ type: 'retry', userId: userIdRef.current });
     };
+    // A page restored from the back/forward cache (a static marketing page
+    // left by a whole-document link, say to /signin) was frozen while another
+    // page of this tab made a choice, and storage events never reach a frozen
+    // page: read the device record again, as another tab's choice (that page
+    // saved it). The variant guard then checks the twin on screen (R8); until
+    // it has, the attribute follows the twin on screen, so no frame shows a
+    // twin on the other design's CSS (a pageshow render may come after a
+    // paint).
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      if (
+        MARKETING_TWINS_BUILT &&
+        (MARKETING_PATHS as readonly string[]).includes(window.location.pathname)
+      ) {
+        twinOverrideRef.current = document.querySelector(`[${TWIN_MARKER}]`) !== null;
+      }
+      const device = readDeviceRecordRaw();
+      if (device !== null) dispatchRef.current({ type: 'device-changed', device, now: Date.now() });
+    };
     window.addEventListener('storage', onStorage);
+    window.addEventListener('pageshow', onPageShow);
     window.addEventListener(APPEARANCE_SIGNED_OUT_EVENT, onSignedOut);
     window.addEventListener('focus', onRetryMoment);
     window.addEventListener('online', onRetryMoment);
     return () => {
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener(APPEARANCE_SIGNED_OUT_EVENT, onSignedOut);
       window.removeEventListener('focus', onRetryMoment);
       window.removeEventListener('online', onRetryMoment);
@@ -649,7 +671,16 @@ export const VARIANT_GUARD_TIMEOUT_MS = 2000;
  *     the attribute follows the twin on screen for this page only, so layout
  *     and CSS agree; the choice applies at the next navigation;
  *   - the crash fallback: a glass twin cannot render classic, so the attribute
- *     follows the twin on screen.
+ *     follows the twin on screen;
+ *   - a page restored from the back/forward cache (Back to a marketing page
+ *     left by a whole-document link) runs the check again: the cookie may
+ *     have changed while the page was frozen;
+ *   - a marketing document read again from the HTTP cache under a cookie that
+ *     no longer selects it was hidden before its first paint: a twin by the
+ *     twin layout's script (twin-first-paint.ts), a classic page under a
+ *     cookie that selects glass by the head script (appearance-script.ts);
+ *     the guard removes that early hide once it has decided, as it removes
+ *     its own.
  * Rendered by the provider only once the twins exist (MARKETING_TWINS_BUILT).
  */
 export function MarketingVariantGuard({
@@ -667,10 +698,20 @@ export function MarketingVariantGuard({
 }) {
   const router = useRouter();
   const pathname = currentPath(usePathname());
+  /** Bumped by every restore from the back/forward cache, to run the check again. */
+  const [restored, setRestored] = React.useState(0);
+  React.useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setRestored((n) => n + 1);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
   React.useLayoutEffect(() => {
     if (!hydrated) return;
     if (!(MARKETING_PATHS as readonly string[]).includes(pathname)) {
       setOverride(null);
+      removeEarlyHide();
       return;
     }
     const twinOnScreen = () => document.querySelector(`[${TWIN_MARKER}]`) !== null;
@@ -685,10 +726,13 @@ export function MarketingVariantGuard({
       setOverride(null);
       return true;
     };
-    if (settled()) return;
+    if (settled()) {
+      removeEarlyHide();
+      return;
+    }
 
     const hide = document.createElement('style');
-    hide.setAttribute('data-lg-variant-guard', '');
+    hide.setAttribute(VARIANT_GUARD_STYLE_ATTRIBUTE, '');
     hide.appendChild(document.createTextNode('html{visibility:hidden!important}'));
     document.head.appendChild(hide);
     let done = false;
@@ -705,10 +749,11 @@ export function MarketingVariantGuard({
       observer.disconnect();
       window.clearTimeout(timer);
       hide.remove();
+      removeEarlyHide();
     }
     observer.observe(document.body, { childList: true, subtree: true, attributes: true });
     router.refresh();
     return finish;
-  }, [hydrated, pathname, shownStyle, fallback, rollout, router, setOverride]);
+  }, [hydrated, pathname, shownStyle, fallback, rollout, router, setOverride, restored]);
   return null;
 }

@@ -1,15 +1,19 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { APPEARANCE_STORAGE_KEYS } from '@stockpilot/core';
 
-import { EXEMPT_PATHS as FLAG_EXEMPT_PATHS } from './appearance-flag';
+import { EXEMPT_PATHS as FLAG_EXEMPT_PATHS, MARKETING_PATHS } from './appearance-flag';
 import {
   appearanceScript,
+  EARLY_HIDE_ATTRIBUTE,
+  EARLY_HIDE_TIMEOUT_MS,
   EXEMPT_PATHS,
   isLowPowerBrowser,
   LOW_POWER_ATTRIBUTE,
+  VARIANT_GUARD_STYLE_ATTRIBUTE,
   type LowPowerNavigator,
 } from './appearance-script';
+import { twinFirstPaintScript } from './twin-first-paint';
 
 /**
  * The first-paint script (plans/REVISION-DEFAULT.md R6, R7; section 9 items
@@ -47,6 +51,8 @@ function run(rollout: 'opt-in' | 'default', path = '/dashboard') {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  document.head.innerHTML = '';
   clearCookies();
   sessionStorage.clear();
   localStorage.clear();
@@ -193,3 +199,98 @@ describe('the low-power material (R7)', () => {
     expect(html().hasAttribute(LOW_POWER_ATTRIBUTE)).toBe(false);
   });
 });
+
+/**
+ * The early hide on the 7 marketing paths (stage 3 review, finding 2): Back
+ * or Forward may read a classic marketing page again from the HTTP cache under
+ * a cookie that now selects glass, so the head script hides the page before
+ * its first paint whenever it turns glass on there. The twin layout's script
+ * removes the hide at once; on a classic body it stays until the variant guard
+ * refreshes (or, with no guard, 2 s), and then the attribute follows the
+ * classic body. Classic choosers and other paths get nothing.
+ */
+describe('the early hide on the marketing paths', () => {
+  const hides = () => document.head.querySelectorAll(`style[${EARLY_HIDE_ATTRIBUTE}]`);
+  const glassCookie = { default: null, 'opt-in': 'liquid-glass' } as const;
+
+  for (const rollout of ['default', 'opt-in'] as const) {
+    for (const path of MARKETING_PATHS) {
+      it(`${rollout}, ${path}, the cookie selects glass: glass and the guard’s style, marked early, before the first paint`, () => {
+        const cookie = glassCookie[rollout];
+        if (cookie) document.cookie = `sp_style=${cookie}; path=/`;
+        run(rollout, path);
+        expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+        const styles = hides();
+        expect(styles).toHaveLength(1);
+        expect(styles[0]!.hasAttribute(VARIANT_GUARD_STYLE_ATTRIBUTE)).toBe(true);
+        expect(styles[0]!.textContent).toBe('html{visibility:hidden!important}');
+      });
+    }
+
+    it(`${rollout}: a classic chooser on a marketing path gets nothing: <html> byte-identical`, () => {
+      document.cookie = 'sp_style=classic; path=/';
+      const before = html().outerHTML;
+      run(rollout, '/pricing');
+      expect(html().outerHTML).toBe(before);
+    });
+
+    it(`${rollout}: the twin’s own script, the first thing in its body, removes the hide at once`, () => {
+      const cookie = glassCookie[rollout];
+      if (cookie) document.cookie = `sp_style=${cookie}; path=/`;
+      run(rollout, '/');
+      expect(hides()).toHaveLength(1);
+      new Function(twinFirstPaintScript(rollout)!)();
+      expect(hides()).toHaveLength(0);
+      expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+    });
+  }
+
+  it('no hide anywhere else, the print route and the crash fallback included', () => {
+    for (const path of ['/dashboard', '/signin', '/orders/sign/x', '/contact/x', '/glass-site']) {
+      run('default', path);
+      expect(hides(), path).toHaveLength(0);
+    }
+    run('default', '/dashboard/orders/abc/print');
+    sessionStorage.setItem('sp-lg-fallback', 'pending');
+    run('default', '/');
+    expect(hides()).toHaveLength(0);
+  });
+
+  it('a classic body (no twin script) with no guard: after 2 s the page shows with the attribute following it, removed', () => {
+    vi.useFakeTimers();
+    run('default', '/pricing');
+    setNavigatorLow();
+    expect(hides()).toHaveLength(1);
+    vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS - 1);
+    expect(hides()).toHaveLength(1);
+    expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+    vi.advanceTimersByTime(1);
+    expect(hides()).toHaveLength(0);
+    expect(html().hasAttribute('data-appearance')).toBe(false);
+    expect(html().hasAttribute(LOW_POWER_ATTRIBUTE)).toBe(false);
+  });
+
+  it('a guard already hiding the page at 2 s owns the outcome: the early hide and the attribute stay', () => {
+    vi.useFakeTimers();
+    run('default', '/pricing');
+    const own = document.createElement('style');
+    own.setAttribute(VARIANT_GUARD_STYLE_ATTRIBUTE, '');
+    document.head.appendChild(own);
+    vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS);
+    expect(hides()).toHaveLength(1);
+    expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+  });
+
+  it('a timer after the hide was removed (twin script or guard) changes nothing', () => {
+    vi.useFakeTimers();
+    run('default', '/');
+    for (const node of hides()) node.remove();
+    vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS);
+    expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+  });
+});
+
+function setNavigatorLow() {
+  // The low-power attribute, when the head script set it, goes with glass.
+  html().setAttribute(LOW_POWER_ATTRIBUTE, 'reduced');
+}

@@ -62,6 +62,13 @@ export interface ExternalShellProps {
    *  already has a `main` passes `div`. */
   as?: 'main' | 'div';
   className?: string;
+  /**
+   * The Liquid Glass page root this page's own composition is scoped to
+   * (styles/liquid-glass/pages/<name>.css, plan 4.1 and 4.6): written as the
+   * inert `data-glass-page` hook on the page frame's root, which no classic
+   * rule reads. Omitted: no attribute at all.
+   */
+  glassPage?: string;
 }
 
 export function ExternalShell({
@@ -72,6 +79,7 @@ export function ExternalShell({
   frame = 'page',
   as = 'main',
   className,
+  glassPage,
 }: ExternalShellProps) {
   const Column = as;
   const column = (
@@ -91,6 +99,7 @@ export function ExternalShell({
   return (
     <div
       data-slot="external-shell"
+      data-glass-page={glassPage}
       className="bg-background text-foreground flex min-h-screen flex-col"
     >
       {/* A <header> outside the column's <main>: the page's banner landmark,
