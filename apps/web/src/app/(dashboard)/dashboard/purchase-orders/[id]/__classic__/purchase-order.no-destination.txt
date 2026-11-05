@@ -1,0 +1,180 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="mb-2">
+      <a class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px] transition-colors" href="/dashboard/purchase-orders">
+        "← Back to purchase orders"
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+              <span class="font-mono text-[24px] font-medium tracking-normal">
+                "PO-2026-0018"
+            <span class="flex items-center gap-2">
+              <button aria-label="Edit PO number" type="button">
+              <span data-testid="status">
+                "ordered"
+          <div class="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]">
+            <span class="text-ink-2">
+              "Lantern Peak School Supply"
+            <span aria-hidden="true">
+              "·"
+            <span>
+              "created "
+              "2 weeks ago"
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/api/purchase-orders/5eed0000-0000-4000-8000-0000000000f1/pdf" rel="noopener noreferrer" target="_blank">
+          <svg aria-hidden="true" class="lucide lucide-download h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 15V3">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+            <path d="m7 10 5 5 5-5">
+          " Download PDF"
+        <span data-testid="file-actions">
+        <button type="button">
+          "Make recurring"
+        <span data-testid="po-actions-secondary">
+        <span data-testid="po-actions-commit">
+  <div data-testid="set-destination">
+  <div class="@container min-w-0">
+    <div class="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+      <div class="flex min-w-0 flex-col gap-4">
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5" id="po-line-items-heading">
+              "Line items"
+          <div class="" data-slot="detail-section-body">
+            <div aria-labelledby="po-line-items-heading" class="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0" role="region">
+              <table class="w-full caption-bottom text-[13.5px]">
+                <thead class="[&_tr]:border-b">
+                  <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+                    <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] last:pr-4 [&:has([role=checkbox])]:pr-0 w-[50px] first:pl-[18px]">
+                      <span class="sr-only">
+                        "Image"
+                    <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 pl-0">
+                      "Item"
+                    <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 [&:has([role=checkbox])]:pr-0 text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap">
+                      "Received / ordered"
+                <tbody class="[&_tr:last-child]:border-0">
+                  <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent" data-testid="po-line">
+                    <td class="px-3 align-middle last:pr-4 [&:has([role=checkbox])]:pr-0 py-2.5 first:pl-[18px] max-sm:pr-2">
+                      <span data-alt="Polo, Navy" data-size="line" data-src="https://img.test/polo-thumb.jpg" data-testid="thumb">
+                    <td class="px-3 align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 py-2.5 pl-0">
+                      <p class="text-foreground font-medium leading-5 [overflow-wrap:anywhere]">
+                        "Polo, Navy"
+                      <p class="text-muted-foreground mt-0.5 font-mono text-[12px] tabular-nums leading-[18px]">
+                        <span class="whitespace-nowrap">
+                          "POLO-M"
+                          " ·"
+                        ␣
+                        <span aria-hidden="true" data-testid="po-line-money">
+                          <span class="whitespace-nowrap">
+                            "$18.00"
+                            " ea"
+                          " ·"
+                          ␣
+                          <span class="whitespace-nowrap">
+                            "$3,600.00"
+                        <span class="sr-only">
+                          "Unit cost "
+                          "$18.00"
+                          ", total "
+                          "$3,600.00"
+                    <td class="px-3 align-middle first:pl-4 [&:has([role=checkbox])]:pr-0 py-2.5 last:pr-[18px]">
+                      <div class="ml-auto w-24 max-w-full sm:w-[120px]">
+                        <div class="flex items-baseline justify-between gap-2 font-mono text-[12px] tabular-nums">
+                          <span class="text-foreground">
+                            <span class="sr-only">
+                              "Received "
+                            "120"
+                          <span class="text-muted-foreground">
+                            <span aria-hidden="true">
+                              "/ "
+                            <span class="sr-only">
+                              "of "
+                            "200"
+                            <span class="sr-only">
+                              " ordered"
+                        <div aria-hidden="true" class="bg-line-strong mt-1 h-1 overflow-hidden rounded-sm">
+                          <div class="bg-accent h-full" style="width: 60%;">
+                  <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent" data-testid="po-line">
+                    <td class="px-3 align-middle last:pr-4 [&:has([role=checkbox])]:pr-0 py-2.5 first:pl-[18px] max-sm:pr-2">
+                      <span data-alt="Unknown item" data-size="line" data-src="" data-testid="thumb">
+                    <td class="px-3 align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 py-2.5 pl-0">
+                      <p class="text-foreground font-medium leading-5 [overflow-wrap:anywhere]">
+                        "Unknown item"
+                      <p class="text-muted-foreground mt-0.5 font-mono text-[12px] tabular-nums leading-[18px]">
+                        <span aria-hidden="true" data-testid="po-line-money">
+                          <span class="whitespace-nowrap">
+                            "$0.65"
+                            " ea"
+                          " ·"
+                          ␣
+                          <span class="whitespace-nowrap">
+                            "$260.00"
+                        <span class="sr-only">
+                          "Unit cost "
+                          "$0.65"
+                          ", total "
+                          "$260.00"
+                    <td class="px-3 align-middle first:pl-4 [&:has([role=checkbox])]:pr-0 py-2.5 last:pr-[18px]">
+                      <div class="ml-auto w-24 max-w-full sm:w-[120px]">
+                        <div class="flex items-baseline justify-between gap-2 font-mono text-[12px] tabular-nums">
+                          <span class="text-foreground">
+                            <span class="sr-only">
+                              "Received "
+                            "0"
+                          <span class="text-muted-foreground">
+                            <span aria-hidden="true">
+                              "/ "
+                            <span class="sr-only">
+                              "of "
+                            "400"
+                            <span class="sr-only">
+                              " ordered"
+                        <div aria-hidden="true" class="bg-line-strong mt-1 h-1 overflow-hidden rounded-sm">
+                          <div class="bg-accent h-full" style="width: 0%;">
+          <div class="border-border flex flex-wrap items-center justify-between gap-3 border-t px-[18px] py-3.5" data-slot="detail-section-footer">
+            <div class="text-muted-foreground text-[13.5px]">
+              "Subtotal"
+              <span class="text-foreground ml-1.5 font-mono font-medium tabular-nums">
+                "$3,860.00"
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+              "Receipts"
+          <div class="p-[18px] max-sm:px-3" data-slot="detail-section-body">
+            <div data-testid="receipt-history">
+      <div class="flex min-w-0 flex-col gap-4">
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+              "Summary"
+          <div class="" data-slot="detail-section-body">
+            <dl class="divide-border divide-y" data-slot="key-value-list">
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Supplier"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "Lantern Peak School Supply"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Destination"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "—"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Expected"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "10/9/2026"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Subtotal"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "$3,860.00"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Total"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere] font-semibold">
+                  "$3,910.00"
+            <div data-testid="notes-editor">
+        <section data-testid="attachments">

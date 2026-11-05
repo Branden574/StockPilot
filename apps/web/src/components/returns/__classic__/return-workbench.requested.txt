@@ -1,0 +1,122 @@
+<div class="flex flex-col gap-4">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="mb-2">
+      <a class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px] transition-colors" href="/dashboard/returns">
+        "← Back to returns"
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+              "RMA-1"
+            <div class="flex flex-wrap items-center gap-1.5">
+              <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning">
+                "Requested"
+              <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+                "Return"
+              <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+                "Created by staff"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            <p>
+              "Against order"
+              ␣
+              <a class="text-foreground font-mono font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o1">
+                "SO-000103"
+              " · "
+              "Pat Lee"
+              " · "
+              "Main"
+              " · "
+              "Damaged"
+  <section aria-label="Next step" class="border-border bg-card text-card-foreground rounded-lg border overflow-hidden">
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-3 px-[18px] py-3.5">
+      <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3.5 text-[13px]">
+        "Approve return"
+      <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card hover:bg-muted h-8 text-[13px] px-3 text-destructive hover:text-destructive">
+        "Deny"
+      <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3">
+        "Cancel return"
+      <div class="flex min-w-0 items-start gap-2.5 sm:ml-auto">
+        <button aria-checked="false" aria-describedby="«id1»-help" aria-labelledby="«id1»-label" class="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 pointer-coarse:before:content-[''] before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] bg-[var(--ed-ink-4)] forced-colors:border forced-colors:border-[ButtonText] mt-0.5" data-state="unchecked" id="«id1»" role="switch" type="button">
+          <span aria-hidden="true" class="pointer-events-none inline-block h-4 w-4 rounded-full transition-transform forced-colors:bg-[ButtonText] forced-colors:forced-color-adjust-none translate-x-0.5 bg-white">
+        <span class="min-w-0 text-[13px] leading-5">
+          <label class="cursor-pointer font-medium" for="«id1»" id="«id1»-label">
+            "The item is here"
+          <span class="text-muted-foreground block max-w-xs text-[12px] leading-[18px]" id="«id1»-help">
+            "Switch on only when the returned item is handed to you at the counter now. A requester is not sent the approved and received messages."
+  <section aria-label="What happens when you approve" class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+    <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+      <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+        "What happens when you approve"
+    <div class="p-[18px]" data-slot="detail-section-body">
+      <ul class="marker:text-ink-4 list-disc space-y-1 pl-5 text-[13.5px] leading-5">
+        <li>
+          "Nothing moves now. The returned item stays out until the return is processed."
+        <li>
+          "When processed, Walk New Hire Shirt, M goes back to 31-C."
+  <section aria-label="RETURNING" class="space-y-2.5">
+    <h2 class="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em] pt-1">
+      "RETURNING"
+    <div class="grid items-start gap-3">
+      <article class="border-border bg-card text-card-foreground rounded-lg border grid grid-cols-[64px_minmax(0,1fr)] gap-4 p-4 sm:grid-cols-[96px_minmax(0,1fr)]">
+        <span class="border-border relative block size-16 overflow-hidden rounded-lg border bg-white sm:size-24">
+          <span aria-hidden="true" class="block h-full w-full absolute inset-0" data-slot="missing-photo" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+        <div class="min-w-0 space-y-3">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div class="min-w-0 space-y-0.5">
+              <a class="text-foreground block truncate text-[14px] font-medium leading-5 underline-offset-2 hover:underline" href="/dashboard/inventory/i1">
+                "Walk New Hire Shirt"
+              <p class="text-muted-foreground text-[12.5px]">
+                "Size M · NH-M"
+              <p class="text-[13px] tabular-nums">
+                "Qty returning: 1"
+            <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+              "Waiting"
+          <div class="space-y-3">
+            <fieldset class="space-y-1.5">
+              <legend class="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em]">
+                "RETURN DISPOSITION"
+                <span class="sr-only">
+                  " for "
+                  "Walk New Hire Shirt"
+              <div aria-label="RETURN DISPOSITION for Walk New Hire Shirt" class="flex flex-wrap gap-2" role="radiogroup">
+                <label class="bg-card rounded-md border text-[13px] transition-colors has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))] cursor-pointer inline-flex min-h-9 items-center gap-2.5 px-3 py-1.5">
+                  <input checked="" class="bg-card size-4 shrink-0 appearance-none rounded-full border border-ink-4 transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none" name="«id2»-disposition" type="radio" value="restock">
+                  "Restock"
+                <label class="bg-card rounded-md border text-[13px] transition-colors has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-border hover:border-line-strong cursor-pointer inline-flex min-h-9 items-center gap-2.5 px-3 py-1.5">
+                  <input class="bg-card size-4 shrink-0 appearance-none rounded-full border border-ink-4 transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none" name="«id2»-disposition" type="radio" value="scrap">
+                  "Scrap"
+              <p class="text-muted-foreground text-[12px]">
+                "Inspect before choosing."
+            <fieldset class="space-y-1.5">
+              <legend class="text-muted-foreground text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em]">
+                "RETURNED ITEM DESTINATION"
+                <span class="sr-only">
+                  " for "
+                  "Walk New Hire Shirt"
+              <div aria-label="RETURNED ITEM DESTINATION for Walk New Hire Shirt" class="space-y-1.5" role="radiogroup">
+                <div class="bg-card rounded-md border text-[13px] transition-colors has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))] cursor-pointer px-3 py-2">
+                  <label class="flex items-start gap-2.5 cursor-pointer">
+                    <input checked="" class="bg-card size-4 shrink-0 appearance-none rounded-full border border-ink-4 transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none mt-0.5" name="«id2»-destination" type="radio" value="original">
+                    <span class="min-w-0">
+                      "Return to original rack: 31-C"
+                <div class="bg-card rounded-md border text-[13px] transition-colors has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-border hover:border-line-strong cursor-pointer px-3 py-2">
+                  <label class="flex items-start gap-2.5 cursor-pointer">
+                    <input class="bg-card size-4 shrink-0 appearance-none rounded-full border border-ink-4 transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none mt-0.5" name="«id2»-destination" type="radio" value="staging">
+                    <span class="min-w-0">
+                      "Leave in Staging"
+  <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+    <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+      <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+        "Notes"
+    <div class="p-[18px]" data-slot="detail-section-body">
+      <p class="whitespace-pre-wrap text-[13.5px] leading-5">
+        "Two pairs have loose rivets."
+  <section aria-label="History" class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+    <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+      <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+        "History"
+    <div class="" data-slot="detail-section-body">
+      <ol class="flex min-w-0 flex-col" data-slot="timeline" data-variant="rows">
+        <li class="text-muted-foreground px-[18px] py-3 text-[13.5px]">
+          "No history yet."

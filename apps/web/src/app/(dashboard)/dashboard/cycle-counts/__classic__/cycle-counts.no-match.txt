@@ -1,0 +1,66 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]" id="cycle-counts-title">
+              "Cycle counts"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            <span class="block max-w-[640px]">
+              "Recount stock against the system. Approving a count posts adjustments for every variance and brings inventory in line with what was counted."
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-accent text-accent-ink hover:bg-accent/90 h-8 px-3.5 text-[13px]" href="/dashboard/cycle-counts/new">
+          "+ Start a count"
+  <div class="flex min-w-0 flex-wrap items-center justify-between gap-3">
+    <nav aria-label="Filter by status" class="border-border bg-sunk inline-flex w-fit max-w-full items-center overflow-x-auto border [scrollbar-width:thin] gap-0.5 rounded-lg p-[3px]" data-slot="segmented-tabs">
+      <a class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" data-state="inactive" href="/dashboard/cycle-counts?q=zzz">
+        <span>
+          "All statuses"
+      <a class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" data-state="inactive" href="/dashboard/cycle-counts?q=zzz&status=in_progress">
+        <span>
+          "In progress"
+      <a aria-current="page" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]" data-state="active" href="/dashboard/cycle-counts?q=zzz&status=completed">
+        <span>
+          "Completed"
+      <a class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" data-state="inactive" href="/dashboard/cycle-counts?q=zzz&status=canceled">
+        <span>
+          "Canceled"
+    <form aria-label="Cycle count history" class="w-full sm:w-[300px]" role="search">
+      <label class="sr-only" for="cycle-count-search">
+        "Search cycle counts"
+      <div class="relative">
+        <svg aria-hidden="true" class="lucide lucide-search text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+          <path d="m21 21-4.34-4.34">
+          <circle cx="11" cy="11" r="8">
+        <input autocomplete="off" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base pl-8 [&::-webkit-search-cancel-button]:hidden pr-12" enterkeyhint="search" id="cycle-count-search" inputmode="search" maxlength="100" placeholder="Search count #, warehouse, or notes…" spellcheck="false" type="search" value="zzz">
+        <div class="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-1">
+          <button aria-label="Clear search" class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring inline-flex h-6 w-6 items-center justify-center rounded focus-visible:outline-none focus-visible:ring-2 max-sm:h-9 max-sm:w-9" type="button">
+            <svg aria-hidden="true" class="lucide lucide-x h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M18 6 6 18">
+              <path d="m6 6 12 12">
+      <p aria-live="polite" class="sr-only">
+  <div class="border-border bg-card min-w-0 overflow-hidden rounded-lg border">
+    <div class="flex w-full min-w-0 flex-col items-center justify-center text-center gap-3 p-10" data-slot="state-panel" data-state-kind="no-match">
+      <div aria-hidden="true" class="flex items-center justify-center rounded-full size-11 bg-sunk text-muted-foreground" data-slot="state-panel-icon">
+        <svg aria-hidden="true" class="lucide lucide-search-x h-5 w-5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+          <path d="m13.5 8.5-5 5">
+          <path d="m8.5 8.5 5 5">
+          <circle cx="11" cy="11" r="8">
+          <path d="m21 21-4.3-4.3">
+      <h2 class="max-w-md text-foreground font-medium text-[14px] leading-5">
+        "No counts match your search."
+      <div class="text-muted-foreground max-w-md text-[13.5px] leading-[20.25px]">
+        "Search looks at every count you can see: its number (CC-000042, CC-42 or 42), warehouse, and notes."
+      <div class="flex flex-wrap items-center justify-center gap-2 mt-2">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/dashboard/cycle-counts">
+          "Clear search and filters"
+    <div class="border-border border-t">
+      <nav aria-label="Cycle count pages" class="flex flex-col gap-2 px-[18px] py-2.5 sm:flex-row sm:items-center sm:justify-between">
+        <p aria-live="polite" class="text-muted-foreground text-[12.5px] tabular-nums">
+          "Showing 0 cycle counts"
+        <div class="flex gap-2">
+          <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]" disabled="">
+            "Previous"
+          <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]" disabled="">
+            "Next"

@@ -1,0 +1,9 @@
+<div>
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]" data-rental-status="out" data-tone="secondary">
+    "Out"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-destructive-wash text-destructive" data-rental-status="overdue" data-tone="destructive">
+    "Overdue"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success" data-rental-status="returned" data-tone="success">
+    "Returned"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground" data-rental-status="cancelled" data-tone="outline">
+    "Cancelled"
