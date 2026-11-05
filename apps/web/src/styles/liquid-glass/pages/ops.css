@@ -99,12 +99,16 @@
       font-size: 13px;
       font-weight: 500;
     }
-    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='seg'] > *:hover,
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='seg'] > *:hover {
+      color: var(--lg-ink);
+    }
+    /* The selected segment keeps stage 2's lift and its 650 (.seg > .on). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops']
       [data-glass='seg']
       > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
       color: var(--lg-ink);
+      font-weight: 650;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops']
@@ -294,7 +298,7 @@
        list its rows only while it is a table. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops']
-      [data-glass='table']:not([data-slot='po-list'])
+      [data-glass='table']:where(:not([data-slot='po-list']))
       > tbody
       > tr {
       height: var(--lg-row-h);

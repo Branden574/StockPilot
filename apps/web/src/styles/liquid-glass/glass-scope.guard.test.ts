@@ -254,6 +254,10 @@ describe('styles/liquid-glass scope guard', () => {
         .filter((f) => !f.includes('/rentals/items/') || f.endsWith('/rentals/items/new/page.tsx'))
         .sort();
       expect(importers.get('pages/ops.css')?.sort()).toEqual(pages);
+      // Each of them draws the root the shared frame is scoped to.
+      for (const page of pages) {
+        expect(readFileSync(join(APP, page), 'utf8'), page).toMatch(/data-glass-page="ops"/u);
+      }
       const within = (file: string, dirs: string[]) =>
         (importers.get(file) ?? []).every((f) =>
           dirs.some((d) => f.startsWith(`(dashboard)/dashboard/${d}/`)),
