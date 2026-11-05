@@ -577,6 +577,13 @@ describe('an open dialog survives every switch', () => {
   });
 });
 
+/** A pageshow event; jsdom's PageTransitionEvent ignores `persisted` in its init. */
+function pageShow(persisted: boolean): Event {
+  const event = new Event('pageshow');
+  Object.defineProperty(event, 'persisted', { value: persisted });
+  return event;
+}
+
 describe('the marketing variant guard (R8, round 2 finding 2)', () => {
   const hidden = () => document.head.querySelector('style[data-lg-variant-guard]') !== null;
   const marker = () => {
@@ -654,6 +661,44 @@ describe('the marketing variant guard (R8, round 2 finding 2)', () => {
     const { setOverride } = guard({ fallback: true });
     expect(refresh).not.toHaveBeenCalled();
     expect(setOverride).toHaveBeenLastCalledWith(true);
+  });
+
+  it('a marketing page restored from the back/forward cache checks again: Classic chosen while it was frozen refreshes it', () => {
+    nav.pathname = '/';
+    document.body.appendChild(marker());
+    guard();
+    expect(refresh).not.toHaveBeenCalled();
+    // Frozen in the cache while /signin (a whole-document load) chose Classic.
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(true));
+    });
+    expect(hidden()).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('an ordinary page load (not from the cache) does not check again', () => {
+    nav.pathname = '/';
+    document.body.appendChild(marker());
+    guard();
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(false));
+    });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('the provider re-reads the device record on a restore from the cache, so <html> follows a choice made while frozen', () => {
+    nav.pathname = '/dashboard';
+    render(<App />);
+    expect(glassOn()).toBe(true);
+    localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'classic' }));
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(true));
+    });
+    expect(glassOn()).toBe(false);
+    expect(mounts).toBe(1);
   });
 
   it('off the 7 marketing paths it clears any override and does nothing else', () => {

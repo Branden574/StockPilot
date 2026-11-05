@@ -515,12 +515,24 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       const { status } = stateRef.current;
       if (status === 'failed') dispatchRef.current({ type: 'retry', userId: userIdRef.current });
     };
+    // A page restored from the back/forward cache (a static marketing page
+    // left by a whole-document link, say to /signin) was frozen while another
+    // page of this tab made a choice, and storage events never reach a frozen
+    // page: read the device record again, as another tab's choice (that page
+    // saved it). The variant guard then checks the twin on screen (R8).
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (!event.persisted) return;
+      const device = readDeviceRecordRaw();
+      if (device !== null) dispatchRef.current({ type: 'device-changed', device, now: Date.now() });
+    };
     window.addEventListener('storage', onStorage);
+    window.addEventListener('pageshow', onPageShow);
     window.addEventListener(APPEARANCE_SIGNED_OUT_EVENT, onSignedOut);
     window.addEventListener('focus', onRetryMoment);
     window.addEventListener('online', onRetryMoment);
     return () => {
       window.removeEventListener('storage', onStorage);
+      window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener(APPEARANCE_SIGNED_OUT_EVENT, onSignedOut);
       window.removeEventListener('focus', onRetryMoment);
       window.removeEventListener('online', onRetryMoment);
@@ -649,7 +661,10 @@ export const VARIANT_GUARD_TIMEOUT_MS = 2000;
  *     the attribute follows the twin on screen for this page only, so layout
  *     and CSS agree; the choice applies at the next navigation;
  *   - the crash fallback: a glass twin cannot render classic, so the attribute
- *     follows the twin on screen.
+ *     follows the twin on screen;
+ *   - a page restored from the back/forward cache (Back to a marketing page
+ *     left by a whole-document link) runs the check again: the cookie may
+ *     have changed while the page was frozen.
  * Rendered by the provider only once the twins exist (MARKETING_TWINS_BUILT).
  */
 export function MarketingVariantGuard({
@@ -667,6 +682,15 @@ export function MarketingVariantGuard({
 }) {
   const router = useRouter();
   const pathname = currentPath(usePathname());
+  /** Bumped by every restore from the back/forward cache, to run the check again. */
+  const [restored, setRestored] = React.useState(0);
+  React.useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setRestored((n) => n + 1);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
   React.useLayoutEffect(() => {
     if (!hydrated) return;
     if (!(MARKETING_PATHS as readonly string[]).includes(pathname)) {
@@ -709,6 +733,6 @@ export function MarketingVariantGuard({
     observer.observe(document.body, { childList: true, subtree: true, attributes: true });
     router.refresh();
     return finish;
-  }, [hydrated, pathname, shownStyle, fallback, rollout, router, setOverride]);
+  }, [hydrated, pathname, shownStyle, fallback, rollout, router, setOverride, restored]);
   return null;
 }
