@@ -1,6 +1,5 @@
-import { isGlassShowing } from './appearance-cookie';
 import { liquidGlassRollout } from './appearance-flag';
-import { APPEARANCE_ATTRIBUTE } from './appearance-script';
+import { APPEARANCE_ATTRIBUTE, LIQUID_GLASS_ATTRIBUTE_VALUE } from './appearance-script';
 
 /**
  * The dashboard's desktop width, by the Design on screen (Liquid Glass plan
@@ -22,9 +21,23 @@ export const CLASSIC_DESKTOP_QUERY = '(min-width: 768px)';
 /** Liquid Glass's desktop width: one pixel past the boards' 760 px phone layout. */
 export const GLASS_DESKTOP_QUERY = '(min-width: 761px)';
 
+/**
+ * Whether <html> shows Liquid Glass now: the same test as appearance-cookie.ts
+ * isGlassShowing(), read here from the attribute itself. This module is
+ * reached from server code (the dashboard layout imports sidebar-pref.ts for
+ * its cookies), and appearance-cookie.ts is browser-only
+ * (server/fire-and-forget.guard.test.ts BROWSER_ONLY), so it is not imported.
+ */
+function glassOnScreen(): boolean {
+  if (typeof document === 'undefined') return false;
+  return (
+    document.documentElement.getAttribute(APPEARANCE_ATTRIBUTE) === LIQUID_GLASS_ATTRIBUTE_VALUE
+  );
+}
+
 /** The media query that is "desktop" for the Design on screen right now. */
 export function desktopViewportQuery(): string {
-  return isGlassShowing() ? GLASS_DESKTOP_QUERY : CLASSIC_DESKTOP_QUERY;
+  return glassOnScreen() ? GLASS_DESKTOP_QUERY : CLASSIC_DESKTOP_QUERY;
 }
 
 /**
