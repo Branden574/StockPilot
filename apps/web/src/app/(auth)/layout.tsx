@@ -43,6 +43,11 @@ import '@/styles/liquid-glass/auth.glass.css';
  */
 export default function AuthLayout({ children }: { children: ReactNode }) {
   const glass = liquidGlassRollout() !== 'off';
+  const panelBrand = (
+    <Link href="/" aria-label="StockPilot home" className="auth-panel-brand">
+      <IconMark />
+    </Link>
+  );
   return (
     <div className="auth-shell">
       {/* Visual column — desktop and tablet only. */}
@@ -57,17 +62,24 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
 
       {/* Form column. */}
       <div className="auth-panel">
-        <header className="auth-panel-head">
-          <Link href="/" aria-label="StockPilot home" className="auth-panel-brand">
-            <IconMark />
-          </Link>
-          <ThemeToggle />
-          {glass ? (
+        {/* Glass's top bar adds the glass-only Contact the team link. Under
+            `off` the bar is today's element exactly: a `{glass ? link :
+            null}` child would leave a null in its children, and so in the
+            static page's React payload, that today's page does not have. */}
+        {glass ? (
+          <header className="auth-panel-head">
+            {panelBrand}
+            <ThemeToggle />
             <Link href="/contact" data-glass-only="" className="auth-glass-contact">
               Contact the team
             </Link>
-          ) : null}
-        </header>
+          </header>
+        ) : (
+          <header className="auth-panel-head">
+            {panelBrand}
+            <ThemeToggle />
+          </header>
+        )}
 
         <main className="auth-panel-main">
           <div className="auth-panel-col">{children}</div>
@@ -76,16 +88,24 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
         <footer className="auth-panel-foot">
           <p>StockPilot is an invite-only inventory system.</p>
           {/* Someone who cannot get in needs to know whether it is them or us. */}
-          <nav aria-label="Help">
-            <Link href="/support">Support</Link>
-            <Link href="/privacy">Privacy</Link>
-            <Link href="/terms">Terms</Link>
-            {glass ? (
+          {/* Glass adds the glass-only Security link; under `off` the list is
+              today's element exactly, as the top bar above. */}
+          {glass ? (
+            <nav aria-label="Help">
+              <Link href="/support">Support</Link>
+              <Link href="/privacy">Privacy</Link>
+              <Link href="/terms">Terms</Link>
               <span data-glass-only="" className="auth-glass-help">
                 <Link href="/security">Security</Link>
               </span>
-            ) : null}
-          </nav>
+            </nav>
+          ) : (
+            <nav aria-label="Help">
+              <Link href="/support">Support</Link>
+              <Link href="/privacy">Privacy</Link>
+              <Link href="/terms">Terms</Link>
+            </nav>
+          )}
         </footer>
       </div>
     </div>

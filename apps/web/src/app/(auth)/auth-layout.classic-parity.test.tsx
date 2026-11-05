@@ -78,6 +78,36 @@ describe('the classic sign-in shell renders as at the stage 3 base', () => {
     await expect(html).toMatchFileSnapshot(PIN);
   });
 
+  // The server HTML is not the whole page: a static page also carries the
+  // React tree as its payload (self.__next_f), which the browser hydrates
+  // from. A glass-only element written as `{glass ? <X /> : null}` renders
+  // nothing under off but leaves a null in its parent's children there, so
+  // the off build's /signin payload held two nulls today's has not (found
+  // comparing the off build's /signin with a build of the stage 3 base). Under
+  // off every children list in the layout's tree must be today's, with no
+  // empty slot.
+  it('off: no empty slot in any children list, so the page payload is today’s too', () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'off');
+    const empty: string[] = [];
+    const walk = (node: React.ReactNode, path: string): void => {
+      if (!React.isValidElement(node)) return;
+      const props = node.props as { children?: React.ReactNode };
+      const name = typeof node.type === 'string' ? node.type : 'component';
+      const kids = props.children;
+      if (Array.isArray(kids)) {
+        kids.forEach((kid, i) => {
+          if (kid === null || kid === undefined || kid === false)
+            empty.push(`${path} > ${name}[${i}]`);
+          walk(kid as React.ReactNode, `${path} > ${name}`);
+        });
+      } else {
+        walk(kids, `${path} > ${name}`);
+      }
+    };
+    walk(AuthLayout({ children: <p>page</p> }), 'layout');
+    expect(empty).toEqual([]);
+  });
+
   for (const rollout of ROLLOUTS) {
     it(`${rollout}: equal to the pinned file once the inert hooks and glass-only elements are removed`, async () => {
       vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
