@@ -27,7 +27,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const poGet = vi.fn();
 const suppliersList = vi.fn(async () => [{ id: 'sup-1', name: 'Acme' }]);
 const locationsList = vi.fn();
-const receivingList = vi.fn(async () => ({ receipts: [], lines: [] }));
+const receivingHistory = vi.fn(async () => ({ state: 'ok', receipts: [], lines: [] }));
 const warehousesListNames = vi.fn(async () => [{ id: 'wh-1', name: 'Main DC' }]);
 const attachmentsList = vi.fn(async () => []);
 const inventoryByIds = vi.fn(async () => []);
@@ -98,7 +98,7 @@ vi.mock('@/server/services/locations', () => ({
 }));
 vi.mock('@/server/services/receiving', () => ({
   ReceivingService: {
-    forCurrentUser: vi.fn(async () => ({ listForPurchaseOrder: receivingList })),
+    forCurrentUser: vi.fn(async () => ({ historyForPurchaseOrder: receivingHistory })),
   },
 }));
 vi.mock('@/server/services/warehouses', () => ({

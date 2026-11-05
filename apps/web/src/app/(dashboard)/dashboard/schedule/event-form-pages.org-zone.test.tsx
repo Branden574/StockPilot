@@ -67,7 +67,9 @@ vi.mock('@/server/services/warehouses', () => ({
   },
 }));
 vi.mock('@/server/services/bundles', () => ({
-  BundlesService: { forCurrentUser: vi.fn(async () => ({ list: vi.fn(async () => []) })) },
+  BundlesService: {
+    forCurrentUser: vi.fn(async () => ({ listForLookups: vi.fn(async () => []) })),
+  },
 }));
 vi.mock('@/components/schedule/schedule-event-form', () => ({
   ScheduleEventForm: vi.fn(() => null),

@@ -176,6 +176,15 @@ export function ScheduleEventForm({
   const startsRef = React.useRef<HTMLInputElement>(null);
   const endsRef = React.useRef<HTMLInputElement>(null);
   const bundleLocked = Boolean(defaults?.bundleAlreadyDistributed);
+  // The bundle this event is linked to, when the Bundle box does not offer it:
+  // Bundles is off (the page passes no bundles), or the bundle was archived or
+  // made inactive after it was linked (the list holds only active ones). The
+  // form keeps the link and saves it again unless None is chosen, so the box
+  // names it instead of showing nothing (B67).
+  const unlistedBundleId =
+    defaults?.bundleId && !bundles.some((b) => b.id === defaults.bundleId)
+      ? defaults.bundleId
+      : null;
   // The event as Edit opened it: a field still showing it saves it as stored.
   const storedStart = defaults?.startsAt ?? null;
   const storedEnd = defaults?.endsAt ?? null;
@@ -519,6 +528,11 @@ export function ScheduleEventForm({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none">None</SelectItem>
+                {unlistedBundleId && (
+                  <SelectItem value={unlistedBundleId}>
+                    Linked bundle (no longer offered)
+                  </SelectItem>
+                )}
                 {bundles.map((b) => (
                   <SelectItem key={b.id} value={b.id}>
                     {b.name}

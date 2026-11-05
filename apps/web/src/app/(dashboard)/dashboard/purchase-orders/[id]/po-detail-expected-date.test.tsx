@@ -69,7 +69,7 @@ vi.mock('@/server/services/locations', () => ({
 vi.mock('@/server/services/receiving', () => ({
   ReceivingService: {
     forCurrentUser: vi.fn(async () => ({
-      listForPurchaseOrder: vi.fn(async () => ({ receipts: [], lines: [] })),
+      historyForPurchaseOrder: vi.fn(async () => ({ state: 'ok', receipts: [], lines: [] })),
     })),
   },
 }));

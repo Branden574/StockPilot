@@ -6,7 +6,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ create: vi.fn() }));
+const h = vi.hoisted(() => ({ create: vi.fn(), update: vi.fn() }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
@@ -14,7 +14,7 @@ vi.mock('next/navigation', () => ({
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/server/actions/schedule', () => ({
   createScheduleEventAction: h.create,
-  updateScheduleEventAction: vi.fn(),
+  updateScheduleEventAction: h.update,
   deleteScheduleEventAction: vi.fn(),
 }));
 vi.mock('@/lib/timezone', () => ({ formatOrgDateTime: () => 'Oct 20, 9:00 AM' }));
@@ -24,6 +24,7 @@ import { ScheduleEventForm } from './schedule-event-form';
 beforeEach(() => {
   vi.clearAllMocks();
   h.create.mockResolvedValue({ ok: true, data: { id: 'ev-new' } });
+  h.update.mockResolvedValue({ ok: true, data: { id: LINKED_EVENT.id } });
 });
 
 const WAREHOUSES = [{ id: 'wh-1', name: 'Main' }];
@@ -128,5 +129,85 @@ describe('ScheduleEventForm', () => {
     const warning = more.closest('div')!;
     expect(warning).toHaveClass('bg-warning-wash', 'text-warning');
     expect(warning.querySelectorAll('[class*="opacity-"]')).toHaveLength(0);
+  });
+});
+
+// B67: Edit event for an event linked to a bundle the Bundle box does not
+// offer: Bundles is off (the page passes no bundles), or the bundle was
+// archived or made inactive after it was linked (the list holds only active,
+// unarchived bundles). The form kept the link and saved it again, but the box
+// matched no option and showed nothing, so the link was invisible.
+const LINKED_BUNDLE_ID = '0a000000-0000-4000-8000-0000000000b7';
+const LINKED_EVENT = {
+  id: '0a000000-0000-4000-8000-0000000000e1',
+  title: 'Sample delivery',
+  startsAt: MORNING_DELIVERY.startsAt,
+  endsAt: null,
+  allDay: false,
+  warehouseId: 'wh-1',
+  status: 'scheduled' as const,
+  bundleId: LINKED_BUNDLE_ID,
+  bundleQuantity: 5,
+  bundleWarehouseId: 'wh-1',
+  bundleAlreadyDistributed: false,
+};
+
+describe('ScheduleEventForm: a linked bundle the Bundle box does not offer', () => {
+  it('shows "Linked bundle (no longer offered)" in the Bundle box', () => {
+    render(
+      <ScheduleEventForm
+        warehouses={WAREHOUSES}
+        bundles={[]}
+        timeZone={ORG_ZONE}
+        defaults={LINKED_EVENT}
+      />,
+    );
+    expect(screen.getByRole('combobox', { name: 'Bundle' })).toHaveTextContent(
+      'Linked bundle (no longer offered)',
+    );
+    // Its quantity and warehouse stay editable, as for any linked bundle.
+    expect(screen.getByRole('spinbutton', { name: 'Quantity' })).toHaveValue(5);
+    expect(screen.getByRole('combobox', { name: 'Distribute from warehouse' })).toHaveTextContent(
+      'Main',
+    );
+  });
+
+  it('saving without touching the Bundle box keeps the link', async () => {
+    const user = userEvent.setup();
+    render(
+      <ScheduleEventForm
+        warehouses={WAREHOUSES}
+        bundles={[]}
+        timeZone={ORG_ZONE}
+        defaults={LINKED_EVENT}
+      />,
+    );
+    await user.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(h.update).toHaveBeenCalledTimes(1));
+    expect(h.update.mock.calls[0]![0]).toBe(LINKED_EVENT.id);
+    expect(h.update.mock.calls[0]![1]).toMatchObject({
+      bundleId: LINKED_BUNDLE_ID,
+      bundleQuantity: 5,
+      bundleWarehouseId: 'wh-1',
+    });
+  });
+
+  it('a linked bundle the box offers shows its name, with no extra option', () => {
+    render(
+      <ScheduleEventForm
+        warehouses={WAREHOUSES}
+        bundles={[{ id: LINKED_BUNDLE_ID, name: 'Sample starter kit', sku: 'KIT-1' }]}
+        timeZone={ORG_ZONE}
+        defaults={LINKED_EVENT}
+      />,
+    );
+    const box = screen.getByRole('combobox', { name: 'Bundle' });
+    expect(box).toHaveTextContent('Sample starter kit (KIT-1)');
+    expect(box).not.toHaveTextContent('no longer offered');
+  });
+
+  it('no linked bundle: the box shows None', () => {
+    render(<ScheduleEventForm warehouses={WAREHOUSES} bundles={[]} />);
+    expect(screen.getByRole('combobox', { name: 'Bundle' })).toHaveTextContent('None');
   });
 });

@@ -61,7 +61,12 @@ export default async function EditScheduleEventPage({
     if (e instanceof ServiceError && e.code === 'not_found') notFound();
     throw e;
   }
-  const [warehouses, bundles] = await Promise.all([warehousesSvc.listNames(), bundlesSvc.list()]);
+  // [] while Bundles is off, where list() refuses (B67). An event linked to a
+  // bundle keeps the link in `defaults`, and the form names it.
+  const [warehouses, bundles] = await Promise.all([
+    warehousesSvc.listNames(),
+    bundlesSvc.listForLookups(),
+  ]);
 
   // Pull a window of nearby events so the form can warn about overlaps.
   // Excludes the event being edited so saving an unchanged time isn't

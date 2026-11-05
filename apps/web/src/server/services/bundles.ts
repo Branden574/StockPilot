@@ -14,6 +14,7 @@ import { audit } from './audit';
 import {
   assertModuleEnabled,
   assertPermission,
+  isModuleEnabled,
   ServiceError,
   withContext,
   type ServiceContext,
@@ -275,6 +276,27 @@ export class BundlesService {
 
   static async forCurrentUser() {
     return new BundlesService(await withContext());
+  }
+
+  /**
+   * Active bundles for a PICKER on a page that is not itself about bundles
+   * (the Schedule's New event and Edit event). Returns [] when the Bundles
+   * module is off, where `list()` throws.
+   *
+   * WHY (B67). Bundles is an optional module and the Schedule depends only on
+   * Inventory, so an organization can have the Schedule with Bundles off. New
+   * event and Edit event loaded their Bundle box with `list()`, so switching
+   * Bundles off turned both into "Something broke loading this page" and no
+   * event could be added or changed on the web. An empty picker is the right
+   * answer for a module the organization does not use, as for the Suppliers
+   * pickers (SuppliersService.listForLookups).
+   *
+   * NOT A WIDENING: off still means no bundle rows. The Bundles screens and
+   * the API keep `list()`, which refuses. A failed read still throws.
+   */
+  async listForLookups(): Promise<BundleSummary[]> {
+    if (!isModuleEnabled(this.ctx, 'bundles')) return [];
+    return this.list();
   }
 
   async list(opts: { search?: string; includeInactive?: boolean; includeArchived?: boolean } = {}): Promise<BundleSummary[]> {

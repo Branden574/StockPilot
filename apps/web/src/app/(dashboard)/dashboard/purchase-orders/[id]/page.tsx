@@ -94,7 +94,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
   // fetched PO row) start together — one round trip instead of two sequential
   // stages. Only referencedItems below depends on po.lines, so it still waits.
   // (P13) The not_found → notFound() handling stays scoped to po.get().
-  const [result, suppliers, locations, receiptData, warehouses, attachments] = await Promise.all([
+  const [result, suppliers, locations, receiptsRead, warehouses, attachments] = await Promise.all([
     poSvc.get(id).catch((e) => {
       if (e instanceof ServiceError && e.code === 'not_found') notFound();
       throw e;
@@ -114,13 +114,23 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
     // an operator's choice. Reading one back is a different question from
     // offering it, and `isUserFacingLocation` stays untouched.
     locationsSvc.list(),
-    receivingSvc.listForPurchaseOrder(id),
+    // Never throws (B67): Receiving off is `off` and a failed read `failed`.
+    // The strict listForPurchaseOrder() refused with module_disabled when
+    // Receiving was off, and took this whole page down with it.
+    receivingSvc.historyForPurchaseOrder(id),
     warehousesSvc.listNames(),
     poAttachSvc.list(id),
   ]);
 
   const { po, lines } = result;
   const canManagePo = can(ctx, 'purchase_orders:manage');
+  // Receiving is an optional module an owner or admin can switch off while
+  // Purchase orders stays on. Off, the page leaves out the receipts, as the
+  // PO's PDF does, and offers no receiving: no Receive items, no receiving
+  // hint and no card asking for a warehouse to receive into. Each line's
+  // received against ordered stays.
+  const receivingOn = receiptsRead.state !== 'off';
+  const receiptData = receiptsRead.state === 'ok' ? receiptsRead : { receipts: [], lines: [] };
 
   // Load only the items actually referenced on this PO (lines + receipts)
   // instead of the whole inventory. Caps memory + DB scan to ~PO size.
@@ -142,6 +152,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
 
   const status = po.status as string;
   const receivableHere =
+    receivingOn &&
     (status === 'ordered' || status === 'expected_inbound' || status === 'partially_received') &&
     warehouseId !== null;
   // Receiving and reversing a receipt ask stock:adjust (ReceivingService
@@ -253,8 +264,10 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
         receive against — covering BOTH a missing destination AND a destination
         location that has no warehouse_id. The latter is the dead-end that hid
         the Receive button with no way out: the destination was set, so the old
-        `!destination_location_id` gate never fired. */}
-      {warehouseId === null &&
+        `!destination_location_id` gate never fired. Only with Receiving on:
+        the card is about receiving (B67). */}
+      {receivingOn &&
+        warehouseId === null &&
         (status === 'expected_inbound' ||
           status === 'ordered' ||
           status === 'partially_received' ||
@@ -307,16 +320,26 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
               <LineItems rows={lineRows} />
             </DetailSection>
 
-            <DetailSection title="Receipts" bodyClassName="max-sm:px-3">
-              <ReceiptHistory
-                receipts={receiptData.receipts}
-                lines={receiptData.lines}
-                items={Object.fromEntries(
-                  referencedItems.map((i) => [i.id, { name: i.name, sku: i.sku }]),
+            {/* A receipts read that failed says so, never "No receipts yet"
+                for a list that could not be read (B67). */}
+            {receivingOn && (
+              <DetailSection title="Receipts" bodyClassName="max-sm:px-3">
+                {receiptsRead.state === 'failed' ? (
+                  <p className="text-muted-foreground text-[13.5px] leading-[20.25px]">
+                    Receipts could not be loaded. Reload the page to try again.
+                  </p>
+                ) : (
+                  <ReceiptHistory
+                    receipts={receiptData.receipts}
+                    lines={receiptData.lines}
+                    items={Object.fromEntries(
+                      referencedItems.map((i) => [i.id, { name: i.name, sku: i.sku }]),
+                    )}
+                    canReverse={canReverse}
+                  />
                 )}
-                canReverse={canReverse}
-              />
-            </DetailSection>
+              </DetailSection>
+            )}
           </div>
 
           <div className="flex min-w-0 flex-col gap-4">
