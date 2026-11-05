@@ -38,14 +38,22 @@ function layoutHtml(): string {
 }
 
 /**
- * The lab run's normalisation: glass-only elements and inert glass hooks
- * removed, and React's useId values mapped to tokens in order of appearance
- * (an element added before a part that calls useId shifts its value).
+ * The lab run's normalisation (plan 4.7 item 3): glass-only elements and inert
+ * glass hooks removed, whitespace-only text nodes dropped (here: the line
+ * breaks this file puts between tags), and React's useId values mapped to
+ * tokens in order of appearance (an element added before a part that calls
+ * useId shifts its value).
  */
 function normalised(html: string): string {
   const host = document.createElement('div');
   host.innerHTML = html;
   for (const el of host.querySelectorAll('[data-glass-only]')) el.remove();
+  const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+  const blank: Node[] = [];
+  while (walker.nextNode()) {
+    if (/^\s*$/u.test(walker.currentNode.nodeValue ?? '')) blank.push(walker.currentNode);
+  }
+  for (const node of blank) node.parentNode?.removeChild(node);
   for (const el of host.querySelectorAll('*')) {
     for (const name of el.getAttributeNames()) {
       if (name === 'data-glass' || name.startsWith('data-glass-')) el.removeAttribute(name);

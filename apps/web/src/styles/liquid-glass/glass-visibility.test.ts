@@ -49,8 +49,13 @@ describe('glass-only and classic-only elements', () => {
   });
 
   // plans/REVISION-DEFAULT.md item 22: the appearance menu in the external
-  // shell's corner (no data action; tests/e2e/appearance/glass-only-allowlist.json).
-  it('are listed: the external appearance menu only, so a new one is reviewed here first', () => {
-    expect(ELEMENTS.map((e) => e.file)).toEqual(['components/auth/external-shell.tsx']);
+  // shell's corner (no data action); stage 3 site lane: the sign-in shell's
+  // "Contact the team" link and the span around its Security help link
+  // (public page links). Each is on tests/e2e/appearance/glass-only-allowlist.json.
+  it('are listed, so a new one is reviewed here first', () => {
+    expect(ELEMENTS.map((e) => e.file)).toEqual([
+      ...Array<string>(2).fill('app/(auth)/layout.tsx'),
+      'components/auth/external-shell.tsx',
+    ]);
   });
 });
