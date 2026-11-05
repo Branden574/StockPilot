@@ -40,14 +40,21 @@ import {
  *     the guard refreshes it to the classic page. A browser that keeps the
  *     page in its back/forward cache restores it frozen instead; that restore
  *     (pageshow persisted) is the unit half's;
- *  4. offline: the refresh cannot land, so within 2 s the page is shown as it
+ *  4. the reverse of 3: a classic page read again from the HTTP cache after
+ *     Liquid Glass was chosen on /signin; the head script hides it before it
+ *     paints (it marks <html> as glass there) and the guard refreshes it to
+ *     the twin;
+ *  5. 3 on a slow device (CPU 20x), where hydrate may come after the early
+ *     hide's 2 s: the page is then shown coherently (the twin in glass) until
+ *     the guard refreshes it;
+ *  6. offline: the refresh cannot land, so within 2 s the page is shown as it
  *     is, its attribute following the twin on screen (coherent), and the
  *     choice applies at the next navigation.
  * Each frame painted while <html> is visible on a marketing path is sampled
  * (requestAnimationFrame): a frame showing the twin the cookie does not select
  * is "wrong", and one whose glass attribute disagrees with the twin on screen
- * is "incoherent". Cases 1, 2 and 3 allow neither; 4 allows no incoherent
- * frame (an offline page shows its own design until it can change).
+ * is "incoherent". Cases 1 to 4 allow neither; 5 and 6 allow no incoherent
+ * frame (a page past the 2 s cap shows its own design until it can change).
  *
  * Needs a running server: the integrator's lab run. Unit half:
  * components/theme/appearance-provider.test.tsx (the guard's states, the
@@ -134,6 +141,51 @@ test('Back to a landing left by a whole-document link, after Classic was chosen 
   const frames = await flaggedFrames(page);
   expect(frames.wrongTwin, 'a frame of the glass twin under Classic').toEqual([]);
   expect(frames.incoherent, 'the twin on the classic CSS').toEqual([]);
+});
+
+test('Back to a classic marketing page read again from the HTTP cache, after Liquid Glass was chosen on /signin: no frame of the classic page under the glass attribute, then the twin (stage 3 review, finding 2)', async ({
+  page,
+  baseURL,
+}) => {
+  await arriveWith(page.context(), baseURL!, 'classic');
+  await page.goto('/pricing');
+  expect(await twinOnScreen(page)).toBe(false);
+  // A whole-document load: Back reads /pricing again from the HTTP cache
+  // (Playwright's Chromium runs without the back/forward cache).
+  await page.goto('/signin');
+  await chooseLook(page, { design: 'liquid-glass', theme: (await shownLook(page)).theme });
+  await page.goBack();
+  await page.waitForURL('**/pricing');
+  await waitForTwin(page, 'liquid-glass');
+  expect((await shownLook(page)).design).toBe('liquid-glass');
+  const frames = await flaggedFrames(page);
+  expect(frames.wrongTwin, 'a frame of the classic page under Liquid Glass').toEqual([]);
+  expect(frames.incoherent, 'the classic page on the glass CSS').toEqual([]);
+});
+
+test('a slow device (CPU 20x, hydrate after the early hide’s 2 s): Back to a twin under Classic never shows the twin on the classic CSS (stage 3 review, finding 1)', async ({
+  page,
+  baseURL,
+  browserName,
+}) => {
+  test.skip(browserName !== 'chromium', 'CPU throttling is a Chromium DevTools feature');
+  await arriveWith(page.context(), baseURL!, cookieFor(rollout, 'liquid-glass'));
+  await page.goto('/');
+  expect(await twinOnScreen(page)).toBe(true);
+  await page.goto('/signin');
+  await chooseLook(page, { design: 'classic', theme: (await shownLook(page)).theme });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 20 });
+  try {
+    await page.goBack();
+    await page.waitForURL((url) => url.pathname === '/');
+    await waitForTwin(page, 'classic');
+  } finally {
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  }
+  // The 2 s rule may show the twin coherently (glass) until the guard runs;
+  // never the twin on the classic CSS.
+  expect((await flaggedFrames(page)).incoherent, 'the twin on the classic CSS').toEqual([]);
 });
 
 test('offline: when the refresh cannot land, the page is shown within 2 s as it is, attribute and twin agreeing', async ({

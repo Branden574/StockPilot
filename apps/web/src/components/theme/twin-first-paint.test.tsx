@@ -2,10 +2,12 @@ import { renderToString } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { twinSelected, type LiquidGlassRollout } from './appearance-flag';
+import { isLowPowerBrowser, type LowPowerNavigator } from './appearance-script';
 import {
   EARLY_HIDE_ATTRIBUTE,
   EARLY_HIDE_TIMEOUT_MS,
   removeEarlyHide,
+  TWIN_LOW_POWER_EXPRESSION,
   twinFirstPaintScript,
   VARIANT_GUARD_STYLE_ATTRIBUTE,
 } from './twin-first-paint';
@@ -36,6 +38,23 @@ function setCookie(value: string | null) {
 
 const earlyHides = () => document.head.querySelectorAll(`style[${EARLY_HIDE_ATTRIBUTE}]`);
 
+const html = () => document.documentElement;
+
+function setNavigator(nav: { deviceMemory?: number; hardwareConcurrency?: number }) {
+  for (const key of ['deviceMemory', 'hardwareConcurrency'] as const) {
+    Object.defineProperty(window.navigator, key, { configurable: true, get: () => nav[key] });
+  }
+}
+
+/** The head script's early hide on a marketing path (appearance-script.ts). */
+function headEarlyHide() {
+  const style = document.createElement('style');
+  style.setAttribute(VARIANT_GUARD_STYLE_ATTRIBUTE, '');
+  style.setAttribute(EARLY_HIDE_ATTRIBUTE, '');
+  style.textContent = 'html{visibility:hidden!important}';
+  document.head.appendChild(style);
+}
+
 beforeEach(() => {
   document.head.innerHTML = '';
   setCookie(null);
@@ -44,6 +63,9 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
   setCookie(null);
+  html().removeAttribute('data-appearance');
+  html().removeAttribute('data-lg-material');
+  setNavigator({ deviceMemory: undefined, hardwareConcurrency: 8 });
 });
 
 describe('twinFirstPaintScript', () => {
@@ -69,16 +91,73 @@ describe('twinFirstPaintScript', () => {
     }
   }
 
-  it('shows the page again after the guard’s 2 s if nothing removed the hide (no bundle)', () => {
+  it('after the guard’s 2 s with no guard yet (a slow hydrate, or no bundle): shows the page with the attribute following the twin, never the twin on the classic CSS', () => {
     vi.useFakeTimers();
     setCookie('classic');
     new Function(twinFirstPaintScript('default')!)();
     expect(earlyHides()).toHaveLength(1);
+    expect(html().hasAttribute('data-appearance')).toBe(false);
     vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS - 1);
     expect(earlyHides()).toHaveLength(1);
+    expect(html().hasAttribute('data-appearance')).toBe(false);
     vi.advanceTimersByTime(1);
     expect(earlyHides()).toHaveLength(0);
+    expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+    expect(html().hasAttribute('data-lg-material')).toBe(false);
   });
+
+  it('that fallback sets the low-power material where the head script would (R7)', () => {
+    vi.useFakeTimers();
+    setNavigator({ deviceMemory: 2, hardwareConcurrency: 8 });
+    setCookie(null);
+    new Function(twinFirstPaintScript('opt-in')!)();
+    vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS);
+    expect(html().getAttribute('data-appearance')).toBe('liquid-glass');
+    expect(html().getAttribute('data-lg-material')).toBe('reduced');
+  });
+
+  it('has no "<" anywhere (it sits in an element’s innerHTML), and its low-power test is the head script’s', () => {
+    for (const rollout of ['default', 'opt-in'] as LiquidGlassRollout[]) {
+      expect(twinFirstPaintScript(rollout)).not.toContain('<');
+    }
+    const MATRIX: Partial<LowPowerNavigator>[] = [
+      { deviceMemory: undefined, hardwareConcurrency: 1 },
+      { deviceMemory: 0.5, hardwareConcurrency: 8 },
+      { deviceMemory: 2, hardwareConcurrency: 8 },
+      { deviceMemory: 4, hardwareConcurrency: 2 },
+      { deviceMemory: 4, hardwareConcurrency: 4 },
+      { deviceMemory: 8, hardwareConcurrency: 16 },
+      { deviceMemory: 4, hardwareConcurrency: undefined },
+      { deviceMemory: Number.NaN, hardwareConcurrency: 1 },
+    ];
+    for (const nav of MATRIX) {
+      const twin = new Function('n', `return ${TWIN_LOW_POWER_EXPRESSION};`)(nav) as boolean;
+      expect(twin, JSON.stringify(nav)).toBe(isLowPowerBrowser(nav as LowPowerNavigator));
+    }
+  });
+
+  it('a guard already hiding the page at 2 s owns the outcome: the early hide stays (the guard removes it) and the attribute is untouched', () => {
+    vi.useFakeTimers();
+    setCookie('classic');
+    new Function(twinFirstPaintScript('default')!)();
+    const own = document.createElement('style');
+    own.setAttribute(VARIANT_GUARD_STYLE_ATTRIBUTE, '');
+    document.head.appendChild(own);
+    vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS);
+    expect(earlyHides()).toHaveLength(1);
+    expect(html().hasAttribute('data-appearance')).toBe(false);
+  });
+
+  for (const rollout of ['default', 'opt-in'] as LiquidGlassRollout[]) {
+    it(`${rollout}: a cookie that selects the twin removes the head script’s early hide at once and touches nothing else`, () => {
+      setCookie(rollout === 'default' ? null : 'liquid-glass');
+      headEarlyHide();
+      new Function(twinFirstPaintScript(rollout)!)();
+      expect(earlyHides()).toHaveLength(0);
+      expect(document.head.innerHTML).toBe('');
+      expect(html().hasAttribute('data-appearance')).toBe(false);
+    });
+  }
 
   it('a timer after the guard removed the hide does nothing', () => {
     vi.useFakeTimers();
@@ -87,6 +166,7 @@ describe('twinFirstPaintScript', () => {
     removeEarlyHide();
     expect(() => vi.advanceTimersByTime(EARLY_HIDE_TIMEOUT_MS)).not.toThrow();
     expect(document.head.innerHTML).toBe('');
+    expect(html().hasAttribute('data-appearance')).toBe(false);
   });
 
   it('removeEarlyHide removes only the early hide, never the guard’s own', () => {

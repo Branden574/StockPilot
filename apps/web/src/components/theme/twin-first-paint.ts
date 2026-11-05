@@ -1,6 +1,17 @@
 import { APPEARANCE_STORAGE_KEYS } from '@stockpilot/core';
 
 import type { LiquidGlassRollout } from './appearance-flag';
+import {
+  APPEARANCE_ATTRIBUTE,
+  EARLY_HIDE_ATTRIBUTE,
+  EARLY_HIDE_TIMEOUT_MS,
+  earlyHideSnippet,
+  LIQUID_GLASS_ATTRIBUTE_VALUE,
+  LOW_POWER_ATTRIBUTE,
+  LOW_POWER_ATTRIBUTE_VALUE,
+  LOW_POWER_EXPRESSION,
+  VARIANT_GUARD_STYLE_ATTRIBUTE,
+} from './appearance-script';
 
 /**
  * The marketing twin's first-paint check (plans/REVISION-DEFAULT.md R8, round
@@ -18,13 +29,21 @@ import type { LiquidGlassRollout } from './appearance-flag';
  * the document from the disk cache, two frames before the guard hid it).
  *
  * The glass-site layout runs this script before any of the twin's content is
- * parsed. When the cookie does not select the twin it hides the page with the
- * guard's own style element (visibility:hidden on <html>, marked with
- * EARLY_HIDE_ATTRIBUTE), so nothing of the twin is painted; the guard then
- * refreshes to the right page and removes it. If the guard never comes
- * (no JavaScript bundle), the script shows the page again after the guard's
- * 2 s, as the guard itself would (offline). A page whose cookie selects the
- * twin, every fresh load among them, is not touched.
+ * parsed:
+ *   - when the cookie selects the twin, it removes the early hide the head
+ *     script put on a marketing path (appearance-script.ts: that hide covers
+ *     the reverse case, a classic body under a cookie that selects glass), so
+ *     a twin is never held back, and touches nothing else;
+ *   - otherwise it hides the page with the guard's own style element
+ *     (visibility:hidden on <html>, marked with EARLY_HIDE_ATTRIBUTE), so
+ *     nothing of the twin is painted; the guard then refreshes to the right
+ *     page and removes it. If the guard has not started within the guard's
+ *     2 s (a slow device still hydrating, or no bundle at all), the page is
+ *     shown with the attribute following the twin on screen (glass, and the
+ *     low-power material where the head script would set it), as the guard's
+ *     own 2 s rule does: never the twin on the classic CSS. A guard that
+ *     starts later hides the page again before it paints and refreshes.
+ *     A guard already running at 2 s owns the outcome and removes this hide.
  *
  * Only the server's HTML runs it: the layout puts it inside a hidden element's
  * innerHTML, so the copy React renders on a client navigation into the twin
@@ -36,31 +55,37 @@ import type { LiquidGlassRollout } from './appearance-flag';
  * script writes it; twin-first-paint.test.ts runs both over one matrix.
  */
 
-/** The guard's hiding style element (both the guard's own and this script's). */
-export const VARIANT_GUARD_STYLE_ATTRIBUTE = 'data-lg-variant-guard';
-/** Marks the hide this script adds, which the guard removes once it has decided. */
-export const EARLY_HIDE_ATTRIBUTE = 'data-lg-variant-early';
-/** The guard's cap, repeated here for the case where the guard never runs. */
-export const EARLY_HIDE_TIMEOUT_MS = 2000;
+export { EARLY_HIDE_ATTRIBUTE, EARLY_HIDE_TIMEOUT_MS, VARIANT_GUARD_STYLE_ATTRIBUTE };
+
+/**
+ * The head script's low-power test (LOW_POWER_EXPRESSION, isLowPowerBrowser)
+ * with each "x<=2" written "2>=x": the same for every number and for NaN, and
+ * no "<" in a script that sits in an element's innerHTML (twin-first-paint
+ * test runs it over the head script's matrix).
+ */
+export const TWIN_LOW_POWER_EXPRESSION = LOW_POWER_EXPRESSION.replace(/(n\.\w+)<=2/gu, '2>=$1');
 
 /** The script for this rollout, or null under `off`. */
 export function twinFirstPaintScript(rollout: LiquidGlassRollout): string | null {
   if (rollout === 'off') return null;
   const selected = rollout === 'default' ? "v!=='classic'" : "v==='liquid-glass'";
+  // The twin on screen under the guard's 2 s rule: the attribute follows it.
+  const twinBody =
+    `d.setAttribute('${APPEARANCE_ATTRIBUTE}','${LIQUID_GLASS_ATTRIBUTE_VALUE}');` +
+    `var n=navigator;if(${TWIN_LOW_POWER_EXPRESSION})` +
+    `d.setAttribute('${LOW_POWER_ATTRIBUTE}','${LOW_POWER_ATTRIBUTE_VALUE}');`;
   return (
-    '(function(){try{' +
-    `var m=document.cookie.match(/(?:^|; )${APPEARANCE_STORAGE_KEYS.webCookie}=([^;]*)/),v=m&&m[1];` +
-    `if(${selected})return;` +
-    "var s=document.createElement('style');" +
-    `s.setAttribute('${VARIANT_GUARD_STYLE_ATTRIBUTE}','');s.setAttribute('${EARLY_HIDE_ATTRIBUTE}','');` +
-    "s.appendChild(document.createTextNode('html{visibility:hidden!important}'));" +
-    'document.head.appendChild(s);' +
-    `setTimeout(function(){if(s.parentNode)s.parentNode.removeChild(s)},${EARLY_HIDE_TIMEOUT_MS});` +
+    '(function(){try{var d=document.documentElement,' +
+    `m=document.cookie.match(/(?:^|; )${APPEARANCE_STORAGE_KEYS.webCookie}=([^;]*)/),v=m&&m[1];` +
+    // No "<" in the text: it sits in a hidden element's innerHTML.
+    `if(${selected}){var e=document.head.querySelectorAll('style[${EARLY_HIDE_ATTRIBUTE}]'),i;` +
+    'for(i=e.length;i--;)e[i].parentNode.removeChild(e[i]);return;}' +
+    earlyHideSnippet(twinBody) +
     '}catch(e){}})();'
   );
 }
 
-/** Removes this script's hide, once the guard has decided (or has nothing to decide). */
+/** Removes the early hides (this script's or the head script's), once the guard has decided. */
 export function removeEarlyHide(doc: Document = document): void {
   for (const node of doc.head.querySelectorAll(`style[${EARLY_HIDE_ATTRIBUTE}]`)) node.remove();
 }

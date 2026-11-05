@@ -675,10 +675,12 @@ export const VARIANT_GUARD_TIMEOUT_MS = 2000;
  *   - a page restored from the back/forward cache (Back to a marketing page
  *     left by a whole-document link) runs the check again: the cookie may
  *     have changed while the page was frozen;
- *   - a twin document read again from the HTTP cache under a cookie that no
- *     longer selects it was hidden before its first paint by the twin layout's
- *     script (twin-first-paint.ts); the guard removes that hide once it has
- *     decided, as it removes its own.
+ *   - a marketing document read again from the HTTP cache under a cookie that
+ *     no longer selects it was hidden before its first paint: a twin by the
+ *     twin layout's script (twin-first-paint.ts), a classic page under a
+ *     cookie that selects glass by the head script (appearance-script.ts);
+ *     the guard removes that early hide once it has decided, as it removes
+ *     its own.
  * Rendered by the provider only once the twins exist (MARKETING_TWINS_BUILT).
  */
 export function MarketingVariantGuard({
