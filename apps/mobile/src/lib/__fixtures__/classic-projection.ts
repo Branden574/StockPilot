@@ -214,11 +214,37 @@ function cleanJsxText(text: string): string {
   return out;
 }
 
-/** JSX whitespace React drops, and empty `{}` / `{/* comment *\/}` children, removed. */
+/**
+ * A string literal's value when React would receive exactly that text from
+ * the same words written as JSX text or a quoted prop: no `&` (JSX text and
+ * quoted props decode HTML entities and these trees keep the raw text), and
+ * for children nothing JSX text cannot hold.
+ */
+function plainLiteral(e: ts.Expression | undefined, child: boolean): string | null {
+  if (!e) return null;
+  const s = strip(e);
+  if (!ts.isStringLiteral(s) && !ts.isNoSubstitutionTemplateLiteral(s)) return null;
+  if (s.text.includes('&')) return null;
+  if (child && /[{}<>]/.test(s.text)) return null;
+  return s.text;
+}
+
+/**
+ * JSX whitespace React drops, and empty `{}` / `{/* comment *\/}` children,
+ * removed; an element written in braces (`{<A />}`) is that element, a
+ * string in braces (`{'Filters'}`) is that text, and a prop given a string in
+ * braces (`label={'Stock'}`) is the quoted prop (`label="Stock"`).
+ */
 function jsxWhitespace(): ts.TransformerFactory<ts.SourceFile> {
   return (context) => {
     const f = context.factory;
     const visit = (node: ts.Node): ts.VisitResult<ts.Node> => {
+      if (ts.isJsxAttribute(node) && node.initializer && ts.isJsxExpression(node.initializer)) {
+        const text = plainLiteral(node.initializer.expression, false);
+        if (text !== null && !node.initializer.dotDotDotToken) {
+          return f.updateJsxAttribute(node, node.name, f.createStringLiteral(text));
+        }
+      }
       if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
         const visited = ts.visitEachChild(node, visit, context);
         const children: ts.JsxChild[] = [];
@@ -229,6 +255,25 @@ function jsxWhitespace(): ts.TransformerFactory<ts.SourceFile> {
             continue;
           }
           if (ts.isJsxExpression(ch) && !ch.expression) continue;
+          // `{<A />}` is the child `<A />` to React: the container goes.
+          if (ts.isJsxExpression(ch) && ch.expression && !ch.dotDotDotToken) {
+            const inner = strip(ch.expression);
+            if (
+              ts.isJsxElement(inner) ||
+              ts.isJsxSelfClosingElement(inner) ||
+              ts.isJsxFragment(inner)
+            ) {
+              children.push(inner);
+              continue;
+            }
+            // `{'Filters'}` is the text child `Filters` (an empty string is
+            // still a child: React keeps it, so it stays as written).
+            const text = plainLiteral(inner, true);
+            if (text) {
+              children.push(f.createJsxText(text));
+              continue;
+            }
+          }
           children.push(ch);
         }
         return ts.isJsxElement(visited)

@@ -237,4 +237,31 @@ describe('classic projection', () => {
       'export function f() { return g(); }\nfunction g() { return 2; }',
     );
   });
+
+  it('an element or a string in braces is that child, and a braced string prop is the quoted prop', () => {
+    const base =
+      'export const A = () => <View><Eyebrow>{date}</Eyebrow><Mono label="STOCK">FILTERS</Mono></View>;';
+    same(
+      base,
+      "export const A = () => <View>{lg ? null : <Eyebrow>{date}</Eyebrow>}<Mono label={lg ? 'Stock' : 'STOCK'}>{lg ? 'Filters' : 'FILTERS'}</Mono></View>;",
+    );
+    // The classic words still count: a changed string or prop is caught.
+    differs(
+      base,
+      "export const A = () => <View><Eyebrow>{date}</Eyebrow><Mono label={lg ? 'Stock' : 'STOK'}>{lg ? 'Filters' : 'FILTERS'}</Mono></View>;",
+    );
+    differs(
+      base,
+      "export const A = () => <View><Eyebrow>{date}</Eyebrow><Mono label=\"STOCK\">{lg ? 'Filters' : 'FILTER'}</Mono></View>;",
+    );
+    // Entities are decoded in JSX text and quoted props, never in a string:
+    // the two spellings render differently and must not fold together.
+    differs('export const A = () => <T>&amp;</T>;', "export const A = () => <T>{'&amp;'}</T>;");
+    differs(
+      'export const A = () => <T title="&amp;" />;',
+      "export const A = () => <T title={'&amp;'} />;",
+    );
+    // An empty string child stays a child.
+    differs('export const A = () => <T></T>;', "export const A = () => <T>{''}</T>;");
+  });
 });
