@@ -17,6 +17,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { printClassic } from './__fixtures__/classic-projection';
 import { notACountMessage, reviewNotACountMessage } from './count-box-words';
 import { palette, type Palette } from './theme';
 
@@ -71,6 +72,11 @@ function treeOf(file: string): ts.SourceFile {
   return parseTsx(sourceOf(file), file);
 }
 
+/** Code with comments stripped and every whitespace run one space. */
+function flatCode(src: string): string {
+  return codeOnly(src).replace(/\s+/g, ' ');
+}
+
 /** Source with comments stripped, so a comment can never satisfy a pin. */
 function codeOnly(src: string): string {
   return src
@@ -93,6 +99,24 @@ function functionBody(file: string, name: string): string {
 }
 
 /** Every element of a file that matches. */
+/**
+ * The file as Classic runs it: every Liquid Glass branch folded away
+ * (classic-projection.ts). A pin on Classic's exact shape reads this, so a
+ * glass entry beside a Classic value cannot hide or break it.
+ */
+function classicTreeOf(file: string): ts.SourceFile {
+  return parseTsx(printClassic(sourceOf(file), file), file);
+}
+
+function classicElements(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boolean) {
+  const sf = classicTreeOf(file);
+  const els: JsxNode[] = [];
+  walkJsx(sf, (el) => {
+    if (match(el, sf)) els.push(el);
+  });
+  return { sf, els };
+}
+
 function elements(file: string, match: (el: JsxNode, sf: ts.SourceFile) => boolean) {
   const sf = treeOf(file);
   const els: JsxNode[] = [];
@@ -675,7 +699,9 @@ describe('count screen: offline capture and the Post rule', () => {
   });
 
   it('the Post button: its role and disabled state for VoiceOver, its words from the footer, wrapping', () => {
-    const { sf, els } = elements(
+    // Classic's button, read off the Classic projection (Liquid Glass lays
+    // the iOS primary button over the same entries in branches of its own).
+    const { sf, els } = classicElements(
       COUNT,
       (el, s) => tagOf(el, s) === 'Pressable' && attrText(el, 'onPress', s) === 'postCount',
     );
@@ -689,14 +715,29 @@ describe('count screen: offline capture and the Post rule', () => {
     expect(attrText(btn, 'style', sf)).toContain(
       'footer.partial && { backgroundColor: c.warnText, borderColor: c.warnText }',
     );
-    const label = elements(
+    const label = classicElements(
       COUNT,
       (el, s) => tagOf(el, s) === 'Text' && el.getText(s).includes('{footer.label}'),
     ).els;
     expect(label).toHaveLength(1);
     expect(attrText(label[0]!, 'numberOfLines', sf)).toBeUndefined();
     expect(attrText(label[0]!, 'maxFontSizeMultiplier', sf)).toBeUndefined();
-    expect(attrText(label[0]!, 'style', sf)).toBe('[styles.postBtnText, { color: post.fg }]');
+    expect((attrText(label[0]!, 'style', sf) ?? '').replace(/\s+/g, ' ')).toMatch(
+      /^\[ ?styles\.postBtnText, \{ color: post\.fg \},? ?\]$/,
+    );
+    // Liquid Glass keeps the same button, role, state and words; its fill and
+    // words are the iOS primary button's, and a partial post still takes the
+    // warning fill over them.
+    const glass = elements(
+      COUNT,
+      (el, s) => tagOf(el, s) === 'Pressable' && attrText(el, 'onPress', s) === 'postCount',
+    );
+    expect(glass.els).toHaveLength(1);
+    const glassStyle = attrText(glass.els[0]!, 'style', glass.sf) ?? '';
+    expect(glassStyle.indexOf('lg && glassCountStyles(lg).postBtn')).toBeGreaterThan(-1);
+    expect(glassStyle.indexOf('lg && glassCountStyles(lg).postBtn')).toBeLessThan(
+      glassStyle.indexOf('footer.partial && {'),
+    );
   });
 
   // Fix: the footer is pinned to the bottom of the screen and the Post
@@ -704,9 +745,12 @@ describe('count screen: offline capture and the Post rule', () => {
   it('the footer stands clear of the home indicator, and the list reserves its measured height', () => {
     const code = codeOnly(src);
     expect(code).toContain('const insets = useSafeAreaInsets();');
-    expect(code).toMatch(
-      /paddingBottom: space\.md \+ insets\.bottom,\s*\},\s*\]\}\s*onLayout=\{\(e\) => setFooterHeight\(e\.nativeEvent\.layout\.height\)\}/,
+    // Classic's footer, read off the Classic projection.
+    expect(printClassic(src, COUNT)).toMatch(
+      /paddingBottom: space\.md \+ insets\.bottom,?\s*\},?\s*\]\}\s*onLayout=\{\(e\) => setFooterHeight\(e\.nativeEvent\.layout\.height\)\}/,
     );
+    // Liquid Glass's floating entry card clears the home indicator too.
+    expect(code).toContain('lg && { paddingBottom: Math.max(14, insets.bottom - 8) },');
     expect(code).toContain('paddingBottom: footerReservation(footerHeight, 140),');
   });
 
@@ -742,9 +786,15 @@ describe('count screen: offline capture and the Post rule', () => {
   });
 
   it('the sync badge stays in the header, drawn for the device mode the screen now follows', () => {
-    const { sf, els } = elements(COUNT, (el, s) => tagOf(el, s) === 'SyncStatusBadge');
+    const { sf, els } = classicElements(COUNT, (el, s) => tagOf(el, s) === 'SyncStatusBadge');
     expect(els).toHaveLength(1);
     expect(attrText(els[0]!, 'surface', sf)).toBeUndefined();
+    // Liquid Glass draws it once, in the nav (the board's sync capsule), and
+    // Classic's place in the badge row is then empty.
+    const glass = elements(COUNT, (el, s) => tagOf(el, s) === 'SyncStatusBadge');
+    expect(glass.els).toHaveLength(2);
+    for (const el of glass.els) expect(attrText(el, 'surface', glass.sf)).toBeUndefined();
+    expect(flatCode(src)).toContain('{lg ? <View /> : <SyncStatusBadge />}');
   });
 
   it('the progress bar draws the same counted-of-total the header says, never a new number', () => {

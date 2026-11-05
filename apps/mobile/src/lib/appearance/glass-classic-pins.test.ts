@@ -36,6 +36,7 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '6d32450d4607d50dfe274dc2c06b9fc3d655c40dbe673efa8f546910de3b43f6',
   'app/(drawer)/(tabs)/scan.tsx':
     '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
+  'app/cycle-count/[id].tsx': '225237c617095b0e9b0857ca262bbefdb109bc9524436b38f1d34309b31e731e',
   'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
   'app/po/[id].tsx': 'ae76a1de33a4ed14e77b401349006835bb401d9c8f8c77f036f384a989496e74',
   'src/components/biometric-optin-sheet.tsx':
@@ -54,6 +55,8 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '9264f450228d533b6b939f22fc0115baed0ba832cbf2d981fbb80965acd8e372',
   'src/components/AddItemCard.tsx':
     '302328f53fa9f62117bf2c1d103336872622802ed06d13aa5e9a19b8fb8ba22f',
+  'src/components/SyncStatusBadge.tsx':
+    '53583f6d432ac34382392a6a245bd86c1656130570935e7d37b1db3241031547',
   'src/components/ui/button.tsx':
     'd1936a64984533be2a5de3a9349c3c9e6f6f3ea2957dc35c13feb0afff95552a',
   'src/components/ui/card.tsx': 'f7bf1fb3df499eb495654304861a7369dba3ad1e2a9d5420b7a8028debd0f482',
