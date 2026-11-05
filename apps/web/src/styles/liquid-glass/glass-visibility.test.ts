@@ -68,12 +68,16 @@ describe('glass-only and classic-only elements', () => {
   // glass-only copy in the side column (words only, plan 4.6).
   // Stage 4, operations lane: a cycle count's fifth figure and its wide
   // progress bar (words and a bar from the summary the page loads); a
-  // return's progress rail (words and marks from its status).
+  // return's progress rail (words and marks from its status); a purchase
+  // order's receiving summary and its four board line columns, with Classic's
+  // "Received / ordered" column marked Classic-only in the page (figures and
+  // words from the lines).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
       ...Array<string>(2).fill('app/(auth)/layout.tsx'),
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
+      ...Array<string>(2).fill('app/(dashboard)/dashboard/purchase-orders/[id]/page.tsx'),
       'components/auth/external-shell.tsx',
       ...Array<string>(2).fill('components/cycle-counts/count-glass-summary.tsx'),
       'components/dashboard/sidebar.tsx',
@@ -81,6 +85,7 @@ describe('glass-only and classic-only elements', () => {
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',
       ...Array<string>(6).fill('components/orders/orders-export-menu.tsx'),
+      ...Array<string>(9).fill('components/po/po-receiving-glass.tsx'),
       'components/returns/return-progress-rail.tsx',
     ]);
   });

@@ -211,6 +211,26 @@
       "$comment": "Return-Detail.dc.html's progress rail under the page head (.steps, \"Return progress\"): Requested, Approved, Received, Processed, the steps before the return's status done, its status current (aria-current=\"step\"). Words and marks from the return's own status, which the workbench already has (the status badge beside the title says the same). None for a denied or cancelled return. Not rendered under off.",
       "classicTwin": null,
       "gate": null
+    },
+    {
+      "id": "po-receiving-progress",
+      "source": "apps/web/src/components/po/po-receiving-glass.tsx",
+      "selector": "[data-glass=\"po-progress\"]",
+      "kind": "summary block (no action)",
+      "routes": ["/dashboard/purchase-orders/[id]"],
+      "$comment": "Purchase-Order.dc.html's \"Receiving progress\" card over the lines: Received x of y units, Still expected, Expected (the day), and the bar of units received (role progressbar). Sums of the lines' ordered and received quantities and the expected day, which the page already loads (the lines table and Summary print them). Drawn for an ordered, expected, partly or fully received order; not for a draft or cancelled one. No \"Overdue by n days\": that needs the organization's day, which the page does not read. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "po-line-board-columns",
+      "source": "apps/web/src/components/po/po-receiving-glass.tsx",
+      "selector": "[data-testid=\"po-line\"] > td[data-glass-only], th[data-glass^=\"po-line-\"]",
+      "kind": "moved block (no action)",
+      "routes": ["/dashboard/purchase-orders/[id]"],
+      "$comment": "Purchase-Order.dc.html's line columns: Ordered, Received, Outstanding and the line's status (\"n still to come\" or \"Fully received\"). Glass shows them in place of Classic's \"Received / ordered\" column (the head and each line's cell carry data-classic-only and are hidden in glass), so each line's received and ordered figures are on screen once in either design; Outstanding and the status are derived from the same two figures. Figures and words only, no link, button or field. Not rendered under off.",
+      "classicTwin": "the lines table's \"Received / ordered\" column (data-classic-only, hidden in glass)",
+      "gate": null
     }
   ]
 }

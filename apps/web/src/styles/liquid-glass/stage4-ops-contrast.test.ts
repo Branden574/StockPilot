@@ -219,6 +219,12 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['receive label (ink 2) in the reading area', '--lg-ink-2', READING, 4.5],
   ['receive field (ink) on the field frost', '--lg-ink', [...READING, '--lg-field-fill'], 4.5],
   ['Post receipt (on accent) on the accent', '--lg-on-accent', [...OVERLAY, '--lg-accent'], 4.5],
+  ['receiving figure (ink) on the summary card', '--lg-ink', CARD, 4.5],
+  ['"of n units" (ink 3) on the summary card', '--lg-ink-3', CARD, 4.5],
+  ['units received bar (ok fill) on its track', '--lg-ok-fill', [...CARD, '--lg-surface-4'], 3],
+  ['outstanding figure (warn) on the card', '--lg-warn', CARD, 4.5],
+  ['still to come (warn) on its wash', '--lg-warn', [...CARD, '--lg-warn-wash'], 4.5],
+  ['fully received (ok) on its wash', '--lg-ok', [...CARD, '--lg-ok-wash'], 4.5],
   // Returns (pages/returns.css)
   ['RMA number (accent text) on the card', '--lg-accent-text', CARD, 4.5],
   ['RETURNING eyebrow (ink 3) on the pane', '--lg-ink-3', ['--lg-pane'], 4.5],

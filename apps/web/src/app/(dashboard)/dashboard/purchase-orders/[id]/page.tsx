@@ -25,6 +25,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PoAccessDenied } from '@/components/po/po-access-denied';
+import {
+  PoLineGlassCells,
+  PoLineGlassHeads,
+  PoReceivingProgress,
+} from '@/components/po/po-receiving-glass';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
@@ -311,8 +316,17 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                 </>
               }
             >
-              <LineItems rows={lineRows} />
+              <LineItems rows={lineRows} status={status} />
             </DetailSection>
+
+            {/* Liquid Glass only: the board's receiving summary
+                (po-receiving-glass.tsx), between two Classic cards; glass
+                draws it over the lines. */}
+            <PoReceivingProgress
+              status={status}
+              lines={lineRows}
+              expectedAt={(po.expected_at as string | null) ?? null}
+            />
 
             <DetailSection title="Receipts" bodyClassName="max-sm:px-3">
               <ReceiptHistory
@@ -396,7 +410,7 @@ function receivedPercent(received: number, ordered: number): number {
  * right (18 + 32 + 8), since 12 px made it 62 px and a 16-character automatic
  * SKU's line 2 px wider than the card at 360 px.
  */
-function LineItems({ rows }: { rows: LineRow[] }) {
+function LineItems({ rows, status }: { rows: LineRow[]; status: string }) {
   return (
     <Table scrollLabelledBy="po-line-items-heading">
       <TableHeader>
@@ -406,7 +420,13 @@ function LineItems({ rows }: { rows: LineRow[] }) {
             <span className="sr-only">Image</span>
           </TableHead>
           <TableHead className="pl-0">Item</TableHead>
-          <TableHead className="text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap">
+          {/* Liquid Glass only: the board's Ordered, Received, Outstanding
+              and Status columns, in place of the next one. */}
+          <PoLineGlassHeads />
+          <TableHead
+            data-classic-only=""
+            className="text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap"
+          >
             Received / ordered
           </TableHead>
         </TableRow>
@@ -445,7 +465,8 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                   </span>
                 </p>
               </TableCell>
-              <TableCell className="py-2.5 last:pr-[18px]">
+              <PoLineGlassCells line={l} status={status} />
+              <TableCell data-classic-only="" className="py-2.5 last:pr-[18px]">
                 <div className="ml-auto w-24 max-w-full sm:w-[120px]">
                   <div className="flex items-baseline justify-between gap-2 font-mono text-[12px] tabular-nums">
                     <span className="text-foreground">

@@ -14,15 +14,21 @@
    page root; the Receive dialog is portalled, so its rules name the root
    through :root:has(...).
 
-   Deviations, recorded (stage4/ops-rows.md): a purchase order keeps
-   Classic's line table (the photo, the item with its SKU, unit cost and
-   line total, and received against ordered over a bar; the board splits
-   Ordered, Received, Outstanding and a status into columns), the Subtotal
-   and Receive items at the foot of Line items (the board puts Receive in
-   the page head: it owns the dialog, so it is rendered once, where Classic
-   has it), the receipts as Classic writes them (each with its lines and
-   Reverse), and the attachments card; Print stays "Download PDF". The
-   staging card the board draws beside the lines is not built: the page
+   A purchase order draws the board's receiving summary over the lines and
+   the board's line columns (Ordered, Received, Outstanding, Status) in place
+   of Classic's "Received / ordered" column: glass-only elements of the page
+   (components/po/po-receiving-glass.tsx), placed between Classic siblings;
+   Classic's column carries data-classic-only.
+
+   Deviations, recorded (stage4/ops-rows.md): a line keeps Classic's photo
+   cell and its item cell (the name, then the SKU with the unit cost and
+   line total); the summary has no "Overdue by n days" (the overdue rule
+   needs the organization's day, which the page does not read); the
+   Subtotal and Receive items stay at the foot of Line items (the board puts
+   Receive in the page head: it owns the dialog, so it is rendered once,
+   where Classic has it), the receipts as Classic writes them (each with its
+   lines and Reverse), and the attachments card; Print stays "Download PDF".
+   The staging card the board draws beside the lines is not built: the page
    reads no staging placements (FOLLOWUPS: classic has none). The list keeps
    Classic's table and figures (the board's panel draws compact rows).
    Imported only by the purchasing pages. */
@@ -49,9 +55,107 @@
         grid-template-columns: minmax(0, 1fr);
       }
     }
-    /* Line items: the item in ink (14 px), its SKU line in mono xs ink 3,
-       received against ordered in the body face with tabular figures over
-       the board's 6 px bar (.prog). */
+    /* The receiving summary (section.card.p20.col.g12, "Receiving
+       progress"): drawn first in the lines' column; the three figures on
+       one baseline 16 px apart (.stat: the 13/18 label in ink 3 over the
+       28/34 figure; "of n units" at 16/24 in ink 3, 500; the expected day at
+       16/24, 600), then the 10 px bar of units received (.prog: the surface
+       4 track, the ok fill, radius 3). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress'] {
+      display: flex;
+      flex-direction: column;
+      order: -1;
+      gap: 12px;
+      padding: 20px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-figures'] {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-stat'] {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-stat']
+      > span:first-child {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-stat']
+      > span:nth-child(2) {
+      color: var(--lg-ink);
+      font-family: var(--font-display);
+      font-size: 28px;
+      font-weight: 650;
+      line-height: 34px;
+      letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-stat']
+      > [data-glass='po-progress-day'] {
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 24px;
+      letter-spacing: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-of'] {
+      color: var(--lg-ink-3);
+      font-size: 16px;
+      font-weight: 500;
+      line-height: 24px;
+      letter-spacing: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-bar'] {
+      display: flex;
+      height: 10px;
+      overflow: hidden;
+      border-radius: 3px;
+      background: var(--lg-surface-4);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='po-progress-bar']
+      > span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+      background: var(--lg-ok-fill);
+    }
+
+    /* Line items: the item in ink (14 px), its SKU line in mono xs ink 3;
+       then the board's columns (.dt --cols: Ordered 84, Received 84,
+       Outstanding 96, Status from 150): the figures right-aligned with
+       tabular figures, Received strong, Outstanding strong in the warn ink
+       while something is still to come and ink 3 at nothing, the status as
+       the board's badge (b-warn "n still to come", b-ok "Fully
+       received"). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='purchase-order']
       [data-testid='po-line']
@@ -70,41 +174,66 @@
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='purchase-order']
-      [data-testid='po-line']
-      > td:last-child
-      .font-mono {
-      font-family: inherit;
-      font-size: 14px;
+      [data-glass='table']
+      :is(th, td):is(
+        [data-glass='po-line-ordered'],
+        [data-glass='po-line-received'],
+        [data-glass='po-line-outstanding']
+      ) {
+      white-space: nowrap;
       font-variant-numeric: tabular-nums lining-nums;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='table']
+      th:is([data-glass='po-line-ordered'], [data-glass='po-line-received']) {
+      width: 84px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='table']
+      th[data-glass='po-line-outstanding'] {
+      width: 96px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-glass='table']
+      th[data-glass='po-line-status'] {
+      min-width: 150px;
+      padding-right: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
       [data-testid='po-line']
-      > td:last-child
-      .font-mono
-      > span:first-child {
+      > td:is([data-glass='po-line-ordered'], [data-glass='po-line-outstanding']) {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td[data-glass='po-line-received'] {
       color: var(--lg-ink);
       font-weight: 600;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='purchase-order']
       [data-testid='po-line']
-      > td:last-child
-      .font-mono
-      + div {
-      height: 6px;
-      border-radius: 3px;
-      background: var(--lg-surface-4);
+      > td[data-glass='po-line-outstanding'][data-state='due'] {
+      color: var(--lg-warn);
+      font-weight: 600;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='purchase-order']
       [data-testid='po-line']
-      > td:last-child
-      .font-mono
-      + div
-      > div {
-      border-radius: 3px;
-      background: var(--lg-ok-fill);
+      > td[data-glass='po-line-outstanding'][data-state='none'] {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='purchase-order']
+      [data-testid='po-line']
+      > td[data-glass='po-line-status'] {
+      padding-right: 16px;
+      color: var(--lg-ink-3);
     }
     /* The Subtotal at the lines' foot: its figure in the body face. */
     :root[data-appearance='liquid-glass']
