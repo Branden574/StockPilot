@@ -325,3 +325,68 @@ export function glassCheckboxTone(
   const fill = disabled ? lg.c.ink4 : lg.g.accent;
   return { fill, border: fill, glyph: disabled ? lg.c.card : lg.g.onAccent };
 }
+
+/**
+ * One row of a list drawn as a single grouped surface across separate list
+ * items (the Items and Books tabs' continuous group): the content fill, a
+ * .5pt card-line edge round the outside only, radius 24 at the group's two
+ * ends (.ios-group [708]); a ticked row on the selection fill (--sel-fill).
+ */
+export function glassGroupRow(
+  lg: GlassLook,
+  edges: { first: boolean; last: boolean; picked?: boolean; header?: boolean },
+): ViewStyle {
+  const r = GLASS_METRICS.group.radius;
+  const fill = edges.picked
+    ? lg.g.selFill
+    : isOpaqueLook(lg)
+      ? lg.ios.card
+      : edges.header
+        ? lg.g.cardFill2
+        : lg.g.cardFill;
+  const edge = isOpaqueLook(lg) ? 0 : StyleSheet.hairlineWidth;
+  return {
+    backgroundColor: fill,
+    borderColor: lg.g.cardLine,
+    borderTopWidth: edges.first ? edge : 0,
+    borderBottomWidth: edges.last ? edge : 0,
+    borderLeftWidth: edge,
+    borderRightWidth: edge,
+    borderTopLeftRadius: edges.first ? r : 0,
+    borderTopRightRadius: edges.first ? r : 0,
+    borderBottomLeftRadius: edges.last ? r : 0,
+    borderBottomRightRadius: edges.last ? r : 0,
+  };
+}
+
+/** A list quantity as the boards draw it (19pt 700, tabular figures). */
+export const glassQuantity = cached((lg): TextStyle => ({
+  ...lg.font.displaySemi,
+  fontSize: 19,
+  fontWeight: '700',
+  letterSpacing: 0,
+  fontVariant: ['tabular-nums'],
+}));
+
+/** A product family title (17/600, the Lookup board's family head). */
+export const glassFamilyTitle = cached((lg): TextStyle => ({
+  ...lg.font.displaySemi,
+  fontSize: 17,
+  lineHeight: 22,
+  letterSpacing: 0,
+}));
+
+/** The iOS search field (.ios-search [721]): --ios-fill, 44pt, radius 22, no border. */
+export const glassSearchBox = cached((lg): ViewStyle => ({
+  backgroundColor: lg.ios.fill,
+  borderWidth: 0,
+  borderRadius: GLASS_METRICS.search.radius,
+  minHeight: GLASS_METRICS.search.height,
+  paddingHorizontal: GLASS_METRICS.search.paddingHorizontal,
+  gap: GLASS_METRICS.search.gap,
+}));
+export const glassSearchInput = cached((lg): TextStyle => ({
+  ...lg.font.displayRegular,
+  fontSize: GLASS_METRICS.search.fontSize,
+  letterSpacing: 0,
+}));

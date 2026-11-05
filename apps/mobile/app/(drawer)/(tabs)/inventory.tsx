@@ -99,6 +99,25 @@ import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourActive, useTourTarget } from '@/lib/tour-targets';
 import { MOBILE_INVENTORY_TOUR } from '@/lib/onboarding';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import {
+  glassCardStyle,
+  glassFamilyTitle,
+  glassGroupRow,
+  glassPillLabel,
+  glassQuantity,
+  glassRowSub,
+  glassRowTitle,
+  glassSearchBox,
+  glassSearchInput,
+} from '@/components/ui/glass/primitive-styles';
+import {
+  GLASS_LOOKUP,
+  GLASS_LOOKUP_SEPARATOR_INSET,
+  GLASS_LOOKUP_THUMB,
+} from '@/components/ui/glass/screens/lookup';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { inventoryViewPredicate } from '@stockpilot/core';
 
 interface Item {
@@ -192,6 +211,10 @@ export default function Inventory() {
   const router = useRouter();
   const navigation = useNavigation();
   const { c } = useTheme();
+  // Liquid Glass (iOS-Lookup.dc.html): the board's title, search field, count
+  // line and grouped rows over the scene; every control and line Classic has
+  // keeps its place, so typed searches, filters and the list stay mounted.
+  const lg = useGlass();
   // The bottom tab bar uses position: 'absolute' (see (tabs)/_layout.tsx),
   // so the FlatList content extends behind it. Use the navigator's
   // real height — covers the home-indicator inset on every iPhone form
@@ -819,7 +842,14 @@ export default function Inventory() {
         placementLabelFor,
         datasetIsTruncated: truncated,
       }),
-    [pageRows, expandedGroups, expandedSkuGroups, expandedExplicitGroups, placementLabelFor, truncated],
+    [
+      pageRows,
+      expandedGroups,
+      expandedSkuGroups,
+      expandedExplicitGroups,
+      placementLabelFor,
+      truncated,
+    ],
   );
 
   // P5: an explicit header says "N matching" under a search or a filter.
@@ -926,10 +956,15 @@ export default function Inventory() {
   );
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LOOKUP.nav : styles.topbar}>
+          <View
+            style={
+              lg ? GLASS_LOOKUP.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
@@ -941,7 +976,11 @@ export default function Inventory() {
             />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <View
+            style={
+              lg ? GLASS_LOOKUP.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             {selectOffers.any ? (
               <IconChip
                 icon={selectMode ? Check : ListChecks}
@@ -960,7 +999,7 @@ export default function Inventory() {
             </View>
           </View>
         </View>
-        <View style={styles.head}>
+        <View style={lg ? GLASS_LOOKUP.head : styles.head}>
           {/* Counts inventory_items ROWS. It said "SKUS", which under Model B
               (mig 0234: one SKU is one row PER charter/bin) is a different and
               smaller number — the same misnaming the Books eyebrow already
@@ -968,29 +1007,47 @@ export default function Inventory() {
               of it; when truncated it quotes the server's count and the line
               below says the list is showing less than that. A failed read
               holds no rows, so it quotes no count rather than "0". */}
-          <Eyebrow>
-            {loadError !== null
-              ? 'INVENTORY · ITEMS'
-              : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
-          </Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Items<Em>.</Em>
+          {/* Liquid Glass says the count under the search field, as the board. */}
+          {lg ? null : (
+            <Eyebrow>
+              {loadError !== null
+                ? 'INVENTORY · ITEMS'
+                : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
+            </Eyebrow>
+          )}
+          <Display
+            size={34}
+            style={lg ? GLASS_LOOKUP.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Items
+            {lg ? null : <Em>.</Em>}
           </Display>
-          <View style={{ marginTop: 10 }}>
+          <View style={{ marginTop: lg ? 6 : 10 }}>
             <MobileTour tour={MOBILE_INVENTORY_TOUR} />
           </View>
         </View>
 
-        <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
+        <View
+          style={
+            lg
+              ? GLASS_LOOKUP.searchArea
+              : { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }
+          }
+        >
           {/* The shared input look: the card fill and the stronger border (a
               control must not rely on a hairline alone), the muted-ink icon
               and placeholder (the faint ink4 held the placeholder under AA). */}
           <View
             ref={searchTargetRef}
             collapsable={false}
-            style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}
+            style={[
+              styles.searchBox,
+              { backgroundColor: c.card, borderColor: c.hair2 },
+              lg && glassSearchBox(lg),
+            ]}
           >
-            <Search size={16} color={c.ink3} strokeWidth={1.4} />
+            <Search size={lg ? 20 : 16} color={c.ink3} strokeWidth={lg ? 1.8 : 1.4} />
             <TextInput
               value={q}
               onChangeText={setQ}
@@ -1006,7 +1063,11 @@ export default function Inventory() {
               autoFocus={false}
               returnKeyType="search"
               onSubmitEditing={() => Keyboard.dismiss()}
-              style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
+              style={[
+                styles.searchInput,
+                { color: c.ink, fontFamily: FONT.displayRegular },
+                lg && glassSearchInput(lg),
+              ]}
             />
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             <Pressable
@@ -1015,9 +1076,20 @@ export default function Inventory() {
               accessibilityRole="button"
               accessibilityLabel="Open scanner"
             >
-              <Barcode size={18} color={c.ink} strokeWidth={1.6} />
+              <Barcode
+                size={lg ? 20 : 18}
+                color={lg ? lg.g.accentText : c.ink}
+                strokeWidth={lg ? 1.8 : 1.6}
+              />
             </Pressable>
           </View>
+
+          {/* The board's count line (.ios-sub num): the rows the list holds. */}
+          {lg ? (
+            <GlassSubline style={GLASS_LOOKUP.count}>
+              {loadError !== null ? 'Items' : `${datasetRowCount.toLocaleString()} items`}
+            </GlassSubline>
+          ) : null}
 
           <ActiveFilterPill
             state={filter}
@@ -1068,7 +1140,7 @@ export default function Inventory() {
           data={groupedRows}
           keyExtractor={keyExtractor}
           contentContainerStyle={{
-            paddingHorizontal: 20,
+            paddingHorizontal: lg ? 16 : 20,
             // In select mode the bar floats 12pt above the tab bar: the list
             // ends 12pt above the bar, so the pager under the last row is
             // never hidden behind it (it was: the bar covered about 45pt).
@@ -1179,6 +1251,7 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
   isLast: boolean;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   // A STORED group knows what it is and what it counts in: "3 variants · 18
   // pairs total". A name-derived run knows neither, so it keeps the weaker
   // "3 sizes" claim — every ungrouped org reads exactly as before.
@@ -1193,28 +1266,38 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
       onPress={onToggle}
       accessibilityRole="button"
       accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${baseName}, ${subtitle}`}
-      style={({ pressed }) => ({
-        // Same continuous-card border model as ItemRow so headers sit flush in
-        // the list. The recessed fill (sunk) and the chevron mark them as a
-        // group (DESIGN-SPEC 6.21); paper2 is the card colour in dark mode, so
-        // the header did not show there.
-        backgroundColor: c.sunk,
-        borderTopWidth: index === 0 ? 1 : 0,
-        borderBottomWidth: 1,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: c.hair,
-        borderTopLeftRadius: index === 0 ? 10 : 0,
-        borderTopRightRadius: index === 0 ? 10 : 0,
-        borderBottomLeftRadius: isLast ? 10 : 0,
-        borderBottomRightRadius: isLast ? 10 : 0,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        paddingVertical: 15,
-        paddingHorizontal: 14,
-        opacity: pressed ? 0.7 : 1,
-      })}
+      style={({ pressed }) =>
+        // Liquid Glass: the run's header is a row of the one grouped surface
+        // (the second card fill marks it as a header beside the chevron).
+        lg
+          ? [
+              glassGroupRow(lg, { first: index === 0, last: isLast, header: true }),
+              GLASS_LOOKUP.header,
+              { opacity: pressed ? 0.7 : 1 },
+            ]
+          : {
+              // Same continuous-card border model as ItemRow so headers sit flush in
+              // the list. The recessed fill (sunk) and the chevron mark them as a
+              // group (DESIGN-SPEC 6.21); paper2 is the card colour in dark mode, so
+              // the header did not show there.
+              backgroundColor: c.sunk,
+              borderTopWidth: index === 0 ? 1 : 0,
+              borderBottomWidth: 1,
+              borderLeftWidth: 1,
+              borderRightWidth: 1,
+              borderColor: c.hair,
+              borderTopLeftRadius: index === 0 ? 10 : 0,
+              borderTopRightRadius: index === 0 ? 10 : 0,
+              borderBottomLeftRadius: isLast ? 10 : 0,
+              borderBottomRightRadius: isLast ? 10 : 0,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+              paddingVertical: 15,
+              paddingHorizontal: 14,
+              opacity: pressed ? 0.7 : 1,
+            }
+      }
     >
       {/* Muted ink, not ink4: the chevron says open or closed, and ink4 is
           under 3:1 on the recessed fill in light mode. */}
@@ -1228,14 +1311,23 @@ const GroupHeaderRow = React.memo(function GroupHeaderRow({
         {/* Dynamic Type: unbounded. The row is paddingVertical-based, so it
             grows for free — any line ceiling here is pure loss, and the name
             is content (plan §3), not chrome. */}
-        <Mono color={c.ink} size={15.5} style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}>
+        <Mono
+          color={c.ink}
+          size={15.5}
+          style={lg ? glassFamilyTitle(lg) : { fontFamily: FONT.display, letterSpacing: -0.19 }}
+        >
           {baseName}
         </Mono>
-        <Mono size={11.5} color={c.ink3} tracking={0.04} style={{ marginTop: 4 }}>
+        <Mono
+          size={11.5}
+          color={c.ink3}
+          tracking={0.04}
+          style={lg ? glassRowSub(lg) : { marginTop: 4 }}
+        >
           {subtitle}
         </Mono>
       </View>
-      <Mono size={15} color={c.ink} style={rowStyles.quantity}>
+      <Mono size={15} color={c.ink} style={lg ? glassQuantity(lg) : rowStyles.quantity}>
         {total}
       </Mono>
     </Pressable>
@@ -1295,6 +1387,7 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
   stacked: boolean;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   // The SAME ladder the rows below run (lib/expected-items.ts, shared with the
   // Books list) — the header's inputs are the group's rolled-up lifecycle and
   // summed quantity, so it can only differ from a child where the NUMBERS
@@ -1307,25 +1400,33 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
       accessibilityLabel={`${expanded ? 'Collapse' : 'Expand'} ${name}, ${
         countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`
       }${partial ? ` shown, at least ${total} on hand` : ''}`}
-      style={({ pressed }) => ({
-        // The header recipe: the recessed fill (see GroupHeaderRow).
-        backgroundColor: c.sunk,
-        borderTopWidth: index === 0 ? 1 : 0,
-        borderBottomWidth: 1,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: c.hair,
-        borderTopLeftRadius: index === 0 ? 10 : 0,
-        borderTopRightRadius: index === 0 ? 10 : 0,
-        borderBottomLeftRadius: isLast ? 10 : 0,
-        borderBottomRightRadius: isLast ? 10 : 0,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        paddingVertical: 15,
-        paddingHorizontal: 14,
-        opacity: pressed ? 0.7 : 1,
-      })}
+      style={({ pressed }) =>
+        lg
+          ? [
+              glassGroupRow(lg, { first: index === 0, last: isLast, header: true }),
+              GLASS_LOOKUP.header,
+              { opacity: pressed ? 0.7 : 1 },
+            ]
+          : {
+              // The header recipe: the recessed fill (see GroupHeaderRow).
+              backgroundColor: c.sunk,
+              borderTopWidth: index === 0 ? 1 : 0,
+              borderBottomWidth: 1,
+              borderLeftWidth: 1,
+              borderRightWidth: 1,
+              borderColor: c.hair,
+              borderTopLeftRadius: index === 0 ? 10 : 0,
+              borderTopRightRadius: index === 0 ? 10 : 0,
+              borderBottomLeftRadius: isLast ? 10 : 0,
+              borderBottomRightRadius: isLast ? 10 : 0,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 10,
+              paddingVertical: 15,
+              paddingHorizontal: 14,
+              opacity: pressed ? 0.7 : 1,
+            }
+      }
     >
       <ChevronRight
         size={18}
@@ -1333,7 +1434,9 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
         strokeWidth={1.8}
         style={{ transform: [{ rotate: expanded ? '90deg' : '0deg' }] }}
       />
-      {imageUrl !== undefined ? <Thumb size={56} imageUrl={imageUrl} /> : null}
+      {imageUrl !== undefined ? (
+        <Thumb size={lg ? GLASS_LOOKUP_THUMB : 56} imageUrl={imageUrl} />
+      ) : null}
       <View style={stacked ? rowStyles.bodyStacked : [rowStyles.bodyRow, rowStyles.bodyRowTight]}>
         <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
           {/* Dynamic Type: unbounded, like the placement rows this header
@@ -1344,17 +1447,22 @@ const SkuGroupHeaderRow = React.memo(function SkuGroupHeaderRow({
           <Mono
             color={c.ink}
             size={15.5}
-            style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+            style={lg ? glassFamilyTitle(lg) : { fontFamily: FONT.display, letterSpacing: -0.19 }}
           >
             {name}
           </Mono>
-          <Mono size={11.5} color={c.ink3} tracking={0.04} style={{ marginTop: 4 }}>
+          <Mono
+            size={11.5}
+            color={c.ink3}
+            tracking={0.04}
+            style={lg ? glassRowSub(lg) : { marginTop: 4 }}
+          >
             {countLabel ?? `${placementCount} placement${placementCount === 1 ? '' : 's'}`}
             {partial ? ' shown' : ''}
           </Mono>
         </View>
         <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
-          <Mono size={15} color={c.ink} style={rowStyles.quantity}>
+          <Mono size={15} color={c.ink} style={lg ? glassQuantity(lg) : rowStyles.quantity}>
             {/* A sum over the loaded rows only is marked with a leading ≥
                 rather than presented as the SKU's stock. */}
             {partial ? `≥${total}` : total}
@@ -1400,6 +1508,7 @@ const ItemRow = React.memo(function ItemRow({
   stacked: boolean;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const picked = useIsPicked(item.id);
   // EXPECTED (awaiting first receipt) replaces OUT for PO-created phantoms —
   // they were never delivered, so "Out of stock" is the exact misreading this
@@ -1408,21 +1517,27 @@ const ItemRow = React.memo(function ItemRow({
   const Icon = LIST_GLYPH_ICON[itemListGlyph(item)];
   return (
     <View
-      style={{
-        // A picked row takes the accent wash, the web's selected row
-        // (DESIGN-SPEC 6.21); the ticked box is its cue beyond colour. It was
-        // paper2, which is the card colour in dark mode.
-        backgroundColor: picked ? c.accentWash : c.card,
-        borderTopWidth: index === 0 ? 1 : 0,
-        borderBottomWidth: 1,
-        borderLeftWidth: 1,
-        borderRightWidth: 1,
-        borderColor: c.hair,
-        borderTopLeftRadius: index === 0 ? 10 : 0,
-        borderTopRightRadius: index === 0 ? 10 : 0,
-        borderBottomLeftRadius: isLast ? 10 : 0,
-        borderBottomRightRadius: isLast ? 10 : 0,
-      }}
+      style={
+        // Liquid Glass: one grouped surface down the list (.ios-group), a
+        // ticked row on the selection fill.
+        lg
+          ? glassGroupRow(lg, { first: index === 0, last: isLast, picked })
+          : {
+              // A picked row takes the accent wash, the web's selected row
+              // (DESIGN-SPEC 6.21); the ticked box is its cue beyond colour. It was
+              // paper2, which is the card colour in dark mode.
+              backgroundColor: picked ? c.accentWash : c.card,
+              borderTopWidth: index === 0 ? 1 : 0,
+              borderBottomWidth: 1,
+              borderLeftWidth: 1,
+              borderRightWidth: 1,
+              borderColor: c.hair,
+              borderTopLeftRadius: index === 0 ? 10 : 0,
+              borderTopRightRadius: index === 0 ? 10 : 0,
+              borderBottomLeftRadius: isLast ? 10 : 0,
+              borderBottomRightRadius: isLast ? 10 : 0,
+            }
+      }
     >
       <Pressable
         onPress={() => (selectMode ? onToggleSelect(item) : onItemPress(item.id))}
@@ -1444,16 +1559,24 @@ const ItemRow = React.memo(function ItemRow({
             },
           })
         }
-        style={({ pressed }) => [rowStyles.row, { opacity: pressed ? 0.7 : 1 }]}
+        style={({ pressed }) => [
+          lg ? GLASS_LOOKUP.row : rowStyles.row,
+          { opacity: pressed ? 0.7 : 1 },
+        ]}
       >
-        <Thumb size={56} icon={Icon} imageUrl={item.imageUrl ?? null} recyclingKey={item.id} />
+        <Thumb
+          size={lg ? GLASS_LOOKUP_THUMB : 56}
+          icon={Icon}
+          imageUrl={item.imageUrl ?? null}
+          recyclingKey={item.id}
+        />
         <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
           <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
             <Mono
               color={c.ink}
               size={15.5}
               tracking={0}
-              style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+              style={lg ? glassRowTitle(lg) : { fontFamily: FONT.display, letterSpacing: -0.19 }}
             >
               {item.name}
             </Mono>
@@ -1462,14 +1585,19 @@ const ItemRow = React.memo(function ItemRow({
               color={c.ink3}
               tracking={0.04}
               numberOfLines={1}
-              style={{ marginTop: 4 }}
+              style={lg ? glassRowSub(lg) : { marginTop: 4 }}
             >
               {placementLabel ?? item.sku}
             </Mono>
             {groupChip ? (
               // Content, so uncapped: it wraps under the name at any size.
               <View style={rowStyles.chipLine}>
-                <Mono size={10.5} color={c.ink3} tracking={0.02}>
+                <Mono
+                  size={10.5}
+                  color={c.ink3}
+                  tracking={0.02}
+                  style={lg ? glassRowSub(lg) : undefined}
+                >
                   {groupChip}
                 </Mono>
                 {addToGroupId && onAddToGroup ? (
@@ -1483,7 +1611,12 @@ const ItemRow = React.memo(function ItemRow({
                     ]}
                   >
                     <View style={[rowStyles.addToGroup, { borderColor: c.hair2 }]}>
-                      <Mono size={10.5} color={c.ink} tracking={0.02}>
+                      <Mono
+                        size={10.5}
+                        color={c.ink}
+                        tracking={0.02}
+                        style={lg ? glassPillLabel(lg) : undefined}
+                      >
                         {GROUP_COPY.addToGroup}
                       </Mono>
                     </View>
@@ -1493,7 +1626,7 @@ const ItemRow = React.memo(function ItemRow({
             ) : null}
           </View>
           <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
-            <Mono size={15} color={c.ink} style={rowStyles.quantity}>
+            <Mono size={15} color={c.ink} style={lg ? glassQuantity(lg) : rowStyles.quantity}>
               {item.quantity_on_hand}
             </Mono>
             <Pill status={pill.status}>{pill.label}</Pill>
@@ -1508,7 +1641,7 @@ const ItemRow = React.memo(function ItemRow({
           </View>
         ) : null}
       </Pressable>
-      {!isLast ? <Hair inset={86} /> : null}
+      {!isLast ? <Hair inset={lg ? GLASS_LOOKUP_SEPARATOR_INSET : 86} /> : null}
     </View>
   );
 });
@@ -1711,6 +1844,7 @@ function TourRowAnchor({ children }: { children: React.ReactNode }) {
  */
 function SampleItemRow() {
   const { c } = useTheme();
+  const lg = useGlass();
   const ref = useTourTarget('inventory-first-row');
   // Rendered once, off the list, so it reads the scale directly — but it is a
   // visual clone of ItemRow and has to stack with it, or the tour spotlights
@@ -1720,22 +1854,31 @@ function SampleItemRow() {
   return (
     <View ref={ref} collapsable={false}>
       <View
-        style={{
-          backgroundColor: c.card,
-          borderWidth: StyleSheet.hairlineWidth,
-          borderColor: c.hair,
-          borderRadius: 10,
-        }}
+        style={
+          lg
+            ? glassCardStyle(lg)
+            : {
+                backgroundColor: c.card,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: c.hair,
+                borderRadius: 10,
+              }
+        }
       >
-        <View style={rowStyles.row}>
-          <Thumb size={56} icon={Box} imageUrl={null} recyclingKey="sample" />
+        <View style={lg ? GLASS_LOOKUP.row : rowStyles.row}>
+          <Thumb
+            size={lg ? GLASS_LOOKUP_THUMB : 56}
+            icon={Box}
+            imageUrl={null}
+            recyclingKey="sample"
+          />
           <View style={stacked ? rowStyles.bodyStacked : rowStyles.bodyRow}>
             <View style={stacked ? rowStyles.nameColStacked : rowStyles.nameCol}>
               <Mono
                 color={c.ink}
                 size={15.5}
                 tracking={0}
-                style={{ fontFamily: FONT.display, letterSpacing: -0.19 }}
+                style={lg ? glassRowTitle(lg) : { fontFamily: FONT.display, letterSpacing: -0.19 }}
               >
                 Acer Chromebook 511
               </Mono>
@@ -1744,13 +1887,13 @@ function SampleItemRow() {
                 color={c.ink3}
                 tracking={0.04}
                 numberOfLines={1}
-                style={{ marginTop: 4 }}
+                style={lg ? glassRowSub(lg) : { marginTop: 4 }}
               >
                 SAMPLE-001 · example item
               </Mono>
             </View>
             <View style={[rowStyles.trailingCol, stacked && rowStyles.trailingColStacked]}>
-              <Mono size={15} color={c.ink} style={rowStyles.quantity}>
+              <Mono size={15} color={c.ink} style={lg ? glassQuantity(lg) : rowStyles.quantity}>
                 25
               </Mono>
               <Pill status="ok">SAMPLE</Pill>
