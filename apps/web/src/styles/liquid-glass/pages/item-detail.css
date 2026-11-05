@@ -1,0 +1,238 @@
+/* The item and book page under Liquid Glass (stage 3, items lane):
+   Item-Detail.dc.html and Book-Detail.dc.html ("photos and cost history keep
+   their current layouts with the new tokens"). CSS on today's markup (M1):
+   the page keeps its classic composition (back link, photo, name, meta line,
+   every action, tabs, figures, cards) and takes the board's frame: the 1480
+   page, the 26 px name, the SKU as the outline mono chip, the figures as
+   wells with the figure above its label, radius 20 cards with 52 px headers
+   and 16 px titles, the accent tab underline (primitives.css), the outline
+   focus ring. Cards, badges, buttons, fields and dialogs take their glass
+   from the shared hooks (materials.css, primitives.css).
+
+   Deviations, recorded: the board's summary card (a 160 px photo beside the
+   size selector, Available and Reserved wells and a reorder alert) and its
+   Ordering, Reserved, Expected and Product family cards need data this page
+   does not load, so they are not drawn; the tabs stay in the sticky header,
+   above the overview, where classic has them (the board puts Movements,
+   Orders, Photos and Cost history in a card); every classic action stays a
+   button in the header row at its classic size (the board shows three and a
+   More menu); a book keeps the square header photo (the board's cover sits
+   in the summary card).
+
+   Imported by its own routes (app/(dashboard)/dashboard/inventory/[id]/page.tsx
+   and books/[id]/page.tsx), scoped to the root ItemDetail draws,
+   [data-glass-page=item-detail], an inert hook
+   (components/inventory/item-detail.redesign.test.tsx, classic parity). The
+   sticky header is found by the attribute it already carries,
+   [data-item-detail-header]; the meta line, the figures and the cards by the
+   pattern components' own data-slot attributes. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── Page (.page): 1480 max, 28 px sides, 48 below ─────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='item-detail'] {
+      max-width: 1480px;
+      padding: 2px 28px 48px;
+    }
+    /* The sticky header keeps the page's text readable as rows scroll under
+       it: the overlay glass (74%, blur 30). Its negative margins follow the
+       page's 28 px sides. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header] {
+      margin-inline: -28px;
+      padding-inline: 28px;
+      background-color: var(--lg-glass-strong);
+      -webkit-backdrop-filter: blur(30px) saturate(160%);
+      backdrop-filter: blur(30px) saturate(160%);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    /* The header photo (.thumb-lg): radius 12 on the card hairline, the
+       third surface behind it (classic's white tile glared at Night). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='page-header']
+      [data-slot='thumb'] {
+      border-color: var(--lg-card-line);
+      border-radius: 12px;
+      background-color: var(--lg-surface-3);
+    }
+    /* The meta line under the name (.titles .row.g6): the SKU is the board's
+       outline mono chip (.badge.b-outline.mono), the chips sit 6 px apart,
+       and the classic middle dot between them (aria-hidden) is not drawn. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='page-header']
+      div:has(> span.break-all.font-mono) {
+      column-gap: 6px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='page-header']
+      span.break-all.font-mono {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border-radius: 6px;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+      font-size: calc(12px * 0.9);
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      line-height: 1.25;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='page-header']
+      span.text-ink-4[aria-hidden='true'] {
+      display: none;
+    }
+
+    /* ── Figures (.well.p12.stat): one well per figure, 10 px apart, the
+       figure (28 / 34, 650) above its label (13 / 18, ink 3). The strip's
+       own card and the hairlines between its cells are not drawn; the DOM
+       order (label, then figure) is unchanged, so a screen reader still
+       reads "On hand, 14 each". ───────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='stat-strip'][data-variant='detail'] {
+      overflow: visible;
+      border-width: 0;
+      border-radius: 0;
+      background-color: transparent;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='stat-strip'][data-variant='detail']
+      > div {
+      gap: 10px;
+      margin: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item'] {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 12px;
+      border: 1px solid var(--lg-card-line);
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-slot='stat-strip-item']
+      > div:first-child {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-slot='stat-strip-item']
+      > div:nth-child(2) {
+      order: -1;
+      font-size: 28px;
+      font-weight: 650;
+      line-height: 34px;
+      letter-spacing: -0.02em;
+    }
+
+    /* ── Cards (.card, .card-h, .h3): radius 20; a 52 px header with
+       12 x 16 padding and the 16 / 22 title at 600. ─────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='item-detail'] [data-glass='panel'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-slot='detail-section-header'] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-slot='detail-section-header']
+      > :is(h2, h3, h4) {
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+
+    /* ── Focus (R11): the glass ring on every control of the page ──────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      :focus-visible:not([data-glass='input'], [data-glass='select']) {
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    /* A tab's ring stays inside its own edge, as classic draws it
+       (ring-inset): the tab row scrolls sideways and would clip it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='tabs']
+      [role='tab']:focus-visible {
+      outline-offset: calc(var(--lg-focus-w) * -1);
+    }
+
+    /* ── Phone (≤760 px): 16 px sides, room for the home indicator ────── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='item-detail'] {
+        padding: 0 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        margin-inline: -16px;
+        padding-inline: 16px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
+
+    /* Reduce Transparency, Increase Contrast and the low-power material: the
+       header does not blur (its fill is opaque there, tokens.generated.css). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='item-detail']
+      [data-item-detail-header] {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        background: Canvas;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+  }
+}

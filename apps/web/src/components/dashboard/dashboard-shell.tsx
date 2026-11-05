@@ -446,6 +446,7 @@ export function DashboardShell({
                 ref={drawerCloseRef}
                 type="button"
                 aria-label="Close"
+                data-glass="navsheet-close"
                 className="hover:bg-muted hover:text-foreground absolute right-1.5 top-1.5 grid size-11 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors"
               >
                 <X aria-hidden className="size-4" />

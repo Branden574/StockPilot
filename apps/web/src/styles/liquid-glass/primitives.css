@@ -133,11 +133,51 @@
     :root[data-appearance='liquid-glass'] [data-glass='checkbox'] {
       border-radius: 5px;
     }
-    :root[data-appearance='liquid-glass']
-      :is([data-glass='checkbox'], [data-glass='switch']):is(
-        [aria-checked='true'],
-        [aria-checked='mixed']
-      ) {
+    /* The checkbox's visible box is its glyph (ui/checkbox.tsx CheckboxGlyph,
+       hooked checkbox-glyph), never the button, which also wraps any label
+       text; the same glyph sits in rows that are themselves the control (a
+       filter option, an export field). It takes .cb (sp.css:180-183, 876):
+       18 px, 24 px where a finger is the pointer, a 1.5 px edge on the
+       surface; ticked or mixed (state on), the accent with an on-accent tick
+       or bar.
+       One accessibility deviation from .cb, the smallest there is: the empty
+       box's edge is ink 4, not line 3. That edge is the only thing that shows
+       an empty box is there, and line 3 reads 1.7:1 (Day) and 2.2:1 (Night)
+       against the card, under the 3:1 a control needs (WCAG 1.4.11); ink 4
+       is the faint ink classic draws the same edge in (ui/checkbox.tsx), and
+       reads at least 3:1 in every material (stage3-contrast.test.ts). */
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] {
+      width: 18px;
+      height: 18px;
+      border-width: 1.5px;
+      border-color: var(--lg-ink-4);
+      background-color: var(--lg-surface);
+    }
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] {
+        width: 24px;
+        height: 24px;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'][data-glass-state='on'] {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span {
+      border-color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span.rounded-full {
+      background-color: var(--lg-on-accent);
+    }
+    /* Forced colours keep the mixed bar's own fill (it opts out of colour
+       adjustment, ui/checkbox.tsx), so it stays the system text colour there,
+       never the on-accent white on a Canvas box. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span.rounded-full {
+        background-color: CanvasText;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='switch']:is([aria-checked='true']) {
       background-color: var(--lg-accent);
       border-color: var(--lg-accent);
       color: var(--lg-on-accent);
@@ -172,6 +212,54 @@
       [data-glass='seg']
       > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
       background-color: rgba(255, 255, 255, 0.16);
+    }
+    /* In-page tabs (.tabs / .tab, patterns/tabs.tsx): 42 px tabs in 14 px
+       ink 3, ink on hover, the current one ink at 650 over a 2.5 px accent
+       underline inset 10 px; a count as the board's .ct. The underline is
+       the tab's own last child (TabUnderline, or the button tab's span), so
+       its pending pulse stays the pattern's. It sits on the strip's hairline
+       rather than over it: the tab row scrolls sideways, so anything below
+       it would be clipped. */
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] {
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [role='tab'] {
+      height: 42px;
+      gap: 7px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [role='tab']:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [role='tab'][aria-selected='true'] {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='tabs']
+      [role='tab']
+      > span[aria-hidden]:last-child {
+      left: 10px;
+      right: 10px;
+      height: 2.5px;
+      border-radius: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='tabs']
+      [role='tab'][aria-selected='true']
+      > span[aria-hidden]:last-child {
+      background-color: var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [data-slot='tab-count'] {
+      padding: 1px 6px;
+      border-radius: 6px;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
     }
     /* Filter chips: round, on the field frost. */
     :root[data-appearance='liquid-glass'] [data-glass='chip'] {

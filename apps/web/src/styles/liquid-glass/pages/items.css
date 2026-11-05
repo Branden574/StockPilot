@@ -1,0 +1,557 @@
+/* The Items and Books lists under Liquid Glass (stage 3, items lane):
+   Items.dc.html, Items-Mobile.dc.html and Books.dc.html, as sp.css draws them
+   (.page, .page-h, .toolbar, .card, .tbl, .pager, .selbar, .thumb; sp.css
+   99-302, 401-407, 483-487, 987-1006).
+
+   Imported by its own routes (app/(dashboard)/dashboard/inventory/page.tsx and
+   books/page.tsx), never globally, and scoped to the page roots those routes
+   draw, [data-glass-page=items|books], so a later route never matches it.
+   The hooks are inert attributes on today's markup
+   (components/inventory/items.classic-parity.test.tsx): [data-glass=items-list|
+   items-views|items-tools|items-toolbar|selbar-layer|selbar|items-count|
+   items-card|items-table|items-pager], plus the shared data-slot and
+   data-glass hooks of the patterns the list draws.
+
+   The layer statement pins cascade layer lg after Tailwind's layers even if
+   this file were to load before app/globals.css (it never should: the root
+   layout's stylesheet comes first).
+
+   From 761 px the selection bar floats at the foot of the frosted pane,
+   centred, as the board draws it (position: absolute against the pane,
+   [data-glass=main-column], the nearest positioned box, so it neither
+   scrolls with the list nor is clipped by it), and the toolbar and the count
+   stay on screen under it while rows are ticked, as on the board; classic
+   swaps the bar into the toolbar's place instead, and so does a phone. The
+   toast dock rises clear of the floating bar (globals.glass.css). The DOM
+   order is unchanged, so the keyboard still reaches the bar after the
+   toolbar and before the table.
+
+   Deviations from the boards, on purpose (stage3/items-rows.md): every
+   classic column, filter and bulk action stays (no Available column is
+   added; the bar carries all of classic's actions, wrapping when they do not
+   fit); the location column stays the site's name and the rack column
+   becomes the board's rack chip. The controls keep classic's rows and
+   order: the views row (stock views, the Expected, archived and saved-view
+   chips, Table / Grid) above the search and filter row, then the count with
+   the top pager, then the card. The board's one toolbar puts the search
+   first and the stock segments after the filters; drawing that from this
+   markup would make the order on screen differ from the keyboard and
+   screen-reader order (plan 4.6: the DOM order wins), and moving the count
+   into the page header or dropping the top pager would change classic's
+   markup or remove a classic control. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── Page (.page, .page-h): 1480 max, 6 28 48, 20 between parts ──── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books']) {
+      max-width: 1480px;
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-list'] {
+      gap: 14px;
+    }
+
+    /* ── Views and toolbar (.toolbar): 8 px between controls ────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      :is([data-glass='items-views'], [data-glass='items-toolbar']) {
+      gap: 8px;
+    }
+    /* Filter chips (.chip): 32 px pills on the field frost, 13 / 500. A
+       finger keeps the 44 px of classic's max-sm:min-h-11. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='filter-trigger'] {
+      height: 32px;
+      padding: 0 12px;
+      border-color: var(--lg-field-line);
+      border-radius: 999px;
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='filter-trigger']:hover {
+      border-color: var(--lg-line-3);
+      color: var(--lg-ink);
+    }
+    /* The search field (.toolbar .search, .ctrl > .input): 36 px, the icon
+       12 px in. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-toolbar']
+      [data-glass='input'] {
+      height: 36px;
+      padding-left: 35px;
+      border-radius: var(--lg-r-md);
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-toolbar']
+      > div:first-child
+      > svg:first-child {
+      left: 12px;
+      width: 16px;
+      height: 16px;
+      color: var(--lg-ink-3);
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-toolbar']
+        > div:first-child {
+        flex: 1 1 280px;
+        width: auto;
+        max-width: 420px;
+      }
+    }
+
+    /* ── Selection bar (.selbar.glass, Items.dc.html): from 761 px,
+       floating glass at the foot of the pane, 20 px up, centred, as wide as
+       its actions and never wider than the pane less 16 px a side; radius
+       18, 8 8 8 14. It rises in when rows are ticked. On a phone it stays
+       where classic swaps it in, over the toolbar (Items-Mobile draws no
+       bar, and a floating bar of every classic action would cover most of
+       a phone's list and its toasts). ─────────────────────────────────── */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='selbar-layer'] {
+        position: absolute;
+        bottom: 20px;
+        left: 50%;
+        z-index: 45;
+        width: max-content;
+        max-width: calc(100% - 32px);
+        transform: translateX(-50%);
+      }
+      /* The toolbar and the count stay on screen while rows are ticked. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        :is([data-glass='items-toolbar'], [data-glass='items-count'] > p) {
+        visibility: visible;
+      }
+      /* Room under the last row for the bar (.page.has-selbar), so the last
+         row can scroll clear of it. With every classic action the bar wraps
+         to two rows from 1280 px, three below, four below 1000 px (its top
+         then sits 104, 142 and 180 px above the pane's foot); fewer actions
+         leave a little more room than needed, never less. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --items-selbar-room: 128px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']):has(
+          [data-glass='selbar-layer'][data-glass-state='open']
+        ) {
+        padding-bottom: var(--items-selbar-room);
+      }
+    }
+    @media (min-width: 761px) and (max-width: 1279.98px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --items-selbar-room: 166px;
+      }
+    }
+    @media (min-width: 761px) and (max-width: 999.98px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --items-selbar-room: 204px;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='selbar'] {
+      gap: 10px;
+      padding: 8px 8px 8px 14px;
+      border-color: transparent;
+      border-radius: 18px;
+      background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='selbar-layer'][data-glass-state='open']
+      [data-glass='selbar'] {
+      animation: lg-rise var(--lg-d-2) var(--lg-ease) both;
+    }
+
+    /* ── The count line and the pager (.pager): 13 px ink 3 ─────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-count'] {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-pager'] {
+      padding: 10px 12px 10px 16px;
+      border-top-color: var(--lg-line);
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+
+    /* ── The table card (.card on glass): radius 20, the card frost ──── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-card'] {
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    /* Grid and covers: the cards sit on the pane, not in a card of their
+       own (Books.dc.html cover view). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-card']:has(> [data-slot='inventory-grid']) {
+      border-color: transparent;
+      background-color: transparent;
+      box-shadow: none;
+    }
+
+    /* ── The table (.dt): 14 px, a quiet 38 px header, 52 px rows ────── */
+    /* The body cells pad by the shell's --row-py (classic 11 px, 6 px
+       compact); here they take the board's row padding instead (.dt .td:
+       8 px, 4 px compact), so a row with its 40 px photo is the board's
+       57 px, not 63. Compact starts where glass is desktop (761 px): a phone
+       keeps comfortable rows, as classic does under 768 px. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books']) {
+      --row-py: var(--lg-row-pad);
+    }
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass']
+        [data-density='compact']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        --row-py: 4px;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table'] {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > thead
+      > tr {
+      border-color: var(--lg-line);
+      background-color: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > thead
+      th {
+      height: 38px;
+      padding-top: 0;
+      padding-bottom: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > thead
+      th
+      button {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr {
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr
+      > td {
+      height: 52px;
+    }
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass']
+        [data-density='compact']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table'] {
+        font-size: 13px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-density='compact']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td {
+        height: 40px;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr:hover {
+      background-color: var(--lg-card-hover);
+    }
+    /* A group header (.tbl tr.grp) on the second card frost. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr[data-row-kind='header'] {
+      background-color: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr[data-row-kind='header']:hover {
+      background-color: var(--lg-card-hover);
+    }
+    /* A record inside an open group (.dt .tr.kid): no fill of its own (classic
+       gives it the card colour, which here would be a second card frost),
+       and the 1.5 px guide down its Item cell from the group's chevron
+       (.kid .ind::before, 22 px in). Its photo stays under the header's. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr[data-row-kind='member'] {
+      background-color: transparent;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr[data-row-kind='member']:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr[data-row-kind='member']
+      > td:has(> [data-slot='item-cell'][data-nested]) {
+      position: relative;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr[data-row-kind='member']
+      > td:has(> [data-slot='item-cell'][data-nested])::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      bottom: -1px;
+      left: 22px;
+      width: 1.5px;
+      background-color: var(--lg-line-2);
+    }
+    /* A ticked row (.tbl tr.sel): the selection tint, read from its own
+       checkbox, so no new state is needed. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      > tbody
+      > tr:has(> td > [role='checkbox'][aria-checked='true']) {
+      background-color: var(--lg-sel-fill);
+    }
+    /* Photos (.thumb): 40 px, radius 9 (28 px in compact). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      [data-slot='thumb'] {
+      width: 40px;
+      height: 40px;
+      border-color: transparent;
+      border-radius: 9px;
+      background-color: var(--lg-surface-3);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    }
+    /* Books (.cover): the photo is a cover, 44 px tall (Books.dc.html sets
+       --thumb: 44px on its table) and two thirds as wide, the spine corners
+       tighter, with a paper shadow. The photo inside is already cropped to
+       fill (object-fit: cover). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      [data-slot='thumb'] {
+      width: calc(44px * 0.667);
+      height: 44px;
+      border-radius: 3px 5px 5px 3px;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    /* Compact (from 761 px, as the rows): 28 px photos; a cover keeps its
+       two thirds. */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass']
+        [data-density='compact']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        [data-slot='thumb'] {
+        width: 28px;
+        height: 28px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-density='compact']
+        [data-glass-page='books']
+        [data-glass='items-table']
+        [data-slot='thumb'] {
+        width: calc(28px * 0.667);
+      }
+    }
+    /* The rack (.loc): a 24 px chip on the third surface, 12.5 / 600; a
+       row still in Staging takes the warn wash (.loc.stg), an unplaced one
+       the info wash (.loc.unp), read from the cell's inert tone hook. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      td[data-glass='rack']
+      > span.font-mono {
+      display: inline-flex;
+      align-items: center;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 7px;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink-2);
+      font-family: inherit;
+      font-size: 12.5px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      td[data-glass='rack']
+      > span.font-mono.text-warning {
+      background-color: var(--lg-warn-wash);
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      td[data-glass='rack']
+      > span.font-mono.text-warning[data-glass-tone='unplaced'] {
+      background-color: var(--lg-info-wash);
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='items-table']
+      [data-slot='item-cell-name']
+      a:hover {
+      text-decoration-line: underline;
+      text-underline-offset: 2px;
+    }
+
+    /* ── Focus (R11): the glass ring on every control of the list ─────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      :focus-visible:not([data-glass='input'], [data-glass='select']) {
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+
+    /* ── Phone (≤760 px, Items-Mobile.dc.html): 4 16 96, 24 / 30 title ── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books']) {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
+
+    /* Reduce Transparency, Increase Contrast and the low-power material: the
+       bar does not blur (its fill is already opaque, tokens.generated.css). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='selbar'] {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      :is([data-glass-page='items'], [data-glass-page='books'])
+      [data-glass='selbar'] {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        td[data-glass='rack']
+        > span.font-mono {
+        border: 1px solid CanvasText;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        :is([data-glass='selbar'], [data-glass='items-card']) {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+    }
+  }
+
+  /* The bar's entrance (sp.css @keyframes rise: 8 px over --d-2, as
+     Items.dc.html runs it on .selbar). Reduced motion shortens it to nothing
+     with every other animation (app/globals.css). */
+  @keyframes lg-rise {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+}

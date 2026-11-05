@@ -335,6 +335,7 @@ export function NotificationBell({ userId, organizationId }: Props) {
       {showBadge && (
         <span
           aria-hidden
+          data-glass="badge-dot"
           className="bg-destructive text-destructive-foreground ring-background absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] font-medium tabular-nums leading-none ring-2"
         >
           {label}

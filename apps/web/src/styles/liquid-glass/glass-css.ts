@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import postcss, { type AtRule, type ChildNode, type Root, type Rule } from 'postcss';
@@ -31,9 +31,23 @@ export const UNSCOPED_ALLOWED = new Set([CLASSIC_HIDE_RULE, '[data-glass-only]']
 /** Files that restyle UNLAYERED classic CSS, so they stay outside every layer (plan 4.1, R22). */
 export const isUnlayeredCompanion = (file: string) => file.endsWith('.glass.css');
 
+/** Where the page compositions live: each is imported by its own route (plan 4.1, 4.6). */
+export const PAGES_DIR = 'pages';
+
+/**
+ * Every glass stylesheet: the global ones in this folder and the page
+ * compositions under pages/ (named "pages/<name>.css"), so every guard reads
+ * the route-imported files too.
+ */
 export function glassSourceFiles(): { file: string; text: string }[] {
-  return readdirSync(GLASS_DIR)
-    .filter((f) => f.endsWith('.css'))
+  const top = readdirSync(GLASS_DIR).filter((f) => f.endsWith('.css'));
+  const pagesDir = join(GLASS_DIR, PAGES_DIR);
+  const pages = existsSync(pagesDir)
+    ? readdirSync(pagesDir)
+        .filter((f) => f.endsWith('.css'))
+        .map((f) => `${PAGES_DIR}/${f}`)
+    : [];
+  return [...top, ...pages]
     .sort()
     .map((file) => ({ file, text: readFileSync(join(GLASS_DIR, file), 'utf8') }));
 }

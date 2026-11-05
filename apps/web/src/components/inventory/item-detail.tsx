@@ -637,7 +637,10 @@ export async function ItemDetail({
     (showSerialsPanel ? 1 : 0);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col px-4 pb-16 pt-2 sm:px-8">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col px-4 pb-16 pt-2 sm:px-8"
+      data-glass-page="item-detail"
+    >
       {/* Performance marker. This server component awaits the item (and
           notFound()s without one) before it returns anything, so reaching
           this markup means the real record is what renders. Shared by the

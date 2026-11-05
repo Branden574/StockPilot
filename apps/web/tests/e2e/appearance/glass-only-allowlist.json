@@ -54,6 +54,18 @@
       "$comment": "DECISIONS.md F6: the header appearance menu's trigger (ThemeToggle) opens the Design and the Theme, so while <html> shows Liquid Glass it is named, and titled, for both; in Classic, in every rollout, it is origin/main's \"Toggle theme\" with no tooltip. The routes are those whose classic page shows it: the marketing header (/, the 6 marketing pages), the sign-in layout, the invite and onboarding top bars, and the dashboard top bar on /dashboard and every route under it (/dashboard/**), where it is shown from a 680 px wide bar. On the /dashboard/orders/[id]/print route <html> is never glass, so it keeps its classic name there. The 8 external routes are entry external-appearance-menu: there it exists only in glass.",
       "classicTwin": "Toggle theme",
       "gate": null
+    },
+    {
+      "id": "sidebar-place-an-order",
+      "source": "apps/web/src/components/dashboard/sidebar.tsx",
+      "selector": "[data-glass=\"sb-cta\"]",
+      "role": "link",
+      "name": "Place an order",
+      "kind": "duplicate action",
+      "routes": ["/dashboard", "/dashboard/**"],
+      "$comment": "AppSidebar.dc.html's tinted .sb-cta (IMPLEMENTATION-PLAN.md 8.5 names it). A link to /dashboard/orders/new, the page the Orders list's own primary action opens (\"+ Place order\", app/(dashboard)/dashboard/orders/page.tsx); in classic the same page is reached from every dashboard route through the sidebar's Orders entry and that action. Shown, in the desktop sidebar and the phone navigation sheet alike, only when the viewer's nav shows the registry's Orders entry (the Orders module on and orders:request, packages/core/src/modules/registry.ts orders placement; /dashboard/orders/new redirects anyone else, orders/new/page.tsx:32-37) and the org's nav overrides have not hidden it; a custom link to the list never stands in for the permission (sidebar.place-order.test.tsx). Not rendered under the off rollout. The 8.5 check pairs it with classicTwin on /dashboard/orders and with the sidebar's Orders link on every other dashboard route, for the same role.",
+      "classicTwin": "+ Place order (/dashboard/orders page header), reached through the sidebar's Orders link",
+      "gate": "orders module on + orders:request (the sidebar's Orders entry)"
     }
   ]
 }
