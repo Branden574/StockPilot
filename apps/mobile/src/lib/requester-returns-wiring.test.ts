@@ -290,7 +290,7 @@ describe('the order screen', () => {
 
   it('after the answer: closes, says so in core\'s words, and reads the order (and so the requests) again', () => {
     expect(screen).toMatch(
-      /onSent=\{\(sent\) => \{\s*setRequesterOpen\(false\);\s*Alert\.alert\(requesterSentTitle\(sent\.exchange\), requesterSentMessage\(sent\.returnNumber\)\);\s*void load\(\);\s*\}\}/,
+      /onSent=\{\(sent\) => \{\s*setRequesterOpen\(false\);\s*Alert\.alert\(requesterSentTitle\(sent\.exchange\), requesterSentMessage\(sent\.returnNumber\)\);\s*void reload\(\);\s*\}\}/,
     );
   });
 });
