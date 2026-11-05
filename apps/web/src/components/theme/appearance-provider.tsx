@@ -519,9 +519,18 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     // left by a whole-document link, say to /signin) was frozen while another
     // page of this tab made a choice, and storage events never reach a frozen
     // page: read the device record again, as another tab's choice (that page
-    // saved it). The variant guard then checks the twin on screen (R8).
+    // saved it). The variant guard then checks the twin on screen (R8); until
+    // it has, the attribute follows the twin on screen, so no frame shows a
+    // twin on the other design's CSS (a pageshow render may come after a
+    // paint).
     const onPageShow = (event: PageTransitionEvent) => {
       if (!event.persisted) return;
+      if (
+        MARKETING_TWINS_BUILT &&
+        (MARKETING_PATHS as readonly string[]).includes(window.location.pathname)
+      ) {
+        twinOverrideRef.current = document.querySelector(`[${TWIN_MARKER}]`) !== null;
+      }
       const device = readDeviceRecordRaw();
       if (device !== null) dispatchRef.current({ type: 'device-changed', device, now: Date.now() });
     };

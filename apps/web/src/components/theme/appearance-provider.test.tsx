@@ -677,6 +677,30 @@ describe('the marketing variant guard (R8, round 2 finding 2)', () => {
     expect(refresh).toHaveBeenCalledTimes(1);
   });
 
+  it('a restored landing whose Design changed while frozen never shows its twin on the other design: the attribute follows the twin on screen until the guard has the right one', async () => {
+    nav.pathname = '/';
+    document.body.appendChild(marker());
+    render(<App />);
+    expect(glassOn()).toBe(true);
+    // Frozen while /signin chose Classic.
+    localStorage.setItem('sp-appearance', JSON.stringify({ v: 2, style: 'classic' }));
+    document.cookie = 'sp_style=classic; path=/';
+    act(() => {
+      window.dispatchEvent(pageShow(true));
+    });
+    // The glass twin is still on screen: the attribute stays with it, the page is hidden and asked for again.
+    expect(glassOn()).toBe(true);
+    expect(hidden()).toBe(true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // The classic page arrives: shown, in classic.
+    act(() => {
+      document.querySelectorAll('[data-lg-twin]').forEach((el) => el.remove());
+    });
+    await waitFor(() => expect(hidden()).toBe(false));
+    expect(glassOn()).toBe(false);
+    expect(mounts).toBe(1);
+  });
+
   it('an ordinary page load (not from the cache) does not check again', () => {
     nav.pathname = '/';
     document.body.appendChild(marker());
