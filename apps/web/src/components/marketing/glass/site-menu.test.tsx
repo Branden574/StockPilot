@@ -4,8 +4,25 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const capture = vi.fn();
 vi.mock('@/lib/analytics', () => ({ capture: (...args: unknown[]) => capture(...args) }));
 
-import { INVITE_ONLY_NOTE, SITE_NAV } from './site-links';
-import { SiteMenu } from './site-menu';
+vi.mock('@/components/theme/theme-toggle', () => ({
+  ThemeToggle: () => <button type="button">Toggle theme</button>,
+}));
+
+import { INVITE_ONLY_NOTE, SITE_NAV, type SitePage } from './site-links';
+import { SiteMenuButton, SiteMenuPanel, SiteMenuRoot } from './site-menu';
+import { SiteNav } from './site-nav';
+
+/** The three parts as SiteNav puts them: the button in the nav, the panel after it. */
+function SiteMenu({ links, active }: { links: typeof SITE_NAV; active: SitePage }) {
+  return (
+    <SiteMenuRoot className="lgs-navbar">
+      <nav className="lgs-nav">
+        <SiteMenuButton />
+      </nav>
+      <SiteMenuPanel links={links} active={active} />
+    </SiteMenuRoot>
+  );
+}
 
 /**
  * The phone menu of the glass marketing nav (SiteNav.dc.html below 900 px).
@@ -84,5 +101,26 @@ describe('SiteMenu', () => {
     other.addEventListener('click', (e) => e.preventDefault());
     fireEvent.click(other);
     expect(capture).not.toHaveBeenCalled();
+  });
+
+  it('SiteNav puts the open panel where the board draws it: the nav’s next sibling inside the navbar, in flow (never inside the blurred nav, never absolutely placed)', () => {
+    const { container } = render(<SiteNav active="home" />);
+    fireEvent.click(button());
+    const menu = document.getElementById('lgs-site-menu')!;
+    const nav = container.querySelector('nav.lgs-nav')!;
+    const navbar = container.querySelector('.lgs-navbar')!;
+    expect(nav.contains(menu)).toBe(false);
+    expect(menu.parentElement).toBe(navbar);
+    expect(menu.previousElementSibling).toBe(nav);
+    expect(nav.contains(button())).toBe(true);
+    for (const cls of ['absolute', 'fixed', 'inset-x-3', 'top-full', 'mt-2']) {
+      expect(menu.classList.contains(cls), cls).toBe(false);
+    }
+  });
+
+  it('SiteNav without the menu open renders no panel (the server HTML is the closed menu)', () => {
+    const { container } = render(<SiteNav active="pricing" />);
+    expect(container.querySelector('#lgs-site-menu')).toBeNull();
+    expect(button()).toHaveAttribute('aria-expanded', 'false');
   });
 });

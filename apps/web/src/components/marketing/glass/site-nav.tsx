@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { AppEntryLink } from './landing/app-entry-link';
 import { SiteBrand } from './site-brand';
 import { SITE_NAV, SIGN_IN_PATH, type SitePage } from './site-links';
-import { SiteMenu } from './site-menu';
+import { SiteMenuButton, SiteMenuPanel, SiteMenuRoot } from './site-menu';
 import { buttonClass } from './ui';
 
 import { ThemeToggle } from '@/components/theme/theme-toggle';
@@ -21,10 +21,15 @@ import { ThemeToggle } from '@/components/theme/theme-toggle';
  *
  * The appearance menu stays on phones too (the board hides it under 900 px):
  * on a marketing page it is the one-tap way back to Classic (R13).
+ *
+ * The phone menu's panel is the nav's next sibling inside the navbar, as the
+ * board draws it (`div.s-navbar > nav.s-nav + div#site-menu`): SiteMenuRoot
+ * is the navbar element and holds the open state for the button in the nav's
+ * right-hand row and the panel after the nav.
  */
 export function SiteNav({ active }: { active: SitePage }) {
   return (
-    <div className="lgs-navbar relative z-30 px-3 pt-3 sm:px-6 sm:pt-4">
+    <SiteMenuRoot className="lgs-navbar relative z-30 px-3 pt-3 sm:px-6 sm:pt-4">
       <nav
         aria-label="Primary"
         className="lgs-nav mx-auto flex min-h-14 max-w-[1180px] flex-wrap items-center gap-1.5 py-1 pl-4 pr-2"
@@ -62,9 +67,10 @@ export function SiteNav({ active }: { active: SitePage }) {
               Sign in
             </a>
           )}
-          <SiteMenu links={SITE_NAV} active={active} />
+          <SiteMenuButton />
         </div>
       </nav>
-    </div>
+      <SiteMenuPanel links={SITE_NAV} active={active} />
+    </SiteMenuRoot>
   );
 }
