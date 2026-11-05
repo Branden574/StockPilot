@@ -227,6 +227,24 @@ const ENTRIES: Entry[] = [
     'box-shadow',
     'none',
   ],
+  // That clears Classic's focus ring (a box-shadow), so the card draws the
+  // glass ring, an outline (WCAG 2.4.7).
+  [
+    'procedure card focus ring',
+    OPS,
+    '',
+    S(`${VIEW('procedures')} [data-slot='procedure-card']:focus-visible`),
+    'outline',
+    'var(--lg-focus-w) solid var(--lg-focus)',
+  ],
+  [
+    'procedure card focus ring offset',
+    OPS,
+    '',
+    S(`${VIEW('procedures')} [data-slot='procedure-card']:focus-visible`),
+    'outline-offset',
+    '2px',
+  ],
   [
     'procedure band height',
     OPS,

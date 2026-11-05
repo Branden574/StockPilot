@@ -514,6 +514,16 @@
       [data-slot='procedure-card']:hover {
       border-color: var(--lg-line-2);
     }
+    /* Keyboard focus: Classic's ring on the card is a box-shadow (its
+       focus-visible:ring utilities), which the rule above clears in glass, so
+       the card takes the board's ring as the buttons do (primitives.css): an
+       outline of --lg-focus-w in --lg-focus, 2 px off the edge. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='procedures']
       [data-slot='procedure-card-media'] {
