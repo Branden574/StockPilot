@@ -503,18 +503,39 @@ export function classicHash(source: string, fileName: string): string {
   return createHash('sha256').update(classicSerialisation(source, fileName)).digest('hex');
 }
 
+/**
+ * A name that is only spelled `lg` and is not the look: a property read off
+ * something else (`space.lg`), an object or type member's key (`{ lg: 16 }`),
+ * the right side of a qualified name, or a JSX attribute's name.
+ */
+function isMemberName(node: ts.Identifier, parent: ts.Node | undefined): boolean {
+  if (!parent) return false;
+  return (
+    (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+    (ts.isQualifiedName(parent) && parent.right === node) ||
+    ((ts.isPropertyAssignment(parent) ||
+      ts.isPropertySignature(parent) ||
+      ts.isPropertyDeclaration(parent) ||
+      ts.isMethodDeclaration(parent) ||
+      ts.isGetAccessorDeclaration(parent) ||
+      ts.isSetAccessorDeclaration(parent) ||
+      ts.isJsxAttribute(parent)) &&
+      parent.name === node)
+  );
+}
+
 /** Every `lg` the projection could not fold (a glass branch in a form it does not see). */
 export function projectionLeaks(source: string, fileName: string): string[] {
   const tree = classicTree(source, fileName);
   const leaks: string[] = [];
-  const walk = (node: ts.Node): void => {
-    if (ts.isIdentifier(node) && node.text === GLASS_BINDING) {
-      const parent = node.parent ? ts.SyntaxKind[node.parent.kind] : 'unknown';
-      leaks.push(`lg inside ${parent}`);
+  // The parent is tracked here: a node the projection rebuilt has none of its own.
+  const walk = (node: ts.Node, parent: ts.Node | undefined): void => {
+    if (ts.isIdentifier(node) && node.text === GLASS_BINDING && !isMemberName(node, parent)) {
+      leaks.push(`lg inside ${parent ? ts.SyntaxKind[parent.kind] : 'unknown'}`);
     }
-    ts.forEachChild(node, walk);
+    ts.forEachChild(node, (child) => walk(child, node));
   };
-  walk(tree);
+  walk(tree, undefined);
   return leaks;
 }
 

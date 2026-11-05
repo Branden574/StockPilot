@@ -184,6 +184,16 @@ describe('classic projection', () => {
     expect(projectionLeaks(stray, 'probe.tsx')).toEqual(['lg inside VariableDeclaration']);
   });
 
+  it('a property that is only named lg (space.lg, { lg: 16 }) is not the look; the look read off is', () => {
+    const named = 'export const a = <View style={{ padding: space.lg, ...{ lg: 16 } }} />;';
+    expect(projectionLeaks(named, 'probe.tsx')).toEqual([]);
+    // The look itself, read outside a branch, is still reported, however it is reached.
+    const read = 'const lg = useGlass();\nexport const a = <View style={{ color: lg.c.ink }} />;';
+    expect(projectionLeaks(read, 'probe.tsx')).toEqual(['lg inside PropertyAccessExpression']);
+    const short = 'const lg = useGlass();\nexport const a = <View style={{ lg }} />;';
+    expect(projectionLeaks(short, 'probe.tsx')).toEqual(['lg inside ShorthandPropertyAssignment']);
+  });
+
   it('a lone glass style entry collapses the array back to the classic style', () => {
     same(
       'export const a = <View style={styles.x} />;',
