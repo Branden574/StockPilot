@@ -1,0 +1,728 @@
+/* The Liquid Glass marketing twins (app/(site-glass)/glass-site; plan 4.6 M3,
+   plans/REVISION-DEFAULT.md R8): the site ground, SiteNav.dc.html,
+   SiteFooter.dc.html, the shared buttons and cards, and the Site-Privacy,
+   Site-Terms, Site-Security, Site-Contact, Site-Pricing and Site-Support
+   pages. Values from the artifact's sp.css (lines 91-104, 128-155, 491-536,
+   956-1033, 1073-1137), through the generated --lg-* tokens only.
+
+   Imported by each twin page (never by a layout, never globally), and every
+   selector is scoped to the twin layout's page root [data-glass-page='site'],
+   so nothing here can match a classic page. Classic visitors never get the
+   twin markup (the rewrite serves it only when glass is selected); a visitor
+   without JavaScript gets it on classic CSS, which the utility classes in the
+   markup keep readable (R8, accepted).
+
+   Materials: cards on the scene blur it themselves (22 px, saturate 160%),
+   the nav and pills are floating glass. Reduce Transparency, Increase
+   Contrast and the low-power material (data-lg-material="reduced") draw
+   everything opaque and unblurred on the flat ground; forced colours use the
+   system colours. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The ground: the scene photo at the top, fading to paper ───────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] {
+      color: var(--lg-ink);
+      background:
+        radial-gradient(
+          1100px 620px at 30% 24%,
+          rgba(255, 251, 245, 0.62),
+          rgba(255, 251, 245, 0.3) 55%,
+          rgba(255, 251, 245, 0) 78%
+        ),
+        radial-gradient(
+          760px 420px at 80% 42%,
+          rgba(255, 251, 245, 0.62),
+          rgba(255, 251, 245, 0) 72%
+        ),
+        linear-gradient(
+          180deg,
+          rgba(255, 251, 245, 0.3),
+          rgba(255, 251, 245, 0.1) 640px,
+          transparent 760px
+        ),
+        linear-gradient(
+          180deg,
+          transparent 0,
+          transparent 720px,
+          var(--lg-paper-1) 1240px,
+          var(--lg-paper-2) 2400px,
+          var(--lg-paper-3) 100%
+        ),
+        var(--lg-scene-veil),
+        var(--lg-scene-img) center top / max(100%, 2000px) auto no-repeat,
+        var(--lg-paper-1);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='site'] {
+      background:
+        radial-gradient(
+          1100px 620px at 30% 24%,
+          rgba(8, 12, 11, 0.62),
+          rgba(8, 12, 11, 0.3) 55%,
+          rgba(8, 12, 11, 0) 78%
+        ),
+        linear-gradient(
+          180deg,
+          transparent 0,
+          transparent 720px,
+          var(--lg-paper-1) 1240px,
+          var(--lg-paper-2) 2400px,
+          var(--lg-paper-3) 100%
+        ),
+        var(--lg-scene-veil),
+        var(--lg-scene-img) center top / max(100%, 2000px) auto no-repeat,
+        var(--lg-paper-1);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] :is(h1, h2, h3, .lgs-h2) {
+      font-family: var(--font-display);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-wrap {
+      max-width: 1240px;
+      padding-left: 40px;
+      padding-right: 40px;
+    }
+
+    /* ── Type ────────────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-h2 {
+      font-size: clamp(30px, 3.6vw, 48px);
+      line-height: 1.06;
+      letter-spacing: -0.032em;
+      font-weight: 650;
+      color: var(--lg-ink);
+      text-wrap: balance;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-lede {
+      font-size: clamp(16px, 1.35vw, 19px);
+      line-height: 1.55;
+      color: var(--lg-ink-2);
+      text-wrap: pretty;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-eyebrow {
+      font-size: 12px;
+      line-height: 16px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-eyebrow.lgs-accent {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-date {
+      font-size: 14px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-ink2 {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-muted {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-strong {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-a {
+      color: var(--lg-accent-text);
+      font-weight: 500;
+      text-decoration-line: underline;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 2.5px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-a:hover {
+      text-decoration-thickness: 2px;
+    }
+
+    /* ── Focus: the outline ring in --lg-focus on every control ─────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      :is(a, button, summary):focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+      box-shadow: 0 0 0 5px var(--lg-focus-halo);
+    }
+
+    /* ── Floating glass: the nav, pills and the glass button ─────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      :is(.lgs-nav, .lgs-menu, .lgs-glass, .lgs-glass-clear, .lgs-btn-glass) {
+      position: relative;
+      isolation: isolate;
+      background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      border-color: transparent;
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] :is(.lgs-menu, .lgs-btn-glass) {
+      background-color: var(--lg-glass-strong);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-glass-clear {
+      background-color: var(--lg-glass-clear);
+    }
+
+    /* ── SiteNav ─────────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-navbar {
+      padding: 16px 24px 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-nav {
+      max-width: 1180px;
+      min-height: 62px;
+      flex-wrap: nowrap;
+      gap: 6px;
+      padding: 0 10px 0 18px;
+      border-radius: 22px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-brand {
+      color: var(--lg-ink);
+      text-decoration: none;
+      border-radius: 10px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-wordmark {
+      font-family: var(--font-display);
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: -0.022em;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-wordmark span {
+      font-weight: 500;
+      color: color-mix(in srgb, currentColor 58%, transparent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-links {
+      flex-wrap: nowrap;
+      gap: 2px;
+      margin-left: 22px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-link {
+      height: 36px;
+      padding: 0 12px;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--lg-ink-2);
+      white-space: nowrap;
+      transition:
+        background-color var(--lg-d-1) var(--lg-ease),
+        color var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-link:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 6%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-link[aria-current='page'] {
+      color: var(--lg-ink);
+      font-weight: 650;
+      background-color: color-mix(in srgb, var(--lg-surface) 80%, transparent);
+      box-shadow: 0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-right {
+      gap: 6px;
+    }
+    /* The header appearance menu's trigger as the board's round ghost button. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-appearance {
+      width: 36px;
+      height: 36px;
+      border-radius: 999px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-btn {
+      width: 36px;
+      height: 36px;
+      color: var(--lg-ink);
+      background: transparent;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-btn:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu {
+      max-width: 1180px;
+      margin: 8px auto 0;
+      border-radius: 22px;
+      padding: 10px;
+      z-index: 40;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-row {
+      color: var(--lg-ink);
+      text-decoration: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-row svg {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-row:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 6%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-menu-row[aria-current='page'] {
+      background-color: var(--lg-sel-fill);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-note {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-hr {
+      background-color: var(--lg-line);
+    }
+
+    /* ── Buttons (btn, btn-primary, btn-secondary, btn-glass, btn-ghost) ── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn {
+      height: 36px;
+      min-width: 36px;
+      padding: 0 14px;
+      gap: 8px;
+      border: var(--lg-b-w) solid transparent;
+      border-radius: var(--lg-r-md);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1;
+      text-decoration: none;
+      white-space: nowrap;
+      transition:
+        background-color var(--lg-d-1) var(--lg-ease),
+        border-color var(--lg-d-1) var(--lg-ease),
+        transform var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn:active {
+      transform: scale(0.97);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn.lgs-lg {
+      height: 44px;
+      padding: 0 18px;
+      font-size: 15px;
+      border-radius: 12px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn.lgs-xl {
+      height: 52px;
+      padding: 0 22px;
+      font-size: 16px;
+      border-radius: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn.lgs-pill {
+      border-radius: 999px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-primary {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-primary:hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-primary:active {
+      background-color: var(--lg-accent-press);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-secondary {
+      background-color: var(--lg-field-fill);
+      border-color: var(--lg-field-line);
+      color: var(--lg-ink);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 1px 2px rgba(60, 44, 26, 0.08);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='site'] .lgs-btn-secondary {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-secondary:hover {
+      background-color: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='site'] .lgs-btn-secondary:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-glass {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-glass:hover {
+      background-color: color-mix(in srgb, var(--lg-glass-strong) 80%, var(--lg-surface));
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-ghost {
+      background-color: transparent;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn-ghost:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+
+    /* ── Content glass: the cards on the scene ──────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-card {
+      position: relative;
+      background-color: var(--lg-card-fill);
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 24px;
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-tile {
+      border-radius: 18px;
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-tile.lgs-tone-danger {
+      background-color: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-tile.lgs-tone-info {
+      background-color: var(--lg-info-wash);
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-card-title {
+      font-size: 20px;
+      line-height: 26px;
+      font-weight: 650;
+      letter-spacing: -0.016em;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-card-cta {
+      color: var(--lg-accent-text);
+      font-weight: 650;
+      text-decoration: none;
+      margin-top: auto;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-card-cta:hover {
+      text-decoration: underline;
+      text-underline-offset: 2.5px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-note {
+      border-radius: 16px;
+      color: var(--lg-ink-2);
+    }
+
+    /* ── Legal pages: the contents list beside one card ─────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-legal-grid {
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 48px;
+      align-items: start;
+      margin-top: 40px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-toc {
+      position: sticky;
+      top: 24px;
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-toc-link {
+      padding: 6px 10px;
+      border-radius: 8px;
+      color: var(--lg-ink-2);
+      text-decoration: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-toc-link:hover {
+      color: var(--lg-ink);
+      background-color: color-mix(in srgb, var(--lg-ink) 5%, transparent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-legal-art {
+      padding: 48px 56px;
+      border-radius: var(--lg-r-xl);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-legal-sec + .lgs-legal-sec {
+      border-top: 1px solid var(--lg-line);
+      margin-top: 28px;
+      padding-top: 4px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose {
+      font-size: 16px;
+      line-height: 1.65;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose h2 {
+      font-size: 22px;
+      line-height: 28px;
+      font-weight: 650;
+      letter-spacing: -0.016em;
+      color: var(--lg-ink);
+      margin: 36px 0 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-prose
+      .lgs-legal-sec:first-child
+      h2 {
+      margin-top: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose h3 {
+      font-size: 17px;
+      line-height: 24px;
+      font-weight: 650;
+      color: var(--lg-ink);
+      margin: 24px 0 6px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose p {
+      margin: 0 0 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose ul {
+      list-style: disc;
+      padding-left: 22px;
+      margin: 0 0 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose li {
+      margin: 4px 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-prose
+      :is(strong, .lgs-statement) {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose .lgs-statement {
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-prose code {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      padding: 1px 6px;
+      border-radius: 6px;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-toc-sum {
+      list-style: none;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-toc-sum::-webkit-details-marker {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-toc-m .lgs-toc {
+      position: static;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-toc-m[open]
+      .lgs-toc-sum
+      svg {
+      transform: rotate(180deg);
+    }
+
+    /* ── Pricing ─────────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-tier[data-highlight] {
+      border-color: var(--lg-accent);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 1px var(--lg-accent),
+        var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-badge {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-badge.lgs-tone-accent {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-price {
+      font-family: var(--font-display);
+      font-size: 32px;
+      font-weight: 650;
+      letter-spacing: -0.025em;
+      color: var(--lg-ink);
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-checks {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-check {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-lead-in {
+      color: var(--lg-ink-3);
+    }
+
+    /* ── Support: the classic form on a glass card ──────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support > :is(form, div) {
+      padding: 28px;
+      border-radius: var(--lg-r-xl);
+      background-color: var(--lg-card-fill);
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support select {
+      height: 44px;
+      border-radius: 12px;
+      border-color: var(--lg-input-line);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+      font-size: 15px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support select:hover {
+      border-color: var(--lg-input-line-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='site']
+      .lgs-support
+      select:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 0;
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support label {
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+      color: var(--lg-ink-2);
+    }
+
+    /* ── SiteFooter ──────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot {
+      border-top: 1px solid var(--lg-line);
+      background-color: color-mix(in srgb, var(--lg-surface) 40%, transparent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-line {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-link {
+      min-height: 24px;
+      display: inline-flex;
+      align-items: center;
+      color: var(--lg-ink-2);
+      font-size: 14px;
+      text-decoration: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-link:hover {
+      color: var(--lg-ink);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-small {
+      color: var(--lg-ink-2);
+    }
+
+    /* Coarse pointers: the footer links are 44 px targets. */
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-foot-link {
+        min-height: 44px;
+      }
+    }
+
+    /* ── Below 900 px: the phone menu, one column ───────────────────────── */
+    @media (max-width: 900px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] :is(.lgs-links, .lgs-hide-sm) {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-menu-btn {
+        display: inline-flex;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-wrap {
+        padding-left: 20px;
+        padding-right: 20px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-navbar {
+        padding: 10px 12px 0;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-nav {
+        min-height: 56px;
+        border-radius: 18px;
+        padding: 0 6px 0 14px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-legal-grid {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 16px;
+        margin-top: 24px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-legal-grid > .lgs-toc {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-toc-m {
+        display: block;
+        border-radius: 20px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-legal-art {
+        padding: 28px 20px;
+        border-radius: 20px;
+      }
+    }
+
+    /* ── Reduced motion: nothing moves ──────────────────────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] :is(.lgs-btn, .lgs-link) {
+        transition: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-btn:active {
+        transform: none;
+      }
+    }
+
+    /* ── Reduce Transparency and Increase Contrast: opaque, no blur ─────── */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'],
+      :root[data-appearance='liquid-glass'].dark [data-glass-page='site'] {
+        background: var(--lg-bg);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='site']
+        :is(.lgs-nav, .lgs-menu, .lgs-glass, .lgs-glass-clear, .lgs-btn-glass, .lgs-card) {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support > :is(form, div) {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"; R7),
+       declaration for declaration (site-pages.guard.test.ts). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass-page='site'],
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'].dark
+      [data-glass-page='site'] {
+      background: var(--lg-bg);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='site']
+      :is(.lgs-nav, .lgs-menu, .lgs-glass, .lgs-glass-clear, .lgs-btn-glass, .lgs-card) {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='site']
+      .lgs-support
+      > :is(form, div) {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    /* ── Forced colours: the system's own colours, no material ──────────── */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'],
+      :root[data-appearance='liquid-glass'].dark [data-glass-page='site'] {
+        background: Canvas;
+        color: CanvasText;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='site']
+        :is(
+          .lgs-nav,
+          .lgs-menu,
+          .lgs-glass,
+          .lgs-glass-clear,
+          .lgs-btn-glass,
+          .lgs-card,
+          .lgs-btn
+        ) {
+        background: Canvas;
+        border: 1px solid CanvasText;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='site'] .lgs-support > :is(form, div) {
+        background: Canvas;
+        border: 1px solid CanvasText;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+    }
+  }
+}

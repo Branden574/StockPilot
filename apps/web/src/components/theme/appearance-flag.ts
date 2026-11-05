@@ -77,13 +77,13 @@ export const MARKETING_PATHS = [
 ] as const;
 
 /**
- * Whether the glass twins exist yet. They are built in stage 3; until then
- * next.config.ts has no marketing rewrites and the provider's variant guard
- * does nothing (it would otherwise see "twin selected, none on screen" on
- * every marketing page). Stage 3 sets this to true in the same change that
- * wires `rewrites()` (appearance-flag.test.ts checks the two agree).
+ * Whether the glass twins exist. Stage 3 built them (app/(site-glass)/
+ * glass-site) and, in the same change, wired next.config.ts's `rewrites()` to
+ * marketingRewrites(liquidGlassRollout()); with this true the provider renders
+ * the variant guard on the 7 marketing paths (appearance-flag.test.ts checks
+ * the flag and next.config.ts agree).
  */
-export const MARKETING_TWINS_BUILT = false;
+export const MARKETING_TWINS_BUILT = true;
 
 interface CookieCondition {
   type: 'cookie';

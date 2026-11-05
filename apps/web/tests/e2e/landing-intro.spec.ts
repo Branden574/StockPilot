@@ -14,6 +14,15 @@ import { expect, test, type Page } from '@playwright/test';
  */
 test.use({ storageState: { cookies: [], origins: [] } });
 
+// The intro belongs to the classic landing. Under the Liquid Glass rollouts
+// that offer the glass twin, / serves the twin (which has no intro) unless the
+// visitor chose Classic (plans/REVISION-DEFAULT.md R8), so every test here
+// chooses Classic first.
+const CLASSIC_COOKIE = (url: string) => ({ name: 'sp_style', value: 'classic', url });
+test.beforeEach(async ({ context, baseURL }) => {
+  await context.addCookies([CLASSIC_COOKIE(baseURL!)]);
+});
+
 const SESSION_KEY = 'stockpilot:intro-seen:v1';
 const CURTAIN = '#li-pre';
 const OVERLAY = '.li-root';
@@ -112,7 +121,10 @@ test.describe('landing intro', () => {
     const frames = await framesOf(page);
     expect(frames.length).toBeGreaterThan(30);
     expect(frames.some((f) => f.covered)).toBe(true);
-    expect(frames.some((f) => f.beam), 'the scan beam should sweep on a first visit').toBe(true);
+    expect(
+      frames.some((f) => f.beam),
+      'the scan beam should sweep on a first visit',
+    ).toBe(true);
     expect(gapsIn(frames), 'the landing must never show through mid-sequence').toHaveLength(0);
 
     // It finishes, and leaves nothing behind in the DOM or the a11y tree.
@@ -137,7 +149,10 @@ test.describe('landing intro', () => {
     await page.waitForTimeout(2200);
 
     const frames = await framesOf(page);
-    expect(frames.some((f) => f.beam), 'no scan beam on the short lane').toBe(false);
+    expect(
+      frames.some((f) => f.beam),
+      'no scan beam on the short lane',
+    ).toBe(false);
     expect(gapsIn(frames)).toHaveLength(0);
     await expect(page.locator(OVERLAY)).toHaveCount(0);
   });
@@ -151,7 +166,10 @@ test.describe('landing intro', () => {
     await page.reload({ waitUntil: 'commit' });
     await page.waitForTimeout(2000);
     const frames = await framesOf(page);
-    expect(frames.some((f) => f.beam), 'a reload must not replay the full sequence').toBe(false);
+    expect(
+      frames.some((f) => f.beam),
+      'a reload must not replay the full sequence',
+    ).toBe(false);
   });
 
   test('reduced motion: no beam, no movement at all, still branded', async ({ page }) => {
@@ -167,7 +185,10 @@ test.describe('landing intro', () => {
       'reduced motion must never translate or scale the lockup',
     ).toBe(false);
     expect(gapsIn(frames)).toHaveLength(0);
-    expect(frames.some((f) => f.covered), 'still shows the branded surface').toBe(true);
+    expect(
+      frames.some((f) => f.covered),
+      'still shows the branded surface',
+    ).toBe(true);
     await expect(page.locator(OVERLAY)).toHaveCount(0);
   });
 
@@ -198,14 +219,18 @@ test.describe('landing intro', () => {
   test('clicking the overlay skips ahead to the exit', async ({ page }) => {
     await instrument(page);
     await page.goto('/', { waitUntil: 'commit' });
-    await page.locator(OVERLAY).click({ timeout: 4000, force: true }).catch(() => {
-      /* if it already exited, the assertion below still holds */
-    });
+    await page
+      .locator(OVERLAY)
+      .click({ timeout: 4000, force: true })
+      .catch(() => {
+        /* if it already exited, the assertion below still holds */
+      });
     await expect(page.locator(OVERLAY)).toHaveCount(0, { timeout: 3000 });
   });
 
-  test('with JavaScript disabled the page is fully usable', async ({ browser }) => {
+  test('with JavaScript disabled the page is fully usable', async ({ browser, baseURL }) => {
     const ctx = await browser.newContext({ javaScriptEnabled: false });
+    await ctx.addCookies([CLASSIC_COOKIE(baseURL!)]);
     const page = await ctx.newPage();
     await page.goto('/');
     // noscript removes the curtain outright; the SSR landing is present and readable.
@@ -258,7 +283,9 @@ test.describe('landing intro', () => {
       await expect(status).toHaveText(/loading stockpilot/i);
     }
     // The overlay itself is hidden from AT and holds nothing focusable.
-    const focusable = await page.locator(`${OVERLAY} a, ${OVERLAY} button, ${OVERLAY} input`).count();
+    const focusable = await page
+      .locator(`${OVERLAY} a, ${OVERLAY} button, ${OVERLAY} input`)
+      .count();
     expect(focusable).toBe(0);
   });
 });
