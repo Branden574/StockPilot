@@ -66,17 +66,21 @@ describe('glass-only and classic-only elements', () => {
   // badge beside the status (words and an icon); the order page's
   // requester note, Classic-only in the main column (the page) and a
   // glass-only copy in the side column (words only, plan 4.6).
+  // Stage 4, insights lane: the Reports hub's grouped tiles (the same links
+  // as Classic's flat list, marked Classic-only in the page).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
       ...Array<string>(2).fill('app/(auth)/layout.tsx'),
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
+      'app/(dashboard)/dashboard/reports/page.tsx',
       'components/auth/external-shell.tsx',
       'components/dashboard/sidebar.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',
       ...Array<string>(6).fill('components/orders/orders-export-menu.tsx'),
+      'components/reports/reports-hub-glass.tsx',
     ]);
   });
 });

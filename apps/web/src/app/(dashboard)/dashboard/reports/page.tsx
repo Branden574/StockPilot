@@ -20,12 +20,20 @@ import { BOOK_REPORT_CARD_DESCRIPTION, BOOK_REPORT_TITLE, can } from '@stockpilo
 
 import { PageHeader } from '@/components/patterns/page-header';
 import { PdfDownloadDropdown } from '@/components/reports/pdf-download-dropdown';
+import { ReportsHubGlass } from '@/components/reports/reports-hub-glass';
 import { IntentLink } from '@/components/ui/intent-link';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { reportModules, type ReportSlug } from '@/lib/reports/report-access';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { REPORTS_TOUR } from '@/lib/onboarding/tours';
+
+// The Liquid Glass insights composition (stage 4): pages/insights.css, the
+// lane's shared frame, and pages/reports.css, the Reports.dc.html board.
+// Every rule is scoped to this page's [data-glass-page] root and to glass,
+// so Classic never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+import '@/styles/liquid-glass/pages/reports.css';
 
 interface Report {
   slug: ReportSlug;
@@ -135,7 +143,12 @@ export default async function ReportsPage() {
   const reports = all.filter((r) => reportModules(r.slug).every((m) => enabled.has(m)));
 
   return (
-    <div className={REPORT_PAGE_CLASS}>
+    <div
+      className={REPORT_PAGE_CLASS}
+      data-glass-page="insights"
+      data-glass-view="reports-hub"
+      data-glass-width="wide"
+    >
       <PageHeader
         title="Reports"
         subline={<>{reports.length} pre-baked reports.</>}
@@ -143,14 +156,24 @@ export default async function ReportsPage() {
         actions={<PdfDownloadDropdown baseUrl="/api/reports/inventory-snapshot/pdf" />}
       />
 
+      {/* Liquid Glass draws the board's grouped hub (Reports.dc.html: the Book
+          Order Totals feature tile, then Inventory, Purchasing & cost,
+          Bundles and Lots) from this same list, in place of the tiles below
+          (each data-classic-only). Nothing at all under the off rollout. */}
+      <ReportsHubGlass reports={reports} />
+
       {/* One tile per report, each to its own route. IntentLink, not Link: a
           page of tiles that prefetch on sight was 26 requests for 13 tiles
           (components/ui/intent-link.tsx); a tile is warmed when someone
           reaches for it instead. The REPORTS_TOUR's second step targets
           `main a[href^="/dashboard/reports/"]`, which these stay. */}
-      <ul role="list" className="grid grid-cols-1 gap-3 md:grid-cols-2">
+      <ul
+        role="list"
+        className="grid grid-cols-1 gap-3 md:grid-cols-2"
+        data-glass-role="reports-classic-list"
+      >
         {reports.map((r) => (
-          <li key={r.slug} className="min-w-0">
+          <li key={r.slug} className="min-w-0" data-classic-only="">
             <IntentLink
               href={`/dashboard/reports/${r.slug}`}
               className="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]"

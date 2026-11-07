@@ -36,6 +36,12 @@ import { TOUR_ROUTES, WORKFLOW_GUIDES } from '@/lib/onboarding/workflows';
 import { SUPPORT_EMAIL } from '@/lib/site';
 import { cn } from '@/lib/utils';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export const metadata: Metadata = { title: 'Help & Learning' };
 
 /** Exported for registry tests only (Task 23) — pins that a tour defined in
@@ -70,7 +76,11 @@ export default async function HelpPage() {
   const state = await getTourStateAction();
 
   return (
-    <div className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-4xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="help"
+    >
       <PageHeader
         title="Help & Learning"
         subline="Interactive tours, step-by-step guides, and support — learn any part of the app in minutes."

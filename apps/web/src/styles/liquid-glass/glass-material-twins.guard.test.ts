@@ -23,9 +23,9 @@ import { enclosing, GLASS_DIR, normaliseQuotes, splitSelectors } from './glass-c
  *     that attribute as well as under the OS media query, and the two are
  *     declaration-for-declaration equal (tokens.generated.css, materials.css,
  *     shell.css and the page compositions that blur: pages/items.css,
- *     pages/item-detail.css, storefront.glass.css, pages/orders.css and
- *     pages/order-detail.css). The contrast and forced-colours sets still win
- *     over it.
+ *     pages/item-detail.css, storefront.glass.css, pages/orders.css,
+ *     pages/order-detail.css and pages/insights.css). The contrast and
+ *     forced-colours sets still win over it.
  *  2. The exempt surfaces. Inside [data-appearance-exempt] (the signature pad,
  *     the label sheet) every token glass overrides is declared again with its
  *     classic value, read from app/globals.css.
@@ -109,6 +109,7 @@ describe('the reduced material under data-lg-material="reduced" (R7)', () => {
     'storefront.glass.css',
     'pages/orders.css',
     'pages/order-detail.css',
+    'pages/insights.css',
   ]) {
     it(`${file}: every Reduce Transparency rule has an attribute twin with the same declarations`, () => {
       const root = postcss.parse(read(file));

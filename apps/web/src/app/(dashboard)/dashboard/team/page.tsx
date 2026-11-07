@@ -19,6 +19,12 @@ import { env } from '@/lib/env';
 
 import { can, resolveOrgTimezone, resolveTerminology, type Role } from '@stockpilot/core';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export default async function TeamPage() {
   const ctx = await requireOrgContext();
 
@@ -161,7 +167,12 @@ export default async function TeamPage() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="team"
+      data-glass-width="wide"
+    >
       <TeamManager
         title={title}
         subline="Invite, assign roles, and manage workspace access."

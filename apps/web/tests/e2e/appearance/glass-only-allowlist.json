@@ -180,6 +180,16 @@
       "$comment": "Auth-SignIn.dc.html's help pill: Privacy, Terms, Security, Support. The classic help links (Support, Privacy, Terms) keep their order (the DOM order wins over the board's, plan 4.6), and Security, glass-only, comes last, inside a glass-only span because auth.css gives every help link a display at phone width. Not rendered under the off rollout. In classic /security is reached through the StockPilot home link (/) and the marketing header and footer there.",
       "classicTwin": "StockPilot home link (/), then Security in the marketing header",
       "gate": null
+    },
+    {
+      "id": "reports-hub-glass",
+      "source": "apps/web/src/components/reports/reports-hub-glass.tsx",
+      "selector": "[data-glass=\"reports-hub\"]",
+      "kind": "duplicate action",
+      "routes": ["/dashboard/reports"],
+      "$comment": "Reports.dc.html's grouped hub: the Book Order Totals feature tile, then Inventory, Purchasing & cost, Bundles and Lots. One link per report in the page's own module-filtered list, with the name, the description and the target of the Classic tile it stands for; Classic's tiles carry data-classic-only and are hidden in glass, so each report is one link in either design. The eyebrow, the chips and the cover fan are aria-hidden decoration.",
+      "classicTwin": "the Classic tile of the same report (data-classic-only, hidden in glass), same name, description and href",
+      "gate": "the page's report list, filtered by reportModules(slug) on the modules enabled for the organization"
     }
   ]
 }

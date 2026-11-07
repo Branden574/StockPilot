@@ -21,6 +21,12 @@ import { ReportsService } from '@/server/services/reports';
 import { formatCurrency, formatNumber } from '@/lib/utils';
 import { reportPageGate } from '@/lib/reports/report-page-gate';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 /** The report pages' frame: the redesign's list-page gutters and width. */
 const REPORT_PAGE_CLASS =
   'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -48,7 +54,12 @@ async function ValuationShell({ charterIdPromise }: { charterIdPromise: Promise<
   const activeCharter = charterId ? charters.find((c) => c.id === charterId) : undefined;
 
   return (
-    <div className={REPORT_PAGE_CLASS}>
+    <div
+      className={REPORT_PAGE_CLASS}
+      data-glass-page="insights"
+      data-glass-view="report"
+      data-glass-width="wide"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title="Inventory valuation"

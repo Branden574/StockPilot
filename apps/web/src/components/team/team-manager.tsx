@@ -419,11 +419,11 @@ function MemberRow({
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-3">
-          <Avatar className="h-8 w-8">
+          <Avatar className="h-8 w-8" data-glass-role="member-avatar">
             {member.avatarUrl && (
               <AvatarImage src={member.avatarUrl} alt={member.fullName ?? member.email} />
             )}
-            <AvatarFallback>{initials}</AvatarFallback>
+            <AvatarFallback data-glass-role="member-initials">{initials}</AvatarFallback>
           </Avatar>
           <div className="min-w-0">
             <p className="text-foreground truncate font-medium">

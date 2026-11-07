@@ -132,7 +132,11 @@ export function BookReportFilterBar(props: BookReportFilterBarProps) {
   const go = (next: BookReportQuery) => goTo(next);
 
   return (
-    <section aria-label={BOOK_REPORT_UI.filters} className="space-y-3">
+    <section
+      aria-label={BOOK_REPORT_UI.filters}
+      className="space-y-3"
+      data-glass-role="bot-filters"
+    >
       {props.viewNow && props.warehouseEcho ? (
         <ViewChangedNotice
           query={query}

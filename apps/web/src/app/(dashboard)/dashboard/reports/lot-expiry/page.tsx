@@ -13,6 +13,12 @@ import { cn } from '@/lib/utils';
 import { reportPageGate } from '@/lib/reports/report-page-gate';
 import { LotsService } from '@/server/services/lots';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export const dynamic = 'force-dynamic';
 
 /** The report pages' frame: the redesign's list-page gutters and width. */
@@ -60,7 +66,12 @@ export default async function LotExpiryReportPage() {
   })).filter((c) => c.count > 0);
 
   return (
-    <div className={REPORT_PAGE_CLASS}>
+    <div
+      className={REPORT_PAGE_CLASS}
+      data-glass-page="insights"
+      data-glass-view="report"
+      data-glass-width="wide"
+    >
       <PageHeader
         title="Aging & expiry"
         titleId="lot-expiry-title"

@@ -222,6 +222,36 @@ describe('styles/liquid-glass scope guard', () => {
       ]);
     });
 
+    it('the insights pages import the shared frame, and the report boards only their own pages', () => {
+      const DASH = join(APP, '(dashboard)', 'dashboard');
+      const lane = [
+        'ai',
+        'audit',
+        'help',
+        'insights',
+        'notifications',
+        'reports',
+        'support',
+        'team',
+        'whats-new',
+        'zendesk',
+      ];
+      const pages = lane
+        .flatMap((d) => routeFiles(join(DASH, d)))
+        .map((f) => relative(APP, f))
+        .filter((f) => /(^|\/)page\.tsx$/.test(f))
+        .sort();
+      expect(importers.get('pages/insights.css')?.sort()).toEqual(pages);
+      // Each of them draws the root the shared frame is scoped to.
+      for (const page of pages) {
+        expect(readFileSync(join(APP, page), 'utf8'), page).toMatch(/data-glass-page="insights"/u);
+      }
+      expect(importers.get('pages/reports.css')?.sort()).toEqual([
+        '(dashboard)/dashboard/reports/book-order-totals/page.tsx',
+        '(dashboard)/dashboard/reports/page.tsx',
+      ]);
+    });
+
     for (const { file, text } of PAGES) {
       it(`${file}: every selector is scoped to a [data-glass-page] root`, () => {
         const root = parse(text, file);

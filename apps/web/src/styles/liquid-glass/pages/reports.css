@@ -1,0 +1,741 @@
+/* Liquid Glass, the two drawn report boards (stage 4, lane L2a), on top of
+   the lane's shared frame (pages/insights.css):
+
+   - Reports.dc.html, the hub: the Book Order Totals feature tile (.card
+     .feature-tile: radius 24, 22 x 24, the eyebrow in accent text, the
+     20/26 title, the 13/18 line in ink 2, three chips, the cover fan) and
+     the reports in the board's four groups (an eyebrow h2 over a grid of
+     .report-tile cards: radius 16, 14 x 16, the 34 px .rt-ic tile on
+     surface 3, the name 13/18 at 600, the line 12/16 in ink 3, the chevron
+     in ink 4). Drawn by the glass-only block the page renders
+     (components/reports/reports-hub-glass.tsx); Classic's tiles carry
+     data-classic-only.
+   - Book-Order-Totals.dc.html: on Classic's own DOM (plan M1), the filter
+     bar as one card (.filterbar: 14 x 16, radius 20, 12 / 600 labels in
+     ink 2, 36 px fields on the field frost), the figures as three cards
+     (.kpis, the figure 34/40), and from 1101 px the board's .cols-side: the
+     books table beside a 300 to 360 px side column holding the by-charter
+     card (or, with one charter chosen, the scope card as the board's "What
+     these totals cover"); the table card with the 38 px band and 72 px
+     rows, the covers 52 px tall (two thirds wide, 3/5/5/3 radius, the paper
+     shadow), the copies figure at 16/22 600, the View orders button 30 px.
+     The DOM order is Classic's (the side column comes before the table in
+     reading order, as an aside does), so keyboard and screen-reader order
+     are unchanged.
+
+   Every rule is scoped to :root[data-appearance="liquid-glass"] inside
+   @media screen and to the page's root (data-glass-page="insights" with its
+   data-glass-view), so Classic never matches one and printing never gets
+   one; the orders drawer and the menus are portalled and take the stage 2
+   overlay glass. Imported only by the two pages. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ══ Reports.dc.html ═══════════════════════════════════════════════ */
+    /* Classic's list: its tiles are data-classic-only; the emptied grid
+       leaves no gap under the groups. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass-role='reports-classic-list'] {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-hub'] {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* The feature tile (.card.feature-tile). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature'] {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      padding: 22px 24px;
+      overflow: hidden;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 24px;
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      color: var(--lg-ink);
+      text-decoration: none;
+      transition: box-shadow var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature']:hover {
+      box-shadow: var(--lg-glass-inner), var(--lg-sh-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-text'] {
+      display: flex;
+      flex: 1 1 0;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      :is([data-glass='reports-feature-eyebrow'], [data-glass='reports-group-title']) {
+      margin: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-eyebrow'] {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-title'] {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-desc'] {
+      max-width: 460px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-chips'] {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-chip'] {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 32px;
+      padding: 0 12px;
+      border: var(--lg-b-w) solid var(--lg-field-line);
+      border-radius: 999px;
+      background: var(--lg-field-fill);
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-chip']
+      svg {
+      width: 15px;
+      height: 15px;
+    }
+    /* The cover fan (.cover-fan: 200 x 120, three 78 x 116 covers turned
+       -8, 0 and 8 degrees). The hub loads no covers, so each is a tinted
+       book shape with the board's paper shadow. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-cover-fan'] {
+      position: relative;
+      flex: none;
+      width: 200px;
+      height: 120px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-cover-fan']
+      > span {
+      position: absolute;
+      bottom: 0;
+      width: 78px;
+      height: 116px;
+      border-radius: 3px 6px 6px 3px;
+      box-shadow:
+        0 2px 4px rgba(0, 0, 0, 0.18),
+        0 10px 24px -10px rgba(0, 0, 0, 0.45);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-cover-fan']
+      > span:nth-child(1) {
+      left: 8px;
+      background: linear-gradient(160deg, #3d63a8, #24407a);
+      transform: rotate(-8deg);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-cover-fan']
+      > span:nth-child(2) {
+      left: 62px;
+      z-index: 2;
+      background: linear-gradient(160deg, #2f7a68, #165445);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-cover-fan']
+      > span:nth-child(3) {
+      left: 116px;
+      background: linear-gradient(160deg, #f3ecdc, #ddd2bb);
+      transform: rotate(8deg);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-feature-chevron'] {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      color: var(--lg-ink-3);
+    }
+
+    /* The groups (section.col.g10: the eyebrow h2 over the tile grid). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-group'] {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='reports-grid'] {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 10px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile'] {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      height: 100%;
+      padding: 14px 16px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      color: var(--lg-ink);
+      text-decoration: none;
+      transition: background-color var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile']:hover {
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile-icon'] {
+      display: grid;
+      flex: none;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: var(--lg-surface-3);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile-icon']
+      svg {
+      width: 17px;
+      height: 17px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile-text'] {
+      display: flex;
+      flex: 1 1 0;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile-name'] {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile-desc'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      [data-glass='report-tile-chevron'] {
+      flex: none;
+      width: 16px;
+      height: 16px;
+      color: var(--lg-ink-4);
+    }
+    /* Content glass's edge (.card::after: the masked 1 px gradient ring);
+       none in the reduced and contrast token sets, hidden under forced
+       colours. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      :is([data-glass='reports-feature'], [data-glass='report-tile'])::after {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      z-index: 1;
+      padding: 1px;
+      border-radius: inherit;
+      background: var(--lg-card-edge);
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='reports-hub']
+      :is([data-glass='reports-feature'], [data-glass='report-tile']):focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='reports-hub']
+        [data-glass='reports-cover-fan'] {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='reports-hub']
+        [data-glass='reports-grid'] {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='reports-hub']
+        :is([data-glass='reports-feature'], [data-glass='report-tile']) {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='reports-hub']
+        :is([data-glass='reports-feature'], [data-glass='report-tile'])::after {
+        display: none;
+      }
+    }
+
+    /* ══ Book-Order-Totals.dc.html ══════════════════════════════════════ */
+
+    /* The body's blocks 20 px apart, as the page box's (.page gap 20). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      div:has(> [data-glass-role='bot-filters'])
+      > :not(:last-child) {
+      margin-block-end: 20px;
+    }
+
+    /* The filter bar as one card (.card.filterbar). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters'] {
+      padding: 14px 16px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      :is([data-filter-grid-primary], [data-filter-grid]) {
+      gap: 14px 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      label,
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      span[id$='-label'] {
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+    }
+    /* The fields (.input.select.fb-btn and .ctrl.search: 36 px, radius 10,
+       14 px, on the field frost, the board's input line). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      :is(select, input:not([type='checkbox']):not([type='radio']), button[aria-haspopup]) {
+      height: 36px;
+      border-color: var(--lg-input-line);
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      :is(select, input:not([type='checkbox']):not([type='radio']), button[aria-haspopup]):hover {
+      border-color: var(--lg-input-line-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      :is(select, input:not([type='checkbox']):not([type='radio']), button[aria-haspopup]):focus-visible {
+      border-color: var(--lg-accent);
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+      outline: none;
+    }
+    /* The hints under the fields (.xs.muted: 12/16 in ink 3). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-filters']
+      p:not([role]) {
+      color: var(--lg-ink-3);
+    }
+
+    /* The actions under the filter card (Refresh, Export): the board's
+       36 px .btn-secondary. They stay here, in Classic's reading order. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-report-actions]
+      [data-glass='button']:not([data-glass-variant='ghost']):not([data-glass-variant='link']) {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* "Showing" and its filter chips (.chip.scope: the selection fill, the
+       accent text at 600, round). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-showing]
+      > h2 {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-showing-scope] {
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-filter-chips]
+      li[data-chip] {
+      height: 32px;
+      padding-left: 12px;
+      border-color: transparent;
+      background: var(--lg-sel-fill);
+      color: var(--lg-accent-text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-filter-chips]
+      li[data-chip]
+      > a {
+      width: 22px;
+      height: 22px;
+      color: inherit;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-filter-chips]
+      li[data-chip]
+      > a:hover {
+      background: var(--lg-accent-wash-2);
+    }
+
+    /* The figures (.kpis: the figure 34/40, the definition 12/16 in ink 3;
+       the card itself is the frame's). The label is the metric's own h2. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-kpis']
+      [data-slot='stat-strip-item']
+      > div:first-child
+      > h2 {
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-kpis']
+      [data-slot='stat-strip-item']
+      > div:nth-child(2) {
+      font-size: 34px;
+      line-height: 40px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-kpis']
+      [data-slot='stat-strip-item']
+      > div:nth-child(3) {
+      color: var(--lg-ink-3);
+    }
+
+    /* The by-charter card (.card: the 52 px head with the 16/22 title; a
+       row per charter, the value 12/16 in ink 3, tabular). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter]
+      > summary {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-radius: var(--lg-r-lg);
+      color: var(--lg-ink);
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter][open]
+      > summary {
+      border-radius: var(--lg-r-lg) var(--lg-r-lg) 0 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter]
+      > summary:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter]
+      > div {
+      padding: 12px 16px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter]
+      [data-charter-row]
+      > a {
+      border-radius: 10px;
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter]
+      [data-charter-row]
+      > a:hover {
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-by-charter]
+      [data-charter-row]
+      > a
+      > span:last-child {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    /* The scope lines (the board's "What these totals cover" card). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-scope'] {
+      padding: 16px 20px;
+      color: var(--lg-ink-2);
+    }
+
+    /* The books table card (.card + .dt: the band, 72 px rows, the covers). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-table']
+      [data-glass='table']
+      > tbody
+      > tr {
+      height: 72px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-table']
+      tbody
+      th[scope='row']
+      > span:first-child {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-table']
+      tbody
+      td:nth-child(3)
+      > span:first-child {
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-table']
+      tbody
+      td:first-child
+      :is(span[role='img'], [data-cover-state]) {
+      width: 35px;
+      height: 52px;
+      border-color: transparent;
+      border-radius: 3px 5px 5px 3px;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.16),
+        0 6px 14px -8px rgba(0, 0, 0, 0.4);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-table']
+      tbody
+      td:first-child
+      [data-cover-state] {
+      background: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-table']
+      tbody
+      [data-glass='button'][data-glass-size='sm'] {
+      height: 30px;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    /* The pager and the grand total (.pager: 13 px in ink 3; the total
+       13/18 at 600). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='book-order-totals']
+      [data-glass-role='bot-pager']
+      > p {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+
+    /* .cols-side from 1101 px (sp.css:291-292): the table, its pager and
+       the grand total in the main column; the by-charter card beside them;
+       the scope card under them, or, with no by-charter card (one charter
+       chosen), in the side column as the board's "What these totals cover". */
+    @media (min-width: 1101px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing]) {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+        grid-template-rows: auto auto auto auto 1fr auto;
+        gap: 16px;
+        align-items: start;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > * {
+        margin-block: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > :is([data-showing], [data-glass-role='bot-kpis']) {
+        grid-column: 1 / -1;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > :is([data-glass-role='bot-table'], [data-glass='state-panel']) {
+        grid-row: 3;
+        grid-column: 1;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > [data-glass-role='bot-pager'] {
+        grid-row: 4;
+        grid-column: 1;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > [data-glass-role='bot-total'] {
+        grid-row: 5;
+        grid-column: 1;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > [data-by-charter] {
+        grid-row: 3 / span 3;
+        grid-column: 2;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > [data-glass-role='bot-scope'] {
+        grid-row: 3 / span 3;
+        grid-column: 2;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-by-charter])
+        > [data-glass-role='bot-scope'] {
+        grid-row: 6;
+        grid-column: 1 / -1;
+      }
+    }
+
+    /* Phones (sp.css 760 px): the fields take the whole width. */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        [data-glass-role='bot-filters'] {
+        padding: 14px;
+      }
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        [data-glass-role='bot-filters'] {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+      }
+    }
+  }
+}

@@ -31,6 +31,12 @@ import { ServiceError } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 /**
  * THE org audit console — the ONE grantable audit surface.
  *
@@ -181,7 +187,12 @@ export default async function AuditLogPage({
   return (
     // Always a table, never cards, and no Export (the console has none; the
     // reference's Movements Export must not become a placeholder here).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="audit"
+      data-glass-width="wide"
+    >
       <PageHeader
         title={title}
         titleId="audit-title"
