@@ -8,6 +8,7 @@ import {
   GLASS_AUTH,
   GlassAuthPanelBackdrop,
   glassCodeInput,
+  GLASS_STATE_GLYPH,
   glassStateTile,
 } from '@/components/ui/glass/screens/auth';
 import { useGlass } from '@/components/ui/glass/use-glass';
@@ -81,12 +82,12 @@ export function MfaChallengeScreen() {
             styles.iconRing,
             { borderColor: c.hair2 },
             lg && GLASS_AUTH.mfaTile,
-            lg && { backgroundColor: glassStateTile(lg, 'neutral').fill },
+            lg && { backgroundColor: glassStateTile(lg, 'accent').fill },
           ]}
         >
           <ShieldCheck
-            size={lg ? 24 : 30}
-            color={lg ? glassStateTile(lg, 'neutral').ink : c.ink}
+            size={lg ? GLASS_STATE_GLYPH : 30}
+            color={lg ? glassStateTile(lg, 'accent').ink : c.ink}
             strokeWidth={lg ? 1.8 : 1.5}
           />
         </View>

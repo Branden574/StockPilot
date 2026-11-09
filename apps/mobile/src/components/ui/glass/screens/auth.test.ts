@@ -9,7 +9,14 @@ vi.mock('../../../../lib/use-theme', () => ({ useTheme: () => ({}) }));
 
 const { themeValueFor } = await import('../../../../lib/appearance/theme-value');
 const { AA_TEXT, AA_UI, contrast, hexOf } = await import('../../__fixtures__/contrast');
-const { GLASS_AUTH, GLASS_AUTH_RING, glassCodeInput, glassStateTile } = await import('./auth');
+const {
+  GLASS_AUTH,
+  GLASS_AUTH_RING,
+  GLASS_STATE_GLYPH,
+  glassAuthCardFill,
+  glassCodeInput,
+  glassStateTile,
+} = await import('./auth');
 const { INPUT_LINE } = await import('../primitive-styles');
 
 type Look = Parameters<typeof glassCodeInput>[0];
@@ -72,6 +79,22 @@ describe('the sign-in card and the gates keep the boards geometry', () => {
     });
   });
 
+  it('the state tiles are .empty-ic: 56 at radius 18, the MFA one 48 at 14, a 26pt glyph', () => {
+    expect(GLASS_AUTH.tile).toMatchObject({
+      width: 56,
+      height: 56,
+      borderRadius: 18,
+      marginBottom: 14,
+    });
+    expect(GLASS_AUTH.mfaTile).toMatchObject({ width: 48, height: 48, borderRadius: 14 });
+    expect(GLASS_STATE_GLYPH).toBe(26);
+  });
+
+  it('the gates keep the boards rhythm: MFA .col.g6 under its tile, account disabled .col.g14', () => {
+    expect(GLASS_AUTH.iconWrap.marginBottom).toBe(6);
+    expect(GLASS_AUTH.gateLine).toEqual({ marginTop: 14, marginBottom: 14 });
+  });
+
   it('the lock is the iOS sheet: 8 in, radius 36, the Face ID tile 64 at radius 20', () => {
     expect(GLASS_AUTH.lockSheet).toMatchObject({
       marginHorizontal: 8,
@@ -82,9 +105,27 @@ describe('the sign-in card and the gates keep the boards geometry', () => {
   });
 });
 
+describe.each(LOOKS)("%s: the card in the ring is the board's .card", (_name, lg) => {
+  it('the card fill with a hairline card-line edge at radius 23 (sp.css .card; auth.glass.css)', () => {
+    expect(glassAuthCardFill(lg)).toEqual({
+      backgroundColor: lg.g.cardFill,
+      borderColor: lg.g.cardLine,
+      borderWidth: 0.5,
+      borderRadius: 23,
+    });
+    expect(glassAuthCardFill(lg).backgroundColor).not.toBe(lg.g.glassStrong);
+  });
+
+  it('the card is solid in the opaque material (the opaque tokens)', () => {
+    if (lg.material === 'opaque') expect(rgbaOf(lg.g.cardFill)[3]).toBe(1);
+    else expect(rgbaOf(lg.g.cardFill)[3]).toBeLessThan(1);
+  });
+});
+
 describe.each(LOOKS)('%s: the gates read at AA', (_name, lg) => {
   const page = over(lg.g.bg, '#000000');
-  const card = over(lg.g.glassStrong, page);
+  // The card fill over the ring's glass (its CSS twin, --glass) over the page.
+  const card = over(lg.g.cardFill, over(lg.g.glass, page));
 
   it('words on the panel card and the lock sheet', () => {
     expect(contrast(over(lg.c.ink, card), card)).toBeGreaterThanOrEqual(AA_TEXT);
@@ -95,9 +136,11 @@ describe.each(LOOKS)('%s: the gates read at AA', (_name, lg) => {
     const danger = glassStateTile(lg, 'danger');
     const dangerGround = over(danger.fill, card);
     expect(contrast(over(danger.ink, dangerGround), dangerGround)).toBeGreaterThanOrEqual(AA_UI);
-    const neutral = glassStateTile(lg, 'neutral');
-    const neutralGround = over(neutral.fill, card);
-    expect(contrast(over(neutral.ink, neutralGround), neutralGround)).toBeGreaterThanOrEqual(AA_UI);
+    const accent = glassStateTile(lg, 'accent');
+    // The MFA shield: .empty-ic's accent wash and accent-text glyph.
+    expect(accent).toEqual({ fill: lg.g.accentWash, ink: lg.g.accentText });
+    const accentGround = over(accent.fill, card);
+    expect(contrast(over(accent.ink, accentGround), accentGround)).toBeGreaterThanOrEqual(AA_UI);
     const face = over(lg.g.accentWash, card);
     expect(contrast(over(lg.g.accentText, face), face)).toBeGreaterThanOrEqual(AA_UI);
   });

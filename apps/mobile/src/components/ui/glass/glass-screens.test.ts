@@ -185,3 +185,46 @@ describe('glassRecipe: the Classic recipe drawn in the glass palette and faces',
     expect(classic.root.backgroundColor).toBe(palette('light').paper);
   });
 });
+
+describe('the selection chip is the iOS capsule (.ios-capsule [705])', () => {
+  it.each(LOOKS)(
+    '%s: 44 tall at radius 22 with 6/16 padding; the iOS fill, ink when chosen',
+    async (_n, lg) => {
+      const { glassChip } = await import('./primitive-styles');
+      for (const active of [false, true]) {
+        expect(glassChip(lg, active)).toMatchObject({
+          minHeight: 44,
+          borderRadius: 22,
+          paddingVertical: 6,
+          paddingHorizontal: 16,
+          backgroundColor: active ? lg.c.ink : lg.ios.fill,
+        });
+      }
+    },
+  );
+});
+
+describe("Items draws the board's large title in the nav (iOS-Lookup: .ios-large.f1 at 30)", () => {
+  const file = 'app/(drawer)/(tabs)/inventory.tsx';
+  const src = readFileSync(path.resolve(__dirname, '../../../..', file), 'utf8');
+
+  it('the glass nav row holds the 30pt title, flexible, before the trailing circles', async () => {
+    const { GLASS_LOOKUP, GLASS_LOOKUP_NAV_TITLE } = await import('./screens/lookup');
+    expect(GLASS_LOOKUP_NAV_TITLE).toBe(30);
+    expect(GLASS_LOOKUP.navTitle).toMatchObject({ flex: 1, minWidth: 0 });
+    const nav = src.slice(
+      src.indexOf('<View style={lg ? GLASS_LOOKUP.nav : styles.topbar}>'),
+      src.indexOf('<View style={lg ? GLASS_LOOKUP.head : styles.head}>'),
+    );
+    expect(nav.length).toBeGreaterThan(0);
+    const title = nav.indexOf('size={GLASS_LOOKUP_NAV_TITLE}');
+    expect(title).toBeGreaterThan(nav.indexOf('accessibilityLabel="Open menu"'));
+    expect(title).toBeLessThan(nav.indexOf('accessibilityLabel="New item"'));
+    expect(nav).toContain('style={GLASS_LOOKUP.navTitle}');
+  });
+
+  it('the 34pt title under the nav is Classic only', () => {
+    const head = src.slice(src.indexOf('<View style={lg ? GLASS_LOOKUP.head : styles.head}>'));
+    expect(head).toMatch(/\{lg \? null : \(\s*<Display size=\{34\} style=\{\{ marginTop: 12 \}\}>/);
+  });
+});

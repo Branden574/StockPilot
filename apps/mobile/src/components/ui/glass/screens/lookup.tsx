@@ -20,8 +20,13 @@ export const GLASS_LOOKUP = StyleSheet.create({
     gap: GLASS_METRICS.nav.gap,
   },
   navGroup: { flexDirection: 'row', alignItems: 'center', gap: GLASS_METRICS.nav.gap },
-  // The large title at the scroll's 16pt edge, 4pt in (.ios-large, margin 0 4).
+  // The large title inline in the nav (iOS-Lookup: `.ios-large.f1` at 30pt,
+  // before the nav's circles): it takes the row's free width.
+  navTitle: { flex: 1, minWidth: 0, marginTop: 0 },
+  // Under the nav: the Tour pill at the scroll's 16pt edge, 4pt in.
   head: { paddingHorizontal: 16 + GLASS_METRICS.largeTitle.marginHorizontal, paddingTop: 2 },
+  // The large title under the nav, for the screens drawn from this frame
+  // whose titles are not in their boards' nav (Books, Receive).
   title: { marginTop: 0 },
   // .ios-scroll with the board's gap 14 and padding-top 8 (the search area).
   searchArea: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 8 },
@@ -47,6 +52,9 @@ export const GLASS_LOOKUP = StyleSheet.create({
     paddingHorizontal: GLASS_METRICS.row.paddingHorizontal,
   },
 });
+
+/** The inline large title's size (iOS-Lookup sets .ios-large to 30px in the nav). */
+export const GLASS_LOOKUP_NAV_TITLE = 30;
 
 /** The list separator's inset (--sep-l: 82px): 16 padding, the 52pt thumb, 12 gap, 2. */
 export const GLASS_LOOKUP_SEPARATOR_INSET = 82;

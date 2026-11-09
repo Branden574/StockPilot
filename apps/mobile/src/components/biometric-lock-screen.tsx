@@ -217,7 +217,8 @@ export function BiometricLockScreen() {
             Unlock with {labelText}
           </Button>
         ) : null}
-        <Button block variant="ghost" onPress={signOutToFallback}>
+        {/* Liquid Glass: the board's .ios-btn.gray (iOS-NotifyFlow step 2), the outline's glass look. */}
+        <Button block variant={lg ? 'outline' : 'ghost'} onPress={signOutToFallback}>
           Use password instead
         </Button>
       </View>

@@ -244,13 +244,16 @@ export const glassPillLabel = cached((lg): TextStyle => ({
 }));
 export const GLASS_PILL: ViewStyle = { minHeight: 24, paddingHorizontal: 10 };
 
-/** A selection chip as the iOS capsule (.ios-capsule [705, 770-771]): --ios-fill, ink when chosen. */
+/**
+ * A selection chip as the iOS capsule (.ios-capsule [705, 770-771]): 44 min,
+ * radius 22, 6/16 padding; --ios-fill, ink when chosen.
+ */
 export function glassChip(lg: GlassLook, active: boolean): ViewStyle {
   return {
-    minHeight: 36,
-    paddingVertical: 7,
-    paddingHorizontal: 14,
-    borderRadius: 18,
+    minHeight: GLASS_METRICS.capsule.minHeight,
+    paddingVertical: GLASS_METRICS.capsule.paddingVertical,
+    paddingHorizontal: GLASS_METRICS.capsule.paddingHorizontal,
+    borderRadius: GLASS_METRICS.capsule.radius,
     borderWidth: 0,
     backgroundColor: active ? lg.c.ink : lg.ios.fill,
   };

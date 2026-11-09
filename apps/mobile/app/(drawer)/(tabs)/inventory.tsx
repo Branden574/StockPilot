@@ -114,6 +114,7 @@ import {
 } from '@/components/ui/glass/primitive-styles';
 import {
   GLASS_LOOKUP,
+  GLASS_LOOKUP_NAV_TITLE,
   GLASS_LOOKUP_SEPARATOR_INSET,
   GLASS_LOOKUP_THUMB,
 } from '@/components/ui/glass/screens/lookup';
@@ -976,6 +977,20 @@ export default function Inventory() {
             />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
+          {/* Liquid Glass: the board's large title inline in the nav at 30pt
+              (iOS-Lookup: .ios-large.f1 before the nav's circles). */}
+          {lg ? (
+            <Display
+              size={GLASS_LOOKUP_NAV_TITLE}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.7}
+              style={GLASS_LOOKUP.navTitle}
+              accessibilityRole="header"
+            >
+              Items
+            </Display>
+          ) : null}
           <View
             style={
               lg ? GLASS_LOOKUP.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
@@ -1015,15 +1030,14 @@ export default function Inventory() {
                 : `INVENTORY · ${datasetRowCount.toLocaleString()} ITEMS`}
             </Eyebrow>
           )}
-          <Display
-            size={34}
-            style={lg ? GLASS_LOOKUP.title : { marginTop: 12 }}
-            accessibilityRole={lg ? 'header' : undefined}
-          >
-            Items
-            {lg ? null : <Em>.</Em>}
-          </Display>
-          <View style={{ marginTop: lg ? 6 : 10 }}>
+          {/* Liquid Glass draws the title in the nav, as the board. */}
+          {lg ? null : (
+            <Display size={34} style={{ marginTop: 12 }}>
+              Items
+              <Em>.</Em>
+            </Display>
+          )}
+          <View style={{ marginTop: lg ? 0 : 10 }}>
             <MobileTour tour={MOBILE_INVENTORY_TOUR} />
           </View>
         </View>

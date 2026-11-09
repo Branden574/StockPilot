@@ -12,9 +12,9 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
-import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
 import { glassRecipe } from '@/components/ui/glass/merge-styles';
-import { GLASS_DIALOG_RADIUS, glassTipShape } from '@/components/ui/glass/screens/overlays';
+import { glassTipFoot, glassTipShape } from '@/components/ui/glass/screens/overlays';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Modal } from '@/components/ui/modal';
 import { FONT, SHADOW, palette, space, type Palette } from '@/lib/theme';
@@ -59,10 +59,11 @@ export function ScannerTip({
   onRequestClose: () => void;
 }) {
   const { mode } = useTheme();
-  // Liquid Glass (inferred: an iOS card over the scanner): the glass scrim,
-  // the card on the overlay glass with the glass-strong fill at the dialog
-  // radius, its words and the demo in the glass palette and faces (the same
-  // recipe run on the glass palette); the same demo, words and button.
+  // Liquid Glass (inferred from the iOS sheet, COVERAGE): the glass scrim,
+  // the card as the .ios-sheet at the foot (8 in, radius 36, the grabber, on
+  // the overlay glass with the glass-strong fill), its words and the demo in
+  // the glass palette and faces (the same recipe run on the glass palette);
+  // the same demo, words and button.
   const lg = useGlass();
   const styles = lg
     ? glassRecipe(lg, makeStyles as (c: Palette) => ReturnType<typeof makeStyles>, glassTipShape)
@@ -164,13 +165,17 @@ export function ScannerTip({
           left. In a scroll view the card is still centred while it fits, and
           scrolls to its button when it does not. */}
       <ScrollView
-        contentContainerStyle={[styles.centerWrap, { paddingVertical: edge }]}
+        contentContainerStyle={[
+          styles.centerWrap,
+          lg ? { paddingTop: edge, paddingBottom: 0 } : { paddingVertical: edge },
+        ]}
         alwaysBounceVertical={false}
       >
         <Animated.View
           accessibilityViewIsModal
           style={[
             styles.card,
+            lg && { paddingBottom: glassTipFoot(insets.bottom) },
             {
               opacity: card.interpolate({
                 inputRange: [0, 1],
@@ -187,7 +192,8 @@ export function ScannerTip({
             },
           ]}
         >
-          {lg ? <GlassSheetBackdrop radius={GLASS_DIALOG_RADIUS} /> : null}
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <Text style={styles.title}>Scans snap automatically</Text>
           <Text style={styles.body}>
             When the scanner sees a page it captures instantly. Want more control?

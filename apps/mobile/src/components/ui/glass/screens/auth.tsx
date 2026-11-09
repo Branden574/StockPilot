@@ -13,9 +13,11 @@ import type { GlassLook } from '../use-glass';
  *   frame    the scene behind the shell's brand bar (Auth-SignIn-Mobile:
  *            the brand top left, the card 16 in from the sides);
  *   panel    the board's form card in its glass ring: an 8pt ring of
- *            overlay glass at radius 30 round a card at radius 23 on the
- *            glass-strong fill, the card's own padding 32/28/28 (stage 3's
- *            auth.glass.css on the web, so both read the same). Sign-in draws
+ *            overlay glass at radius 30 round the board's .card at radius
+ *            23 (sp.css [976]: the card fill with a hairline card-line edge;
+ *            solid in the opaque material, whose tokens are opaque), the
+ *            card's own padding 32/28/28 (stage 3's auth.glass.css draws
+ *            the same fill and edge on the web). Sign-in draws
  *            it behind its scroll's content; the account-disabled and MFA
  *            gates draw it behind the shell's content (Auth-States cards and
  *            the MFA step sit in the same card on the web);
@@ -105,11 +107,12 @@ export const GLASS_AUTH = StyleSheet.create({
   // The MFA gate's heading (.h1) 6 under its tile, and the line 6 under it.
   mfaHead: { marginTop: 6 },
   centredText: { textAlign: 'center' },
-  // The state's icon tile: 56, radius 16 (.empty-ic at the cards' size).
+  // The state's icon tile: .empty-ic [363], 56 at radius 18, 14 above the
+  // heading (the card's .col.g14).
   tile: {
     width: 56,
     height: 56,
-    borderRadius: 16,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 0,
@@ -124,7 +127,11 @@ export const GLASS_AUTH = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 0,
   },
-  iconWrap: { alignItems: 'flex-start', marginBottom: 12 },
+  // The MFA step's head is .col.g6: the tile 6 above what follows it.
+  iconWrap: { alignItems: 'flex-start', marginBottom: 6 },
+  // The account-disabled line in its .col.g14 card: 14 under the heading
+  // and 14 above Sign out.
+  gateLine: { marginTop: 14, marginBottom: 14 },
   // The h1/h2 heading's spacing in the card (.col.g6): 6 above the line under it.
   headLine: { marginTop: 6 },
   // The biometric lock's sheet (.ios-sheet [740]) at the foot of the shell.
@@ -163,22 +170,45 @@ export function glassCodeInput(lg: GlassLook, error: boolean): TextStyle {
   };
 }
 
-/** The icon tile's fill and glyph colour for a state (danger for a refusal, else the well). */
+/** The .empty-ic glyph [364]: 26pt. */
+export const GLASS_STATE_GLYPH = 26;
+
+/**
+ * The icon tile's fill and glyph colour for a state: .empty-ic [363] is the
+ * accent wash with the accent-text glyph (the MFA step's shield); a refusal
+ * takes the danger wash and danger glyph (Auth-States "Account disabled").
+ */
 export function glassStateTile(
   lg: GlassLook,
-  tone: 'danger' | 'neutral',
+  tone: 'danger' | 'accent',
 ): { fill: string; ink: string } {
   return tone === 'danger'
     ? { fill: lg.g.dangerWash, ink: lg.g.danger }
-    : { fill: lg.g.surface3, ink: lg.c.ink };
+    : { fill: lg.g.accentWash, ink: lg.g.accentText };
+}
+
+/**
+ * The card inside the ring (Auth-SignIn: `.card` at radius 23, sp.css [976]
+ * `.card{background:var(--card-fill);border:var(--b-w) solid var(--card-line)}`;
+ * the web's auth.glass.css the same): the card fill with a hairline
+ * card-line edge. In the opaque material the tokens are the opaque twins
+ * (cardFill #FFFFFF by day), so the card is solid there.
+ */
+export function glassAuthCardFill(lg: Pick<GlassLook, 'g'>): ViewStyle {
+  return {
+    backgroundColor: lg.g.cardFill,
+    borderColor: lg.g.cardLine,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: GLASS_AUTH_RING.cardRadius,
+  };
 }
 
 /**
  * The panel's material, drawn as the panel's first child (absolutely filling
  * it, touches passing through): the ring of overlay glass (no touch effect:
- * the ring is not a control), and the card on
- * the glass-strong fill 8pt inside it (the opaque chrome under Reduce
- * Transparency, where GlassSurface draws solid).
+ * the ring is not a control), and the card 8pt inside it
+ * (glassAuthCardFill; the opaque chrome under Reduce Transparency, where
+ * GlassSurface draws solid).
  */
 export function GlassAuthPanelBackdrop() {
   const { g } = useTheme();
@@ -189,7 +219,7 @@ export function GlassAuthPanelBackdrop() {
         radius={GLASS_AUTH_RING.radius}
         style={StyleSheet.absoluteFill}
       />
-      <View style={[styles.card, { backgroundColor: g?.glassStrong ?? 'transparent' }]} />
+      <View style={[styles.card, g ? glassAuthCardFill({ g }) : null]} />
     </View>
   );
 }

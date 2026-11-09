@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import {
   GLASS_AUTH,
   GlassAuthPanelBackdrop,
+  GLASS_STATE_GLYPH,
   glassStateTile,
 } from '@/components/ui/glass/screens/auth';
 import { useGlass } from '@/components/ui/glass/use-glass';
@@ -80,7 +81,11 @@ export function AccountDisabledScreen() {
           ]}
         >
           {lg ? (
-            <CircleX size={28} color={glassStateTile(lg, 'danger').ink} strokeWidth={1.8} />
+            <CircleX
+              size={GLASS_STATE_GLYPH}
+              color={glassStateTile(lg, 'danger').ink}
+              strokeWidth={1.8}
+            />
           ) : (
             <Lock size={28} color={c.ink} strokeWidth={1.5} />
           )}
@@ -98,7 +103,7 @@ export function AccountDisabledScreen() {
         muted
         size={lg ? 13 : undefined}
         color={lg ? lg.c.ink2 : undefined}
-        style={lg ? [styles.message, GLASS_AUTH.centredText, { marginTop: 8 }] : styles.message}
+        style={lg ? [styles.message, GLASS_AUTH.centredText, GLASS_AUTH.gateLine] : styles.message}
       >
         {ACCOUNT_DISABLED_MESSAGE}
       </Body>

@@ -14,6 +14,8 @@ export const GLASS_METRICS = {
   row: { minHeight: 56, paddingVertical: 10, paddingHorizontal: 16, gap: 12, separatorInset: 16 },
   /** .ios-btn [716]: 50 min, radius 25, 10/22 padding. */
   button: { minHeight: 50, radius: 25, paddingVertical: 10, paddingHorizontal: 22 },
+  /** .ios-capsule [705]: 44 min, radius 22, 6/16 padding. */
+  capsule: { minHeight: 44, radius: 22, paddingVertical: 6, paddingHorizontal: 16 },
   /** .ios-search [721]: 44 tall, radius 22, 14 side padding, 8 gap. */
   search: { height: 44, radius: 22, paddingHorizontal: 14, gap: 8, fontSize: 17, iconSize: 18 },
   /** .ios-seg [722-723]: 3 padding, radius 20 track, 32 tall segments radius 17, 2 gap. */

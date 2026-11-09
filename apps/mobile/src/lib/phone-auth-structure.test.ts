@@ -456,6 +456,23 @@ describe('the account-disabled gate', () => {
   });
 });
 
+describe('the gates in Liquid Glass keep the boards tiles and rhythm', () => {
+  it('account disabled: the danger tile at the .empty-ic glyph, the line 14 from the heading and Sign out', () => {
+    const disabled = code(DISABLED);
+    expect(disabled).toContain('size={GLASS_STATE_GLYPH}');
+    expect(disabled).toContain(
+      'lg ? [styles.message, GLASS_AUTH.centredText, GLASS_AUTH.gateLine] : styles.message',
+    );
+  });
+
+  it('MFA: the shield on the accent wash in accent text at the .empty-ic glyph', () => {
+    const mfa = code(MFA);
+    expect(mfa).toContain("lg && { backgroundColor: glassStateTile(lg, 'accent').fill }");
+    expect(mfa).toContain('size={lg ? GLASS_STATE_GLYPH : 30}');
+    expect(mfa).toContain("color={lg ? glassStateTile(lg, 'accent').ink : c.ink}");
+  });
+});
+
 describe('the MFA gate', () => {
   const mfa = code(MFA);
 
@@ -532,8 +549,15 @@ describe('the biometric lock', () => {
     expect(lock).toContain('if (splashActive) return;');
     expect(lock).toContain('if (attempted) return;');
     expect(lock).toContain('void tryUnlock();');
+    // Classic's ghost button; Liquid Glass draws the board's .ios-btn.gray
+    // (iOS-NotifyFlow step 2), which is the outline variant's glass look.
+    expect(classicCode(LOCK)).toContain(
+      flatNorm(
+        '<Button block variant="ghost" onPress={signOutToFallback}> Use password instead </Button>',
+      ),
+    );
     expect(lock).toContain(
-      '<Button block variant="ghost" onPress={signOutToFallback}> Use password instead </Button>',
+      "<Button block variant={lg ? 'outline' : 'ghost'} onPress={signOutToFallback}> Use password instead </Button>",
     );
   });
 
