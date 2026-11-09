@@ -19,6 +19,12 @@ import {
 import { BarcodeDisplay } from '@/components/inventory/barcode-display';
 import { DuplicateItemDialog } from '@/components/inventory/duplicate-item-dialog';
 import { GroupMembershipControl } from '@/components/inventory/group-membership-control';
+import {
+  ItemGlassAside,
+  ItemGlassSummary,
+  type ItemGlassFacts,
+} from '@/components/inventory/item-glass-summary';
+import { ItemMoreActions } from '@/components/inventory/item-more-actions';
 import { MakeOwnItemButton } from '@/components/inventory/make-own-item-button';
 // ImageUploader is heavy (canvas resize/transcode + lazy-loaded
 // ImageLightbox) and only renders on the Overview tab's Images card —
@@ -603,6 +609,78 @@ export async function ItemDetail({
       ? (rowCustomFields.thumbnail_url as string)
       : null;
 
+  // ── The book and storage facts the Details card shows ───────────────
+  // Read once here, for the Details card's rows below and for the Liquid Glass
+  // summary card (the same ISBN, grade, crate and rack, under the same rule).
+  const bookFacts = (() => {
+    const storage = readBookStorage(item.custom_fields as Record<string, unknown> | null);
+    const color = getCrateColor(storage.crateColor);
+    const cf = (item.custom_fields as Record<string, unknown> | null) ?? {};
+    // For books, ISBN is stored in inventory_items.barcode — the
+    // edit form's "ISBN" label binds to the same field as
+    // "Barcode" for non-books, and bulk-ISBN import also writes
+    // the ISBN to `barcode` (services/books-import.ts:85).
+    // custom_fields.isbn / .isbn13 / .isbn10 are legacy fallbacks
+    // from older import paths.
+    const isbnRaw = isBook
+      ? ((item.barcode as string | null) ?? '') ||
+        (typeof cf.isbn === 'string' && cf.isbn) ||
+        (typeof cf.isbn13 === 'string' && cf.isbn13) ||
+        (typeof cf.isbn10 === 'string' && cf.isbn10) ||
+        ''
+      : '';
+    const isbn = isbnRaw.trim();
+    // WHERE THE STOCK IS vs what the item REMEMBERS. `storage`
+    // above is the custom_fields SUMMARY; a put-away into a
+    // position-less crate preserves it on purpose (mig 0335), so
+    // it can name a rack the stock has entirely left. The live
+    // breakdown in the By location card already shows the truth,
+    // which made this card CONTRADICT ITSELF rather than merely
+    // mislead — so a rack the holdings REFUTE stands down and
+    // points at the breakdown instead.
+    //
+    // ONLY the Rack row, and only on a real contradiction. The
+    // first cut of this gate hid BOTH rows whenever the holdings
+    // were authoritative at all, which swept in every SPLIT item:
+    // a book split across two racks lost its crate summary ("Red
+    // 5") entirely, a row main has always shown. The crate
+    // summary is a human's note about which box, refuted by
+    // nothing here — the split is described in full by the
+    // breakdown.
+    //
+    // 0371: the holdings here are the caller's own warehouses'.
+    // A rack in ANOTHER warehouse can hold the labelled stock, so
+    // hidden placed locations count as evidence FOR the label
+    // (named from the org-wide location list; their quantities
+    // are unknown, and the rule reads names only). When the
+    // hidden stock could not be read, or a hidden location
+    // cannot be named, the holdings are not known in full and
+    // the label is never called false.
+    const hiddenPlacedIds = hiddenHoldings?.placedLocationIds ?? [];
+    const hiddenPlaced = hiddenPlacedIds.map((locId) =>
+      locations.find((l) => (l.id as string) === locId),
+    );
+    const holdingsKnownInFull =
+      elsewhere.status !== 'unavailable' && hiddenPlaced.every((l) => !!l);
+    const rackContradicted =
+      holdingsKnownInFull &&
+      holdingsContradictRack(storage.rackLabel, [
+        ...holdings
+          .filter((h) => h.kind === 'rack' || h.kind === 'crate')
+          .map((h) => ({ name: h.name, quantity: h.quantity, kind: h.kind })),
+        ...hiddenPlaced
+          .filter((l) => l!.kind === 'rack' || l!.kind === 'crate')
+          .map((l) => ({
+            name: l!.name as string,
+            quantity: 0,
+            kind: l!.kind as string,
+          })),
+      ]);
+    const showRack = !!storage.rackLabel && !rackContradicted;
+    const hasAny = isBook || storage.grade || showRack || storage.crateNumber || isbn;
+    return { storage, color, isbn, showRack, hasAny };
+  })();
+
   // ── The header photo: OVERVIEW ONLY ─────────────────────────────────
   // Photos are read (and signed) on the Overview tab only; a photo in the
   // header of the Movements and Activity tabs would add that read to every
@@ -635,6 +713,69 @@ export async function ItemDetail({
     (showMarketPrice ? 1 : 0) +
     (costHistory.pointCount > 0 ? 1 : 0) +
     (showSerialsPanel ? 1 : 0);
+
+  // ── Liquid Glass: the summary card and the side column (Overview) ──────
+  // Values this render already holds, nothing read for them (plan 4.6 data
+  // rule; item-glass-summary.tsx says what each board element needs and which
+  // are not drawn). The photo is the primary upload at the summary's size,
+  // through the optimizer, or the ISBN cover, as the header uses.
+  const summaryPhotoSrc = primaryImage
+    ? getImageProps({
+        src: primaryImage.url,
+        alt: '',
+        width: isBook ? 152 : 160,
+        height: isBook ? 228 : 160,
+      }).props.src
+    : images.length === 0
+      ? coverThumbUrl
+      : null;
+  const glassFacts: ItemGlassFacts = {
+    isBook,
+    unit,
+    onHand,
+    reserved: reservedByItem.get(id) ?? 0,
+    reorderPoint: Number(item.reorder_point ?? 0),
+    reorderQuantity: Number(item.reorder_quantity ?? 0),
+    retailPrice: Number(item.retail_price ?? 0),
+    unitCost: Number(item.unit_cost ?? 0),
+    value,
+    status: itemStatus,
+    awaitingFirstReceipt,
+    staged: Number((item as { staged_quantity?: number }).staged_quantity ?? 0),
+    photoSrc: summaryPhotoSrc,
+    book: isBook
+      ? {
+          isbn: bookFacts.isbn,
+          author:
+            typeof rowCustomFields?.author === 'string' && rowCustomFields.author.trim()
+              ? rowCustomFields.author.trim()
+              : null,
+          grade: formatGrade(bookFacts.storage.grade),
+          crate: bookFacts.storage.crateNumber
+            ? {
+                label: bookFacts.storage.crateLabel ?? bookFacts.storage.crateNumber,
+                hex: bookFacts.color?.hex ?? null,
+                number: bookFacts.storage.crateNumber,
+              }
+            : null,
+          rack: bookFacts.showRack ? bookFacts.storage.rackLabel : null,
+        }
+      : null,
+    ordering: isModuleEnabled(ctx, 'orders')
+      ? {
+          visible:
+            (item as { order_catalog_visible?: boolean | null }).order_catalog_visible !== false,
+        }
+      : null,
+    inFamily: (item as { group_id?: string | null }).group_id != null,
+    bookReportHref:
+      isBook &&
+      can(ctx, 'reports:read') &&
+      isModuleEnabled(ctx, 'orders') &&
+      isModuleEnabled(ctx, 'books')
+        ? '/dashboard/reports/book-order-totals'
+        : null,
+  };
 
   return (
     <div
@@ -770,7 +911,7 @@ export async function ItemDetail({
                     ? `${editBase}?return=${encodeURIComponent(returnParam)}`
                     : editBase;
                   return (
-                    <Button asChild variant="outline">
+                    <Button asChild variant="outline" data-glass-action="edit">
                       <Link href={href}>Edit</Link>
                     </Button>
                   );
@@ -840,6 +981,10 @@ export async function ItemDetail({
           </div>
         </div>
 
+        {/* Liquid Glass's More actions (glass-only, item-more-actions.tsx):
+            shows the actions glass keeps behind it, in the row above. */}
+        <ItemMoreActions />
+
         <div className="mt-4">
           <ItemDetailTabs activeTab={activeTab} />
         </div>
@@ -858,7 +1003,7 @@ export async function ItemDetail({
               something is reserved; value; reorder at. No Allocated, On order,
               coverage days or chart the product does not compute (CONFLICTS
               D3, O2), and on hand is never labelled available. */}
-          <StatStrip variant="detail" data-testid="item-figures">
+          <StatStrip variant="detail" data-testid="item-figures" data-classic-only="">
             <StatStripItem
               size="detail"
               data-testid="item-on-hand"
@@ -886,6 +1031,15 @@ export async function ItemDetail({
               }
             />
           </StatStrip>
+
+          {/* Liquid Glass's summary card and side column (glass-only; the
+              figure strip above and the Reorder card carry data-classic-only).
+              A <section> and an <aside> between the strip and the grid, so
+              no Classic element changes its place among its siblings: the
+              boards put the aside after the panels, but there it would take
+              :last-child from the grid below (a recorded deviation). */}
+          <ItemGlassSummary facts={glassFacts} />
+          <ItemGlassAside facts={glassFacts} />
 
           {/* The panels: two columns on a wide content area (the reference's
               1.7 : 1 split with a 280 px floor for the right one), one column
@@ -959,73 +1113,7 @@ export async function ItemDetail({
                   </KeyValueRow>
                 ) : null}
                 {(() => {
-                  const storage = readBookStorage(
-                    item.custom_fields as Record<string, unknown> | null,
-                  );
-                  const color = getCrateColor(storage.crateColor);
-                  const cf = (item.custom_fields as Record<string, unknown> | null) ?? {};
-                  // For books, ISBN is stored in inventory_items.barcode — the
-                  // edit form's "ISBN" label binds to the same field as
-                  // "Barcode" for non-books, and bulk-ISBN import also writes
-                  // the ISBN to `barcode` (services/books-import.ts:85).
-                  // custom_fields.isbn / .isbn13 / .isbn10 are legacy fallbacks
-                  // from older import paths.
-                  const isbnRaw = isBook
-                    ? ((item.barcode as string | null) ?? '') ||
-                      (typeof cf.isbn === 'string' && cf.isbn) ||
-                      (typeof cf.isbn13 === 'string' && cf.isbn13) ||
-                      (typeof cf.isbn10 === 'string' && cf.isbn10) ||
-                      ''
-                    : '';
-                  const isbn = isbnRaw.trim();
-                  // WHERE THE STOCK IS vs what the item REMEMBERS. `storage`
-                  // above is the custom_fields SUMMARY; a put-away into a
-                  // position-less crate preserves it on purpose (mig 0335), so
-                  // it can name a rack the stock has entirely left. The live
-                  // breakdown in the By location card already shows the truth,
-                  // which made this card CONTRADICT ITSELF rather than merely
-                  // mislead — so a rack the holdings REFUTE stands down and
-                  // points at the breakdown instead.
-                  //
-                  // ONLY the Rack row, and only on a real contradiction. The
-                  // first cut of this gate hid BOTH rows whenever the holdings
-                  // were authoritative at all, which swept in every SPLIT item:
-                  // a book split across two racks lost its crate summary ("Red
-                  // 5") entirely, a row main has always shown. The crate
-                  // summary is a human's note about which box, refuted by
-                  // nothing here — the split is described in full by the
-                  // breakdown.
-                  //
-                  // 0371: the holdings here are the caller's own warehouses'.
-                  // A rack in ANOTHER warehouse can hold the labelled stock, so
-                  // hidden placed locations count as evidence FOR the label
-                  // (named from the org-wide location list; their quantities
-                  // are unknown, and the rule reads names only). When the
-                  // hidden stock could not be read, or a hidden location
-                  // cannot be named, the holdings are not known in full and
-                  // the label is never called false.
-                  const hiddenPlacedIds = hiddenHoldings?.placedLocationIds ?? [];
-                  const hiddenPlaced = hiddenPlacedIds.map((locId) =>
-                    locations.find((l) => (l.id as string) === locId),
-                  );
-                  const holdingsKnownInFull =
-                    elsewhere.status !== 'unavailable' && hiddenPlaced.every((l) => !!l);
-                  const rackContradicted =
-                    holdingsKnownInFull &&
-                    holdingsContradictRack(storage.rackLabel, [
-                      ...holdings
-                        .filter((h) => h.kind === 'rack' || h.kind === 'crate')
-                        .map((h) => ({ name: h.name, quantity: h.quantity, kind: h.kind })),
-                      ...hiddenPlaced
-                        .filter((l) => l!.kind === 'rack' || l!.kind === 'crate')
-                        .map((l) => ({
-                          name: l!.name as string,
-                          quantity: 0,
-                          kind: l!.kind as string,
-                        })),
-                    ]);
-                  const showRack = !!storage.rackLabel && !rackContradicted;
-                  const hasAny = isBook || storage.grade || showRack || storage.crateNumber || isbn;
+                  const { storage, color, isbn, showRack, hasAny } = bookFacts;
                   if (!hasAny) return null;
                   return (
                     <>
@@ -1170,7 +1258,7 @@ export async function ItemDetail({
                 </DetailSection>
               )}
 
-              <DetailSection title="Reorder" flush>
+              <DetailSection title="Reorder" flush data-classic-only="">
                 <KeyValueList>
                   <KeyValueRow label="Reorder at">
                     {formatNumber(item.reorder_point as number)} {unit}

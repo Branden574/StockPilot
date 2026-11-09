@@ -1,6 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { classicStructure } from '@/test/classic-dom';
 import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
 
 /**
@@ -131,6 +135,7 @@ vi.mock('@/components/inventory/group-membership-control', async () => {
 
 const ctxHolder = vi.hoisted(() => ({
   permissions: new Set<string>(),
+  modules: new Set<string>(),
 }));
 
 vi.mock('@/server/services/context', async (importOriginal) => {
@@ -155,7 +160,7 @@ vi.mock('@/server/services/context', async (importOriginal) => {
       permissions: ctxHolder.permissions,
       mfaRequired: false,
       mfaSatisfied: true,
-      enabledModules: new Set<string>(),
+      enabledModules: ctxHolder.modules,
       supabase: {},
     })),
   };
@@ -306,6 +311,7 @@ beforeEach(() => {
   skuSiblings.count = 0;
   groups.map = new Map();
   ctxHolder.permissions = new Set();
+  ctxHolder.modules = new Set();
 });
 
 describe('the figure strip: real figures only', () => {
@@ -574,11 +580,70 @@ describe('classic parity of the item page', () => {
       },
     ],
     ['item-detail-movements', () => {}, 'movements'],
+    // Fidelity lane (detail): everything the glass summary and side column
+    // read, so the classic page they sit in is pinned with each of them on:
+    // a low-stock product in a family, in the Orders module, hidden from
+    // Orders, over-reserved, every action allowed; and an expected book with
+    // Staging, an author and the Book Order Totals permission.
+    [
+      'item-detail-glass-facts-item',
+      () => {
+        inventoryGet.mockResolvedValue(
+          itemFixture({
+            quantity_on_hand: 6,
+            reorder_point: 10,
+            group_id: 'family-1',
+            order_catalog_visible: false,
+          }),
+        );
+        reserved.map = new Map([[ITEM_ID, 9]]);
+        ctxHolder.modules = new Set(['orders', 'books', 'maintenance_requests']);
+        ctxHolder.permissions = new Set([
+          'items:update',
+          'items:create',
+          'stock:adjust',
+          'stock:transfer',
+          'maintenance_requests:submit',
+        ]);
+      },
+    ],
+    [
+      'item-detail-glass-facts-book',
+      () => {
+        inventoryGet.mockResolvedValue(
+          itemFixture({
+            ...BOOK,
+            barcode: '9780000000011',
+            awaiting_first_receipt: true,
+            staged_quantity: 52,
+            custom_fields: { ...BOOK.custom_fields, author: 'A. Example' },
+          }),
+        );
+        ctxHolder.modules = new Set(['orders', 'books']);
+        ctxHolder.permissions = new Set(['reports:read', 'items:update']);
+      },
+    ],
   ];
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  for (const [name, arrange, tab] of CASES) {
+    it(`${name}: every Classic element keeps its place among its siblings under default (classicStructure)`, async () => {
+      // A hidden glass-only element still counts for :first-child,
+      // :last-child, :only-child and the *-of-type classes, so the glass
+      // summary, side column and More actions must sit where they take none
+      // of those from a Classic element (src/test/classic-dom.ts).
+      arrange();
+      const off = classicStructure(render(await page(tab)).container);
+      cleanup();
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+      arrange();
+      const { container } = render(await page(tab));
+      expect(classicStructure(container)).toBe(off);
+    });
+  }
 
   for (const [name, arrange, tab] of CASES) {
     it(`${name}: the off rollout renders no glass-only element and today's markup`, async () => {
@@ -595,4 +660,331 @@ describe('classic parity of the item page', () => {
       await expect(classicMarkup(container)).toMatchFileSnapshot(`./__parity__/${name}.html`);
     });
   }
+});
+
+/**
+ * THE LIQUID GLASS COMPOSITION (fidelity lane "detail", Item-Detail.dc.html and
+ * Book-Detail.dc.html; IMPLEMENTATION-PLAN.md 4.6). Under the default rollout
+ * the Overview holds the board's summary card and side column as glass-only
+ * blocks between the figure strip and the panels, the figure strip and the
+ * Reorder card are Classic-only, and the page head holds the More actions
+ * disclosure. Every glass value is one the page already read.
+ */
+describe('the Liquid Glass composition (default rollout)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  async function glassPage(tab?: string) {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    return render(await page(tab));
+  }
+
+  /** The summary's wells as "label|figure" (the figure's words, unit included). */
+  function wells(container: HTMLElement): string[] {
+    const summary = container.querySelector('[data-glass="item-summary"]')!;
+    return Array.from(summary.querySelectorAll('[data-glass-part="well"]')).map((w) => {
+      const [dt, dd] = [w.querySelector('dt'), w.querySelector('dd')];
+      return `${dt?.textContent ?? ''}|${(dd?.textContent ?? '').trim()}`;
+    });
+  }
+
+  it('the Overview panel: strip (Classic-only), summary, side column, then the panels, in that DOM order', async () => {
+    const { container } = await glassPage();
+    const panel = container.querySelector('#item-detail-panel-overview')!;
+    const kids = Array.from(panel.children);
+    expect(kids.map((k) => k.getAttribute('data-glass') ?? k.tagName.toLowerCase())).toEqual([
+      'stat-strip',
+      'item-summary',
+      'item-aside',
+      'div',
+    ]);
+    expect(kids[0]).toHaveAttribute('data-classic-only', '');
+    expect(kids[1]!.tagName).toBe('SECTION');
+    expect(kids[1]).toHaveAttribute('data-glass-only', '');
+    expect(kids[1]).toHaveAttribute('aria-label', 'Item summary');
+    expect(kids[2]!.tagName).toBe('ASIDE');
+    expect(kids[2]).toHaveAttribute('data-glass-only', '');
+    // The side column precedes the panels (a recorded deviation: the boards
+    // put the aside last). After them it would take :last-child from the
+    // Classic panels grid, which classicStructure forbids.
+    expect(kids[3]!.matches(':last-child')).toBe(true);
+    expect(kids[3]).not.toHaveAttribute('data-glass-only');
+    // The Reorder card is Classic-only; its glass copy sits in the side column.
+    const reorder = screen
+      .getAllByRole('heading', { name: 'Reorder' })
+      .map((h) => h.closest('section')!);
+    expect(reorder).toHaveLength(2);
+    expect(reorder.filter((s) => s.hasAttribute('data-classic-only'))).toHaveLength(1);
+    expect(reorder.filter((s) => kids[2]!.contains(s))).toHaveLength(1);
+  });
+
+  it('the summary wells: on hand, available, reserved, reorder at and value, the figures the strip shows', async () => {
+    reserved.map = new Map([[ITEM_ID, 12]]);
+    const { container } = await glassPage();
+    expect(wells(container)).toEqual([
+      'On hand|100 each',
+      'Available|88 each',
+      'Reserved|12 each',
+      'Reorder at|20 each',
+      'Value|$4,000.00',
+    ]);
+    // Nothing reserved: the wells still say so (the board draws all four).
+    cleanup();
+    reserved.map = new Map();
+    expect(wells((await glassPage()).container).slice(1, 3)).toEqual([
+      'Available|100 each',
+      'Reserved|0 each',
+    ]);
+  });
+
+  it('low stock: the On hand well in the warning tone and the reorder alert, from the badge’s own rule', async () => {
+    inventoryGet.mockResolvedValue(itemFixture({ quantity_on_hand: 6, reorder_point: 10 }));
+    const { container } = await glassPage();
+    const summary = container.querySelector('[data-glass="item-summary"]')!;
+    const onHand = summary.querySelector('[data-glass-part="well"]')!;
+    expect(onHand).toHaveAttribute('data-glass-tone', 'warn');
+    const alert = summary.querySelector('[data-glass-part="alert"]')!;
+    expect(alert).toHaveAttribute('data-glass-tone', 'warn');
+    expect(alert).toHaveTextContent(
+      'At or below the reorder point of 10 each. Reorder quantity: 5 each.',
+    );
+    // In stock, archived or expected: no alert.
+    for (const over of [
+      { quantity_on_hand: 50 },
+      { quantity_on_hand: 6, reorder_point: 10, status: 'archived' },
+      { quantity_on_hand: 0, awaiting_first_receipt: true },
+    ]) {
+      cleanup();
+      inventoryGet.mockResolvedValue(itemFixture(over));
+      const c = (await glassPage()).container;
+      expect(c.querySelector('[data-glass-part="alert"]'), JSON.stringify(over)).toBeNull();
+    }
+  });
+
+  it('the summary photo: the primary upload at 160 px through the optimizer, lazy, so Classic never fetches it', async () => {
+    imageList.mockResolvedValue([
+      { id: 'b', storage_path: 'org-1/items/x/primary.webp', is_primary: true },
+    ]);
+    const { container } = await glassPage();
+    const img = container.querySelector('[data-glass="item-summary"] img')!;
+    expect(img.getAttribute('loading')).toBe('lazy');
+    const src = img.getAttribute('src') ?? '';
+    expect(src.startsWith('/_next/image?')).toBe(true);
+    const q = new URLSearchParams(src.split('?')[1]);
+    expect(q.get('url')).toBe('https://cdn.test/org-1/items/x/primary.webp');
+    expect(Number(q.get('w'))).toBeLessThanOrEqual(384);
+    // No photo: the hatch, never a broken image.
+    cleanup();
+    imageList.mockResolvedValue([]);
+    const bare = (await glassPage()).container.querySelector('[data-glass="item-summary"]')!;
+    expect(bare.querySelector('img')).toBeNull();
+    expect(bare.querySelector('[data-slot="missing-photo"]')).not.toBeNull();
+  });
+
+  it('the side column: Ordering only with the Orders module, in its two states, and the family card', async () => {
+    let c = (await glassPage()).container;
+    let aside = c.querySelector('[data-glass="item-aside"]')!;
+    expect(within(aside as HTMLElement).queryByRole('heading', { name: 'Ordering' })).toBeNull();
+    expect(
+      within(aside as HTMLElement).queryByRole('heading', { name: 'Product family' }),
+    ).toBeNull();
+
+    cleanup();
+    ctxHolder.modules = new Set(['orders']);
+    inventoryGet.mockResolvedValue(itemFixture({ group_id: 'family-1' }));
+    c = (await glassPage()).container;
+    aside = c.querySelector('[data-glass="item-aside"]')!;
+    const ordering = within(aside as HTMLElement)
+      .getByRole('heading', { name: 'Ordering' })
+      .closest('section')!;
+    expect(ordering).toHaveTextContent('Shown in Orders');
+    expect(
+      within(aside as HTMLElement).getByRole('heading', { name: 'Product family' }),
+    ).toBeTruthy();
+
+    cleanup();
+    inventoryGet.mockResolvedValue(itemFixture({ order_catalog_visible: false }));
+    c = (await glassPage()).container;
+    expect(c.querySelector('[data-glass="item-aside"]')).toHaveTextContent('Hidden from Orders');
+  });
+
+  it('the side column: Reserved when something is reserved, Expected while awaiting the first receipt, Reorder always', async () => {
+    reserved.map = new Map([[ITEM_ID, 120]]);
+    inventoryGet.mockResolvedValue(itemFixture({ awaiting_first_receipt: true }));
+    const { container } = await glassPage();
+    const aside = container.querySelector('[data-glass="item-aside"]') as HTMLElement;
+    const headings = within(aside)
+      .getAllByRole('heading', { level: 2 })
+      .map((h) => h.textContent);
+    expect(headings).toEqual(['Reserved', 'Expected', 'Reorder']);
+    expect(aside).toHaveTextContent('120 each reserved for open orders, so 0 each available.');
+    expect(aside).toHaveTextContent('20 short of what is promised.');
+    // The Reorder copy says what the Classic card says, row for row.
+    const classic = screen
+      .getAllByRole('heading', { name: 'Reorder' })
+      .map((h) => h.closest('section')!)
+      .find((sec) => sec.hasAttribute('data-classic-only'))!;
+    const glassRows = Array.from(
+      aside.querySelectorAll('[data-glass="item-aside-card"]:last-child dt'),
+    ).map((dt) => `${dt.textContent}${dt.nextElementSibling?.textContent}`);
+    expect(glassRows).toEqual([
+      'Reorder at20 each',
+      'Reorder qty5 each',
+      'Retail price$100.00',
+      'StatusActive',
+    ]);
+    const classicBody = classic.querySelector('[data-slot="detail-section-body"]')!;
+    expect(classicBody.textContent?.replace(/\s+/g, '')).toBe(
+      glassRows.join('').replace(/\s+/g, ''),
+    );
+  });
+
+  it('nothing in the summary or the side column is a control; the only link is Book Order Totals, behind its gate', async () => {
+    reserved.map = new Map([[ITEM_ID, 3]]);
+    ctxHolder.modules = new Set(['orders', 'books']);
+    ctxHolder.permissions = new Set(['reports:read']);
+    let c = (await glassPage()).container;
+    for (const sel of ['[data-glass="item-summary"]', '[data-glass="item-aside"]']) {
+      expect(
+        c.querySelector(sel)!.querySelectorAll('a, button, input, select, textarea'),
+      ).toHaveLength(0);
+    }
+
+    const BOOK = {
+      item_type: 'book',
+      barcode: '9780000000011',
+      staged_quantity: 52,
+      custom_fields: {
+        author: 'A. Example',
+        book_crate_color: 'blue',
+        book_crate_number: '12',
+        book_rack_number: '4',
+        book_rack_row: 'B',
+        book_grade: '9',
+      },
+    };
+    cleanup();
+    inventoryGet.mockResolvedValue(itemFixture(BOOK));
+    c = (await glassPage()).container;
+    const aside = c.querySelector('[data-glass="item-aside"]') as HTMLElement;
+    const links = aside.querySelectorAll('a');
+    expect(links).toHaveLength(1);
+    expect(links[0]).toHaveAttribute('href', '/dashboard/reports/book-order-totals');
+    expect(links[0]).toHaveTextContent('Open the report');
+    expect(within(aside).getAllByRole('heading', { level: 2 })[0]).toHaveTextContent(
+      'Book Order Totals',
+    );
+    // Without reports:read, or with the Books module off: no card.
+    for (const [perms, mods] of [
+      [[], ['orders', 'books']],
+      [['reports:read'], ['orders']],
+    ] as const) {
+      cleanup();
+      ctxHolder.permissions = new Set(perms);
+      ctxHolder.modules = new Set(mods);
+      const a = (await glassPage()).container.querySelector('[data-glass="item-aside"]')!;
+      expect(a.querySelectorAll('a')).toHaveLength(0);
+    }
+  });
+
+  it('the book summary: the cover, ISBN, author, grade and home crate as Details shows them, and the In Staging well', async () => {
+    inventoryGet.mockResolvedValue(
+      itemFixture({
+        item_type: 'book',
+        barcode: '9780000000011',
+        staged_quantity: 52,
+        custom_fields: {
+          author: 'A. Example',
+          book_crate_color: 'blue',
+          book_crate_number: '12',
+          book_rack_number: '4',
+          book_rack_row: 'B',
+          book_grade: '9',
+          thumbnail_url: 'https://covers.openlibrary.org/b/9-M.jpg',
+        },
+      }),
+    );
+    const { container } = await glassPage();
+    const summary = container.querySelector('[data-glass="item-summary"]') as HTMLElement;
+    expect(summary).toHaveAttribute('aria-label', 'Book summary');
+    expect(summary).toHaveAttribute('data-glass-variant', 'book');
+    expect(summary.querySelector('img')).toHaveAttribute(
+      'src',
+      'https://covers.openlibrary.org/b/9-M.jpg',
+    );
+    const kv = Array.from(summary.querySelectorAll('[data-glass-part="kv"] dt')).map(
+      (dt) => `${dt.textContent}|${(dt.nextElementSibling?.textContent ?? '').trim()}`,
+    );
+    expect(kv).toEqual([
+      'Author|A. Example',
+      'ISBN|9780000000011',
+      'Grade|Grade 9',
+      'Home crate|Blue 12 · Rack 4-B (a label only; it does not move stock)',
+    ]);
+    expect(wells(container)).toEqual([
+      'On hand|100 each',
+      'Available|100 each',
+      'Reserved|0 each',
+      'In Staging|52 each',
+      'Value|$4,000.00',
+    ]);
+    const staging = Array.from(summary.querySelectorAll('[data-glass-part="well"]'))[3]!;
+    expect(staging).toHaveAttribute('data-glass-tone', 'warn');
+  });
+
+  it('a rack the holdings refute is left out of the home crate, as the Details card leaves it out', async () => {
+    inventoryGet.mockResolvedValue(
+      itemFixture({
+        item_type: 'book',
+        custom_fields: { book_rack_number: '38', book_rack_row: 'A', book_crate_number: '4' },
+      }),
+    );
+    // Only the Details card's own rule is under test here: with no holdings
+    // the rack stands, so the glass crate line names it.
+    const { container } = await glassPage();
+    const crate = container.querySelector('[data-glass-part="crate"]')!;
+    expect(crate).toHaveTextContent('4 · Rack 38-A (a label only');
+    expect(screen.getAllByText('38-A').length).toBeGreaterThan(0);
+  });
+
+  it('the page head: Edit carries its keep hook, More actions sits between the title row and the tabs, glass-only', async () => {
+    ctxHolder.permissions = new Set(['items:update', 'items:create', 'stock:adjust']);
+    const { container } = await glassPage();
+    const header = screen.getByTestId('item-detail-header');
+    const kids = Array.from(header.children);
+    expect(kids.map((k) => k.tagName)).toEqual(['DIV', 'DIV', 'SPAN', 'DIV']);
+    expect(kids[2]).toHaveAttribute('data-glass-only', '');
+    expect(kids[2]).toHaveAttribute('data-glass', 'item-more');
+    const more = within(kids[2] as HTMLElement).getByRole('button', { name: 'More actions' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(kids[3]!.querySelector('[role="tablist"]')).not.toBeNull();
+    // The Edit link keeps its place in the head row by an inert hook on its
+    // Button (the test's next/link stand-in drops every prop but href, so the
+    // hook is read from the source; the lab spec reads it on the page).
+    expect(
+      within(container.querySelector('[data-tour="item-actions"]') as HTMLElement).getByRole(
+        'link',
+        { name: 'Edit' },
+      ),
+    ).toBeTruthy();
+    expect(readFileSync(join(__dirname, 'item-detail.tsx'), 'utf8')).toMatch(
+      /<Button asChild variant="outline" data-glass-action="edit">\s*<Link href=\{href\}>Edit<\/Link>/u,
+    );
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('Movements and Activity draw no summary and no side column (their reads are the Overview’s)', async () => {
+    for (const tab of ['movements', 'activity']) {
+      cleanup();
+      const { container } = await glassPage(tab);
+      expect(container.querySelector('[data-glass="item-summary"]')).toBeNull();
+      expect(container.querySelector('[data-glass="item-aside"]')).toBeNull();
+      // The More actions disclosure is in the head on every tab.
+      expect(container.querySelector('[data-glass="item-more"]')).not.toBeNull();
+    }
+  });
 });

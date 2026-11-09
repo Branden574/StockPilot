@@ -11,7 +11,9 @@
     "public page link (no data action)": "A plain link, drawn by the board's frame, to one of the 7 public marketing pages (/contact, /security, ...), which every visitor may open: no data, no form, no permission gate, nothing the viewer could not reach in classic from the same route through the shell's StockPilot home link and the marketing pages' own navigation. classicTwin names that classic path; the 8.5 check counts the entry as navigation, never as a missing or extra action.",
     "summary block (no action)": "A stateless block glass draws that Classic does not have (plan 4.6: a summary row, a figure, a progress bar or rail), made only of words, figures and marks drawn from data the page already loads for every viewer of it: it holds no link, button or field, so the 8.5 check has no action to pair, and it reads nothing new (no data request). The classic proof drops it under default and it is not rendered under off.",
     "presentation control (no data action)": "A glass-only control that changes only how this viewer's glass page draws what it already loaded (which classic columns a glass table shows), kept in this browser; it reads and writes no data and has no permission gate. Classic always draws everything it chooses between, so it has no classic twin; the 8.5 check counts it as no data action. The elements it brings back are classic's own, in their classic place.",
-    "moved into a menu below a width": "A classic control that glass does not draw in windows maxWidth px wide or narrower, where this glass-only menu item does the same thing (the same handler, behind the same permission gate) from a menu on the same bar; replaces names the classic control. Above maxWidth the item is hidden and the classic control is drawn as it is. At those widths the 8.5 check counts the replaced control as present in glass when the menu holds an item of this entry's name (the menu's trigger opens it), and at wider sizes it expects the classic control."
+    "moved into a menu below a width": "A classic control that glass does not draw in windows maxWidth px wide or narrower, where this glass-only menu item does the same thing (the same handler, behind the same permission gate) from a menu on the same bar; replaces names the classic control. Above maxWidth the item is hidden and the classic control is drawn as it is. At those widths the 8.5 check counts the replaced control as present in glass when the menu holds an item of this entry's name (the menu's trigger opens it), and at wider sizes it expects the classic control.",
+    "disclosure of classic actions (no action)": "A glass-only button that only shows or hides classic controls of the same route, in place (aria-expanded): it performs no action, goes nowhere and reads or writes nothing. The classic controls it reveals keep their nodes, roles, names, targets, gates and DOM order; glass hides them (display: none) while it is closed and shows them in the same row when it is open. The 8.5 check presses it (expects aria-expanded=\"true\") before counting the controls listed in reveals, and expects each of them there in glass at every width.",
+    "summary (no action)": "Glass-only words, figures and decorative images the board draws, built only from values the route already loads (no read is added for them), holding no button or field and no link unless the link has its own entry. Where the block replaces a stateless classic block, that block carries data-classic-only and is hidden in glass, so each figure is shown once in either design. The 8.5 check has no action to pair; the classic proof drops them under default and they are not rendered under off."
   },
   "entries": [
     {
@@ -315,6 +317,75 @@
       "$comment": "Reports.dc.html's grouped hub: the Book Order Totals feature tile, then Inventory, Purchasing & cost, Bundles and Lots. One link per report in the page's own module-filtered list, with the name, the description and the target of the Classic tile it stands for; Classic's tiles carry data-classic-only and are hidden in glass, so each report is one link in either design. The eyebrow, the chips and the cover fan are aria-hidden decoration.",
       "classicTwin": "the Classic tile of the same report (data-classic-only, hidden in glass), same name, description and href",
       "gate": "the page's report list, filtered by reportModules(slug) on the modules enabled for the organization"
+    },
+    {
+      "id": "item-more-actions",
+      "source": "apps/web/src/components/inventory/item-more-actions.tsx",
+      "selector": "[data-glass=\"item-more\"] button",
+      "role": "button",
+      "name": "More actions",
+      "kind": "disclosure of classic actions (no action)",
+      "routes": [
+        "/dashboard/inventory/[id]",
+        "/dashboard/books/[id]",
+        "/dashboard/rentals/items/[id]"
+      ],
+      "$comment": "Item-Detail.dc.html's page head draws Transfer, Adjust, Edit and a More button. The item page keeps every classic action in its tour row [data-tour=\"item-actions\"], each rendered once with its own gate and dialog; glass shows the three with an inert data-glass-action hook (Edit, Adjust stock, Transfer) and hides the others until this button is pressed, then shows them in the same row in their DOM order (styles/liquid-glass/pages/item-detail.css). It never closes on its own. When none of the three is allowed, glass hides nothing and does not draw the button. Not rendered under off.",
+      "reveals": [
+        {
+          "role": "button",
+          "name": "Duplicate",
+          "gate": "items:create"
+        },
+        {
+          "role": "button",
+          "name": "Label",
+          "gate": null
+        },
+        {
+          "role": "link",
+          "name": "Print label",
+          "gate": null
+        },
+        {
+          "role": "button",
+          "name": "Count this item",
+          "gate": "canStartCount + a countable item"
+        },
+        {
+          "role": "button",
+          "name": "Report a problem",
+          "gate": "maintenance_requests:submit + the module"
+        }
+      ],
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "item-glass-summary",
+      "source": "apps/web/src/components/inventory/item-glass-summary.tsx",
+      "selector": "[data-glass=\"item-summary\"], [data-glass=\"item-aside\"]",
+      "kind": "summary (no action)",
+      "routes": [
+        "/dashboard/inventory/[id]",
+        "/dashboard/books/[id]",
+        "/dashboard/rentals/items/[id]"
+      ],
+      "$comment": "Item-Detail.dc.html and Book-Detail.dc.html: the summary card (the photo or cover, the book's ISBN, author, grade and home crate, the On hand / Available / Reserved / Reorder at or In Staging / Value wells, the reorder alert) and the side column (Ordering, Reserved, Expected, Product family and the Reorder card's rows), on the Overview tab only. Every value comes from the item row, the reserved sum and the photo the Overview already reads, and the context's modules and permissions. The figure strip and the Reorder card carry data-classic-only. The side column's one link has its own entry (item-book-order-totals). Not rendered under off.",
+      "classicTwin": "the Overview's figure strip and Reorder card (data-classic-only, hidden in glass)",
+      "gate": null
+    },
+    {
+      "id": "item-book-order-totals",
+      "source": "apps/web/src/components/inventory/item-glass-summary.tsx",
+      "selector": "[data-glass=\"item-aside\"] a[href=\"/dashboard/reports/book-order-totals\"]",
+      "role": "link",
+      "name": "Open the report",
+      "kind": "duplicate action",
+      "routes": ["/dashboard/books/[id]", "/dashboard/inventory/[id]"],
+      "$comment": "Book-Detail.dc.html's Book Order Totals card: on a book's Overview, a link to /dashboard/reports/book-order-totals, the page the Reports list's Book Order Totals card opens; in classic it is reached from every dashboard route through the sidebar's Reports link. Shown only with reports:read and the Orders and Books modules on, the report page's own gate (reports/book-order-totals/page.tsx). The board's figure (copies requested in the last 30 days) is not drawn: it would be a report read on the book page. Not rendered under off.",
+      "classicTwin": "the Book Order Totals card on /dashboard/reports, reached through the sidebar's Reports link",
+      "gate": "reports:read + the Orders and Books modules"
     }
   ]
 }

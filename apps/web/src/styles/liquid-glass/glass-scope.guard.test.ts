@@ -219,6 +219,9 @@ describe('styles/liquid-glass scope guard', () => {
         '(dashboard)/dashboard/inventory/page.tsx',
         '(dashboard)/dashboard/rentals/items/page.tsx',
       ]);
+      // The rental item page renders the same ItemDetail (its glass-only
+      // summary, side column and More actions), so it takes the composition
+      // too (fidelity lane detail).
       expect(importers.get('pages/item-detail.css')?.sort()).toEqual([
         '(dashboard)/dashboard/books/[id]/page.tsx',
         '(dashboard)/dashboard/inventory/[id]/page.tsx',
