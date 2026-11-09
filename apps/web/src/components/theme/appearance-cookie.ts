@@ -307,6 +307,16 @@ export function isGlassShowing(): boolean {
 }
 
 /**
+ * The appearance twin a document in this Design hides
+ * (styles/liquid-glass/visibility.css): a glass-only element in Classic, a
+ * classic-only one in glass. For code that looks up an element that must be
+ * on screen, such as a page tour's target (onboarding/page-tour.tsx).
+ */
+export function hiddenTwinSelector(glass: boolean): string {
+  return glass ? '[data-classic-only]' : '[data-glass-only]';
+}
+
+/**
  * An error boundary caught a render error. When Liquid Glass is on screen,
  * hold this tab in classic from the next load on, until the person turns it
  * back on or closes the tab. The stored choice is NOT changed: a temporary

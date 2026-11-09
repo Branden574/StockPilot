@@ -6,6 +6,7 @@ import {
   chooseClassicFromRecovery,
   ensureStyleCookie,
   forgetAppearanceAccount,
+  hiddenTwinSelector,
   isCrashFallbackActive,
   markCrashFallbackShown,
   markIntroSeen,
@@ -353,5 +354,12 @@ describe('the one-time crash fallback', () => {
     expect(readDeviceRecord(NOW)).toEqual({ v: 2, style: 'classic', theme: 'dark' });
     expect(readAppearanceCookie(document.cookie)).toBe('classic');
     expect(document.documentElement.hasAttribute('data-appearance')).toBe(false);
+  });
+});
+
+describe('the hidden appearance twin', () => {
+  it('is the glass-only one in Classic and the classic-only one in glass (visibility.css)', () => {
+    expect(hiddenTwinSelector(false)).toBe('[data-glass-only]');
+    expect(hiddenTwinSelector(true)).toBe('[data-classic-only]');
   });
 });
