@@ -78,8 +78,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/ui/toggle.tsx':
     '0f94a5d9eef3cc588556141111590fb16586e13b31dde062d0bb1b1b42aa2786',
   // Sign-in, welcome and the root gates (native-core).
-  'app/(auth)/sign-in.tsx': '19ab14bb04aea77af8fc63bb2d8e4e448ec81e6d8a11f9bd43b8a38598ccefd6',
-  'app/(auth)/welcome.tsx': '84d2fa5ad3c05268760c3d9f1e111abf5b23053a875f31e2a72b45f1696ab93c',
+  // prettier-ignore
+  'app/(auth)/sign-in.tsx':
+    '19ab14bb04aea77af8fc63bb2d8e4e448ec81e6d8a11f9bd43b8a38598ccefd6',
+  // prettier-ignore
+  'app/(auth)/welcome.tsx':
+    '84d2fa5ad3c05268760c3d9f1e111abf5b23053a875f31e2a72b45f1696ab93c',
   'src/components/account-disabled-screen.tsx':
     'f08b00bb93fdc3b740b2d2d6bb63fbe37ecb8fe557e74fe1fde26a3ff1fd483c',
   'src/components/auth/auth-shell.tsx':
