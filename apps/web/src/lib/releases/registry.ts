@@ -28,6 +28,149 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'approver-controls-own-warehouses-2026-11',
+    revision: 1,
+    // S2, security slice E, both halves in one release:
+    // - #378 (squash bae51d8e6; web and migration 0416, on the web and in the
+    //   database since 2026-11-03 01:47Z);
+    // - #487 (squash ebabb2772; the phone order screen waits for the saved
+    //   permissions and shows only its newest load, so a fresh open offers
+    //   nothing on another warehouse's order).
+    // Web build 82033659d53a (main ebabb2772) is live. The phone halves reached
+    // phones in EAS update group b0ba5d7e-e17a-4a1b-ba7e-84476c1f2a1c (runtime
+    // 1.4.0, published 2026-11-05 07:35Z from ebabb2772); the integrator
+    // merges this only after iOS launches of that group show in EAS insights.
+    // This release needs a web deploy only. If the phone update is rolled back
+    // (to group 9cf9ecf7) while the web stays, the phone clauses are no longer
+    // true: withdraw this release or correct it.
+    // No What's New for S2 was published before: at ebabb2772 no release
+    // names #378, #487 or 0416, and #487 has none of its own (its description:
+    // #378's draft covers it). From #378's draft, corrected below.
+    // Walks (lab, synthetic users and orders, a staff approver and a staff
+    // picker who work in one warehouse, and a manager):
+    // - walk-s2-phone-1103 (2026-11-03), web half: on the other warehouse's
+    //   orders no Manager actions card before picking, Print pick slip only in
+    //   picking and at picking complete, Print customer slip (and View
+    //   signature on a signed order) from the packing slips on, no Print
+    //   warehouse slip, internal notes, Hold, needed-by Change, Add items or
+    //   line control; an own pending request offers Cancel request only; the
+    //   manager's set unchanged. Direct call PASS: the route answered 403 and
+    //   the function 42501, each with the sentence quoted below.
+    // - walk-s2b-phone-1105 (2026-11-05), phone at ebabb2772, iPhone and iPad,
+    //   Large and AX5: 145 fresh opens of the other warehouse's orders, 0 with
+    //   a control; picking statuses: no Claim picking, pick or Release for the
+    //   approver or the picker; own pending request: Cancel request only, and
+    //   cancelled; View signature shown; in their own warehouse Approve, Claim
+    //   picking and Release done; the manager's set unchanged. Independent
+    //   check PASS.
+    // Claims checked against the code at ebabb2772:
+    // - Who: staff work in their assigned warehouses (lib/auth/warehouse.ts
+    //   :221-229); owners, admins and managers in every one by role
+    //   (roleSeesEveryWarehouse :76-78; the phone's seesEveryHolding,
+    //   apps/mobile/src/lib/holdings-elsewhere.ts:80-84).
+    // - Web (app/(dashboard)/dashboard/orders/[id]/page.tsx): approverWritesHere
+    //   and approverReadsHere :310-312; the panel's steps follow
+    //   approverWritesHere (:1966; components/orders/manager-actions-panel.tsx
+    //   :341, Approve and Deny :780, internal notes :1210); Cancel through core
+    //   orderCancelOffer (:1408; packages/core/src/orders/order-cancel.ts
+    //   :48-49); Hold available stock :1001; Add items and the line controls
+    //   viewerMayChangeLines :344 and :351. The panel shows for such an
+    //   approver only where it carries a read (:397-402,
+    //   lib/orders/actions-panel-reads.ts:38): Print pick slip (panel :902,
+    //   :957), Print customer slip :976 and View signature :987; Print
+    //   warehouse slip only with canPrintWarehouseSlip (:978), which the page
+    //   passes as viewerMayHandOver (:1200, :1992), mayHandOverOrder's rule.
+    //   Not changed on the web by #378, so told for the phone only: the
+    //   needed-by Change already asked write access to the order's warehouse
+    //   (lib/orders/needed-by-change.ts:92-96, F2-4), and so did Claim picking
+    //   and Release (page.tsx:793-796).
+    // - Phone (apps/mobile/app/order/[id].tsx): orderWarehouseAccessAsShown
+    //   :946 (src/lib/order-warehouse-scope.ts:112-124 and :142-161);
+    //   Approve, Deny and every step through orderManagerActions
+    //   (src/lib/order-manager-actions.ts:124, writesOrderWarehouse :2462);
+    //   Cancel :2505-2508; Hold :2285-2289; the needed-by Change :2318-2323;
+    //   Add items and the line edits :970-976; Claim picking and Release
+    //   :960, :2411 and :2441; the wait for the saved permissions :697-705
+    //   (#487); the View signature card :3816. The phone has no internal notes.
+    // - The sentence: core ORDER_WAREHOUSE_WRITE_REFUSED_COPY
+    //   (packages/core/src/guards/db-guard-copy.ts:37-38), said by the order
+    //   service (server/services/order-requests.ts:5151) and by 0416's six
+    //   functions (supabase/migrations/0416_order_functions_warehouse_scope.sql
+    //   :164, :265, :353, :421, :539, :736), returned by the routes
+    //   (app/api/v1/orders/[id]/transition/route.ts:227-228). "for most of
+    //   them": the hand-over and Print warehouse slip refuse in their own
+    //   words (app/api/orders/[id]/packing-slip-warehouse.pdf/route.tsx:56).
+    // - An own pending request: the service asks no warehouse for that cancel
+    //   (order-requests.ts:3186-3188), nor does 0416's cancel_order_request;
+    //   the line edits ask read access of everyone (loadEditableOrderHeader,
+    //   order-requests.ts:2108).
+    // - A delivery's driver: the hand-over rule lets the assigned driver
+    //   through first (server/lib/order-secrets.ts:266), the web card keeps
+    //   their hand-over (page.tsx:402, panel :1095-1096) and Print warehouse
+    //   slip (viewerMayHandOver), and the phone theirs (driverHere,
+    //   order-manager-actions.ts:126), so the card is not "only the prints"
+    //   for them: said in howItAffectsYou.
+    // Changed from the draft: the internal notes are named for the web and
+    // the needed-by Change for the phone only (above); the card is said to
+    // show only when the order has a print or a signature to offer; "each of
+    // these was refused" is "for most of them"; the other steps that move an
+    // order on are named; a delivery's driver keeps the hand-over; the
+    // update words are the current ones; whyItMatters ends on "these
+    // controls", not "only what you can do on it"; and the audience leaves
+    // out viewers (below).
+    // Left out: #487's Orders list and Returns list changes (a read started
+    // before a permission change or a workspace switch no longer lands after
+    // it): only seen while a permission or the workspace changes during a
+    // read, so there is nothing a member will notice to tell. The database
+    // refusing what the app already refused is not visible to anyone using
+    // the app, so it has no entry. A phone whose warehouse read fails offers
+    // as before, and the server refuses.
+    // Not every control follows the warehouse, so whyItMatters says "these
+    // controls", not every one: Create return on a completed order asks no
+    // warehouse on the web (page.tsx:1105-1113; returnableLinesForOrder,
+    // server/services/returns.ts:729) or the phone (showCreateReturn
+    // :759-760), and create_return_request refuses it there
+    // (0394_returns_lifecycle_original_rack.sql:1293-1295).
+    // Who is told: owners, admins, managers and staff who approve orders or
+    // pick (orders:approve or items:update) where Orders is on, the people the
+    // entry speaks of; owners, admins and managers are told that nothing
+    // changes for them. Not a viewer, even one granted orders:approve or
+    // items:update: neither app offered a viewer Approve, Deny or the other
+    // steps, before #378 or after (panel :341, order-manager-actions.ts:124),
+    // and the warehouse write that Cancel, Hold and Claim picking now ask is
+    // never a viewer's on any order (page.tsx:310-311 approverWritesHere,
+    // lib/auth/warehouse.ts:222; order-warehouse-scope.ts:118), so the words
+    // would be wrong for them. The 2026-10-06 entry on the same subject
+    // (order-other-warehouse-words) limits its audience by role too.
+    status: 'published',
+    title:
+      'Approve, Cancel and the other order steps show only on orders of your warehouses, on the web and in the mobile app',
+    summary:
+      'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, changes to its items or the other steps that move it on, on the web or in the mobile app. In the mobile app, Claim picking and Release show only on orders of your warehouses, as on the web. Owners, admins and managers see no change. In the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-05T13:54:00Z',
+    entries: [
+      {
+        id: 'approver-controls-own-warehouses',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Approve, Cancel and the other order steps show only on orders of your warehouses',
+        whatChanged:
+          'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, Add items, changes to its items or the other steps that move it on, on the web or in the mobile app. On the web, its internal notes are hidden too, and its Manager actions card, when it shows, offers only Print pick slip, Print customer slip and View signature. In the mobile app, Change beside its needed-by date is hidden too, and Claim picking and Release show only on orders of your warehouses, as on the web, for everyone who picks.',
+        whyItMatters:
+          "Before, these controls were offered on such an order and every tap was refused, for most of them with “This order is in a warehouse you don't work in, so you can't change it. Ask a manager.” Now these controls show only on orders of the warehouses you work in.",
+        howItAffectsYou:
+          'Owners, admins and managers work in every warehouse, so nothing changes for them. A request you placed yourself can still be cancelled while it waits for approval, wherever it is, but its items can be changed only in a warehouse you work in. As the driver of a delivery, you can still hand it over, wherever it is. When an order of another warehouse needs a change, ask a manager.',
+        whatToDo:
+          'No action needed on the web. To load the latest update in the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: {
+          roles: ['owner', 'admin', 'manager', 'staff'],
+          anyPermission: ['orders:approve', 'items:update'],
+          modules: ['orders'],
+        },
+      },
+    ],
+  },
+  {
     id: 'export-items-permission-2026-11',
     revision: 1,
     // B68, #446 (squash 22e52f1ea, live 2026-11-02 23:45:39Z, web build
