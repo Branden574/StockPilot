@@ -622,7 +622,9 @@ describe('stage 3 fidelity, small lane: the board values', () => {
       value(
         ITEM_DETAIL,
         '',
-        S("[data-glass-page='item-detail'] [data-glass='page-header'] div:has(> [data-slot='thumb'])"),
+        S(
+          "[data-glass-page='item-detail'] [data-glass='page-header'] div:has(> [data-slot='thumb'])",
+        ),
         'display',
       ),
     ).toBe('none');

@@ -424,12 +424,7 @@ const squashValue = (value: string) =>
   value
     .split(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/)
     .map((part, i) =>
-      i % 2 === 1
-        ? part
-        : part
-            .replace(/\s+/g, ' ')
-            .replace(/\(\s+/g, '(')
-            .replace(/\s+\)/g, ')'),
+      i % 2 === 1 ? part : part.replace(/\s+/g, ' ').replace(/\(\s+/g, '(').replace(/\s+\)/g, ')'),
     )
     .join('')
     .trim();
