@@ -222,6 +222,31 @@ describe('styles/liquid-glass scope guard', () => {
       ]);
     });
 
+    it('the settings, admin and platform console pages import their compositions, the console after admin.css', () => {
+      const lane = (importers.get('pages/admin.css') ?? []).sort();
+      expect(lane.length).toBeGreaterThan(30);
+      for (const rel of lane) {
+        expect(rel, rel).toMatch(
+          /^\(dashboard\)\/dashboard\/(settings|admin)\/|^\(platform\)\/platform\//,
+        );
+      }
+      const consolePages = (importers.get('pages/platform.css') ?? []).sort();
+      expect(consolePages).toEqual([
+        '(platform)/platform/audit/page.tsx',
+        '(platform)/platform/orgs/[id]/page.tsx',
+        '(platform)/platform/page.tsx',
+        '(platform)/platform/provision/page.tsx',
+        '(platform)/platform/support/page.tsx',
+      ]);
+      for (const rel of consolePages) {
+        expect(lane, rel).toContain(rel);
+        const text = readFileSync(join(APP, rel), 'utf8');
+        expect(text.indexOf('pages/admin.css'), rel).toBeLessThan(
+          text.indexOf('pages/platform.css'),
+        );
+      }
+    });
+
     for (const { file, text } of PAGES) {
       it(`${file}: every selector is scoped to a [data-glass-page] root`, () => {
         const root = parse(text, file);

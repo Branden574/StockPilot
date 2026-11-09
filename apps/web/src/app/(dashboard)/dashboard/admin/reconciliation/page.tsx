@@ -17,6 +17,11 @@ import { effectiveNavLabel } from '@/lib/nav-labels';
 import { ReconciliationService } from '@/server/services/reconciliation';
 import { formatCurrency, formatRelative } from '@/lib/utils';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 /**
  * The status label's tone (DESIGN-SPEC 6.10), the same tones the PO pages use
  * for each status. The words stay this page's own (the status with its

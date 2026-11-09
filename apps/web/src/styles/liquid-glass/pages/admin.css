@@ -1,0 +1,1384 @@
+/* Liquid Glass, the settings and administration pages (stage 4, lane L2b):
+   every settings page in its frame (the sub-nav beside or above the page, the
+   grouped hub, the panels), the workspace admin pages, and the parts the
+   platform console's pages share with them (pages/platform.css adds the
+   console's own staff bar, ground and cards).
+
+   Boards: the settings section nav is Routes-Gallery-2.dc.html's
+   /dashboard/settings/profile panel (exact: the Account / Workspace / Access
+   eyebrows over .mi rows, the current page in 600 with the accent check at
+   the row's end). Everything else is an inferred extension built from
+   DS-Components.dc.html (a form section is .card p24 with its .h2 title; a
+   list or a table is .card with the 52 px .card-h head over its rows; the
+   .field, .badge, .rb, .choice, .empty and .dialog parts) inside the shell's
+   .page box (sp.css:401); the admin pages use "the same table, form and
+   dialog patterns as Team and Settings" (Handoff-Coverage), drawn as
+   Routes-Gallery-2's list rows (.li: 56 px, 12 x 16).
+
+   Same DOM as Classic (plan M1): every rule restyles today's markup, found
+   through the inert page roots (data-glass-page="settings" on the settings
+   frame, the hub and its error, "admin" with its data-glass-view on every
+   admin page, "platform" on the console's layout), the stage 2 hooks of the
+   shared components (data-glass="page-header", "table", "badge", "radio",
+   "dialog" ...), the pattern components' data-slot attributes, and the inert
+   hooks this lane adds (the settings panel's head, body, variant and tone;
+   the dialog parts data-glass="dialog-header", "dialog-body",
+   "dialog-footer", "dialog-form"; the step-up's own "step-up-*" parts and
+   data-glass-role). Every rule is scoped to :root[data-appearance=
+   "liquid-glass"] inside @media screen, so Classic Dark and Light never match
+   one and printing never gets one (glass-scope.guard.test.ts). App Router
+   keeps a route's stylesheet after a client navigation, so every selector
+   also names one of the three page roots: nothing here reaches another
+   lane's page. Dialogs are portalled out of the page, so their rules name
+   the root through :root:has(...).
+
+   Imported only by the settings, admin and platform route pages (never
+   globally, plan 4.1). The layer order statement is the order globals.css
+   already declares, so lg stays after Tailwind's layers. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The page box (.page: 6 / 28 / 48, 20 between, 1480 wide) ────────
+       The admin pages and the settings hub take the board's box; a form
+       page keeps its own reading width (data-glass-width="form"). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='admin'], [data-glass-page='settings'][data-glass-view='hub']) {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is(
+        [data-glass-page='admin']:not([data-glass-width='form']),
+        [data-glass-page='settings'][data-glass-view='hub']
+      ) {
+      max-width: 1480px;
+    }
+    /* Table cells pad by the shell's --row-py: the glass row (8 px, so a
+       two-line cell makes the 52 px row). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform']) {
+      --row-py: var(--lg-row-pad);
+    }
+
+    /* The settings frame: the sub-nav's column, then the page's column.
+       Below 1280 px (the frame's own xl) the nav is one button over the
+       page; from 1280 px it is the board's 190 px rail, 18 px from the
+       page, inside the page box's 28 px edge. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings'][data-slot='settings-frame']
+      > div:first-child {
+      padding: 6px 28px 0;
+    }
+    /* The hub's error and loading skeleton draw no frame: each is its own
+       root, in the page box (first, so a skeleton inside the frame takes
+       the frame's rule below at the same weight). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']:is([data-slot='settings-page'], [data-glass-view='loading']) {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      :is([data-slot='settings-page'], [data-glass-view='loading']) {
+      gap: 20px;
+      padding: 16px 28px 48px;
+    }
+    @media (min-width: 1280px) {
+      /* The rail scrolls on its own beside a long page, inside the pane:
+         the pane's 10 px margins and its 68 px top bar (shell.css). */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings'][data-slot='settings-frame']
+        > div:first-child {
+        width: 218px;
+        max-height: calc(100dvh - 88px);
+        padding: 6px 0 48px 28px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings'][data-slot='settings-frame']
+        :is([data-slot='settings-page'], [data-glass-view='loading']) {
+        padding: 6px 28px 48px 18px;
+      }
+    }
+
+    /* ── The page head (.page-h: the Large title 26/32, the subline and
+       meta 13/18 in ink 2, the eyebrow, the 36 px header buttons) ──────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div[class~='text-muted-foreground'] {
+      margin-top: 4px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    /* The eyebrow over the title (.eyebrow: 12/16, 600, .06em, ink 3). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='page-header']
+      div:has(+ div > h1) {
+      margin-bottom: 4px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='page-header-actions']
+      [data-glass='button']:not([data-glass-variant='ghost']):not([data-glass-variant='link']) {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ── The settings sub-nav (exact: Routes-Gallery-2 settings nav) ──────
+       The group names as the board's eyebrows, each destination an .mi row
+       (36 px, radius 9, 14 px, the 12% accent tint under the pointer), the
+       current page in 600 with the accent check at the row's end
+       (.mi.sel::after) instead of a fill. A finger keeps Classic's 44 px
+       rows (below the rail, and on a coarse pointer). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      ul {
+      gap: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > div
+      > div {
+      margin-top: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > div
+      > div
+      > p {
+      padding: 10px 10px 4px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      a {
+      gap: 10px;
+      padding: 0 10px;
+      border-radius: 9px;
+      background-color: transparent;
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 400;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      a:hover {
+      background-color: color-mix(in srgb, var(--lg-accent) 12%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      a[aria-current='page'] {
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      a[aria-current='page']::after {
+      content: '';
+      flex: none;
+      width: 16px;
+      height: 16px;
+      margin-left: auto;
+      background-color: var(--lg-accent-text);
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      a:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: calc(-1 * var(--lg-focus-w));
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    @media (min-width: 1280px) and (pointer: fine) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings']
+        [data-slot='settings-subnav']
+        a {
+        min-height: 36px;
+      }
+    }
+    /* A destination whose module could not be checked: its words in ink 3. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      [data-slot='settings-entry-unchecked'] {
+      padding: 8px 10px;
+      color: var(--lg-ink-3);
+    }
+    /* Below the rail: the one Settings button (the secondary button on the
+       field frost, radius 12) and the list it opens (a card under it). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button {
+      gap: 8px;
+      padding: 0 14px;
+      border-color: var(--lg-field-line);
+      border-radius: 12px;
+      background-color: var(--lg-field-fill);
+      font-size: 14px;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 1px 2px rgba(60, 44, 26, 0.08);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button:hover {
+      background-color: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button
+      > span:first-child {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button
+      > span:nth-child(3) {
+      color: var(--lg-ink);
+      font-weight: 600;
+    }
+    /* The button's material shadow replaces Classic's ring (a box-shadow),
+       so the board's outline ring draws the focus. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-subnav']
+      > button:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    @media (max-width: 1279.98px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings']
+        [data-slot='settings-subnav']
+        > div {
+        padding: 6px;
+        border-color: var(--lg-card-line);
+        border-radius: 16px;
+        background-color: var(--lg-card-fill);
+        box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      }
+    }
+
+    /* ── The settings hub (inferred: each group a .card with its .card-h
+       head, each destination a Routes-Gallery-2 list row: 56 px, 12 x 16,
+       the title 13/18 at 600 over its line in ink 3, the chevron) ──────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index'] {
+      column-gap: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      > section {
+      margin-bottom: 20px;
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      > section
+      > h2 {
+      display: flex;
+      align-items: center;
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+      color: var(--lg-ink);
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      > section
+      > ul
+      > li {
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a {
+      gap: 12px;
+      min-height: 56px;
+      padding: 12px 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a
+      h3 {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a
+      h3
+      + span {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a
+      > svg {
+      width: 16px;
+      height: 16px;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a:hover
+      > svg {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      li
+      > a:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: calc(-1 * var(--lg-focus-w));
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings']
+      [data-slot='settings-index']
+      [data-slot='settings-entry-unchecked'] {
+      min-height: 56px;
+      padding: 12px 16px;
+    }
+
+    /* ── The admin hub's rows (the list card straight under the page root,
+       not the platform block; Routes-Gallery-2 list rows: 56 px, 12 x 16,
+       the .rt-ic tile 34 px at radius 10 on surface 3, the title 13/18 at
+       600 over its line 12/16 in ink 3, the count and the chevron) ─────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      > div:not([data-slot])
+      > ul
+      > li
+      > a {
+      column-gap: 12px;
+      min-height: 56px;
+      padding: 12px 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      > div:not([data-slot])
+      > ul
+      > li
+      > a:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      > div:not([data-slot])
+      > ul
+      > li
+      > a:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: calc(-1 * var(--lg-focus-w));
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      > div:not([data-slot])
+      > ul
+      > li
+      > a
+      > span:first-child {
+      width: 34px;
+      height: 34px;
+      border-width: 0;
+      border-radius: 10px;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      > div:not([data-slot])
+      > ul
+      > li
+      > a
+      > span:nth-child(2)
+      > span:first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      > div:not([data-slot])
+      > ul
+      > li
+      > a
+      > span:nth-child(2)
+      > span:last-child {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='admin'][data-glass-view='hub']
+      [data-testid='admin-platform-block']
+      li {
+      min-height: 56px;
+      padding: 12px 16px;
+    }
+
+    /* ── Settings panels (DS-Components: a form section is .card p24 with
+       its .h2 title 20/26 at 650 and 16 between; a list or a table is .card
+       with the 52 px .card-h head over the rows) ───────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='settings-panel'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='settings-panel-head'] {
+      gap: 4px 12px;
+      padding: 24px 24px 0;
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='settings-panel-head']
+      h2 {
+      color: var(--lg-ink);
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='settings-panel-head']
+      h2
+      + div {
+      margin-top: 4px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='settings-panel'][data-glass-variant='form']
+      > [data-glass='settings-panel-body'] {
+      padding: 16px 24px 24px;
+    }
+    /* A list or a table: the head is the board's .card-h, the rows bring
+       their own padding (flush). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='settings-panel'][data-glass-variant='flush']
+      > [data-glass='settings-panel-head'] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-bottom-width: 1px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='settings-panel'][data-glass-tone='danger'] {
+      border-color: var(--lg-danger-line);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='settings-panel'][data-glass-tone='danger']
+      h2 {
+      color: var(--lg-danger);
+    }
+    /* The loading skeleton's panels are the panels they stand for. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings'][data-glass-view='loading']
+      > div.bg-card
+      > div:first-child {
+      padding: 24px 24px 0;
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='settings'][data-glass-view='loading']
+      > div.bg-card
+      > div
+      + div {
+      padding: 16px 24px 24px;
+    }
+
+    /* ── Cards the pages draw themselves (.card: the content glass, radius
+       20): a plain block with the card fill, hairline and radius, unhooked
+       (a hooked one takes its material from materials.css). ─────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      :is(div, section, aside, ul, form).bg-card.rounded-lg.border:not([data-glass]):not(
+        [data-slot='settings-panel']
+      ) {
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    /* Record cards (DetailSection): radius 20, a 52 px head (12 x 16) with
+       the 16/22 title, 16 px inside, a 12 x 16 foot. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='detail-section'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='detail-section-header'] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='detail-section-header']
+      > :is(h2, h3, h4) {
+      color: var(--lg-ink);
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='detail-section-body'].p-\[18px\] {
+      padding: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='detail-section-footer'] {
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+
+    /* ── Label and value lists (.kv: the label in ink 3, the value in ink
+       at 500) ──────────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='key-value-list']
+      > * {
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='key-value-row']
+      > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='key-value-row']
+      > dd {
+      color: var(--lg-ink);
+      font-weight: 500;
+    }
+
+    /* ── Figures (StatStrip detail: the board's .stat, the label 13/18 at
+       500 in ink 3 over the 28/34 figure at 650; one card, no rules
+       between, 18 px apart) ────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='stat-strip'][data-variant='detail']
+      > div {
+      gap: 18px;
+      margin: 0;
+      padding: 18px 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item'] {
+      padding: 0;
+      border-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item']
+      > div:first-child {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item']
+      > div:nth-child(2) {
+      font-size: 28px;
+      font-weight: 650;
+      line-height: 34px;
+      letter-spacing: -0.02em;
+    }
+
+    /* ── Tables in a card (.dt): 14 px, the 38 px header band (12 / 600 in
+       ink 3, no capitals), the row hairline, 52 px rows. No blur on the
+       band: these cards do not scroll under it. ───────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='table'] {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='table']
+      > thead
+      > tr {
+      border-bottom: 1px solid var(--lg-line);
+      background: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='table']
+      th {
+      height: 38px;
+      padding-top: 0;
+      padding-bottom: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='table']
+      > tbody
+      > tr {
+      height: var(--lg-row-h);
+      border-color: var(--lg-line);
+    }
+
+    /* ── Badges (.badge: 22 px, 12 / 600, radius 6; outline and neutral as
+       the board's .b-outline) ─────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='badge'] {
+      height: 22px;
+      gap: 5px;
+      padding: 0 8px;
+      font-size: 12px;
+      line-height: 1;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='badge']:is([data-glass-variant='outline'], [data-glass-variant='secondary']) {
+      border-color: transparent;
+      background-color: transparent;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+    }
+
+    /* ── Empty and failed states (.empty: the 56 px wash tile) ─────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='state-panel-icon'] {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-state-kind='failed']
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      :is([data-state-kind='no-match'], [data-state-kind='forbidden'])
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-slot='state-panel-icon']
+      svg {
+      width: 26px;
+      height: 26px;
+    }
+    /* The state's title (a quiet in-table line keeps its ink 3 and weight). */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='state-panel']
+      > :is(h1, h2, h3, p)[class~='font-medium'] {
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='state-panel']
+      > :is(h1, h2, h3, p)
+      + div {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* ── Fields that are native selects without a hook (the console's and
+       a few settings selects): the .input field on its 62% frost, the input
+       line, radius 10, the focus halo (primitives.css draws the same for
+       hooked ones). ────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      select:not([data-glass]) {
+      border-color: var(--lg-input-line);
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      select:not([data-glass]):hover:not(:disabled) {
+      border-color: var(--lg-input-line-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      select:not([data-glass]):focus-visible {
+      border-color: var(--lg-accent);
+      outline: none;
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+    }
+
+    /* ── Radios and choice cards (.rb, .choice). The empty ring is ink 4,
+       not the board's line 3 (line 3 reads under the 3:1 a control needs:
+       the stage 3 checkbox made the same choice); chosen, the accent disc
+       with its 8 px on-accent centre. ─────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='radio'] {
+      width: 18px;
+      height: 18px;
+      border-width: 1.5px;
+      border-color: var(--lg-ink-4);
+      background-color: var(--lg-surface);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='radio']:checked {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-on-accent);
+      box-shadow: inset 0 0 0 3.5px var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='radio-group'][data-glass-variant='card']
+      > label {
+      gap: 10px;
+      padding: 12px;
+      border-color: var(--lg-line-2);
+      border-radius: 12px;
+      background-color: var(--lg-field-fill);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='radio-group'][data-glass-variant='card']
+      > label:has(> [data-glass='radio']:checked) {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-sel-fill);
+      box-shadow: inset 0 0 0 1px var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='radio-group'][data-glass-variant='card']
+      > label:has(> :focus-visible) {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='radio-group'][data-glass-variant='default']
+      [data-glass='radio']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+
+    /* ── Phones (sp.css 760 px: 4 / 16 / 96, 16 between, the 24/30
+       title) ───────────────────────────────────────────────────────────── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='admin'], [data-glass-page='settings'][data-glass-view='hub']) {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings'][data-slot='settings-frame']
+        > div:first-child {
+        padding: 4px 16px 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings']:is([data-slot='settings-page'], [data-glass-view='loading']) {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings']
+        :is([data-slot='settings-page'], [data-glass-view='loading']) {
+        gap: 16px;
+        padding: 16px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        [data-glass='settings-panel-head'] {
+        padding: 18px 18px 0;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        [data-slot='settings-panel'][data-glass-variant='form']
+        > [data-glass='settings-panel-body'] {
+        padding: 14px 18px 18px;
+      }
+    }
+
+    /* Forced colours: the system colours draw every edge (no fill, no
+       shadow), and the current settings page keeps its check. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        :is(
+          [data-slot='settings-panel'],
+          [data-slot='detail-section'],
+          [data-slot='settings-index'] > section,
+          .bg-card.rounded-lg.border
+        ) {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='settings']
+        [data-slot='settings-subnav']
+        a[aria-current='page']::after {
+        background-color: LinkText;
+      }
+    }
+  }
+}
+
+/* ── Dialogs opened from these pages (portalled: named by the page root on
+   :root). Every one takes the board's type (.dialog: the 20/26 title in the
+   display face at 650, the description 13/18 in ink 2, the 36 px foot
+   buttons) over stage 2's overlay glass and scrim. A dialog that marks its
+   parts (data-glass="dialog-header", "dialog-body", "dialog-footer", on
+   the dialog or on the form that holds them, "dialog-form") takes the
+   whole .dialog anatomy: the 20 / 48 / 14 / 24 head, the inset reading
+   area (.dlg-b: 8 px in, the 62% frost, radius 16, 18 px inside), the
+   14 / 16 / 16 / 24 foot; anything it does not mark keeps the head's 24 px
+   inset. The step-up marks its own parts (data-glass="step-up-*"), so no
+   other lane's dialog rule ever reaches it.
+   ─────────────────────────────────────────────────────────────────────── */
+@layer lg {
+  @media screen {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:is(
+        [data-glass-variant='confirm'],
+        [data-glass-role='step-up'],
+        [data-glass-role='remove-org'],
+        [data-glass-role='disable-account'],
+        [data-glass-role='order-items-access'],
+        :has(
+          > [data-glass='dialog-header'],
+          > [data-glass='dialog-form'] > [data-glass='dialog-header']
+        )
+      )
+      h2[id] {
+      font-family: var(--font-display);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:is(
+        [data-glass-variant='confirm'],
+        [data-glass-role='step-up'],
+        [data-glass-role='remove-org'],
+        [data-glass-role='disable-account'],
+        [data-glass-role='order-items-access'],
+        :has(
+          > [data-glass='dialog-header'],
+          > [data-glass='dialog-form'] > [data-glass='dialog-header']
+        )
+      )
+      h2[id]
+      + :is(p, div)[class~='text-muted-foreground'] {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is(
+        [data-glass='dialog'] [data-glass='dialog-footer'],
+        [data-glass='dialog'][data-glass-role='step-up'] [data-glass='step-up-foot'],
+        [data-glass='dialog'][data-glass-variant='confirm'] > div:last-of-type
+      )
+      > [data-glass='button']:is([data-glass-size='default'], [data-glass-size='sm']) {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* The marked dialogs' anatomy. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:has(
+        > [data-glass='dialog-header'],
+        > [data-glass='dialog-form'] > [data-glass='dialog-header']
+      ) {
+      gap: 0;
+      padding: 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='order-items-access'] {
+      max-width: 560px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form'])
+      > [data-glass='dialog-header'] {
+      gap: 4px;
+      padding: 20px 48px 14px 24px;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form'])
+      > [data-glass='dialog-header']
+      > h2
+      > svg {
+      color: var(--lg-ink-3);
+    }
+    /* A destructive title keeps its danger ink, and its warning icon too. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form'])
+      > [data-glass='dialog-header']
+      > h2
+      > svg[class~='text-destructive'] {
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form'])
+      > [data-glass='dialog-body'] {
+      margin: 0 8px;
+      padding: 18px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-field-fill);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form']):has(
+        > [data-glass='dialog-header']
+      )
+      > :not(
+        [data-glass='dialog-header'],
+        [data-glass='dialog-body'],
+        [data-glass='dialog-footer'],
+        [data-glass='dialog-form'],
+        button
+      ) {
+      margin: 0 24px 14px;
+    }
+    /* A form that holds the fields and the foot (not the head): its fields
+       take the head's 24 px inset, its foot the board's foot. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      > [data-glass='dialog-form']:not(:has(> [data-glass='dialog-header']))
+      > :not([data-glass='dialog-footer']) {
+      margin-right: 24px;
+      margin-left: 24px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      > [data-glass='dialog-form']
+      > :has(+ [data-glass='dialog-footer']) {
+      margin-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form'])
+      > [data-glass='dialog-footer'] {
+      gap: 10px;
+      padding: 14px 16px 16px 24px;
+    }
+    /* Order items access and the step-up (Platform-Console, exact): the
+       foot's own action is the board's primary (.btn-primary: the accent
+       with its glow); a destructive one keeps the danger fill. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:is([data-glass-role='order-items-access'], [data-glass-role='step-up'])
+      :is([data-glass='dialog-footer'], [data-glass='step-up-foot'])
+      > [data-glass='button'][data-glass-variant='default'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:is([data-glass-role='order-items-access'], [data-glass-role='step-up'])
+      :is([data-glass='dialog-footer'], [data-glass='step-up-foot'])
+      > [data-glass='button'][data-glass-variant='default']:not(:disabled) {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.2),
+        0 1px 2px rgba(0, 0, 0, 0.14),
+        0 4px 12px -6px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:is([data-glass-role='order-items-access'], [data-glass-role='step-up'])
+      :is([data-glass='dialog-footer'], [data-glass='step-up-foot'])
+      > [data-glass='button'][data-glass-variant='default']:not(:disabled):hover {
+      background-color: var(--lg-accent-hover);
+    }
+    /* Order items access: the "After saving" note as the board's line on
+       surface 2 (radius 12, 10 x 12, no edge). */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='order-items-access']
+      [data-glass-role='order-items-access-after'] {
+      padding: 10px 12px;
+      border-width: 0;
+      border-radius: 12px;
+      background-color: var(--lg-surface-2);
+    }
+
+    /* ── The step-up (Platform-Console "Confirm it's you", exact): 420 px;
+       the head; the code in the reading area, 48 px tall, its digits 20 px
+       spaced .3em; the foot with Cancel as the board's ghost at its start
+       and the confirmation at its end. Its form lends its children to the
+       dialog (display: contents: no box; the form, its submit, its fields
+       and their order are unchanged), so each field sits in a reading area
+       and the foot on the dialog's glass, as drawn. ───────────────────── */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up'] {
+      gap: 0;
+      max-width: 420px;
+      padding: 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-head'] {
+      gap: 4px;
+      padding: 20px 48px 14px 24px;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-head']
+      > h2
+      > svg {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-form'] {
+      display: contents;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-form']
+      > [data-glass='step-up-field'] {
+      margin: 0 8px;
+      padding: 18px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-field-fill);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-form']
+      > [data-glass='step-up-field']
+      + [data-glass='step-up-field'] {
+      margin-top: 8px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-form']
+      > p[role='alert'] {
+      margin: 10px 24px 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      [data-glass='step-up-field']
+      [data-glass='input'][inputmode='numeric'] {
+      height: 48px;
+      font-size: 20px;
+      letter-spacing: 0.3em;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-form']
+      > [data-glass='step-up-foot'] {
+      gap: 10px;
+      margin: 0;
+      padding: 14px 16px 16px 24px;
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']:has(
+          :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        )
+        [data-glass='dialog'][data-glass-role='step-up']
+        > [data-glass='step-up-form']
+        > [data-glass='step-up-foot'] {
+        justify-content: space-between;
+      }
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      [data-glass='step-up-foot']
+      > [data-glass='button'][data-glass-variant='outline'] {
+      border-color: transparent;
+      background-color: transparent;
+      color: var(--lg-ink-2);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      [data-glass='step-up-foot']
+      > [data-glass='button'][data-glass-variant='outline']:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+
+    /* Fields inside these dialogs that are native selects without a hook
+       (the step-up's authenticator, Disable account's reason). */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      select:not([data-glass]) {
+      border-color: var(--lg-input-line);
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      select:not([data-glass]):focus-visible {
+      border-color: var(--lg-accent);
+      outline: none;
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+    }
+    /* Radios and choice cards inside these dialogs (Order items access). */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      [data-glass='radio'] {
+      width: 18px;
+      height: 18px;
+      border-width: 1.5px;
+      border-color: var(--lg-ink-4);
+      background-color: var(--lg-surface);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      [data-glass='radio']:checked {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-on-accent);
+      box-shadow: inset 0 0 0 3.5px var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      [data-glass='radio-group'][data-glass-variant='card']
+      > label {
+      gap: 10px;
+      padding: 12px;
+      border-color: var(--lg-line-2);
+      border-radius: 12px;
+      background-color: var(--lg-surface);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      [data-glass='radio-group'][data-glass-variant='card']
+      > label:has(> [data-glass='radio']:checked) {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-sel-fill);
+      box-shadow: inset 0 0 0 1px var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']
+      [data-glass='radio-group'][data-glass-variant='card']
+      > label:has(> :focus-visible) {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']:has(
+          :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        )
+        [data-glass='dialog']
+        :is([data-glass='dialog-body'], [data-glass='step-up-field']) {
+        border-color: CanvasText;
+        background: Canvas;
+      }
+    }
+  }
+}

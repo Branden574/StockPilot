@@ -6,6 +6,11 @@ import { SuppliersService } from '@/server/services/suppliers';
 import { createClient } from '@/lib/supabase/server';
 import { requireOrgContext } from '@/lib/auth/session';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export default async function VendorMappingsPage() {
   const ctx = await requireOrgContext();
   const supabase = await createClient();
