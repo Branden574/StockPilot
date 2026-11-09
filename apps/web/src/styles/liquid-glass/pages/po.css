@@ -99,10 +99,13 @@
       font-weight: 500;
       line-height: 18px;
     }
+    /* The figures, not the expected day: the day's own rule below has the
+       lower specificity, so this one leaves it alone rather than out-rank it
+       (stage4-ops-cascade.test.tsx). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='purchase-order']
       [data-glass='po-progress-stat']
-      > span:nth-child(2) {
+      > span:nth-child(2):not([data-glass='po-progress-day']) {
       color: var(--lg-ink);
       font-family: var(--font-display);
       font-size: 28px;

@@ -524,9 +524,19 @@ const ENTRIES: Entry[] = [
     'summary figure size',
     PO,
     '',
-    S(`${VIEW('purchase-order')} [data-glass='po-progress-stat'] > span:nth-child(2)`),
+    S(
+      `${VIEW('purchase-order')} [data-glass='po-progress-stat'] > span:nth-child(2):not([data-glass='po-progress-day'])`,
+    ),
     'font-size',
     '28px',
+  ],
+  [
+    'summary expected day size (.lg.strong)',
+    PO,
+    '',
+    S(`${VIEW('purchase-order')} [data-glass='po-progress-stat'] > [data-glass='po-progress-day']`),
+    'font-size',
+    '16px',
   ],
   [
     'summary bar height',
