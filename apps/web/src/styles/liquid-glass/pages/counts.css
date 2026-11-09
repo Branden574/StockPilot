@@ -403,6 +403,35 @@
       [data-glass='button'][data-glass-variant='default']:disabled {
       box-shadow: none;
     }
+    /* Post this count? (Cycle-Count-Detail.dc.html: its Post adjustments is
+       the accent primary, .btn-primary, as Review & post is). The count page
+       opens no other dialog with a primary button: Cancel count's is the
+       danger one. Portalled, so the page is named through :root:has(). */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+      )
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-variant='default'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+      )
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-variant='default']:hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+      )
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-variant='default']:disabled {
+      box-shadow: none;
+    }
     /* The lines: Item, SKU (mono xs muted), Expected (tabular), the count
        box (.count-in: 96 x 34, right-aligned, 600), Variance (strong). */
     :root[data-appearance='liquid-glass']

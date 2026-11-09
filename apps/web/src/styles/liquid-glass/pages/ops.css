@@ -481,9 +481,13 @@
     /* ── Dialogs opened from these pages (.dialog: the 20/26 title in the
        glass display face, the description in ink 2, the 36 px foot
        buttons). The dialog material and radius are stage 2's. ─────────── */
+    /* The title is ink, as the boards draw every alert dialog's .h2 (a
+       destructive confirmation keeps its danger button: Classic also inks
+       the title red). */
     :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
       [data-glass='dialog']
       h2:first-child {
+      color: var(--lg-ink);
       font-size: 20px;
       font-weight: 650;
       line-height: 26px;

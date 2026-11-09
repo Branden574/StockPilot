@@ -609,6 +609,24 @@ const ENTRIES: Entry[] = [
     'height',
     '34px',
   ],
+  // The dialogs opened from these pages (.dialog .h2 in ink) and a count's
+  // Post adjustments (.btn-primary, the accent).
+  [
+    'dialog title in ink',
+    OPS,
+    '',
+    `${ROOT}:has(${PAGE}) [data-glass='dialog'] h2:first-child`,
+    'color',
+    'var(--lg-ink)',
+  ],
+  [
+    "a count's dialog primary is the accent",
+    COUNTS,
+    '',
+    `${ROOT}:has( ${VIEW('cycle-count')} ) [data-glass='dialog'] [data-glass='button'][data-glass-variant='default']`,
+    'background-color',
+    'var(--lg-accent)',
+  ],
   // A purchase order (sp.css .cols-side; the 680 px Receive dialog).
   [
     'record beside its column',

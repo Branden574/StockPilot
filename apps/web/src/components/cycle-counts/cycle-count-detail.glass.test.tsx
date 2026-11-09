@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -29,6 +29,8 @@ vi.mock('@/server/actions/cycle-counts', () => ({
   postCycleCountAction: vi.fn(),
   recordCycleCountLineAction: vi.fn(),
 }));
+
+import { cascaded } from '@/styles/liquid-glass/stage4-ops-cascade';
 
 import { CycleCountDetail } from './cycle-count-detail';
 
@@ -195,5 +197,64 @@ describe('A cycle count in Liquid Glass: the lines toolbar and the net variance'
         .querySelector('[data-testid="count-stat-net-variance"]')
         ?.getAttribute('data-glass-tone'),
     ).toBe(tone);
+  });
+});
+
+/**
+ * The count's two dialogs as Cycle-Count-Detail.dc.html draws them, on the
+ * cascade of the page's glass files (styles/liquid-glass/stage4-ops-cascade.ts):
+ * the title in ink (.h2; Classic inks a destructive confirmation's title
+ * red), and Post this count?'s Post adjustments as the accent primary
+ * (.btn-primary, as Review & post), Cancel count's confirm the danger one.
+ */
+describe('A cycle count in Liquid Glass: its post and cancel dialogs', () => {
+  const FILES = ['pages/ops.css', 'pages/counts.css'];
+
+  function page() {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+    return render(
+      <div data-glass-page="ops" data-glass-view="cycle-count">
+        <CycleCountDetail
+          header={header}
+          lines={lines}
+          summary={SUMMARY}
+          page={1}
+          pageSize={50}
+          total={1}
+          search=""
+          filter="all"
+          canAdjust
+          canAssign
+          role="manager"
+        />
+      </div>,
+    );
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-appearance');
+  });
+
+  it('draws Post this count? with an ink title and Post adjustments as the accent primary', () => {
+    page();
+    fireEvent.click(screen.getByRole('button', { name: 'Review & post' }));
+    const dialog = screen.getByRole('dialog', { name: 'Post this count?' });
+    const title = within(dialog).getByRole('heading', { name: 'Post this count?' });
+    expect(cascaded(title, 'color', FILES)?.value).toBe('var(--lg-ink)');
+    const post = within(dialog).getByRole('button', { name: 'Post adjustments' });
+    expect(cascaded(post, 'background-color', FILES)?.value).toBe('var(--lg-accent)');
+    expect(cascaded(post, 'color', FILES)?.value).toBe('var(--lg-on-accent)');
+  });
+
+  it('draws Cancel this cycle count? with an ink title and leaves its confirm the danger button', () => {
+    page();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel count' }));
+    const dialog = screen.getByRole('dialog', { name: 'Cancel this cycle count?' });
+    const title = within(dialog).getByRole('heading', { name: 'Cancel this cycle count?' });
+    expect(cascaded(title, 'color', FILES)?.value).toBe('var(--lg-ink)');
+    const confirm = within(dialog).getByRole('button', { name: 'Cancel count' });
+    expect(confirm.getAttribute('data-glass-variant')).toBe('destructive');
+    expect(cascaded(confirm, 'background-color', FILES)?.value).not.toBe('var(--lg-accent)');
   });
 });
