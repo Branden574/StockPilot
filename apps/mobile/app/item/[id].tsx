@@ -1979,10 +1979,10 @@ export default function ItemDetail() {
                         height: MIN_TAP,
                         borderRadius: MIN_TAP / 2,
                         borderWidth: 1,
-                        borderColor: lg ? glassItemStyles(lg).photoChip.borderColor : c.hair2,
-                        backgroundColor: lg
-                          ? glassItemStyles(lg).photoChip.backgroundColor
-                          : c.card,
+                        borderColor: c.hair2,
+                        backgroundColor: c.card,
+                        // The chip's glass fill and edge (a code palette, never a stored colour).
+                        ...(lg && glassItemStyles(lg).photoChip),
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
@@ -2009,9 +2009,11 @@ export default function ItemDetail() {
                   bottom: 10,
                   right: 10,
                   minHeight: MIN_TAP,
-                  backgroundColor: lg ? glassItemStyles(lg).photoChip.backgroundColor : c.card,
+                  backgroundColor: c.card,
                   borderWidth: 1,
-                  borderColor: lg ? glassItemStyles(lg).photoChip.borderColor : c.hair2,
+                  borderColor: c.hair2,
+                  // The chip's glass fill and edge (a code palette, never a stored colour).
+                  ...(lg && glassItemStyles(lg).photoChip),
                   paddingHorizontal: lg ? 14 : 12,
                   borderRadius: lg ? MIN_TAP / 2 : 10,
                   flexDirection: 'row',
