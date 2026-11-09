@@ -128,6 +128,14 @@ import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-pai
  * Suspense boundary of the page). From then on a status of 'signed-out' is
  * true: nobody was named.
  *
+ * It stops being true when a client navigation mounts a shell (from sign-in
+ * straight to Settings > Profile, say): the panel mounts in the same commit
+ * and would paint the no-account line until the shell's effect named the
+ * person. So a shell that is about to name a person not named yet says so in
+ * a layout effect (AccountApi.expect), the session is unknown again and the
+ * line is empty before that commit can paint (L4 fix round, review findings
+ * H2 and LG-R1).
+ *
  * KILL SWITCH (R5). Under `off` the provider is inert: no hydrate writes, no
  * account read or save, no cookie, and both attributes removed. Every stored
  * value is kept for when the flag comes back.
@@ -200,6 +208,57 @@ interface AppearanceApi extends AppearanceActions {
 const AppearanceContext = React.createContext<AppearanceApi | null>(null);
 
 /**
+ * A store's facts for one reader, IN TIME FOR THE NEXT PAINT (L4 fix round,
+ * review findings H1, R1 and LG-R2).
+ *
+ * useSyncExternalStore alone is a paint late here. It subscribes, and looks
+ * for a change made since it rendered, in a passive effect, which React may
+ * run after the browser painted; and while React adopts server HTML it hands
+ * the reader the server's facts. The provider reads this device in its mount
+ * LAYOUT effect, so on a hard load every reader held the server's facts for
+ * one frame more than when those facts were React state set in that layout
+ * effect: the header trigger's glass name, the checked radios, and the
+ * marketing variant guard's first decision (with the early hide it lifts).
+ *
+ * So each reader also listens from a layout effect of its own and asks for
+ * one more render when the store is ahead of what it rendered. React runs
+ * that render inside the same commit, before the browser can paint. A
+ * reader's layout effect runs before the provider's (children first), so it
+ * is listening when the provider reads the device; a reader adopted later (in
+ * streamed content) finds the store ahead of the server's facts it just
+ * rendered, and catches up the same way.
+ *
+ * It is state of the reader alone, a leaf: nothing is propagated through the
+ * tree, so a boundary that is still streaming is left alone exactly as before
+ * (appearance-store.ts; appearance-provider.streaming.test.tsx).
+ * appearance-provider.timing.test.tsx looks at the end of the commit's task.
+ */
+function useFacts<T>(store: {
+  subscribe: (listener: () => void) => () => void;
+  getSnapshot: () => T;
+  getServerSnapshot: () => T;
+}): T {
+  const facts = React.useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getServerSnapshot,
+  );
+  const [, renderAgain] = React.useReducer((count: number) => count + 1, 0);
+  const renderedRef = React.useRef(facts);
+  React.useLayoutEffect(() => {
+    renderedRef.current = facts;
+  });
+  React.useLayoutEffect(() => {
+    const catchUp = () => {
+      if (store.getSnapshot() !== renderedRef.current) renderAgain();
+    };
+    catchUp();
+    return store.subscribe(catchUp);
+  }, [store]);
+  return facts;
+}
+
+/**
  * The appearance as it is now, for the selectors only
  * (appearance-render.guard.test.ts). The component that calls this renders
  * again when a fact changes; nothing else does. On the server, and while
@@ -207,12 +266,7 @@ const AppearanceContext = React.createContext<AppearanceApi | null>(null);
  */
 export function useAppearance(): AppearanceContextValue | null {
   const api = React.useContext(AppearanceContext);
-  const store = api ? api.facts : NO_FACT_STORE;
-  const facts = React.useSyncExternalStore<AppearanceFacts | null>(
-    store.subscribe,
-    store.getSnapshot,
-    store.getServerSnapshot,
-  );
+  const facts = useFacts<AppearanceFacts | null>(api ? api.facts : NO_FACT_STORE);
   return React.useMemo<AppearanceContextValue | null>(
     () =>
       api && facts
@@ -244,6 +298,8 @@ export function useAppearanceActions(): AppearanceActions | null {
 }
 
 interface AccountApi {
+  /** A page is about to name this person (before the paint of the commit that mounted it). */
+  expect: (userId: string) => void;
   authenticate: (userId: string) => void;
 }
 const AccountContext = React.createContext<AccountApi | null>(null);
@@ -256,6 +312,12 @@ const AccountContext = React.createContext<AccountApi | null>(null);
  */
 export function AppearanceAccountSync({ userId }: { userId: string }) {
   const api = React.useContext(AccountContext);
+  // Before the paint: a status that was true while nobody was named is taken
+  // back (SESSION KNOWN in the provider's note). The naming itself, with its
+  // account read, stays in the passive effect, where it always was.
+  React.useLayoutEffect(() => {
+    api?.expect(userId);
+  }, [api, userId]);
   React.useEffect(() => {
     api?.authenticate(userId);
   }, [api, userId]);
@@ -608,6 +670,15 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
   const account = React.useMemo<AccountApi>(
     () => ({
+      expect: (userId) => {
+        // Only a client navigation gets past this line: on a full load the
+        // session is not known yet when the shell mounts, and a person
+        // already named keeps their status.
+        if (inert || userIdRef.current === userId || !sessionKnownRef.current) return;
+        // What the status said was about nobody, or about somebody else.
+        sessionKnownRef.current = false;
+        publish();
+      },
       authenticate: (userId) => {
         if (inert || userIdRef.current === userId) return;
         userIdRef.current = userId;
@@ -617,7 +688,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         dispatch({ type: 'authenticated', userId, now: Date.now() });
       },
     }),
-    [inert, dispatch, setAccountRead],
+    [inert, dispatch, setAccountRead, publish],
   );
 
   React.useEffect(() => {
@@ -748,16 +819,8 @@ function AppearanceWatchers({
 }) {
   const { facts, inner, rollout, chooseStyle, keepGlass, signedInUserId } = api;
   const pathname = currentPath(usePathname());
-  const { hydrated, style, shownStyle } = React.useSyncExternalStore(
-    facts.subscribe,
-    facts.getSnapshot,
-    facts.getServerSnapshot,
-  );
-  const { accountRead, fallback } = React.useSyncExternalStore(
-    inner.subscribe,
-    inner.getSnapshot,
-    inner.getServerSnapshot,
-  );
+  const { hydrated, style, shownStyle } = useFacts(facts);
+  const { accountRead, fallback } = useFacts(inner);
 
   // The one-time "new look" notice (R13): default rollout, signed in, the
   // account read, no Design of their own, glass on screen, not seen on this
