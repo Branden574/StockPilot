@@ -14,6 +14,7 @@ import {
   signedOutContext,
   signIn,
 } from './stage5a-lib';
+import { neverClassicAfterGlass } from './stage5a-paint';
 import { compareLoads } from './stage5a-network';
 
 /**
@@ -44,11 +45,6 @@ import { compareLoads } from './stage5a-network';
 
 const NIGHT: Look = { design: 'liquid-glass', theme: 'dark' };
 const CLASSIC_DARK: Look = { design: 'classic', theme: 'dark' };
-
-function neverClassicAfterGlass(history: (string | null)[]): boolean {
-  const first = history.indexOf('liquid-glass');
-  return first >= 0 && history.slice(first).every((value) => value === 'liquid-glass');
-}
 
 test('Sign-in with MFA in glass: /signin, the two-step page and Overview, with no classic frame', async ({
   browser,

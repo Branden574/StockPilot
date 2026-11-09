@@ -10,8 +10,10 @@ import {
   labSql,
   labUser,
   onlyOnceAcrossRoles,
+  paintFrames,
   readState,
   recordAttributeHistory,
+  recordPaintFrames,
   removeAppearanceRow,
   requireEnv,
   signedOutContext,
@@ -22,7 +24,13 @@ import {
   watchSaves,
   writeState,
 } from './stage5a-lib';
-import { DEVICE_LOCAL_KEYS, REHEARSAL_ORDER, rehearsalFileNames } from './stage5a-records';
+import { headScriptSetGlass, neverGlass } from './stage5a-paint';
+import {
+  DEVICE_LOCAL_KEYS,
+  phaseProblem,
+  REHEARSAL_ORDER,
+  rehearsalFileNames,
+} from './stage5a-records';
 
 /**
  * PROVES plan 8.2 case 12 (R5, R13, R15), the default rollout, on the lab:
@@ -38,9 +46,12 @@ import { DEVICE_LOCAL_KEYS, REHEARSAL_ORDER, rehearsalFileNames } from './stage5
  *  3. CLASSIC ON A HARD LOAD: sp_style=classic (with the matching device
  *     record and account) never shows a glass frame on /dashboard,
  *     /dashboard/inventory and /signin: the attribute's whole history from
- *     the document's start holds no glass value, and a CDP screencast of
- *     every frame is saved for the reviewer (Chromium); the marketing HTML
- *     served with that cookie is the classic page;
+ *     the moment <html> exists holds no glass value (and is not empty), a
+ *     frame probe on every animation frame sees no frame that draws glass
+ *     (the glass attribute or glass's body::before scene layer), no scene
+ *     picture is requested, and a CDP screencast of every frame is saved for
+ *     a person to look through (Chromium); the marketing HTML served with
+ *     that cookie is the classic page;
  *  4. THE INTRO NOTICE (R13) appears once for a person without a Design, and
  *     each of its buttons writes an explicit Design (device record, cookie,
  *     account save); after a reload it does not come back;
@@ -72,6 +83,10 @@ const AUTH_PATHS = ['/signin', '/signup', '/reset'];
 
 let rollout: Rollout;
 test.beforeAll(async ({ request }) => {
+  // A phase name the phased specs do not know FAILS (a runner's r1-off would
+  // otherwise skip the rehearsal step and run cases 1 to 4 instead).
+  const problem = phaseProblem(stage5Phase());
+  if (problem) throw new Error(problem);
   rollout = await buildRollout(request);
 });
 
@@ -81,11 +96,6 @@ function onlyDefault(): void {
   test.skip(isRehearsal(), 'The rehearsal phase runs only the rehearsal.');
   onlyOnceAcrossRoles();
   test.skip(rollout !== 'default', `Default rollout only (this build: ${rollout}).`);
-}
-
-/** The head script set glass before anything else touched the attribute. */
-function headScriptSetGlass(history: (string | null)[]): boolean {
-  return history[0] === 'liquid-glass' || (history[0] === null && history[2] === 'liquid-glass');
 }
 
 test('1 no cookie: glass on the marketing pages, the auth pages and the dashboard of a person who never chose', async ({
@@ -182,6 +192,33 @@ for (const theme of ['light', 'dark'] as const) {
   });
 }
 
+/** Every request for a glass scene picture (scene.css names them only under the glass root). */
+function watchSceneRequests(page: Page): () => string[] {
+  const seen: string[] = [];
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.startsWith('/liquid-glass/scene-'))
+      seen.push(request.url());
+  });
+  return () => seen;
+}
+
+/**
+ * No glass frame on a hard load, read three ways, none of which can pass
+ * empty: the attribute's whole history (at least its first value, else the
+ * reader throws), the frame probe on every animation frame (at least one
+ * frame, else it throws; a frame draws glass when <html> carries the glass
+ * attribute or body::before, glass's scene layer, has content) and no request
+ * for a scene picture. The screencast's JPEG frames are kept for a person.
+ */
+async function expectNoGlassFrame(page: Page, path: string, sceneRequests: () => string[]) {
+  const history = await attributeHistory(page);
+  expect(history.length, `${path}: the recorder saw <html>`).toBeGreaterThanOrEqual(1);
+  expect(neverGlass(history), `${path}: ${history.join(' > ')}`).toBe(true);
+  const frames = await paintFrames(page);
+  expect(frames.glass, `${path}: frames that drew glass (of ${frames.count})`).toEqual([]);
+  expect(sceneRequests(), `${path}: no scene picture requested`).toEqual([]);
+}
+
 test('3 sp_style=classic: no glass frame on a hard load (attribute history and a screencast), and the classic marketing HTML', async ({
   browser,
   baseURL,
@@ -204,14 +241,15 @@ test('3 sp_style=classic: no glass frame on a hard load (attribute history and a
   await first.close();
 
   await recordAttributeHistory(context);
+  await recordPaintFrames(context);
   for (const path of ['/dashboard', '/dashboard/inventory']) {
     const page = await context.newPage();
+    const sceneRequests = watchSceneRequests(page);
     const cast = isChromium(page) ? await startScreencast(page) : null;
     await page.goto(path);
     await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
     await settle(page);
-    const history = await attributeHistory(page);
-    expect(history.includes('liquid-glass'), `${path}: ${history.join(' > ')}`).toBe(false);
+    await expectNoGlassFrame(page, path, sceneRequests);
     if (cast) {
       const frames = await cast.stop(
         test.info().outputPath('screencast'),
@@ -229,12 +267,13 @@ test('3 sp_style=classic: no glass frame on a hard load (attribute history and a
   });
   await visitor.addCookies([{ name: 'sp_style', value: 'classic', url: baseURL! }]);
   await recordAttributeHistory(visitor);
+  await recordPaintFrames(visitor);
   const signin = await visitor.newPage();
+  const sceneRequests = watchSceneRequests(signin);
   const cast = isChromium(signin) ? await startScreencast(signin) : null;
   await signin.goto('/signin');
   await settle(signin);
-  const history = await attributeHistory(signin);
-  expect(history.includes('liquid-glass'), `/signin: ${history.join(' > ')}`).toBe(false);
+  await expectNoGlassFrame(signin, '/signin', sceneRequests);
   if (cast) await cast.stop(test.info().outputPath('screencast'), 'signin');
   await visitor.close();
 
@@ -283,7 +322,9 @@ test('5 rehearsal step: open the pages, click nothing, write the device snapshot
   baseURL,
 }) => {
   test.skip(!isRehearsal(), 'Runs only with STAGE5_PHASE=rehearsal-<n>.');
-  onlyOnceAcrossRoles();
+  // No role skip: a rehearsal phase is one run the runner starts once per
+  // build, whatever STAGE5_ROLE it carries, and the step signs in as lab
+  // user A itself (a skip here would only leave the comparison short).
   const step = Number(stage5Phase()!.slice('rehearsal-'.length));
   const expected = REHEARSAL_ORDER[step - 1];
   expect(expected, `rehearsal step ${step} of ${REHEARSAL_ORDER.length}`).toBeDefined();

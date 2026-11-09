@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canonicalJson,
+  checkKillSwitch,
   checkRehearsal,
+  killDoneFileName,
+  phaseProblem,
   rehearsalFileNames,
   sameBytes,
   snapshotDifferences,
@@ -96,5 +99,43 @@ describe('stage 5 device records', () => {
     const files = rehearsal();
     files.delete('rehearsal-5-off.json');
     expect(checkRehearsal(files)).toEqual(['missing rehearsal-5-off.json']);
+  });
+
+  it('refuses the phase names a runner could get wrong, so no phase skips into a pass', () => {
+    for (const ok of [
+      null,
+      undefined,
+      '',
+      'kill-record',
+      'kill-off',
+      'kill-back',
+      'rehearsal-1',
+      'rehearsal-5',
+    ])
+      expect(phaseProblem(ok), String(ok)).toBeNull();
+    // The names run-stage5.sh carried before this fix, and near misses.
+    for (const bad of [
+      'record',
+      'check-off',
+      'check-on',
+      'r1-off',
+      'r3-default',
+      'kill-on',
+      'rehearsal-6',
+      'rehearsal-0',
+    ])
+      expect(phaseProblem(bad), bad).toMatch(/is not a phase of these specs/u);
+  });
+
+  it('the kill switch passes only when all three phases wrote their done file', () => {
+    const all = ['kill-record', 'kill-off', 'kill-back'].map((p) =>
+      killDoneFileName(p as 'kill-record'),
+    );
+    expect(checkKillSwitch([...all, 'kill-switch-device.json'])).toEqual([]);
+    // Three skipped phases leave only what kill-record saved before its checks, or nothing.
+    expect(checkKillSwitch([])).toHaveLength(3);
+    expect(checkKillSwitch(all.slice(0, 2))).toEqual([
+      expect.stringContaining('missing kill-switch-kill-back-done.json'),
+    ]);
   });
 });

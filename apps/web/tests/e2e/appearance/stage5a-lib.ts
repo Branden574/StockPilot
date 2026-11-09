@@ -22,6 +22,14 @@ import {
 import type { NetRequest } from './stage5a-network';
 import { msLeftInStep, totp } from './stage5a-totp';
 import { isAppearanceSaveBody } from './switch-requests';
+import {
+  attributeRecorder,
+  paintFrameRecorder,
+  readAttrHistory,
+  readPaintFrames,
+  type AttrHistory,
+  type PaintFrames,
+} from './stage5a-paint';
 
 /**
  * Shared steps for writerA's stage 5 specs (plan 8.2 cases 2, 4, 5, 6, 7, 9,
@@ -433,30 +441,34 @@ export function statePath(name: string): string {
 // ── first paint: the attribute's whole history, and a screencast ───────────
 
 /**
- * Records every value data-appearance takes on <html> from the document's
- * start (an init script, so it sees the head script's write), including a
- * value set and removed within one task (attributeOldValue).
+ * Records every value data-appearance takes on <html> from the moment <html>
+ * exists (an init script that waits for <html>, so it sees the head script's
+ * write), including a value set and removed within one task
+ * (attributeOldValue). See stage5a-paint.ts for why it must wait.
  */
 export async function recordAttributeHistory(page: Page | BrowserContext): Promise<void> {
-  await page.addInitScript(() => {
-    const w = window as unknown as { __lgAttrHistory?: (string | null)[] };
-    const html = document.documentElement;
-    w.__lgAttrHistory = [html.getAttribute('data-appearance')];
-    new MutationObserver((records) => {
-      for (const record of records) {
-        w.__lgAttrHistory!.push(record.oldValue, html.getAttribute('data-appearance'));
-      }
-    }).observe(html, {
-      attributes: true,
-      attributeOldValue: true,
-      attributeFilter: ['data-appearance'],
-    });
-  });
+  // Called with no argument in the page (its parameters exist for the unit
+  // tests); typed as such, since Playwright's argument inference cannot follow
+  // the DOM parameter types.
+  await page.addInitScript(attributeRecorder as () => void);
 }
 
-export async function attributeHistory(page: Page): Promise<(string | null)[]> {
-  return page.evaluate(
-    () => (window as unknown as { __lgAttrHistory?: (string | null)[] }).__lgAttrHistory ?? [],
+/** The recorded history; throws when the recorder never started on this page. */
+export async function attributeHistory(page: Page): Promise<AttrHistory> {
+  return readAttrHistory(
+    await page.evaluate(() => (window as unknown as { __lgAttrHistory?: unknown }).__lgAttrHistory),
+  );
+}
+
+/** Installs the frame probe (stage5a-paint.ts paintFrameRecorder). */
+export async function recordPaintFrames(page: Page | BrowserContext): Promise<void> {
+  await page.addInitScript(paintFrameRecorder);
+}
+
+/** What the frame probe saw; throws when it saw no frame on this page. */
+export async function paintFrames(page: Page): Promise<PaintFrames> {
+  return readPaintFrames(
+    await page.evaluate(() => (window as unknown as { __lgPaintFrames?: unknown }).__lgPaintFrames),
   );
 }
 

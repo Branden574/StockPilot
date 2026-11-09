@@ -146,3 +146,42 @@ export function checkRehearsal(files: ReadonlyMap<string, string>): string[] {
   out.push(...sameBytes(rows));
   return out;
 }
+
+// ── the phases the runner names (STAGE5_PHASE) ──────────────────────────────
+
+/** The kill switch's phases, in the order the runner runs them (one build each). */
+export const KILL_PHASES = ['kill-record', 'kill-off', 'kill-back'] as const;
+
+/** The rehearsal's phases: rehearsal-1 .. rehearsal-5, one per REHEARSAL_ORDER build. */
+export const REHEARSAL_PHASES = REHEARSAL_ORDER.map((_, i) => `rehearsal-${i + 1}`);
+
+/**
+ * Why a STAGE5_PHASE value cannot be run, or null when it can (or is unset).
+ * Every value the two phased specs do not know is refused, so a runner that
+ * names its phases differently fails at once instead of skipping every test
+ * (a skip exits 0 and would read as a pass).
+ */
+export function phaseProblem(phase: string | null | undefined): string | null {
+  if (phase === null || phase === undefined || phase === '') return null;
+  if ((KILL_PHASES as readonly string[]).includes(phase)) return null;
+  if (REHEARSAL_PHASES.includes(phase)) return null;
+  return `STAGE5_PHASE=${phase} is not a phase of these specs: the kill switch runs ${KILL_PHASES.join(', ')} (kill-switch.spec.ts) and the rehearsal ${REHEARSAL_PHASES.join(', ')} (default-rollout.spec.ts).`;
+}
+
+/** The file a kill switch phase writes as its last step, only when every check of it passed. */
+export function killDoneFileName(phase: (typeof KILL_PHASES)[number]): string {
+  return `kill-switch-${phase}-done.json`;
+}
+
+/**
+ * The kill switch's verdict over a state folder's file names: every phase's
+ * done file present (each is written only after all of that phase's checks
+ * passed). Returns the findings (empty: pass).
+ */
+export function checkKillSwitch(names: Iterable<string>): string[] {
+  const present = new Set(names);
+  return KILL_PHASES.filter((phase) => !present.has(killDoneFileName(phase))).map(
+    (phase) =>
+      `missing ${killDoneFileName(phase)}: the ${phase} phase did not run to its end (skipped, failed or never started)`,
+  );
+}

@@ -8,6 +8,9 @@ import { deviceSnapshot, readState, stage5Phase, statePath, writeState } from '.
 import {
   comparedPart,
   DEVICE_LOCAL_KEYS,
+  KILL_PHASES,
+  killDoneFileName,
+  phaseProblem,
   snapshotDifferences,
   STYLE_COOKIE,
   type DeviceSnapshot,
@@ -33,13 +36,21 @@ import {
  *                off build left: Night glass on the dashboard and the glass
  *                landing, with no choice made, and the device records still
  *                byte-identical.
- * Without STAGE5_PHASE every test skips.
+ * Without STAGE5_PHASE every test skips; with a phase name it does not know
+ * (anything but the three above and the rehearsal's rehearsal-1..5) every
+ * test FAILS. Each phase writes kill-switch-<phase>-done.json to
+ * STAGE5_STATE_DIR as its last step, only when all its checks passed, and
+ * kill-switch-compare.mjs <STAGE5_STATE_DIR> (after kill-back) requires all
+ * three: a phase that skipped (for example a role it does not run as:
+ * anonymous, platform, portal) cannot read as passed. Any organisation role
+ * (admin, manager, staff, viewer) may run it.
  *
  * Lab commands (run-stage5.sh, in order, one build each):
  *   cd apps/web && STAGE5_STATE_DIR=<dir> STAGE5_ROLE=admin PLAYWRIGHT_BASE_URL=http://127.0.0.1:<default port> \
  *     STAGE5_PHASE=kill-record pnpm exec playwright test -c playwright.stage5.config.ts tests/e2e/appearance/kill-switch.spec.ts
  *   ... PLAYWRIGHT_BASE_URL=http://127.0.0.1:<off port> STAGE5_PHASE=kill-off ...
  *   ... PLAYWRIGHT_BASE_URL=http://127.0.0.1:<default port> STAGE5_PHASE=kill-back ...
+ *   node apps/web/tests/e2e/appearance/kill-switch-compare.mjs <dir>
  */
 
 const NIGHT: Look = { design: 'liquid-glass', theme: 'dark' };
@@ -94,8 +105,13 @@ async function marketingVisitor(browser: Browser, baseURL: string, profile: stri
 }
 
 test.beforeEach(() => {
+  // A phase name this spec does not know FAILS: skipping every test would
+  // exit 0 and read as a pass (run-stage5.sh once named them record,
+  // check-off and check-on).
+  const problem = phaseProblem(stage5Phase());
+  if (problem) throw new Error(problem);
   test.skip(
-    !['kill-record', 'kill-off', 'kill-back'].includes(stage5Phase() ?? ''),
+    !(KILL_PHASES as readonly string[]).includes(stage5Phase() ?? ''),
     'Phased across builds: the runner sets STAGE5_PHASE (kill-record, kill-off, kill-back).',
   );
   test.skip(
@@ -122,6 +138,7 @@ test('kill-record: an explicit Liquid Glass Night choice, saved with the profile
   expect(snapshot.cookie).toBe('liquid-glass');
   writeState(RECORD, snapshot);
   await page.context().storageState({ path: statePath(STATE) });
+  writeState(killDoneFileName('kill-record'), { phase: 'kill-record', passed: true });
 });
 
 test('kill-off: the off build shows classic everywhere and touches no stored value', async ({
@@ -164,6 +181,7 @@ test('kill-off: the off build shows classic everywhere and touches no stored val
     ).toBeNull();
   }
   await visitor.close();
+  writeState(killDoneFileName('kill-off'), { phase: 'kill-off', passed: true });
 });
 
 test('kill-back: the flag back on restores Night glass with no choice made', async ({
@@ -198,4 +216,5 @@ test('kill-back: the flag back on restores Night glass with no choice made', asy
     await waitForLook(site, NIGHT);
   }
   await visitor.close();
+  writeState(killDoneFileName('kill-back'), { phase: 'kill-back', passed: true });
 });

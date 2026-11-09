@@ -13,6 +13,7 @@ import {
   submitSignIn,
   watchSaves,
 } from './stage5a-lib';
+import { neverClassicAfterGlass } from './stage5a-paint';
 
 /**
  * PROVES plan 8.2 case 4 on the web, the parts no earlier spec covers (the
@@ -64,12 +65,6 @@ async function restored(page: Page): Promise<Restored> {
       ),
     cart: await page.locator('.sf-cart-foot .sf-tot .v').allInnerTexts(),
   };
-}
-
-/** The attribute never returned to classic after it first showed glass. */
-function neverClassicAfterGlass(history: (string | null)[]): boolean {
-  const first = history.indexOf('liquid-glass');
-  return first >= 0 && history.slice(first).every((value) => value === 'liquid-glass');
 }
 
 const ROUTES: Array<{
