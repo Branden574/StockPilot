@@ -4,6 +4,7 @@ import {
   bodyShape,
   classifyRequest,
   compareLoads,
+  holdsDocument,
   jsonShape,
   type NetRequest,
 } from '../../tests/e2e/appearance/stage5a-network';
@@ -118,5 +119,52 @@ describe('stage 5 network parity', () => {
     expect(
       compareLoads([], [prefetch('/dashboard/team')], APP, ['/dashboard/books']).strayPrefetches,
     ).toEqual(['/dashboard/team']);
+  });
+
+  it('ignores only the action id the first appearance save used: a save-shaped body on another action is data', () => {
+    const save = (action: string, style: string) =>
+      req(
+        'POST',
+        '/dashboard',
+        { 'next-action': action },
+        JSON.stringify([{ userId: USER, style }]),
+      );
+    // One save, its action id fixed: ignored in either look.
+    expect(compareLoads([], [save('aa11', 'liquid-glass')], APP, [])).toEqual({
+      onlyClassic: [],
+      onlyGlass: [],
+      strayPrefetches: [],
+    });
+    // A second action id sending a save-shaped body is another action: data.
+    const other = compareLoads(
+      [],
+      [save('aa11', 'liquid-glass'), save('ff99', 'classic')],
+      APP,
+      [],
+    );
+    expect(other.onlyGlass).toEqual([
+      'POST /dashboard action ff99 [{"style":string,"userId":string}]',
+    ]);
+  });
+
+  it('a load must hold its own document request, so a recorder that saw nothing cannot pass', () => {
+    const doc = req('GET', '/dashboard/inventory');
+    expect(
+      holdsDocument(
+        [doc, req('GET', `${DB}/rest/v1/items?select=id`)],
+        APP,
+        '/dashboard/inventory',
+      ),
+    ).toBe(true);
+    expect(holdsDocument([], APP, '/dashboard/inventory')).toBe(false);
+    // An RSC fetch of the path is not the document.
+    expect(
+      holdsDocument(
+        [req('GET', '/dashboard/inventory?_rsc=1', { rsc: '1' })],
+        APP,
+        '/dashboard/inventory',
+      ),
+    ).toBe(false);
+    expect(holdsDocument([req('GET', '/dashboard')], APP, '/dashboard/inventory')).toBe(false);
   });
 });

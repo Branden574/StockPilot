@@ -9,7 +9,7 @@ import {
   type Rollout,
 } from './site-look';
 import { contextWithLook, linkPaths, recordRequests, stage5Role } from './stage5a-lib';
-import { compareLoads } from './stage5a-network';
+import { compareLoads, holdsDocument } from './stage5a-network';
 
 /**
  * PROVES plan 8.5 "network parity": per route, the set of data requests a
@@ -21,8 +21,11 @@ import { compareLoads } from './stage5a-network';
  * appearance records and account both say the look measured (the account is
  * set first through the header menu, so the account read adopts nothing).
  *
- * Routes: the items, orders and insights lanes and Overview (as
- * action-inventory.spec.ts), the first item, book and order, signed in per
+ * Each load must hold its own document request (GET <path>), so a recorder
+ * that saw nothing cannot compare as equal.
+ *
+ * Routes: the items, orders and insights lanes, Overview and AI (as
+ * action-inventory.spec.ts's DASHBOARD_ROUTES), the first item, book and order, signed in per
  * role; the 7 marketing pages and the auth pages in the signed-out run.
  *
  * Lab command, per role and the signed-out run (opt-in or default; skips in `off`):
@@ -47,6 +50,7 @@ const SIGNED_IN = [
   '/dashboard/team',
   '/dashboard/notifications',
   '/dashboard/help',
+  '/dashboard/ai',
 ];
 const RECORDS = [
   { list: '/dashboard/inventory', record: new RegExp(`^/dashboard/inventory/${ID}$`, 'u') },
@@ -110,6 +114,16 @@ async function compareRoute(
   if (page) await accountHolds(page, GLASS);
   const glass = await load(browser, baseURL, path, GLASS);
   if (page) await accountHolds(page, CLASSIC);
+  const origin = new URL(baseURL).origin;
+  expect(
+    holdsDocument(classic.requests, origin, path),
+    `${path}: Classic's load holds GET ${path}`,
+  ).toBe(true);
+  expect(glass.ok, `${path}: the glass load reached the page`).toBe(true);
+  expect(
+    holdsDocument(glass.requests, origin, path),
+    `${path}: the glass load holds GET ${path}`,
+  ).toBe(true);
   expect(
     compareLoads(classic.requests, glass.requests, new URL(baseURL).origin, classic.links),
     `${path} (${process.env.STAGE5_ROLE ?? 'signed out'}): the same data requests`,

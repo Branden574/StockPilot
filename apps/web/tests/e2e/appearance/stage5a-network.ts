@@ -19,7 +19,8 @@ import { isAppearanceSaveBody } from './switch-requests';
  * (/liquid-glass/...), fonts and icons, analytics and error reporting
  * (PostHog, Sentry and its /monitoring tunnel), data: and blob: URLs, the
  * Design cookie route (POST /api/appearance/style) and the account save
- * (setMyAppearanceAction's body, switch-requests.ts). A router prefetch is
+ * (setMyAppearanceAction's body, and only under the action id the load's
+ * first such body used, as switch-requests.ts does). A router prefetch is
  * kept apart: glass may prefetch only a link Classic's page also holds.
  */
 
@@ -82,8 +83,22 @@ function where(url: URL, appOrigin: string): string {
   return `${host}${url.pathname}${query}`;
 }
 
-/** What one request is, for the parity comparison. */
-export function classifyRequest(request: NetRequest, appOrigin: string): Verdict {
+/**
+ * The appearance save's server action id within one load: the first request
+ * whose body is setMyAppearanceAction's argument list fixes it, and only that
+ * id is ignored afterwards (switch-requests.ts does the same), so another
+ * action that happens to send a save-shaped body stays a data request.
+ */
+export interface SaveTracker {
+  action: string | null;
+}
+
+/** What one request is, for the parity comparison (`saves`: this load's tracker). */
+export function classifyRequest(
+  request: NetRequest,
+  appOrigin: string,
+  saves: SaveTracker = { action: null },
+): Verdict {
   let url: URL;
   try {
     url = new URL(request.url);
@@ -106,8 +121,10 @@ export function classifyRequest(request: NetRequest, appOrigin: string): Verdict
     if (method === 'POST' && path === '/api/appearance/style')
       return { kind: 'ignore', why: 'the Design cookie route' };
     const action = request.headers['next-action'];
-    if (method === 'POST' && action && isAppearanceSaveBody(request.postData))
-      return { kind: 'ignore', why: 'the appearance save' };
+    if (method === 'POST' && action && isAppearanceSaveBody(request.postData)) {
+      saves.action ??= action;
+      if (action === saves.action) return { kind: 'ignore', why: 'the appearance save' };
+    }
     if (request.headers['next-router-prefetch']) return { kind: 'prefetch', path };
     const tag = action ? ` action ${action}` : request.headers.rsc ? ' rsc' : '';
     return {
@@ -145,8 +162,9 @@ export function compareLoads(
   const keys = (list: readonly NetRequest[]) => {
     const data = new Set<string>();
     const prefetch = new Set<string>();
+    const saves: SaveTracker = { action: null };
     for (const request of list) {
-      const verdict = classifyRequest(request, appOrigin);
+      const verdict = classifyRequest(request, appOrigin, saves);
       if (verdict.kind === 'data') data.add(verdict.key);
       if (verdict.kind === 'prefetch') prefetch.add(verdict.path);
     }
@@ -160,4 +178,20 @@ export function compareLoads(
     onlyGlass: [...b.data].filter((k) => !a.data.has(k)).sort(),
     strayPrefetches: [...b.prefetch].filter((p) => !links.has(p) && !a.prefetch.has(p)).sort(),
   };
+}
+
+/**
+ * Whether a load's requests hold the page's own document request (a GET of
+ * `path` on this app's origin, not an RSC fetch): a recorder that saw nothing,
+ * or a load that never reached the page, would otherwise compare as equal.
+ */
+export function holdsDocument(
+  list: readonly NetRequest[],
+  appOrigin: string,
+  path: string,
+): boolean {
+  return list.some((request) => {
+    const verdict = classifyRequest(request, appOrigin);
+    return verdict.kind === 'data' && verdict.key === `GET ${path} -`;
+  });
 }
