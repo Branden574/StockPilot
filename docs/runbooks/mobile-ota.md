@@ -42,8 +42,9 @@ What it does (`apps/mobile/scripts/release-ota.sh`):
 1. Stops unless `EXPO_PUBLIC_LIQUID_GLASS` from the command is `off`, `opt-in`
    or `default` (unset and empty are refused), and prints the value it
    publishes with. It stops too when `apps/mobile/.env.local` names it (that
-   file would override the command), and sets the command's value again after
-   loading the file. EAS server-side variables of the `production` environment
+   file would override the command), keeps the command's value read-only and
+   sets it again after loading the file, so no line in that file can change
+   what is published or printed (`scripts/liquid-glass-rollout.sh`). EAS server-side variables of the `production` environment
    win over the shell, so none may set it.
 2. Stops unless `apps/mobile/.env.local` exists (a link to the real settings,
    kept outside the repository) and sets `EXPO_PUBLIC_SENTRY_DSN` and
@@ -239,13 +240,18 @@ production:
 - Build with the `simulator-ota-test` profile: the `simulator` profile on the
   `ota-test` channel (and its `ota-test` branch). No store or TestFlight build.
 - Publish every test update with `scripts/release-ota-test.sh`, from
-  `apps/mobile` in the worktree under test:
+  `apps/mobile` in the worktree under test, naming the Liquid Glass rollout
+  as for `pnpm release:ota` (`default` proves what phones get at G3; the
+  `simulator-ota-test` build embeds `default`, and an update without the flag
+  would turn it to classic):
 
   ```bash
-  bash scripts/release-ota-test.sh ota-test --message 'Proof U1'
+  EXPO_PUBLIC_LIQUID_GLASS=default bash scripts/release-ota-test.sh ota-test --message 'Proof U1'
   ```
 
-  It refuses an empty channel, `production` and `preview`, loads
+  It refuses an empty channel, `production` and `preview`, refuses a missing
+  or unknown rollout and an `.env.local` that names it (the same checks as
+  `pnpm release:ota`, in `scripts/liquid-glass-rollout.sh`), loads
   `.env.local` into the shell without printing it (with
   `--environment production`, eas-cli turns off Expo's own `.env` loading),
   publishes iOS only, runs the host check from "Verify after publishing"
@@ -347,9 +353,10 @@ change** (e.g. `1.0.0 → 1.0.1`). The new binary then gets a fresh
 embedded bundle and only ever receives OTAs published from matching code.
 
 **Recovery if you already shipped the native build WITHOUT bumping** (as on
-2026-06-18): publish a fresh OTA from the post-change code (`pnpm release:ota`
-from an up-to-date, clean `main`) so the latest update for that runtime is
-compatible again; it supersedes the stale one. Already-installed copies that
+2026-06-18): publish a fresh OTA from the post-change code
+(`EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota` from an up-to-date,
+clean `main`, with the rollout phones have now: see "Publish") so the latest
+update for that runtime is compatible again; it supersedes the stale one. Already-installed copies that
 cached the bad bundle must **delete + reinstall** (a fast crash can kill the
 process before the corrected OTA finishes downloading in the background).
 
