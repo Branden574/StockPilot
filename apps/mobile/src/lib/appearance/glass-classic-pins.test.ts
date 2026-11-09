@@ -77,6 +77,17 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/ui/thumb.tsx': 'f4d2621d886f4d549cb2cf539e5cbaad27d3cc8959a5e0cc0092a68892c617ae',
   'src/components/ui/toggle.tsx':
     '0f94a5d9eef3cc588556141111590fb16586e13b31dde062d0bb1b1b42aa2786',
+  // Sign-in, welcome and the root gates (native-core).
+  'app/(auth)/sign-in.tsx': '19ab14bb04aea77af8fc63bb2d8e4e448ec81e6d8a11f9bd43b8a38598ccefd6',
+  'app/(auth)/welcome.tsx': '84d2fa5ad3c05268760c3d9f1e111abf5b23053a875f31e2a72b45f1696ab93c',
+  'src/components/account-disabled-screen.tsx':
+    'f08b00bb93fdc3b740b2d2d6bb63fbe37ecb8fe557e74fe1fde26a3ff1fd483c',
+  'src/components/auth/auth-shell.tsx':
+    'd44a57161903d76256a79ef57874d896bb69d49319c1d53f4c01f1c2c9d31eb7',
+  'src/components/biometric-lock-screen.tsx':
+    'd422de3d6bfdeb7990290349cfde176b8f17228707476a98686197816b95bcc1',
+  'src/components/mfa-challenge-screen.tsx':
+    '636e013c36904f03910de06311115558d58471d4d4e77acb75cc07ecce34b49c',
 };
 
 function walk(dir: string, out: string[] = []): string[] {

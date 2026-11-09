@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Field } from '@/components/ui/field';
+import { GLASS_AUTH, GlassAuthPanelBackdrop } from '@/components/ui/glass/screens/auth';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -30,6 +32,11 @@ import { supabase } from '@/lib/supabase';
 import { useTheme } from '@/lib/use-theme';
 
 export default function SignIn() {
+  // Liquid Glass: the Auth-SignIn-Mobile card in its glass ring over the
+  // scene (the heading over its line, the fields and Sign in in the card, the
+  // rule, Face ID and the invitation note under it); every field, link,
+  // toggle, message and the Face ID path stay.
+  const lg = useGlass();
   const { signIn } = useAuth();
   const { c } = useTheme();
   const [email, setEmail] = React.useState('');
@@ -164,21 +171,30 @@ export default function SignIn() {
           onDismiss={() => setShowOptIn(false)}
         />
         <ScrollView
-          contentContainerStyle={{ paddingBottom: 30 }}
+          contentContainerStyle={lg ? GLASS_AUTH.panel : { paddingBottom: 30 }}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-          <View style={{ marginTop: 28 }}>
-            <Eyebrow>WELCOME BACK</Eyebrow>
-            <Display size={36} style={{ marginTop: 16 }}>
-              Sign in to <Em>StockPilot</Em>
+          {lg ? <GlassAuthPanelBackdrop /> : null}
+          <View style={lg ? GLASS_AUTH.signHead : { marginTop: 28 }}>
+            {lg ? null : <Eyebrow>WELCOME BACK</Eyebrow>}
+            <Display
+              size={lg ? 26 : 36}
+              style={lg ? GLASS_AUTH.h1 : { marginTop: 16 }}
+              accessibilityRole={lg ? 'header' : undefined}
+            >
+              Sign in to {lg ? 'StockPilot' : <Em>StockPilot</Em>}
             </Display>
-            <Body muted style={{ marginTop: 12, maxWidth: 320 }}>
+            <Body
+              muted
+              color={lg ? lg.c.ink2 : undefined}
+              style={lg ? GLASS_AUTH.h1Line : { marginTop: 12, maxWidth: 320 }}
+            >
               Pick up where you left off. Counts, cycle audits, and pending POs sync as soon as you&apos;re back online.
             </Body>
           </View>
 
-          <Card hero style={{ padding: 22, marginTop: 26, gap: 18 }}>
+          <Card hero style={lg ? GLASS_AUTH.form : { padding: 22, marginTop: 26, gap: 18 }}>
             <Field
               label="EMAIL"
               placeholder="ops@stockpilot.app"
@@ -267,7 +283,7 @@ export default function SignIn() {
             </Button>
           </Card>
 
-          <View style={styles.divider}>
+          <View style={[styles.divider, lg && GLASS_AUTH.divider]}>
             <View style={[styles.line, { backgroundColor: c.hair }]} />
             <Mono size={10.5} tracking={0.18} upper color={c.ink3}>
               or
@@ -288,8 +304,12 @@ export default function SignIn() {
             </View>
           ) : null}
 
-          <View style={styles.footer}>
-            <Body size={13} color={c.ink3} style={{ textAlign: 'center' }}>
+          <View style={[styles.footer, lg && GLASS_AUTH.footer]}>
+            <Body
+              size={13}
+              color={lg ? lg.c.ink2 : c.ink3}
+              style={lg ? GLASS_AUTH.footerText : { textAlign: 'center' }}
+            >
               New to StockPilot? Your organization admin can invite you.
             </Body>
           </View>
