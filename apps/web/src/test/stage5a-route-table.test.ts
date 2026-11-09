@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   compareRouteTables,
+  FICTIONAL_PARAM,
   parseRouteTable,
+  pathsToAsk,
   routeTableFails,
 } from '../../tests/e2e/appearance/stage5a-route-table';
 
@@ -69,6 +71,36 @@ describe('stage 5 route table', () => {
     const empty = parseRouteTable('build failed');
     expect(routeTableFails(base, empty, compareRouteTables(base, empty))).toContain(
       'the branch build log holds no route table',
+    );
+  });
+
+  it('headers parity asks every app route once: params filled, the API, auth and Next entries left out', () => {
+    const table = parseRouteTable(
+      BASE_LOG.replace(
+        '└ ƒ /dashboard',
+        [
+          '├ ƒ /dashboard',
+          '├ ƒ /dashboard/orders/[id]',
+          '├ ƒ /dashboard/orders/[id]/pick',
+          '├ ƒ /ingest/[...path]',
+          '├ ƒ /auth/session-ended',
+          '├ ○ /_not-found',
+          '├ ƒ /docs/[[...slug]]',
+          '└ ƒ /files/[...rest]',
+        ].join('\n'),
+      ),
+    );
+    expect(pathsToAsk(table)).toEqual(
+      [
+        '/',
+        `/blog/${FICTIONAL_PARAM}`,
+        '/dashboard',
+        `/dashboard/orders/${FICTIONAL_PARAM}`,
+        `/dashboard/orders/${FICTIONAL_PARAM}/pick`,
+        '/docs',
+        '/files/x',
+        '/signin',
+      ].sort(),
     );
   });
 });

@@ -93,3 +93,48 @@ export function routeTableFails(
   for (const route of comparison.removed) out.push(`route missing on the branch: ${route}`);
   return out;
 }
+
+/** A fictional id for a parameterised route's one asked record (no lab data in this file). */
+export const FICTIONAL_PARAM = '0d3c2b1a-0000-4000-8000-0000000000b5';
+
+/**
+ * Route prefixes headers-parity.spec.ts never GETs: route handlers whose GET
+ * may act (the API, the auth callbacks and the session-ended sign-out) and
+ * the analytics tunnels.
+ */
+export const NOT_ASKED: readonly RegExp[] = [
+  /^\/api(\/|$)/u,
+  /^\/auth(\/|$)/u,
+  /^\/ingest(\/|$)/u,
+  /^\/monitoring(\/|$)/u,
+];
+
+/**
+ * The paths headers parity asks, from a build's route table: every app route
+ * (static and dynamic), each `[param]` segment filled with FICTIONAL_PARAM
+ * and a catch-all with one segment (`[[...x]]` with none), so each
+ * parameterised family is asked once; Next's own `/_...` entries and
+ * NOT_ASKED are left out. Sorted, without repeats.
+ */
+export function pathsToAsk(table: RouteTable): string[] {
+  const out = new Set<string>();
+  for (const key of table.keys()) {
+    if (!key.startsWith('app ')) continue;
+    const route = key.slice('app '.length);
+    if (route.split('/').some((segment) => segment.startsWith('_'))) continue;
+    if (NOT_ASKED.some((re) => re.test(route))) continue;
+    const path =
+      route
+        .split('/')
+        .map((segment) => {
+          if (/^\[\[\.\.\.[^\]]+\]\]$/u.test(segment)) return null;
+          if (/^\[\.\.\.[^\]]+\]$/u.test(segment)) return 'x';
+          if (/^\[[^\]]+\]$/u.test(segment)) return FICTIONAL_PARAM;
+          return segment;
+        })
+        .filter((segment) => segment !== null)
+        .join('/') || '/';
+    out.add(path);
+  }
+  return [...out].sort();
+}
