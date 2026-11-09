@@ -75,10 +75,16 @@ function GlassBuildThemeToggle({ className }: { className?: string }) {
         {/* The Design group: the menu's one classic difference (R5). The dot
             of the one in use sits in the icon column, and pl-10 lines the
             names up with the items below (icon 16 + its margin + the item's
-            gap), as in the account menu. */}
-        <DropdownMenuLabel>Design</DropdownMenuLabel>
-        <AppearanceDesignRadioGroup itemClassName="pl-10" />
-        <DropdownMenuSeparator />
+            gap), as in the account menu. The three parts sit in one inert
+            wrapper that draws no box (display: contents), so the lab's parity
+            run can take the group out of the menu by one selector and compare
+            the rest with origin/main's (verify/allowances.json, the
+            menu-design entries); nothing styles or reads it. */}
+        <div data-appearance-design="" className="contents">
+          <DropdownMenuLabel>Design</DropdownMenuLabel>
+          <AppearanceDesignRadioGroup itemClassName="pl-10" />
+          <DropdownMenuSeparator />
+        </div>
         {/* origin/main's items, verbatim, through the provider (R13). */}
         <DropdownMenuItem onClick={() => chooseTheme('light')}>
           <Sun className="mr-2 h-4 w-4" />
