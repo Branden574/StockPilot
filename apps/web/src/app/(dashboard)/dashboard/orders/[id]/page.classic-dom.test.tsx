@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { OrderReadinessResult } from '@stockpilot/core';
 
 import { READINESS_FAILED } from '@/test/order-readiness-facts';
+import { cssRules, declaredFor } from '@/styles/liquid-glass/glass-css';
 import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 /**
@@ -511,6 +512,70 @@ describe('Order page, Classic DOM', () => {
       // No Classic element changes its place among its siblings (classicStructure).
       expect(glass.structure).toBe(off.structure);
       await expect(off.dom).toMatchFileSnapshot(`./__classic__/order-detail.${scenario.name}.txt`);
+    });
+  }
+});
+
+/**
+ * THE PHONE'S LINE LIST (Liquid Glass, fidelity lane phone;
+ * Order-Detail-Mobile.dc.html, the lines card's .mob-f list). At 760 px and
+ * under, pages/order-detail.css lays the SAME lines table out as the board's
+ * list, finding the cells by position (Item, Requested, Fulfilled, Owed, On
+ * hand, then the line actions). This renders the real page in each scenario
+ * and checks each phone rule lands on the column it names, that the figures
+ * carry their column's name, and that the one heading still drawn is the
+ * one that holds a control (the Fulfilled vs Owed help). Fails on a
+ * stylesheet without the phone list.
+ */
+describe('Liquid Glass phone line list', () => {
+  const rules = cssRules('pages/order-detail.css');
+  const phone = (media: string[]) => media.includes('(max-width: 760px)');
+  const declared = (el: Element, prop: string, pseudo?: '::before') =>
+    declaredFor(el, rules, prop, phone, pseudo);
+
+  for (const scenario of SCENARIOS) {
+    it(`${scenario.name}: each line is a row of the list, every column kept and named`, async () => {
+      scenario.setup();
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+      document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+      try {
+        const view = render(await OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) }));
+        const table = view.container.querySelector(
+          '[data-glass-role="order-lines"] [data-glass="table"]',
+        )!;
+        expect(declared(table, 'display')).toBe('block');
+        expect(declared(table.closest('[data-glass="table-scroll"]')!, 'overflow')).toBe('visible');
+        const heads = [...table.querySelectorAll('thead th')].map((th) => th.textContent!.trim());
+        expect(heads.slice(0, 5)).toEqual([
+          'Item',
+          'Requested',
+          expect.stringMatching(/^Fulfilled/),
+          'Owed',
+          'On hand',
+        ]);
+        // Fulfilled's heading holds the Fulfilled vs Owed help (HelpTip, a
+        // button; stubbed in this file); no other heading holds a control.
+        [...table.querySelectorAll('thead th')].forEach((th, i) => {
+          expect(declared(th, 'display'), th.textContent ?? '').toBe(i === 2 ? 'block' : 'none');
+          if (i !== 2) expect(th.querySelector('button, a, input, [role="checkbox"]')).toBeNull();
+        });
+        const rows = [...table.querySelectorAll('tbody tr')];
+        expect(rows.length).toBeGreaterThan(0);
+        for (const tr of rows) {
+          expect(declared(tr, 'display')).toBe('flex');
+          const cells = [...tr.children];
+          expect(cells.length).toBe(heads.length);
+          expect(declared(cells[0]!, 'flex')).toBe('1 1 calc(100% - 84px)');
+          expect(declared(cells[1]!, 'content', '::before')).toBe("'×' / 'Requested '");
+          expect(declared(cells[2]!, 'content', '::before')).toBe("'Fulfilled '");
+          expect(declared(cells[3]!, 'content', '::before')).toBe("'Owed '");
+          expect(declared(cells[4]!, 'content', '::before')).toBe("'On hand '");
+          if (cells[5]) expect(declared(cells[5], 'margin-left')).toBe('auto');
+        }
+        view.unmount();
+      } finally {
+        document.documentElement.removeAttribute('data-appearance');
+      }
     });
   }
 });

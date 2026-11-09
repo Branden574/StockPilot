@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event';
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { PageHeader } from '@/components/patterns/page-header';
+import { cssRules, declaredFor } from '@/styles/liquid-glass/glass-css';
 import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
 
 /**
@@ -286,6 +288,202 @@ describe('classic parity of the Items and Books lists', () => {
       vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
       const root = await draw();
       await expect(classicMarkup(root)).toMatchFileSnapshot(`./__parity__/${name}.html`);
+    });
+  }
+});
+
+/**
+ * THE PHONE CARDS (Liquid Glass, fidelity lane phone; Items-Mobile.dc.html).
+ * At 760 px and under, pages/items.css lays the SAME table out as the board's
+ * card list: no glass-only copy, so every row checkbox, disclosure, group
+ * action and the 14-day mode menu stay the one node they are in Classic. Its
+ * rules find the columns by position (the checkbox first, Item second, On
+ * hand fifth from the end); this renders the real table in the Items and the
+ * Books layouts, record rows and a group header among them, and checks each
+ * phone rule lands on the column it names, and that the only headings shown
+ * are the two that hold a control. Fails on a stylesheet without the phone
+ * rules (each value below is undefined there).
+ */
+describe('Liquid Glass phone cards: each phone rule lands on its column', () => {
+  const rules = cssRules('pages/items.css');
+  const phone = (media: string[]) => media.includes('(max-width: 760px)');
+  const declared = (el: Element, prop: string, pseudo?: '::before') =>
+    declaredFor(el, rules, prop, phone, pseudo);
+  // A cell's display without the td:empty rule: happy-dom matches :empty on
+  // a cell that holds only text, which a browser does not.
+  const notEmptyRules = rules.filter((r) => !r.selectors.some((sel) => sel.includes(':empty')));
+  const shown = (el: Element) => declaredFor(el, notEmptyRules, 'display', phone);
+
+  const LAYOUTS = [
+    ['items', () => itemsTable()],
+    ['books', () => booksTable()],
+  ] as const;
+
+  for (const page of ['items', 'books'] as const) {
+    it(`${page}: the page head's actions scroll as one row`, () => {
+      document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+      try {
+        const { container } = render(
+          <div data-glass-page={page}>
+            <PageHeader
+              title="Items"
+              actions={
+                <>
+                  <button type="button">Active</button>
+                  <button type="button">Rack: Any</button>
+                  <button type="button">Import CSV</button>
+                </>
+              }
+              primaryAction={<button type="button">+ New item</button>}
+            />
+          </div>,
+        );
+        const row = container.querySelector('[data-slot="page-header-actions"]')!;
+        expect(declared(row, 'flex-wrap')).toBe('nowrap');
+        expect(declared(row, 'overflow-x')).toBe('auto');
+        expect(declared(row, 'width')).toBe('calc(100% + 32px)');
+        expect([...row.children].map((c) => c.textContent)).toEqual([
+          'Active',
+          'Rack: Any',
+          'Import CSV',
+          '+ New item',
+        ]);
+        for (const child of row.children) expect(declared(child, 'flex')).toBe('none');
+      } finally {
+        document.documentElement.removeAttribute('data-appearance');
+      }
+    });
+  }
+
+  for (const [page, draw] of LAYOUTS) {
+    it(`${page}: the cards' lines and the shown headings`, () => {
+      document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+      try {
+        const { container } = render(<div data-glass-page={page}>{draw()}</div>);
+        const table = container.querySelector('[data-glass="items-table"]')!;
+        const heads = [...table.querySelectorAll(':scope > thead th')];
+        const label = (i: number) => (i === 0 ? 'select' : heads[i]!.textContent!.trim());
+        expect(label(1)).toBe('Item');
+        expect(heads.length - 5).toBe(heads.findIndex((th) => th.textContent === 'On hand'));
+
+        // The table and its body are blocks; every row is a card.
+        expect(declared(table, 'display')).toBe('block');
+        expect(declared(table, 'min-width')).toBe('0');
+        const rows = [...table.querySelectorAll(':scope > tbody > tr')];
+        const kinds = new Set(rows.map((tr) => tr.getAttribute('data-row-kind')));
+        expect(kinds.has('record')).toBe(true);
+        if (page === 'items') expect(kinds.has('header')).toBe(true);
+        for (const tr of rows) {
+          expect(declared(tr, 'display')).toBe('flex');
+          expect(declared(tr, 'border-radius')).toBe('16px');
+          const cells = [...tr.children];
+          expect(cells.length).toBe(heads.length);
+          const isHeader = tr.getAttribute('data-row-kind') === 'header';
+          cells.forEach((td, i) => {
+            const col = label(i);
+            const where = `${page} ${tr.getAttribute('data-row-kind')} ${col}`;
+            const isRack = td.getAttribute('data-glass') === 'rack';
+            const want =
+              col === 'select' || col === 'Item'
+                ? '1'
+                : col === 'On hand'
+                  ? '2'
+                  : isRack || col === 'Status'
+                    ? '3'
+                    : '4';
+            expect(declared(td, 'order'), where).toBe(want);
+            // Every fact of words is named by its column's label; the status
+            // badge names itself; the coverage bar and the 14-day line are
+            // not drawn on the card; a group's Updated (always the dash) is
+            // not drawn either.
+            const fact = !['select', 'Item', 'On hand', 'Status'].includes(col) && !isRack;
+            const hidden =
+              col === 'Coverage' || col.startsWith('14-day') || (isHeader && col === 'Updated');
+            if (hidden) expect(shown(td), where).toBe('none');
+            else if (col !== 'select') expect(shown(td), where).toBe('block');
+            if (!hidden) {
+              expect(declared(td, 'content', '::before'), where).toBe(
+                fact || isRack ? `'${col} '` : undefined,
+              );
+            }
+          });
+          if (isHeader) {
+            // A group: no gutter, the figure at the top right, the name over
+            // its line, Rename and Remove across the room under them.
+            expect(declared(tr, 'padding-left')).toBe('12px');
+            expect(declared(cells[1]!, 'flex')).toBe('1 1 100%');
+            expect(
+              declared(cells[1]!.querySelector('[data-slot="item-cell"]')!, 'align-items'),
+            ).toBe('flex-start');
+            expect(declared(cells[heads.length - 5]!, 'position')).toBe('absolute');
+            const name = cells[1]!.querySelector('[data-slot="item-cell-name"]')!.parentElement!;
+            expect(declared(name, 'padding-right')).toBe('94px');
+            const actions = cells[1]!.querySelector('[data-slot="item-cell-actions"]');
+            if (actions) expect(declared(actions, 'padding-right')).toBeUndefined();
+          } else {
+            expect(declared(cells[0]!, 'position')).toBe('absolute');
+            expect(declared(cells[1]!, 'flex')).toBe('1 1 calc(100% - 96px)');
+            expect(declared(cells[heads.length - 5]!, 'position')).toBeUndefined();
+          }
+          expect(declared(cells[heads.length - 5]!, 'flex')).toBe('0 0 86px');
+        }
+        // The labels in use: on Books also Grade and Crate.
+        const labelled = new Set(
+          rows.flatMap((tr) =>
+            [...tr.children]
+              .filter((td) => shown(td) !== 'none')
+              .map((td) => declared(td, 'content', '::before'))
+              .filter(Boolean),
+          ),
+        );
+        expect([...labelled].sort()).toEqual(
+          page === 'books'
+            ? [
+                "'Category '",
+                "'Charter '",
+                "'Crate '",
+                "'Grade '",
+                "'Location '",
+                "'Rack '",
+                "'Updated '",
+              ]
+            : ["'Category '", "'Charter '", "'Location '", "'Rack '", "'Updated '"],
+        );
+
+        // The top pager is not drawn on a phone; the one under the list is
+        // the same pager (every page control stays).
+        const top = container.querySelector('[data-glass="items-count"] > div');
+        if (top) {
+          expect(declared(top, 'display')).toBe('none');
+          const bottom = container.querySelector('[data-glass="items-pager"]')!;
+          expect(bottom.textContent).toContain(top.textContent!);
+          expect(declared(bottom, 'display')).toBeUndefined();
+        }
+        if (page === 'items') expect(top).not.toBeNull();
+        // Rack has its own line on a record.
+        for (const rack of table.querySelectorAll('tbody td[data-glass="rack"]')) {
+          expect(declared(rack, 'flex')).toBe('1 1 100%');
+        }
+
+        // Only the headings that hold a control are drawn.
+        for (const th of heads) {
+          const control = th.querySelector('button, [role="checkbox"], input, a');
+          expect(declared(th, 'display'), th.textContent ?? '').toBe(control ? 'block' : 'none');
+        }
+        expect(heads.filter((th) => th.querySelector('button, [role="checkbox"]')).length).toBe(2);
+
+        // The selection bar floats at the foot; the search sits over the filters.
+        const layer = container.querySelector('[data-glass="selbar-layer"]')!;
+        expect(declared(layer, 'position')).toBe('fixed');
+        const toolbar = container.querySelector('[data-glass="items-toolbar"]')!;
+        expect(declared(toolbar, 'overflow-x')).toBe('auto');
+        expect(declared(toolbar.firstElementChild!, 'position')).toBe('sticky');
+        expect(declared(container.querySelector('[data-glass="items-views"]')!, 'flex-wrap')).toBe(
+          'nowrap',
+        );
+      } finally {
+        document.documentElement.removeAttribute('data-appearance');
+      }
     });
   }
 });

@@ -175,6 +175,9 @@ describe('stage 3 orders lane: the review findings stay fixed', () => {
         'backdrop-filter': 'blur(14px) saturate(140%)',
       });
       const flat = found.filter((r) => r.decls['backdrop-filter'] === 'none');
+      // The order page's phone line list (lane phone) lays the band out as a
+      // plain row at 760 px and under: not sticky, so not frosted either.
+      const phone = file === 'pages/order-detail.css' ? [['(max-width: 760px)', false]] : [];
       expect(
         flat.map((r) => [
           r.media.join(),
@@ -182,9 +185,16 @@ describe('stage 3 orders lane: the review findings stay fixed', () => {
         ]),
         tail,
       ).toEqual([
+        ...phone,
         ['(prefers-reduced-transparency: reduce), (prefers-contrast: more)', false],
         ['', true],
       ]);
+      if (phone.length > 0) {
+        expect(
+          found.find((r) => r.media.join() === '(max-width: 760px)')?.decls,
+          tail,
+        ).toMatchObject({ position: 'static' });
+      }
     }
   });
 
