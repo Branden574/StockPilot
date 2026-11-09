@@ -43,6 +43,18 @@ const SHEETS: [string, number, number][] = [
   ['src/components/biometric-optin-sheet.tsx', 1, 0],
   ['src/components/workspace-switcher.tsx', 1, 0],
   ['src/components/onboarding/whats-new.tsx', 1, 0],
+  // ---- Stage 4, native-ops lane (lg/s4-native-ops): the operations sheets. ----
+  ['app/po-import/[id].tsx', 1, 0],
+  ['src/components/exception-recount-sheet.tsx', 1, 0],
+  ['src/components/exception-note-sheet.tsx', 1, 0],
+  ['src/components/exception-evidence-sheets.tsx', 2, 0],
+  ['src/components/release-replacement-sheet.tsx', 1, 0],
+  ['src/components/return-action-sheet.tsx', 1, 0],
+  ['src/components/book-order-charter-sheet.tsx', 1, 0],
+  ['src/components/book-order-dates-sheet.tsx', 1, 0],
+  ['src/components/book-order-filters-sheet.tsx', 1, 0],
+  ['src/components/book-order-export-sheet.tsx', 1, 0],
+  // ---- end native-ops lane ----
 ];
 
 /** Source with comments stripped, one space per whitespace run. */

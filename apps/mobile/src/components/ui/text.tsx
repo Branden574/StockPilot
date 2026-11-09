@@ -269,6 +269,10 @@ export function Mono({
   upper?: boolean;
 }) {
   const { c } = useTheme();
+  // Liquid Glass keeps the mono face for references (lg.font.mono is JetBrains
+  // Mono); a caller's Classic display face (a figure set in FONT.display) is
+  // drawn in the glass face of its role, as the other text primitives do.
+  const lg = useGlass();
   return (
     <Text
       {...rest}
@@ -283,7 +287,7 @@ export function Mono({
           letterSpacing: size * tracking,
           ...(upper ? { textTransform: 'uppercase' as const } : null),
         },
-        style,
+        lg ? facedProp(lg, style) : style,
       ]}
     >
       {children}

@@ -14,6 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -197,8 +198,16 @@ describe('Bundles', () => {
     expect(attrText(btn, 'accessibilityLabel', sf)).toBe('Refresh');
     expect(attrText(btn, 'accessibilityState', sf)).toBe('{ busy: refreshing }');
     expect(textOf(btn, sf)).toBe('Refresh');
+    // Classic's button, read off the list's Classic projection (every Liquid
+    // Glass branch folded to Classic: lib/__fixtures__/classic-projection.ts).
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm(
+        '{refreshing ? ( <ActivityIndicator size="small" color={c.ink} /> ) : ( <RefreshCw size={14} color={c.ink} strokeWidth={1.75} /> )} <Text style={[styles.refreshLabel, { color: c.ink }]}>Refresh</Text>',
+      ),
+    );
+    // Liquid Glass keeps the same spinner, glyph and word on the glass capsule.
     expect(code).toContain(
-      '{refreshing ? ( <ActivityIndicator size="small" color={c.ink} /> ) : ( <RefreshCw size={14} color={c.ink} strokeWidth={1.75} /> )} <Text style={[styles.refreshLabel, { color: c.ink }]}>Refresh</Text>',
+      '{refreshing ? ( <ActivityIndicator size="small" color={c.ink} /> ) : ( <RefreshCw size={14} color={c.ink} strokeWidth={1.75} /> )} <Text style={[ styles.refreshLabel, { color: c.ink }, lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL], ]} >',
     );
     expect(styleBlock(LIST, 'refreshBtn')).toMatch(/minHeight: 44,/);
   });
@@ -319,16 +328,26 @@ describe('a bundle', () => {
     expect(code).toContain(
       "const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
     );
+    expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
+      flatNorm(
+        ') : state === \'missing\' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back after the next sync. </Body>',
+      ),
+    );
     expect(code).toContain(
-      ') : state === \'missing\' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back after the next sync. </Body>',
+      ') : state === \'missing\' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back after the next sync. </Body>',
     );
   });
 
   // Mutation caught: a read of the cached bundles that threw said as "This
   // bundle is not on this phone" again, or without its tone or announcement.
   it('a read that threw is said as a failure, never as a bundle not on this phone', () => {
+    expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
+      flatNorm(
+        "{state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+      ),
+    );
     expect(code).toContain(
-      "{state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+      "{state === 'failed' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
     );
   });
 
@@ -380,7 +399,13 @@ describe('a bundle', () => {
       (el, s) => TOUCHABLE_TAG.test(tagOf(el, s)) && textOf(el, s) === '← Back',
     );
     expect(els).toHaveLength(1);
-    expect(attrText(els[0]!, 'style', sf)).toBe('styles.backBtn');
+    // Liquid Glass draws the same button as the 44pt glass circle.
+    expect(attrText(els[0]!, 'style', sf)).toBe('[styles.backBtn, lg && GLASS_RECORD_BACK]');
+    expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
+      flatNorm(
+        '<Pressable onPress={onPress} style={styles.backBtn} accessibilityRole="button" accessibilityLabel="Back"> <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>',
+      ),
+    );
   });
 
   // Mutation caught: Distribute back on a bespoke Pressable with no role, a
@@ -420,9 +445,14 @@ describe('a bundle', () => {
     expect(code).toContain(
       'styles.whBtn, { borderColor: active ? c.ink : c.hair2, backgroundColor: active ? c.ink : c.sunk, opacity: pressed ? 0.85 : 1, },',
     );
-    expect(code).toContain(
-      '<Text style={[styles.whLabel, { color: active ? c.paper : c.ink }]}> {w.name} </Text>',
+    expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
+      flatNorm(
+        '<Text style={[styles.whLabel, { color: active ? c.paper : c.ink }]}> {w.name} </Text>',
+      ),
     );
+    // Liquid Glass: the iOS capsule, the chosen one in ink.
+    expect(code).toContain('lg && glassChip(lg, active),');
+    expect(code).toContain('lg && glassChipLabel(lg, active),');
   });
 
   it('Quantity is the shared text box, named, its typed words uncapped as before', () => {

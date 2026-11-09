@@ -31,6 +31,11 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { glassCardStyle } from '@/components/ui/glass/primitive-styles';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_NOTE, GLASS_WORKBENCH } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -96,6 +101,12 @@ export function ReturnWorkbenchView({
   onChanged?: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Return-Detail.dc.html stacked for
+  // the phone; beside the list on iPad): 16 from the sides, the cards on the
+  // grouped glass surface, the sections under iOS headings, the held-step
+  // notes on the boards' status line; the action sheets take the glass sheet.
+  // Every action, gate, note and word stays.
+  const lg = useGlass();
   // Simulator fault F-B (2026-10-06): at AX5 on the iPhone the 72 pt photo
   // beside each card's words broke them mid-word. Past the AX threshold both
   // cards put the photo above their words (the orders card's rule).
@@ -161,7 +172,7 @@ export function ReturnWorkbenchView({
     // Nothing could be read: the words, with the no-connection glyph offline
     // and the warning glyph otherwise (the shared list's failed panel).
     return (
-      <View style={styles.failed}>
+      <View style={lg ? [styles.failed, glassCardStyle(lg), GLASS_WORKBENCH.failed] : styles.failed}>
         {offline ? (
           <WifiOff size={32} color={c.ink3} strokeWidth={1.3} style={{ marginBottom: 12 }} />
         ) : (
@@ -306,7 +317,11 @@ export function ReturnWorkbenchView({
   return (
     <>
       <ScrollView
-        contentContainerStyle={[styles.content, compact ? { paddingTop: 12 } : null]}
+        contentContainerStyle={[
+          styles.content,
+          compact ? { paddingTop: 12 } : null,
+          lg && GLASS_WORKBENCH.content,
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -355,7 +370,7 @@ export function ReturnWorkbenchView({
         {/* Notes that hold the actions back: on the warning wash, each with
             its glyph beside the words (never the colour alone). */}
         {offline ? (
-          <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+          <View style={[styles.banner, { backgroundColor: c.warnWash }, lg && GLASS_NOTE]}>
             <WifiOff size={16} color={c.warnText} strokeWidth={1.75} style={{ marginTop: 2 }} />
             <Body size={13.5} color={c.warnText} style={{ flex: 1 }}>
               {RETURNS_COPY.offlineActionsWait}
@@ -363,7 +378,7 @@ export function ReturnWorkbenchView({
           </View>
         ) : null}
         {wb.destinationsUnavailable && wb.viewer.canManageReturns && (actions.primary || actions.secondary.length > 0) ? (
-          <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+          <View style={[styles.banner, { backgroundColor: c.warnWash }, lg && GLASS_NOTE]}>
             <TriangleAlert
               size={16}
               color={c.warnText}
@@ -449,7 +464,11 @@ export function ReturnWorkbenchView({
 
         {hasExchange ? (
           <>
-            <Eyebrow accessibilityRole="header">{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
+            {lg ? (
+              <GlassHeading>{sentenceCase(RETURNS_COPY.exchangeStatusHeading)}</GlassHeading>
+            ) : (
+              <Eyebrow accessibilityRole="header">{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
+            )}
             <Card padding={14}>
               <View style={{ gap: 6 }}>
                 {ex.rail.length > 0 ? (
@@ -484,7 +503,11 @@ export function ReturnWorkbenchView({
           </>
         ) : null}
 
-        <Eyebrow accessibilityRole="header">{RETURNS_COPY.returning}</Eyebrow>
+        {lg ? (
+          <GlassHeading>{sentenceCase(RETURNS_COPY.returning)}</GlassHeading>
+        ) : (
+          <Eyebrow accessibilityRole="header">{RETURNS_COPY.returning}</Eyebrow>
+        )}
         <View style={compact ? { gap: 10 } : styles.cards}>
           {wb.lines.map((l) => {
             const name = l.item.name ?? 'Deleted item';
@@ -601,7 +624,11 @@ export function ReturnWorkbenchView({
           </Card>
         ) : null}
 
-        <Eyebrow accessibilityRole="header">HISTORY</Eyebrow>
+        {lg ? (
+          <GlassHeading>History</GlassHeading>
+        ) : (
+          <Eyebrow accessibilityRole="header">HISTORY</Eyebrow>
+        )}
         <Card padding={14}>
           <View style={{ gap: 10 }}>
             {wb.chain.length === 0 ? (

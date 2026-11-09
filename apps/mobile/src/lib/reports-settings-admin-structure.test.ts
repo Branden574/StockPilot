@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { unsentWorkDetail } from './rejected-work';
 import { palette, type Palette } from './theme';
 
@@ -420,9 +421,14 @@ describe('Book Order Totals screens: the per-mode palette', () => {
 
   it('the search box is the reference toolbar search: the card fill, the control border, a muted icon and placeholder', () => {
     const list = flatCode(BOT_LIST);
-    expect(list).toContain(
-      '<View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}> <Search size={16} color={c.ink3} strokeWidth={1.4} />',
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(BOT_LIST), BOT_LIST)).toContain(
+      flatNorm(
+        '<View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}> <Search size={16} color={c.ink3} strokeWidth={1.4}/>',
+      ),
     );
+    // Liquid Glass: the iOS search field.
+    expect(list).toContain('lg && glassSearchBox(lg), ]} > <Search size={16} color={c.ink3} strokeWidth={1.4} />');
     expect(list).toContain('placeholder="Title, SKU or ISBN" placeholderTextColor={c.ink3}');
   });
 
@@ -574,8 +580,17 @@ describe('Reports hub: the look', () => {
       '<IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />',
       '{BOOK_REPORT_KPI_LOAD_ERROR}',
     ]) {
-      expect(hub).toContain(words);
+      // Read off the hub's Classic projection (every Liquid Glass branch
+      // folded to Classic: lib/__fixtures__/classic-projection.ts).
+      // (The printer closes a tag with no space before "/>".)
+      expect(classicFlat(sourceOf(REPORTS_HUB), REPORTS_HUB)).toContain(
+        flatNorm(words).replace(/\s+\/>/g, '/>'),
+      );
     }
+    // Liquid Glass says the same title and eyebrow words (the eyebrow's under
+    // the title, as the list frame does).
+    expect(hub).toContain("glassListTitle('Reports', '& insights.')");
+    expect(hub).toContain('<GlassSubline style={GLASS_LIST.sub}>Analytics</GlassSubline>');
   });
 });
 

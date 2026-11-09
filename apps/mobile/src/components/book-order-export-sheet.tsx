@@ -4,6 +4,9 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'reac
 
 import { Modal } from '@/components/ui/modal';
 import { Body, Display, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { BUTTON_RADIUS } from '@/components/ui/tones';
 import {
   BOOK_REPORT_EXPORT_OFFLINE,
@@ -55,6 +58,9 @@ export function BookOrderExportSheet({
   onChoose: (choice: BookReportExportChoice) => void;
 }) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const offer = bookReportExportOffer(totalCount);
   const csv = offer.choices.filter((ch) => ch.format === 'csv');
   const pdf = offer.choices.filter((ch) => ch.format === 'pdf');
@@ -71,9 +77,19 @@ export function BookOrderExportSheet({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            lg && glassScrim(lg),
           ]}
         />
-        <View style={[styles.card, { backgroundColor: c.card }, SHADOW.sheet]}>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.card },
+            SHADOW.sheet,
+            lg && GLASS_SHEET_CARD,
+          ]}
+        >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Display size={22} style={{ flexShrink: 1 }} accessibilityRole="header">
               {BOOK_REPORT_EXPORT_SHEET_TITLE}

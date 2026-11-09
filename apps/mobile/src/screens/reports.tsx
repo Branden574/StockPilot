@@ -30,6 +30,11 @@ import {
 } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
+import { GLASS_OPS, glassGrayCapsule, glassIconWell } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { StatCard } from '@/components/ui/stat-card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -93,6 +98,10 @@ export default function ReportsScreen() {
   });
   // 0 in the drawer; the translucent bar height inside the tabs navigator.
   const tabBarInset = React.useContext(BottomTabBarHeightContext) ?? 0;
+  // Liquid Glass (an inferred extension of Reports.dc.html as an iOS list):
+  // the scene, the glass nav, the large title over its line, the figures and
+  // rows on the grouped glass surface, the icon wells on the iOS fill.
+  const lg = useGlass();
   const [kpi, setKpi] = React.useState<KpiState | null>(null);
   const [refreshing, setRefreshing] = React.useState(false);
 
@@ -203,26 +212,38 @@ export default function ReportsScreen() {
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>ANALYTICS</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Reports <Em>& insights.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : <Eyebrow>ANALYTICS</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? glassListTitle('Reports', '& insights.') : 'Reports '}
+            {lg ? null : <Em>& insights.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Analytics</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ padding: 20, paddingTop: 12, paddingBottom: 40 + tabBarInset }}
+        contentContainerStyle={
+          lg
+            ? [GLASS_OPS.scroll, { paddingBottom: 40 + tabBarInset }]
+            : { padding: 20, paddingTop: 12, paddingBottom: 40 + tabBarInset }
+        }
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
       >
         {showBookReport ? (
           <View style={{ marginBottom: 20, gap: 10 }}>
-            <Eyebrow>REPORTS</Eyebrow>
+            {lg ? <GlassHeading>Reports</GlassHeading> : <Eyebrow>REPORTS</Eyebrow>}
             <Pressable
               onPress={() => router.push('/reports/book-order-totals' as Href)}
               accessibilityRole="button"
@@ -232,7 +253,13 @@ export default function ReportsScreen() {
             >
               <Card padding={14}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-                  <View style={[styles.entryIcon, { borderColor: c.hair, backgroundColor: c.card }]}>
+                  <View
+                    style={[
+                      styles.entryIcon,
+                      { borderColor: c.hair, backgroundColor: c.card },
+                      lg && glassIconWell(lg),
+                    ]}
+                  >
                     <BookOpen size={16} color={c.ink} strokeWidth={1.5} />
                   </View>
                   <View style={{ flex: 1, minWidth: 0 }}>
@@ -340,22 +367,27 @@ function ReportRow({
   tone?: 'ok' | 'warn' | 'crit' | 'default';
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const tint = reportRowTint(tone, c);
   return (
     <Card padding={14}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
         <View
-          style={{
-            width: 32,
-            height: 32,
-            borderRadius: 8,
-            borderWidth: 1,
-            borderColor: c.hair,
-            backgroundColor: c.card,
-            alignItems: 'center',
-            justifyContent: 'center',
-            position: 'relative',
-          }}
+          style={[
+            {
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: c.hair,
+              backgroundColor: c.card,
+              alignItems: 'center',
+              justifyContent: 'center',
+              position: 'relative',
+            },
+            // Liquid Glass: the board's icon well (the iOS fill, no ring).
+            lg && glassIconWell(lg),
+          ]}
         >
           <Icon size={16} color={c.ink} strokeWidth={1.5} />
           <View
@@ -391,6 +423,7 @@ function ReportRow({
  */
 function WebReportLink({ onPress }: { onPress: () => void }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const tone = buttonTone('outline', c);
   return (
     <Pressable
@@ -400,6 +433,8 @@ function WebReportLink({ onPress }: { onPress: () => void }) {
       style={({ pressed }) => [
         styles.webLink,
         { backgroundColor: tone.bg, borderColor: tone.border, opacity: pressed ? 0.85 : 1 },
+        // Liquid Glass: the iOS gray capsule (.ios-btn.gray).
+        lg && glassGrayCapsule(lg),
       ]}
     >
       <Body size={13} color={tone.fg} style={styles.webLinkLabel}>

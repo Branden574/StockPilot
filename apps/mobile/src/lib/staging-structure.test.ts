@@ -13,6 +13,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -162,13 +163,27 @@ describe('the worklist', () => {
   it('the All / Books / Items filter is the segmented switch: 44pt segments, a 3:1 ring, a semibold choice', () => {
     expect(styleBlock(STAGING, 'segment')).toMatch(/minHeight: MIN_TAP,/);
     expect(styleBlock(STAGING, 'filterRow')).toMatch(/padding: 3,[\s\S]*borderRadius: 10,/);
-    expect(code).toContain('<View style={[styles.filterRow, { backgroundColor: c.sunk }]}>');
-    expect(code).toContain(
-      "style={({ pressed }) => [ styles.segment, { borderColor: active ? c.ink3 : 'transparent', backgroundColor: active ? c.card : 'transparent', opacity: pressed ? 0.7 : 1, }, ]}",
+    // Classic's switch, read off the screen's Classic projection (every Liquid
+    // Glass branch folded to Classic: lib/__fixtures__/classic-projection.ts).
+    const classic = classicFlat(sourceOf(STAGING), STAGING);
+    expect(classic).toContain(
+      flatNorm('<View style={[styles.filterRow, { backgroundColor: c.sunk }]}>'),
     );
-    expect(code).toContain(
-      '<Body size={13} color={active ? c.ink : c.ink3} maxFontSizeMultiplier={SEGMENT_CAP} style={[styles.segmentLabel, active && styles.segmentLabelOn]} > {opt.label} </Body>',
+    expect(classic).toContain(
+      flatNorm(
+        "style={({ pressed }) => [ styles.segment, { borderColor: active ? c.ink3 : 'transparent', backgroundColor: active ? c.card : 'transparent', opacity: pressed ? 0.7 : 1, }, ]}",
+      ),
     );
+    expect(classic).toContain(
+      flatNorm(
+        '<Body size={13} color={active ? c.ink : c.ink3} maxFontSizeMultiplier={SEGMENT_CAP} style={[styles.segmentLabel, active && styles.segmentLabelOn]} > {opt.label} </Body>',
+      ),
+    );
+    // Liquid Glass: the iOS segmented control over the same buttons; the
+    // chosen segment keeps the ink-3 ring (glassSegment sets no border).
+    expect(code).toContain('lg && glassSegTrack(lg)');
+    expect(code).toContain('lg && glassSegment(lg, active),');
+    expect(code).toContain('lg && glassSegLabel(lg),');
     expect(code).toContain('const SEGMENT_CAP = capTo(13, TYPE_CEILING.control);');
     expect(code).toContain('segmentLabelOn: { fontFamily: FONT.displaySemi },');
   });

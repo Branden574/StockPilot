@@ -14,6 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { RADIUS, palette, type Palette } from './theme';
 
 /**
@@ -426,8 +427,15 @@ describe('Movements: the ledger is one surface of hairline rows (M-SG-08)', () =
       expect(row, decl).toContain(decl);
     }
     expect(row).not.toMatch(/\bheight:/);
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(MOVEMENTS), MOVEMENTS)).toContain(
+      flatNorm(
+        'style={({ pressed }) => [ styles.row, { backgroundColor: pressed ? c.sunk : c.card, borderColor: c.hair, borderTopWidth: first ? 1 : 0, borderTopLeftRadius: first ? LIST_RADIUS : 0, borderTopRightRadius: first ? LIST_RADIUS : 0, borderBottomLeftRadius: last ? LIST_RADIUS : 0, borderBottomRightRadius: last ? LIST_RADIUS : 0, marginBottom: last ? 0 : -LIST_GAP, }, ]}',
+      ),
+    );
+    // Liquid Glass: one grouped glass surface, a --line-2 hairline between rows.
     expect(code).toContain(
-      'style={({ pressed }) => [ styles.row, { backgroundColor: pressed ? c.sunk : c.card, borderColor: c.hair, borderTopWidth: first ? 1 : 0, borderTopLeftRadius: first ? LIST_RADIUS : 0, borderTopRightRadius: first ? LIST_RADIUS : 0, borderBottomLeftRadius: last ? LIST_RADIUS : 0, borderBottomRightRadius: last ? LIST_RADIUS : 0, marginBottom: last ? 0 : -LIST_GAP, }, ]}',
+      'lg && [ glassOpsGroupRow(lg, first, last), !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: lg.g.line2 }, pressed && { opacity: 0.7 }, ],',
     );
     // The surface's corners: 14, the reference's phone list.
     expect(code).toContain('const LIST_RADIUS = RADIUS.cardHero;');

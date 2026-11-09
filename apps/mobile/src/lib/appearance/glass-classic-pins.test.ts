@@ -120,6 +120,63 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '87b37fbb15959b696b5f3eac89e2d0ff1d56d0dd49d0802b9849a984c6777feb',
   'src/components/onboarding/mobile-tour.tsx':
     'a101da670e5a3d31fbff28e763e95c0bc9f0cf3cae61d716a5d43efe3abbb2f2',
+  // ---- Stage 4, native-ops lane (lg/s4-native-ops): the operations screens. ----
+  'app/(drawer)/exceptions.tsx': 'ab2fd7042ee896ac2f2c8a7cf478de3a708cb04fb38867043098fa5a5f94ea6d',
+  'app/(drawer)/maintenance.tsx':
+    '9bf1602fce0e5569a335be53b7ac8d4933078975bc2d1fd02d54479376301557',
+  'app/(drawer)/returns.tsx': '2e39381f23762d920821d12cf8479f364de946d901331fafd9cc012005f416ec',
+  'app/(drawer)/staging.tsx': '52122f436736abaf6fe696759a1be6b32620d2361b8c3df5500c12eac86834d3',
+  'app/bundles/[id].tsx': '2cd32b5020886e99d1cee8a46797d998dd9cab20c1c96a931d1ec4024249e1c9',
+  'app/bundles/index.tsx': 'edbf916d7a856984cad1b751d6e399f89c0e653b333de65541892bcd31ea8aff',
+  'app/exceptions/[id].tsx': '7562d38c59ec2f655fabac8cf198bfabb9b367a436b0720a80c5916d62b0fa11',
+  'app/group-selected.tsx': 'a3ad2b67aa7b4e857c16754a3634884672a50b47bb92e7ab819992be635d9832',
+  'app/location/[id].tsx': '9d56b6be06f47593d91058575d22894a50a7f6a43e7147e684ac3ad67409f13a',
+  'app/maintenance/[id].tsx': 'e6e53b7e9c5fad8c5943664d05ae6013ca318498aafe7c288fc874887327fc47',
+  'app/maintenance/new.tsx': 'e98d670b7b43b465ef0f8498459097af3f8b4e54c0a863b3c75abbb2cc315f67',
+  'app/po-import/[id].tsx': 'da091d8135b45a9f1a473a91e0ee5fdb90802e9ab9dce5a333cdf862553edb5d',
+  'app/rentals/[id].tsx': 'a69061a23d69073e18b32c3c0b9d42b599e2fc817c2fe826cbf5e0d292e9b10c',
+  'app/rentals/new.tsx': 'e2dca591e7f9432b719cb9b3108d2fde791a675544faa9965addafe3c3056f65',
+  'app/reports/book-order-totals/[itemId].tsx':
+    'a8aadefce0a01a268c630eed737ba80d36164f256e1fb25175659f99fff7021d',
+  'app/reports/book-order-totals/index.tsx':
+    '26885e242c8250d3de4999fb83a40a2f52644e9fde5fdd387e9b09ecf7495257',
+  'app/returns/[id].tsx': '92e9db95b722388ef09f399cd2e85ca79ce850905d81b076fbc699143e4c0a3a',
+  'app/schedule/new.tsx': '835390cf0c1e4b6cd8d2b1cab591885008998a4d8bfceea475a14e99c5884058',
+  'app/ungroup-selected.tsx': 'ebec938e80f5851340755c07883217b4e3649672a3ad0cf8cff67354b75ed16e',
+  'src/components/book-order-charter-sheet.tsx':
+    '2b80357d987c5079ee2b3bd616ea59ada33b62c8288fa389364bfaa1d02ffeae',
+  'src/components/book-order-dates-sheet.tsx':
+    'd9e062eaf4d3ef5a02bb07ece9b198442e49ccacfbc826a259c6f0553df72511',
+  'src/components/book-order-export-sheet.tsx':
+    '960312aa5df81a417ce8ad2bd712e98a1fab8a6ece08a0cbaa6ddea96dfb6b63',
+  'src/components/book-order-filters-sheet.tsx':
+    'aa4cd670daebe13e14d7d96da4ea8b81d54912ad536bf93401dba68b9e40f1bb',
+  'src/components/book-order-sheet-parts.tsx':
+    'b6d2df1287549fc24fb6e6d4fb96db5e9ee7faf8a0cd42cc40a4223e79da9fbd',
+  'src/components/exception-evidence-section.tsx':
+    'fad393616ee434964bd68e49d49de87b95a9026ba48f9309d098d6ebf9a9d72f',
+  'src/components/exception-evidence-sheets.tsx':
+    'e9a6c4972a61660387bbafd72ac1fa42ebe66805f15dcd1d5d628adf62b4f016',
+  'src/components/exception-note-sheet.tsx':
+    '795e9cb2b8d3d5ab74ae4b8cf9221a5483b3d130f28861834406a3742eaf767d',
+  'src/components/exception-recount-sheet.tsx':
+    'f924ad9ab523b3639683cd64203819de09d8033cdc561e0acef2b7adcb997b41',
+  'src/components/release-replacement-sheet.tsx':
+    '3362738fd397318103cbc206abd417a888f9505b3bfbfbf31aa7838dd83a1569',
+  'src/components/return-action-sheet.tsx':
+    '56f1685cf889104f4adbb856c15c02e5c80dd647fdd6c2d847a4cb0b6b7ef0a4',
+  'src/components/return-workbench-view.tsx':
+    'f8b2d3c8c57b2e070ba709b1ac77663cfaecf187ef394f396013b8ee2eb3932e',
+  'src/screens/categories.tsx': '3c31c776ea56b481cb1619c33088457d8ef01a64c121b896aaecf27f55baa9d6',
+  'src/screens/locations.tsx': '1555608ee36096b69974e2e8d4267699bdb2736337cd36bc0f294ff8f9d21389',
+  'src/screens/movements.tsx': '432d5df04a0e1e16e12d774f5385bee77b1ea15830fbb80fb98bd6d665524a52',
+  'src/screens/po-imports.tsx': '109f59e68d08223f885bc75e859feb002eecbb42f26f74499848ef656a243d4e',
+  'src/screens/purchase-orders.tsx':
+    '4430bcc012491aeccacf7dbbb6cc87b912162b73d406ed288417e7e3361f05c6',
+  'src/screens/rentals.tsx': 'a9b4f8ac55497379cbcfbdc1dcf11542586119945845d22499019565f2db0559',
+  'src/screens/reports.tsx': 'd0f88aacf47a52b6cccda08c287e3d26ee4ff690e42a52cc19b77fac12b13074',
+  'src/screens/suppliers.tsx': 'eb440f4872ee08a3d7639ae4896efb7dc63f23727824b632983fbb3021c46ad6',
+  // ---- end native-ops lane ----
 };
 
 function walk(dir: string, out: string[] = []): string[] {

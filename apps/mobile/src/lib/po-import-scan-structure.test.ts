@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { actionsForStatus } from './po-import-approve';
 import { FONT, RADIUS, SPACE, TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
@@ -300,11 +301,25 @@ describe('the import review keeps its gates, actions and words', () => {
     expect(code).not.toContain(
       "<View style={{ flexDirection: 'row', gap: 10 }}> {actions.includes",
     );
+    // Classic's error and note, read off the Classic projection.
+    const classic = classicFlat(sourceOf(REVIEW), REVIEW);
+    expect(classic).toContain(
+      flatNorm(
+        '{actionError ? ( <Mono size={11.5} color={c.critText} style={{ lineHeight: 16 }}> {actionError} </Mono> ) : null}',
+      ),
+    );
+    expect(classic).toContain(
+      flatNorm(
+        "{actions.includes('approve') && itemNamesError !== null ? ( <Mono size={11.5} color={c.warnText} style={{ lineHeight: 16 }}> Approve is unavailable until item names load, so every line can be checked against its item. Pull down to try again. </Mono> ) : null}",
+      ),
+    );
+    // Liquid Glass: the same words, inset from the floating bar's clipped
+    // corners (GLASS_ACTION_BAR_NOTE; review fix 2026-11-08).
     expect(code).toContain(
-      '{actionError ? ( <Mono size={11.5} color={c.critText} style={{ lineHeight: 16 }}> {actionError} </Mono> ) : null}',
+      '{actionError ? ( <Mono size={11.5} color={c.critText} style={lg ? [{ lineHeight: 16 }, GLASS_ACTION_BAR_NOTE] : { lineHeight: 16 }} > {actionError} </Mono> ) : null}',
     );
     expect(code).toContain(
-      "{actions.includes('approve') && itemNamesError !== null ? ( <Mono size={11.5} color={c.warnText} style={{ lineHeight: 16 }}> Approve is unavailable until item names load, so every line can be checked against its item. Pull down to try again. </Mono> ) : null}",
+      "{actions.includes('approve') && itemNamesError !== null ? ( <Mono size={11.5} color={c.warnText} style={lg ? [{ lineHeight: 16 }, GLASS_ACTION_BAR_NOTE] : { lineHeight: 16 }} > Approve is unavailable until item names load, so every line can be checked against its item. Pull down to try again. </Mono> ) : null}",
     );
   });
 
@@ -312,11 +327,17 @@ describe('the import review keeps its gates, actions and words', () => {
   // approve note made taller; or a footer in the home indicator's strip.
   it('the parsed lines scroll clear of the footer however tall it grows, and it clears the home indicator', () => {
     expect(code).toContain("import { footerReservation } from '@/lib/dynamic-type-layout';");
-    expect(code).toContain(
-      'paddingBottom: footerReservation(actions.length > 0 ? footerHeight : null, 160),',
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(REVIEW), REVIEW)).toContain(
+      flatNorm('paddingBottom: footerReservation(actions.length > 0 ? footerHeight : null, 160),'),
     );
     expect(code).toContain('onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}');
     expect(code).toContain('paddingBottom: Math.max(28, insets.bottom),');
+    // Liquid Glass: the floating bar's lift added, its material first in it.
+    expect(code).toContain(
+      'paddingBottom: lg ? footerReservation(actions.length > 0 ? footerHeight : null, 160) + GLASS_ACTION_BAR_LIFT : footerReservation(actions.length > 0 ? footerHeight : null, 160),',
+    );
+    expect(code).toContain('lg && GLASS_ACTION_BAR, ]} > {lg ? <GlassFootBackdrop /> : null}');
     expect(code).toContain('const insets = useSafeAreaInsets();');
   });
 
@@ -333,9 +354,17 @@ describe('the import review keeps its gates, actions and words', () => {
   });
 
   it('every word on the review survives, word for word', () => {
+    // The head: Classic's eyebrow over "Review import." (read off the Classic
+    // projection); Liquid Glass says the eyebrow's words under the title,
+    // which drops its emphasis and full stop (review fix 2026-11-08).
+    const classic = classicFlat(sourceOf(REVIEW), REVIEW);
+    expect(classic).toContain(flatNorm('<Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>'));
+    expect(classic).toContain(flatNorm('Review <Em>import.</Em>'));
+    expect(code).toContain("{lg ? glassListTitle('Review', 'import.') : 'Review '}");
+    expect(code).toContain(
+      '{lg ? <GlassSubline style={GLASS_LIST.sub}>Procurement · PO import</GlassSubline> : null}',
+    );
     for (const words of [
-      '<Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>',
-      'Review <Em>import.</Em>',
       "uploaded: { label: 'UPLOADED', status: 'default' },",
       "parsing: { label: 'PARSING', status: 'warn' },",
       "parsed: { label: 'PARSED', status: 'ok' },",

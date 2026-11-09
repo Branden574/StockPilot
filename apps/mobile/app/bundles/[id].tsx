@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { TriangleAlert } from 'lucide-react-native';
+import { ChevronLeft, TriangleAlert } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -17,6 +17,17 @@ import { Card, Hair } from '@/components/ui/card';
 import { Field } from '@/components/ui/field';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Mono } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { glassChip, glassChipLabel } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import {
+  GLASS_OPS,
+  GLASS_RECORD_BACK,
+  GLASS_RECORD_HEADER,
+  GLASS_SECTION_HEADING,
+  GlassCircleLook,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { api, ApiError } from '@/lib/api';
 import {
   distributeKeyFor,
@@ -84,6 +95,11 @@ type FailedRead = 'bundle' | 'components' | 'warehouses';
  */
 export default function BundleDetail() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html: its cards with a
+  // components list): the scene, Back as a 44pt glass circle over the name,
+  // the cards on the grouped glass surface, the sections under iOS headings,
+  // the warehouse choices as iOS capsules. Every control, state and word stays.
+  const lg = useGlass();
   const router = useRouter();
   // Distribute is a WRITE the server accepts from managers and above holding
   // bundles:distribute (0101). Staff hold the permission by default and were
@@ -297,13 +313,17 @@ export default function BundleDetail() {
     // No id at all is a bundle this phone cannot hold either.
     const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');
     return (
-      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+      <SafeAreaView
+        style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+        edges={['top']}
+      >
+        {lg ? <SceneBackground /> : null}
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={[styles.header, { borderBottomColor: c.hair }]}>
+        <View style={[styles.header, { borderBottomColor: c.hair }, lg && GLASS_RECORD_HEADER]}>
           <BackLink onPress={() => router.back()} />
         </View>
         {state === 'failed' ? (
-          <View style={styles.body}>
+          <View style={[styles.body, lg && GLASS_OPS.scroll]}>
             <Card padding={16}>
               <Body size={14.5} color={c.warnText} accessibilityRole="alert">
                 Could not read this bundle on this phone. Go back and try again.
@@ -311,7 +331,7 @@ export default function BundleDetail() {
             </Card>
           </View>
         ) : state === 'missing' ? (
-          <View style={styles.body}>
+          <View style={[styles.body, lg && GLASS_OPS.scroll]}>
             <Card padding={16}>
               <Body size={14.5} accessibilityRole="alert">
                 This bundle is not on this phone. Go back to Bundles and tap Refresh, or check back
@@ -329,12 +349,21 @@ export default function BundleDetail() {
   }
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+    <SafeAreaView
+      style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+      edges={['top']}
+    >
+      {lg ? <SceneBackground /> : null}
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={[styles.header, { borderBottomColor: c.hair }]}>
+      <View style={[styles.header, { borderBottomColor: c.hair }, lg && GLASS_RECORD_HEADER]}>
         <BackLink onPress={() => router.back()} />
         {/* The bundle's name is content: no Dynamic Type cap, as before. */}
-        <Display size={26} maxFontSizeMultiplier={0} style={{ marginTop: 4 }}>
+        <Display
+          size={26}
+          maxFontSizeMultiplier={0}
+          style={{ marginTop: lg ? 0 : 4 }}
+          accessibilityRole={lg ? 'header' : undefined}
+        >
           {bundle.name}
         </Display>
         {bundle.sku ? (
@@ -344,7 +373,9 @@ export default function BundleDetail() {
         ) : null}
       </View>
 
-      <ScrollView contentContainerStyle={[styles.body, { paddingBottom: 120 }]}>
+      <ScrollView
+        contentContainerStyle={[styles.body, lg && GLASS_OPS.scroll, { paddingBottom: 120 }]}
+      >
         {bundle.preassemblyEnabled && (
           <Card padding={16} style={{ marginBottom: space.md }}>
             <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
@@ -438,9 +469,17 @@ export default function BundleDetail() {
                           backgroundColor: active ? c.ink : c.sunk,
                           opacity: pressed ? 0.85 : 1,
                         },
+                        // Liquid Glass: the iOS capsule (the chosen one in ink).
+                        lg && glassChip(lg, active),
                       ]}
                     >
-                      <Text style={[styles.whLabel, { color: active ? c.paper : c.ink }]}>
+                      <Text
+                        style={[
+                          styles.whLabel,
+                          { color: active ? c.paper : c.ink },
+                          lg && glassChipLabel(lg, active),
+                        ]}
+                      >
                         {w.name}
                       </Text>
                     </Pressable>
@@ -506,14 +545,20 @@ export default function BundleDetail() {
  *  cache was read). */
 function BackLink({ onPress }: { onPress: () => void }) {
   const { c } = useTheme();
+  // Liquid Glass: Back as the 44pt glass circle (the same button and name).
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
-      style={styles.backBtn}
+      style={[styles.backBtn, lg && GLASS_RECORD_BACK]}
       accessibilityRole="button"
       accessibilityLabel="Back"
     >
-      <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+      {lg ? (
+        <GlassCircleLook icon={ChevronLeft} />
+      ) : (
+        <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+      )}
     </Pressable>
   );
 }
@@ -521,6 +566,9 @@ function BackLink({ onPress }: { onPress: () => void }) {
 /** A section's label: the reference's muted uppercase line. */
 function SectionLabel({ children }: { children: React.ReactNode }) {
   const { c } = useTheme();
+  // Liquid Glass: an iOS section heading (.ios-h, 20/25 700), 4pt in.
+  const lg = useGlass();
+  if (lg) return <GlassHeading style={GLASS_SECTION_HEADING}>{children}</GlassHeading>;
   return (
     <Mono size={11} tracking={0.12} upper color={c.ink3} style={styles.section}>
       {children}

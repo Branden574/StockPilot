@@ -166,8 +166,13 @@ describe('the per-mode palette on every list of the package', () => {
   });
 
   it('the supplier well is recessed too (sunk, never the card colour)', () => {
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(SUPPLIERS), SUPPLIERS)).toContain(
+      flatNorm('<View style={[styles.well, { borderColor: c.hair, backgroundColor: c.sunk }]}>'),
+    );
+    // Liquid Glass: the well on the iOS fill.
     expect(flatCode(SUPPLIERS)).toContain(
-      '<View style={[styles.well, { borderColor: c.hair, backgroundColor: c.sunk }]}>',
+      '{ borderColor: c.hair, backgroundColor: c.sunk }, lg && glassIconWell(lg), ]}',
     );
   });
 });
@@ -457,10 +462,15 @@ describe('the rows and controls VoiceOver and a finger reach', () => {
       'style={({ pressed }) => [styles.headerActionFrame, { opacity: pressed ? 0.7 : 1 }]}',
     );
     expect(code).not.toContain('hitSlop');
-    // The control's edge is the stronger border on the card fill.
-    expect(code).toContain(
-      '<View style={[styles.headerAction, { borderColor: c.hair2, backgroundColor: c.card }]}>',
+    // The control's edge is the stronger border on the card fill, read off
+    // the file's Classic projection (every Liquid Glass branch folded to
+    // Classic); Liquid Glass lays the small iOS gray capsule over it.
+    expect(classicFlat(sourceOf(file), file)).toContain(
+      flatNorm(
+        '<View style={[styles.headerAction, { borderColor: c.hair2, backgroundColor: c.card }]}>',
+      ),
     );
+    expect(code).toContain('lg && [glassGrayCapsule(lg), GLASS_HEADER_ACTION],');
   });
 
   it('the PO list keeps Imports for everyone and Scan PO for those who manage purchase orders', () => {
