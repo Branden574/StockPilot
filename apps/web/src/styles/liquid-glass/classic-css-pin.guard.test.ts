@@ -1244,6 +1244,27 @@ describe('the fix round’s attacks fail the pin', () => {
       ]);
     });
 
+    it.runIf(hasRepo)(
+      'a pull request’s merge commit (main first, the branch second) is held to the branch’s merge base',
+      () => {
+        // HEAD as GitHub's merge commit: its first parent on main, its second the branch.
+        const tip = real('rev-parse', 'HEAD')!.trim();
+        const asMerge: Git = (...args) => {
+          if (args.join(' ') === 'rev-parse --verify --quiet HEAD^2^{commit}') return `${tip}\n`;
+          if (args[0] === 'merge-base' && args[1] === '--is-ancestor' && args[2] === 'HEAD^1')
+            return '';
+          return real(...args);
+        };
+        expect(provenanceFindings(asMerge, true)).toEqual([]);
+        const older = real('rev-parse', `${MANIFEST.mergeBase}~1`)!.trim();
+        expect(provenanceFindings(asMerge, true, { ...MANIFEST, mergeBase: older })).toEqual(
+          expect.arrayContaining([
+            expect.stringMatching(/^manifest mergeBase .* is not the merge base/),
+          ]),
+        );
+      },
+    );
+
     it.runIf(hasRepo)('an older commit of main, not the merge base, fails', () => {
       const older = real('rev-parse', `${MANIFEST.mergeBase}~1`)!.trim();
       const found = provenanceFindings(real, true, { ...MANIFEST, mergeBase: older });
