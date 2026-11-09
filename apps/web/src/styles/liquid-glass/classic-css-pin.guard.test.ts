@@ -1209,10 +1209,13 @@ describe('the fix round’s attacks fail the pin', () => {
     };
     const hasRepo = real('rev-parse', '--git-dir') !== undefined;
     const FAKE = '0123456789abcdef0123456789abcdef01234567';
+    // The fixture with one Classic value changed (as the same edit to globals.css
+    // would be). Built with replace, not once(): a fixture already edited on disk
+    // must still load this file, so that the provenance test above can fail.
     const matched = new Map(FIXTURE);
     matched.set(
       'app/globals.css',
-      once(FIXTURE.get('app/globals.css')!, '--chart-4: 95 28% 58%;', '--chart-4: 95 28% 38%;'),
+      FIXTURE.get('app/globals.css')!.replace(/--chart-4: [^;]+;/, '--chart-4: 95 28% 37%;'),
     );
 
     it('in CI, a shallow clone (no recorded commit, no origin/main) is a finding, not a skip', () => {
