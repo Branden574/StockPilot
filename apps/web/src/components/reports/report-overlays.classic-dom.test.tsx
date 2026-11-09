@@ -130,7 +130,7 @@ function sortClassTokens(dom: string): string {
   );
 }
 
-type Opened = () => Promise<Element>;
+type Opened = () => Promise<HTMLElement>;
 
 const openPdfPlain: Opened = async () => {
   render(<PdfDownloadDropdown baseUrl="/api/reports/x/pdf?days=30" />);
@@ -196,7 +196,9 @@ const openStatus: Opened = async () => {
   );
   await userEvent.click(screen.getByRole('button', { name: /^Status/ }));
   const group = await screen.findByRole('group', { name: 'Status' });
-  return group.closest('[data-radix-popper-content-wrapper] > *') ?? group.parentElement!;
+  return (
+    group.closest<HTMLElement>('[data-radix-popper-content-wrapper] > *') ?? group.parentElement!
+  );
 };
 
 const openDrawer: Opened = async () => {
