@@ -33,7 +33,7 @@ import { GlassSubline } from '@/components/ui/glass/parts';
 import { glassChip, glassChipLabel } from '@/components/ui/glass/primitive-styles';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { GLASS_LIST } from '@/components/ui/glass/screens/list';
-import { GLASS_NOTE, GLASS_OPS } from '@/components/ui/glass/screens/ops';
+import { GLASS_NOTE, GLASS_OPS, glassSplitRule } from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
@@ -409,7 +409,14 @@ export default function ReturnsListScreen() {
                 )}
               />
               {split ? (
-                <View style={[styles.splitDetail, { borderColor: c.hair }]}>
+                <View
+                  style={[
+                    styles.splitDetail,
+                    { borderColor: c.hair },
+                    // Liquid Glass: the split's rule as the boards' hairline in --line-2.
+                    lg && glassSplitRule(lg),
+                  ]}
+                >
                   {selectedId ? (
                     <ReturnWorkbenchView
                       key={selectedId}

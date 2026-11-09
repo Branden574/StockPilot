@@ -30,7 +30,7 @@ import {
 } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
-import { GlassSubline } from '@/components/ui/glass/parts';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
 import { GLASS_OPS, glassGrayCapsule, glassIconWell } from '@/components/ui/glass/screens/ops';
@@ -243,7 +243,7 @@ export default function ReportsScreen() {
       >
         {showBookReport ? (
           <View style={{ marginBottom: 20, gap: 10 }}>
-            <Eyebrow>REPORTS</Eyebrow>
+            {lg ? <GlassHeading>Reports</GlassHeading> : <Eyebrow>REPORTS</Eyebrow>}
             <Pressable
               onPress={() => router.push('/reports/book-order-totals' as Href)}
               accessibilityRole="button"

@@ -38,6 +38,8 @@ import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
 import { GLASS_LIST } from '@/components/ui/glass/screens/list';
 import { GLASS_FOOT_BAR, GLASS_OPS, GlassFootBackdrop } from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
@@ -309,10 +311,21 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
           <IconChip icon={ArrowLeft} onPress={close} accessibilityLabel="Back" minTap />
         </View>
         <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
-          <Eyebrow>{view === 'books' ? 'BOOKS · UNGROUP' : 'ITEMS · UNGROUP'}</Eyebrow>
-          <Display size={30} style={{ marginTop: 12 }}>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31, the
+              eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>{view === 'books' ? 'BOOKS · UNGROUP' : 'ITEMS · UNGROUP'}</Eyebrow>}
+          <Display
+            size={lg ? 26 : 30}
+            style={lg ? GLASS_ITEM.name : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
             {UNGROUP_COPY.selectedTitle}
           </Display>
+          {lg ? (
+            <GlassSubline style={GLASS_LIST.sub}>
+              {view === 'books' ? 'Books · Ungroup' : 'Items · Ungroup'}
+            </GlassSubline>
+          ) : null}
           <Body muted size={13.5} style={{ marginTop: 8 }}>
             {UNGROUP_COPY.selectedIntro}
           </Body>

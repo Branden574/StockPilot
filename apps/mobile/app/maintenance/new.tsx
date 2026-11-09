@@ -40,14 +40,15 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
-import { GlassHeading } from '@/components/ui/glass/parts';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
 import { glassChip, glassChipLabel } from '@/components/ui/glass/primitive-styles';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
-import { sentenceCase } from '@/components/ui/glass/screens/item';
-import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_ITEM, sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
 import {
   GLASS_ACTION_BAR,
   GLASS_ACTION_BAR_LIFT,
+  GLASS_ACTION_BAR_NOTE,
   GLASS_OPS,
   GlassFootBackdrop,
   glassAccentButton,
@@ -679,14 +680,32 @@ function RequestFormScreen({
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
         <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>
-              {createdId ? 'ADD PHOTOS' : escalationId ? 'ESCALATE TO MAINTENANCE' : 'NEW MAINTENANCE REQUEST'}
-            </Eyebrow>
-          </View>
-          <Display size={32} style={{ marginTop: 10 }}>
-            {createdId ? (
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it (the
+              photo step's eyebrow says the title's words, so its title stands
+              alone). */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>
+                {createdId ? 'ADD PHOTOS' : escalationId ? 'ESCALATE TO MAINTENANCE' : 'NEW MAINTENANCE REQUEST'}
+              </Eyebrow>
+            </View>
+          )}
+          <Display
+            size={lg ? 26 : 32}
+            style={lg ? GLASS_ITEM.name : { marginTop: 10 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? (
+              createdId ? (
+                glassListTitle('Add', 'photos.')
+              ) : escalationId ? (
+                glassListTitle('Escalate an', 'exception.')
+              ) : (
+                glassListTitle('Report an', 'issue.')
+              )
+            ) : createdId ? (
               <>
                 Add <Em>photos.</Em>
               </>
@@ -700,6 +719,13 @@ function RequestFormScreen({
               </>
             )}
           </Display>
+          {lg ? (
+            createdId ? null : (
+              <GlassSubline style={GLASS_LIST.sub}>
+                {escalationId ? 'Escalate to maintenance' : 'New maintenance request'}
+              </GlassSubline>
+            )
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -1057,7 +1083,12 @@ function FormStep({
       >
         {lg ? <GlassFootBackdrop /> : null}
         {escalation?.state.reason ? (
-          <Body size={13} muted accessibilityRole="alert" style={{ marginBottom: 10 }}>
+          <Body
+            size={13}
+            muted
+            accessibilityRole="alert"
+            style={lg ? [{ marginBottom: 10 }, GLASS_ACTION_BAR_NOTE] : { marginBottom: 10 }}
+          >
             {escalation.state.reason}
           </Body>
         ) : null}

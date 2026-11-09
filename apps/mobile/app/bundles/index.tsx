@@ -16,6 +16,7 @@ import { Card } from '@/components/ui/card';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import {
   GLASS_NAV_CAPSULE,
+  GLASS_NAV_CAPSULE_LABEL,
   GLASS_NAV_CIRCLE,
   GLASS_NAV_TITLE,
   GLASS_OPS,
@@ -171,7 +172,13 @@ export default function BundlesList() {
           ) : (
             <RefreshCw size={14} color={c.ink} strokeWidth={1.75} />
           )}
-          <Text style={[styles.refreshLabel, { color: c.ink }, lg && lg.font.displaySemi]}>
+          <Text
+            style={[
+              styles.refreshLabel,
+              { color: c.ink },
+              lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL],
+            ]}
+          >
             Refresh
           </Text>
         </Pressable>

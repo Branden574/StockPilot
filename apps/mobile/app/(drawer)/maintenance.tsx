@@ -363,7 +363,8 @@ function ScopeSegment({
         style={[
           styles.segmentLabel,
           { color: selected ? c.paper : c.ink3 },
-          lg && [glassSegLabel(lg), { color: selected ? c.ink : c.ink3 }],
+          // Liquid Glass: every segment's words in ink (.ios-seg > button).
+          lg && [glassSegLabel(lg), { color: c.ink }],
         ]}
         maxFontSizeMultiplier={CONTROL_CAP}
       >

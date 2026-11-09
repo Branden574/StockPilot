@@ -581,7 +581,8 @@ function StatusTab({
     >
       <Body
         size={lg ? 14 : 13}
-        color={active ? c.ink : c.ink3}
+        // Liquid Glass: every segment's words in ink (.ios-seg > button).
+        color={lg ? c.ink : active ? c.ink : c.ink3}
         maxFontSizeMultiplier={TAB_LABEL_CAP}
         style={[
           { fontFamily: active ? FONT.displaySemi : FONT.display, textAlign: 'center' },

@@ -915,7 +915,7 @@ export default function BookOrderTotalsScreen() {
       <View style={lg ? GLASS_LIST.head : styles.head}>
         {lg ? null : <Eyebrow>REPORTS</Eyebrow>}
         <Display
-          size={30}
+          size={lg ? 34 : 30}
           style={lg ? GLASS_LIST.title : { marginTop: 10 }}
           accessibilityRole="header"
         >

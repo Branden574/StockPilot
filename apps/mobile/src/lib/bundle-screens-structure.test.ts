@@ -207,7 +207,7 @@ describe('Bundles', () => {
     );
     // Liquid Glass keeps the same spinner, glyph and word on the glass capsule.
     expect(code).toContain(
-      '{refreshing ? ( <ActivityIndicator size="small" color={c.ink} /> ) : ( <RefreshCw size={14} color={c.ink} strokeWidth={1.75} /> )} <Text style={[styles.refreshLabel, { color: c.ink }, lg && lg.font.displaySemi]}>',
+      '{refreshing ? ( <ActivityIndicator size="small" color={c.ink} /> ) : ( <RefreshCw size={14} color={c.ink} strokeWidth={1.75} /> )} <Text style={[ styles.refreshLabel, { color: c.ink }, lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL], ]} >',
     );
     expect(styleBlock(LIST, 'refreshBtn')).toMatch(/minHeight: 44,/);
   });

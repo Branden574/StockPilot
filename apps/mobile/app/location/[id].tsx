@@ -33,8 +33,14 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { GlassHeading } from '@/components/ui/glass/parts';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
 import { GLASS_LIST } from '@/components/ui/glass/screens/list';
-import { GLASS_RECORD_BODY, GLASS_RECORD_PAD } from '@/components/ui/glass/screens/ops';
+import {
+  GLASS_RECORD_BODY,
+  GLASS_RECORD_PAD,
+  GLASS_RECORD_PILL,
+  GLASS_RECORD_TITLE_BLOCK,
+} from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
@@ -324,20 +330,34 @@ function LocationBody({
         </Card>
       ) : null}
 
-      <View style={{ gap: 8 }}>
-        <Eyebrow>
-          {[locationKindLabel(loc.kind, loc.type), loc.warehouseName]
-            .filter(Boolean)
-            .join(' · ')
-            .toUpperCase()}
-        </Eyebrow>
+      <View style={lg ? GLASS_RECORD_TITLE_BLOCK : { gap: 8 }}>
+        {/* Liquid Glass: the record head (iOS-Item): the name at 26/31, the
+            kind and warehouse on the mono line under it. */}
+        {lg ? null : (
+          <Eyebrow>
+            {[locationKindLabel(loc.kind, loc.type), loc.warehouseName]
+              .filter(Boolean)
+              .join(' · ')
+              .toUpperCase()}
+          </Eyebrow>
+        )}
         {/* The name is content: no Dynamic Type cap (Display's default
             ceiling is for chrome headings). */}
-        <Display size={28} maxFontSizeMultiplier={0}>
+        <Display
+          size={lg ? 26 : 28}
+          maxFontSizeMultiplier={0}
+          style={lg ? GLASS_ITEM.name : undefined}
+          accessibilityRole={lg ? 'header' : undefined}
+        >
           {loc.name}
         </Display>
+        {lg ? (
+          <Mono size={12.5} tracking={0.04} color={c.ink3}>
+            {[locationKindLabel(loc.kind, loc.type), loc.warehouseName].filter(Boolean).join(' · ')}
+          </Mono>
+        ) : null}
         {loc.archived ? (
-          <Pill status="default" dot={false}>
+          <Pill status="default" dot={false} style={lg ? GLASS_RECORD_PILL : undefined}>
             ARCHIVED
           </Pill>
         ) : null}

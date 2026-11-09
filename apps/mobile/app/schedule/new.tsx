@@ -29,7 +29,9 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
-import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
 import { GLASS_OPS } from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -164,10 +166,18 @@ export default function NewScheduleEvent() {
           <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
         </View>
         <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
-          <Eyebrow>SCHEDULE · NEW EVENT</Eyebrow>
-          <Display size={32} style={{ marginTop: 12 }}>
-            Add to <Em>calendar.</Em>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>SCHEDULE · NEW EVENT</Eyebrow>}
+          <Display
+            size={lg ? 26 : 32}
+            style={lg ? GLASS_ITEM.name : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? glassListTitle('Add to', 'calendar.') : 'Add to '}
+            {lg ? null : <Em>calendar.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Schedule · New event</GlassSubline> : null}
         </View>
       </SafeAreaView>
 

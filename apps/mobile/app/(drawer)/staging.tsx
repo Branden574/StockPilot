@@ -388,7 +388,8 @@ export default function StagingScreen() {
                   >
                     <Body
                       size={lg ? 14 : 13}
-                      color={active ? c.ink : c.ink3}
+                      // Liquid Glass: every segment's words in ink (.ios-seg > button).
+                      color={lg ? c.ink : active ? c.ink : c.ink3}
                       maxFontSizeMultiplier={SEGMENT_CAP}
                       style={[
                         styles.segmentLabel,

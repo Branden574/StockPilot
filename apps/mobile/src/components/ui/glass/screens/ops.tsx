@@ -177,6 +177,9 @@ export const GLASS_NAV_CAPSULE: ViewStyle = {
   overflow: 'hidden',
 };
 
+/** A nav capsule's words (.ios-capsule [705]): 15/600, no tracking; the face is lg.font.displaySemi. */
+export const GLASS_NAV_CAPSULE_LABEL: TextStyle = { fontSize: 15, letterSpacing: 0 };
+
 /**
  * The nav's title between its circles (.ios-nav .ttl [701]): 17/600, -0.4,
  * centred. Laid over a screen's own Display title, which keeps its element.
@@ -264,6 +267,25 @@ export const GLASS_WORKBENCH = StyleSheet.create({
   failed: { marginTop: 24, marginHorizontal: OPS_SIDE, paddingTop: 32, paddingBottom: 32 },
 });
 
+/**
+ * A record screen's title block in glass (iOS-Item [27]: .col.g2, the name at
+ * 26/31 over its mono meta line): the name is screens/item.tsx GLASS_ITEM.name,
+ * reused; its line sits 2 under it and nothing sits over it. A pill under the
+ * line (Archived) keeps a 6pt step from it.
+ */
+export const GLASS_RECORD_TITLE_BLOCK: ViewStyle = { gap: 2 };
+export const GLASS_RECORD_META: TextStyle = { marginTop: 2 };
+export const GLASS_RECORD_PILL: ViewStyle = { marginTop: 6 };
+
+/**
+ * The rule between an iPad split's list and its detail (iPad-Orders: .ipad-col
+ * [812], border-right .5px, --line-2 on glass [1054]): a hairline in --line-2.
+ */
+export const glassSplitRule = cached((lg): ViewStyle => ({
+  borderLeftWidth: StyleSheet.hairlineWidth,
+  borderColor: lg.g.line2,
+}));
+
 /** A record screen's scroll content in glass: 16 from the sides, 10 under the nav. */
 export const GLASS_RECORD_BODY: ViewStyle = { paddingHorizontal: OPS_SIDE, paddingTop: 10 };
 
@@ -303,6 +325,18 @@ export const GLASS_ACTION_BAR: ViewStyle = {
   paddingBottom: 7,
   borderRadius: GLASS_METRICS.actionBar.radius,
   overflow: 'hidden',
+};
+
+/**
+ * Words a screen puts inside the floating bar over its buttons (an action's
+ * error, a held step's reason): the bar is drawn for 50pt buttons 7 in from a
+ * radius-32 edge that clips, so the words take their own inset, 16 from the
+ * bar's sides and 12 from its top, which keeps the first line's ends clear of
+ * the corner's curve.
+ */
+export const GLASS_ACTION_BAR_NOTE: TextStyle = {
+  paddingHorizontal: OPS_SIDE - GLASS_METRICS.actionBar.paddingHorizontal,
+  paddingTop: 5,
 };
 
 /** How far the floating bar sits off the foot: added to the room a list leaves under its rows. */

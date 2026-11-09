@@ -131,4 +131,39 @@ describe('the operations screens’ glass parts (native-ops lane)', () => {
     expect(ops.GLASS_RECORD_PAD).toEqual({ paddingHorizontal: 16 });
     expect(ops.GLASS_OPS.controls).toEqual({ paddingHorizontal: 16 });
   });
+
+  // Mutation caught (review fix 2026-11-08): words in the floating bar back
+  // at its 7pt edge, where the radius-32 corner clips the first line's ends.
+  it('words inside the floating bar sit clear of its clipped corners', () => {
+    const m = GLASS_METRICS.actionBar;
+    const bar = ops.GLASS_ACTION_BAR;
+    const note = ops.GLASS_ACTION_BAR_NOTE;
+    const x = Number(bar.paddingHorizontal) + Number(note.paddingHorizontal ?? 0);
+    const y = Number(bar.paddingTop) + Number(note.paddingTop ?? 0);
+    // 16 from the bar's sides, as the boards inset words on a group.
+    expect(x).toBe(16);
+    // The line's top corner point lies inside the rounded corner:
+    // (r - x)^2 + (r - y)^2 <= r^2.
+    const r = m.radius;
+    expect((r - x) ** 2 + (r - y) ** 2).toBeLessThanOrEqual(r * r);
+    // Without the note's inset the bar's own 7pt edge does not clear it at
+    // a glyph's cap height (the reviewers' point: x 7, y 10).
+    expect((r - Number(bar.paddingHorizontal)) ** 2 + (r - 10) ** 2).toBeGreaterThan(r * r);
+  });
+
+  // Mutation caught (review fix 2026-11-08): the capsule's words at Classic's 13.
+  it('a nav capsule says its words at 15 with no tracking (.ios-capsule)', () => {
+    expect(ops.GLASS_NAV_CAPSULE_LABEL).toEqual({ fontSize: 15, letterSpacing: 0 });
+  });
+
+  // Mutation caught (review fix 2026-11-08): the iPad split's rule left as
+  // Classic's 1pt hair line.
+  it.each(LOOKS)('%s: the split rule is a hairline in --line-2', (_n, lg) => {
+    expect(ops.glassSplitRule(lg)).toEqual({ borderLeftWidth: 0.5, borderColor: lg.g!.line2 });
+  });
+
+  it('a record title block keeps its meta line 2 under the name (iOS-Item .col.g2)', () => {
+    expect(ops.GLASS_RECORD_TITLE_BLOCK).toEqual({ gap: 2 });
+    expect(ops.GLASS_RECORD_META).toEqual({ marginTop: 2 });
+  });
 });

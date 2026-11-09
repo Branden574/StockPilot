@@ -29,7 +29,7 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
-import { GlassHeading, GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GlassHeading, GlassSheetBackdrop, GlassSubline } from '@/components/ui/glass/parts';
 import {
   GLASS_SHEET_CARD,
   glassFieldBox,
@@ -37,10 +37,12 @@ import {
   glassScrim,
 } from '@/components/ui/glass/primitive-styles';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
-import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
 import {
   GLASS_ACTION_BAR,
   GLASS_ACTION_BAR_LIFT,
+  GLASS_ACTION_BAR_NOTE,
   GLASS_OPS,
   GlassFootBackdrop,
 } from '@/components/ui/glass/screens/ops';
@@ -590,10 +592,18 @@ export default function PoImportDetailScreen() {
               : { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }
           }
         >
-          <Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>
-          <Display size={28} style={{ marginTop: 10 }}>
-            Review <Em>import.</Em>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>}
+          <Display
+            size={lg ? 26 : 28}
+            style={lg ? GLASS_ITEM.name : { marginTop: 10 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? glassListTitle('Review', 'import.') : 'Review '}
+            {lg ? null : <Em>import.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Procurement · PO import</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
@@ -845,12 +855,20 @@ export default function PoImportDetailScreen() {
             >
               {lg ? <GlassFootBackdrop /> : null}
               {actionError ? (
-                <Mono size={11.5} color={c.critText} style={{ lineHeight: 16 }}>
+                <Mono
+                  size={11.5}
+                  color={c.critText}
+                  style={lg ? [{ lineHeight: 16 }, GLASS_ACTION_BAR_NOTE] : { lineHeight: 16 }}
+                >
                   {actionError}
                 </Mono>
               ) : null}
               {actions.includes('approve') && itemNamesError !== null ? (
-                <Mono size={11.5} color={c.warnText} style={{ lineHeight: 16 }}>
+                <Mono
+                  size={11.5}
+                  color={c.warnText}
+                  style={lg ? [{ lineHeight: 16 }, GLASS_ACTION_BAR_NOTE] : { lineHeight: 16 }}
+                >
                   Approve is unavailable until item names load, so every line can be checked against
                   its item. Pull down to try again.
                 </Mono>

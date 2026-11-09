@@ -49,10 +49,12 @@ import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
 import { GLASS_LIST } from '@/components/ui/glass/screens/list';
 import {
   GLASS_OPS,
   GLASS_RECORD_BODY,
+  GLASS_RECORD_META,
   glassCopyBox,
   glassGrayCapsule,
   glassTextArea,
@@ -1115,13 +1117,26 @@ export default function MaintenanceRequestDetailScreen() {
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
         <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>{handle}</Eyebrow>
-          </View>
-          <Display size={26} style={{ marginTop: 8 }}>
+          {/* Liquid Glass: the record head (iOS-Item): the subject at 26/31,
+              the request's handle on the mono line under it. */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>{handle}</Eyebrow>
+            </View>
+          )}
+          <Display
+            size={26}
+            style={lg ? GLASS_ITEM.name : { marginTop: 8 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
             {detail.subject}
           </Display>
+          {lg ? (
+            <Mono size={12.5} tracking={0.04} color={c.ink3} style={GLASS_RECORD_META}>
+              {handle}
+            </Mono>
+          ) : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
             <Pill status={pillStatus} dot={false}>
               {MAINTENANCE_STATUS_LABELS[detail.status]}

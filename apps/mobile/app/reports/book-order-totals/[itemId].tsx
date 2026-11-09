@@ -49,6 +49,7 @@ import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { GLASS_LIST } from '@/components/ui/glass/screens/list';
 import { GLASS_RECORD_BODY } from '@/components/ui/glass/screens/ops';
+import { GlassNavSpacer, GlassPoNavTitle } from '@/components/ui/glass/screens/po';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { accountEpoch } from '@/lib/account-epoch';
 import { useAuth } from '@/lib/auth-context';
@@ -403,6 +404,10 @@ export default function BookOrdersScreen() {
       <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
         <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ChevronLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+          {/* Liquid Glass: the eyebrow's words as the nav's title between
+              the circles (.ios-nav .ttl), not over the book's name. */}
+          {lg ? <GlassPoNavTitle lg={lg} title="Book Order Totals · Orders" /> : null}
+          {lg ? <GlassNavSpacer /> : null}
         </View>
       </SafeAreaView>
       <ScrollView
@@ -416,7 +421,7 @@ export default function BookOrdersScreen() {
           />
         }
       >
-        <Eyebrow>BOOK ORDER TOTALS · ORDERS</Eyebrow>
+        {lg ? null : <Eyebrow>BOOK ORDER TOTALS · ORDERS</Eyebrow>}
         {filtersReset && itemId && !switched ? (
           <Card padding={12}>
             <Body size={13.5} accessibilityRole="alert">
