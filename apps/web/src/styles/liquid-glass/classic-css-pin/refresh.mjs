@@ -22,11 +22,29 @@
  *                                    merge base's globals.css builds a rule
  *                                    for it or it names a custom property;
  *                                    one per line. Tailwind's scanner
- *                                    skips .dat and .css files, so nothing in
- *                                    this folder reaches the app's stylesheet;
+ *                                    skips .dat files, so the list never
+ *                                    reaches the app's stylesheet. It DOES
+ *                                    scan the .css copies under files/ (the
+ *                                    app's automatic scan reads every .css
+ *                                    file of apps/web): they add nothing
+ *                                    because check (a) keeps them equal to
+ *                                    the live Classic files, and the guard's
+ *                                    "own files add nothing" test builds the
+ *                                    stylesheet with and without this folder
+ *                                    and requires the same output;
  *   manifest.json                    the merge base, the file list, every
  *                                    stylesheet outside styles/liquid-glass
- *                                    a source file imports, the token count.
+ *                                    a source file imports, the token count,
+ *                                    and the CSS toolchain at the merge base
+ *                                    (apps/web's tailwindcss,
+ *                                    @tailwindcss/postcss, postcss and
+ *                                    tailwindcss-animate from its
+ *                                    pnpm-lock.yaml, @tailwindcss/node and
+ *                                    @tailwindcss/oxide from the
+ *                                    @tailwindcss/postcss snapshot there, and
+ *                                    postcss.config.mjs's text). The script
+ *                                    refuses when the installed toolchain is
+ *                                    not that one (run pnpm install first).
  */
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -40,7 +58,8 @@ const ROOT = execFileSync('git', ['rev-parse', '--show-toplevel'], {
   cwd: HERE,
   encoding: 'utf8',
 }).trim();
-const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim();
+const git = (...args) =>
+  execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', maxBuffer: 1 << 30 }).trim();
 const fail = (message) => {
   console.error(`refresh.mjs: refusing: ${message}`);
   process.exit(1);
@@ -93,6 +112,48 @@ const texts = new Map(
 );
 
 /**
+ * The CSS toolchain at the merge base, from its pnpm-lock.yaml: apps/web's
+ * resolved versions of its direct CSS packages, and the halves of
+ * @tailwindcss/postcss (node and oxide) from that package's snapshot.
+ */
+function toolchainAt(commit) {
+  const lock = git('show', `${commit}:pnpm-lock.yaml`);
+  const importer = /\n  apps\/web:\n([\s\S]*?)(?=\n  [^\s]|\n\S|$)/.exec(lock)?.[1];
+  if (!importer) fail(`${commit}'s pnpm-lock.yaml has no apps/web importer`);
+  const direct = (name) => {
+    const quoted = name.startsWith('@') ? `'${name}'` : name;
+    const m = new RegExp(
+      `\\n      ${quoted.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}:\\n        specifier: [^\\n]*\\n        version: ([^\\s(]+)`,
+    ).exec(`\n${importer}`);
+    if (!m) fail(`${commit}'s pnpm-lock.yaml: apps/web has no ${name}`);
+    return m[1];
+  };
+  const packages = {
+    '@tailwindcss/postcss': direct('@tailwindcss/postcss'),
+    postcss: direct('postcss'),
+    tailwindcss: direct('tailwindcss'),
+    'tailwindcss-animate': direct('tailwindcss-animate'),
+  };
+  const snapshot = new RegExp(
+    `\\n  '@tailwindcss/postcss@${packages['@tailwindcss/postcss'].replace(/\./g, '\\.')}':\\n    dependencies:\\n((?:      [^\\n]+\\n)+)`,
+  ).exec(lock)?.[1];
+  if (!snapshot) fail(`${commit}'s pnpm-lock.yaml has no @tailwindcss/postcss snapshot`);
+  for (const half of ['@tailwindcss/node', '@tailwindcss/oxide']) {
+    const m = new RegExp(`      '${half}': ([^\\s(]+)`).exec(snapshot);
+    if (!m) fail(`${commit}'s pnpm-lock.yaml: @tailwindcss/postcss has no ${half}`);
+    packages[half] = m[1];
+  }
+  return {
+    packages: Object.fromEntries(Object.entries(packages).sort(([a], [b]) => (a < b ? -1 : 1))),
+    postcssConfig: execFileSync('git', ['show', `${commit}:apps/web/postcss.config.mjs`], {
+      cwd: ROOT,
+      encoding: 'utf8',
+    }),
+  };
+}
+const toolchain = toolchainAt(base);
+
+/**
  * Every stylesheet a non-test source file under `src` imports, outside
  * styles/liquid-glass: a path under src for './x.css' and '@/x.css', the
  * specifier itself for a package. The guard reads the branch with the same
@@ -128,6 +189,39 @@ function stylesheetImports(src) {
 const fromWeb = createRequire(join(WEB, 'package.json'));
 const fromTailwind = createRequire(fromWeb.resolve('@tailwindcss/postcss'));
 const { Scanner } = fromTailwind('@tailwindcss/oxide');
+
+// The installed toolchain must be the merge base's (the guard holds the
+// install to the manifest; the candidates below are built with it).
+const versionOf = (resolveFrom, name) => {
+  let dir = dirname(resolveFrom.resolve(name));
+  for (;;) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+      if (pkg.name === name) return pkg.version;
+    } catch {
+      // No package.json at this level: keep climbing.
+    }
+    if (dirname(dir) === dir) fail(`no package.json for ${name}`);
+    dir = dirname(dir);
+  }
+};
+const installed = {
+  '@tailwindcss/node': versionOf(fromTailwind, '@tailwindcss/node'),
+  '@tailwindcss/oxide': versionOf(fromTailwind, '@tailwindcss/oxide'),
+  '@tailwindcss/postcss': versionOf(fromWeb, '@tailwindcss/postcss'),
+  postcss: versionOf(fromWeb, 'postcss'),
+  tailwindcss: versionOf(fromWeb, 'tailwindcss'),
+  'tailwindcss-animate': versionOf(fromWeb, 'tailwindcss-animate'),
+};
+if (JSON.stringify(installed) !== JSON.stringify(toolchain.packages)) {
+  fail(
+    `the installed CSS toolchain ${JSON.stringify(installed)} is not the merge base's ` +
+      `${JSON.stringify(toolchain.packages)} (pnpm install first)`,
+  );
+}
+if (readFileSync(join(WEB, 'postcss.config.mjs'), 'utf8') !== toolchain.postcssConfig) {
+  fail("apps/web/postcss.config.mjs is not the merge base's text");
+}
 const tailwindNode = fromTailwind('@tailwindcss/node');
 const tmp = mkdtempSync(join(tmpdir(), 'classic-css-pin-'));
 let tokens;
@@ -179,6 +273,7 @@ writeFileSync(
       files: files.map((p) => p.slice(SRC_PREFIX.length)),
       stylesheetImports: imports,
       candidates: candidates.length,
+      toolchain,
     },
     null,
     2,

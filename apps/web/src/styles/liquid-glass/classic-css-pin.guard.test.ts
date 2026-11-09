@@ -9,6 +9,14 @@ import tailwindcss from '@tailwindcss/postcss';
 import postcss, { type AtRule, type ChildNode, type Container, type Rule } from 'postcss';
 import { afterAll, describe, expect, it } from 'vitest';
 
+import {
+  CLASSIC_HIDE_RULE,
+  GLASS_ROOT,
+  glassSourceFiles,
+  normaliseQuotes,
+  splitSelectors,
+} from './glass-css';
+
 /**
  * THE CLASSIC CSS PIN (defence (g); liquid-glass DECISIONS.md, 2026-11-09).
  * Classic Dark and Light must look exactly as on main. Check 4 of the parity
@@ -17,19 +25,41 @@ import { afterAll, describe, expect, it } from 'vitest';
  * cascade order of unmatched rules; N-A3 a new rule for a class Classic uses,
  * in a new context). This guard closes that class at the source:
  *
- *   (a) every Classic stylesheet (apps/web/src outside styles/liquid-glass)
- *       equals main's text at the merge base, held in classic-css-pin/files,
- *       except the hunks named in ALLOWED_HUNKS, each with its reason;
- *   (b) there is no new Classic stylesheet, no Classic stylesheet imports
- *       anything new (the glass @import is the one allowlisted), and no source
- *       file imports a stylesheet outside styles/liquid-glass that main did
- *       not import;
+ *   (a) every Classic stylesheet (every stylesheet under apps/web/src except
+ *       the glass sheets: a .css file in styles/liquid-glass or its pages/,
+ *       exactly what glassSourceFiles() reads, so every one is under the
+ *       glass guards) equals main's text at the merge base, held in
+ *       classic-css-pin/files, except the hunks named in ALLOWED_HUNKS, each
+ *       with its reason;
+ *   (b) there is no new Classic stylesheet (a glass subfolder is Classic), no
+ *       Classic stylesheet imports anything new (the glass @import is the one
+ *       allowlisted), and no source file imports a stylesheet other than a
+ *       glass sheet that main did not import (the fixture copies included);
  *   (c) globals.css compiled through Tailwind (as compiled-css.guard.test.ts
- *       compiles it) at main's text and at HEAD without the glass @import,
- *       with ONE fixed candidate list (classic-css-pin/candidates.dat: the
- *       class tokens of Classic's source at the merge base), is the same:
- *       layer order, rule order, every rule's declarations, every custom
- *       property value, and every @keyframes, @property and @font-face.
+ *       compiles it) at main's text, and at HEAD WITH the glass @import and
+ *       the glass files the app loads beside it (the unlayered companions and
+ *       the page compositions), with ONE fixed candidate list
+ *       (classic-css-pin/candidates.dat: the class tokens of Classic's source
+ *       at the merge base), is the same once the glass entries are dropped
+ *       (rules every selector of which starts with the glass root, the two
+ *       allowed visibility and print rules, @keyframes lg-*, @property --lg-*
+ *       and layer lg): layer order, rule order, every rule's declarations,
+ *       every custom property value, and every @keyframes, @property,
+ *       @font-face and other at-rule. So a global at-rule a glass file brings
+ *       in (@property, @font-face, @config, @page...) fails here as well as in
+ *       glass-at-rules.guard.test.ts;
+ *   (d) globals.css compiled at HEAD without the glass @import from HEAD's
+ *       whole source (Tailwind's automatic scan of apps/web, as the app
+ *       builds it) differs from (c)'s compile of main only by new utilities
+ *       for classes Classic's source never had (not in candidates.dat) and
+ *       new theme variables nothing Classic reads with var(); and the CSS
+ *       toolchain (tailwindcss, @tailwindcss/postcss and its node and oxide
+ *       halves, postcss, tailwindcss-animate, postcss.config.mjs) is the merge
+ *       base's (manifest.json toolchain).
+ * The fixture is tied to main (the provenance test): its text is the recorded
+ * commit's, that commit is on origin/main and is the merge base of the branch;
+ * in CI a missing commit or origin/main FAILS (the Test job fetches with
+ * fetch-depth: 0), it is never skipped.
  *
  * When main is merged in, refresh the fixture from the new merge base:
  *   git fetch origin && node apps/web/src/styles/liquid-glass/classic-css-pin/refresh.mjs
@@ -42,6 +72,7 @@ const WEB = join(SRC, '..');
 const APP = join(SRC, 'app');
 const PIN = join(__dirname, 'classic-css-pin');
 const GLASS_PREFIX = 'styles/liquid-glass/';
+const PIN_PREFIX = `${GLASS_PREFIX}classic-css-pin/`;
 const STYLESHEET = /\.(css|scss|sass|less|pcss|postcss)$/;
 
 interface Manifest {
@@ -49,6 +80,8 @@ interface Manifest {
   files: string[];
   stylesheetImports: string[];
   candidates: number;
+  /** The CSS toolchain at the merge base: package -> version, and postcss.config.mjs's text. */
+  toolchain: { packages: Record<string, string>; postcssConfig: string };
 }
 const MANIFEST = JSON.parse(readFileSync(join(PIN, 'manifest.json'), 'utf8')) as Manifest;
 const MAIN_SHORT = MANIFEST.mergeBase.slice(0, 9);
@@ -77,8 +110,11 @@ const ALLOWED_HUNKS: readonly Hunk[] = [
     reason:
       'brings in styles/liquid-glass/index.css, every rule of which is scoped to ' +
       ':root[data-appearance="liquid-glass"], inside @media screen and @layer lg ' +
-      '(glass-scope and compiled-css guards); (c) compiles globals.css without it ' +
-      "and requires main's output",
+      '(glass-scope and compiled-css guards), and no at-rule of which acts outside ' +
+      'that scope (glass-at-rules guard: only @import in index.css, @layer, @media, ' +
+      '@supports, @container, @starting-style, @keyframes lg-* and @property --lg-*); ' +
+      "(c) compiles globals.css WITH it and requires main's output once the glass " +
+      'entries are dropped',
     after: "@plugin 'tailwindcss-animate';\n",
     insert: GLASS_IMPORT_HUNK,
   },
@@ -91,7 +127,17 @@ const ALLOWED_IMPORTS: Record<string, readonly string[]> = {
 
 type Sheets = Map<string, string>;
 
-const isClassic = (file: string) => STYLESHEET.test(file) && !file.startsWith(GLASS_PREFIX);
+/**
+ * A glass stylesheet: exactly what glassSourceFiles() reads (a .css file in
+ * styles/liquid-glass or its pages/), so every one is under the glass guards.
+ * Any other stylesheet there (a subfolder, another extension) is Classic.
+ */
+const isGlassSheet = (file: string) => /^styles\/liquid-glass\/(pages\/)?[^/]+\.css$/.test(file);
+/** The pin's own copies of main's text (classic-css-pin/files), which nothing loads. */
+const FIXTURE_COPIES = new Set(MANIFEST.files.map((f) => `${PIN_PREFIX}files/${f}`));
+
+const isClassic = (file: string) =>
+  STYLESHEET.test(file) && !isGlassSheet(file) && !FIXTURE_COPIES.has(file);
 
 /** Every stylesheet under apps/web/src, by its path there (glass ones too). */
 function readStylesheets(dir = SRC, out: Sheets = new Map()): Sheets {
@@ -167,7 +213,8 @@ function newFileFindings(sheets: Sheets, fixture: Sheets = FIXTURE): string[] {
   return [...sheets.keys()]
     .filter((f) => isClassic(f) && !fixture.has(f))
     .map(
-      (f) => `${f}: a new Classic stylesheet (outside styles/liquid-glass; main has no such file)`,
+      (f) =>
+        `${f}: a new Classic stylesheet (not a glass sheet the glass guards read; main has no such file)`,
     );
 }
 
@@ -202,31 +249,44 @@ const IMPORT_STYLESHEET =
   /\b(?:import|require)\s*\(?\s*(?:[^'"();]*?\bfrom\s*)?['"]([^'"]+\.(?:css|scss|sass|less|pcss|postcss))['"]/g;
 
 /**
- * Every stylesheet a non-test source file under apps/web/src imports, outside
- * styles/liquid-glass (refresh.mjs lists main's with the same rule).
+ * Every stylesheet a non-test source file under apps/web/src imports, other
+ * than a glass sheet (refresh.mjs lists main's, which has no glass folder).
  */
-function stylesheetImports(): Map<string, string> {
-  const out = new Map<string, string>();
-  const walk = (dir: string) => {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, e.name);
-      if (e.isDirectory()) walk(full);
-      else if (/\.(tsx?|jsx?|mjs)$/.test(e.name) && !/\.test\.[jt]sx?$/.test(e.name)) {
-        const rel = relative(SRC, full).split(sep).join('/');
-        for (const m of readFileSync(full, 'utf8').matchAll(IMPORT_STYLESHEET)) {
-          const spec = m[1]!;
-          const target = spec.startsWith('.')
-            ? posix.join(posix.dirname(rel), spec)
-            : spec.startsWith('@/')
-              ? spec.slice(2)
-              : spec;
-          if (!target.startsWith(GLASS_PREFIX) && !out.has(target)) out.set(target, rel);
-        }
-      }
+/** Every non-test source file under apps/web/src, by its path there. */
+function readSources(dir = SRC, out = new Map<string, string>()): Map<string, string> {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, e.name);
+    if (e.isDirectory()) readSources(full, out);
+    else if (/\.(tsx?|jsx?|mjs)$/.test(e.name) && !/\.test\.[jt]sx?$/.test(e.name)) {
+      out.set(relative(SRC, full).split(sep).join('/'), readFileSync(full, 'utf8'));
     }
-  };
-  walk(SRC);
+  }
   return out;
+}
+
+function stylesheetImports(sources = readSources()): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [rel, text] of sources) {
+    for (const m of text.matchAll(IMPORT_STYLESHEET)) {
+      const spec = m[1]!;
+      const target = spec.startsWith('.')
+        ? posix.join(posix.dirname(rel), spec)
+        : spec.startsWith('@/')
+          ? spec.slice(2)
+          : spec;
+      // A glass sheet is under the glass guards; anything else (a glass
+      // subfolder, the pin's fixture copies) counts as Classic.
+      if (!isGlassSheet(target) && !out.has(target)) out.set(target, rel);
+    }
+  }
+  return out;
+}
+
+/** (b) Every stylesheet a source file imports that main never imported. */
+function importedFindings(sources?: Map<string, string>): string[] {
+  return [...stylesheetImports(sources)]
+    .filter(([target]) => !MANIFEST.stylesheetImports.includes(target))
+    .map(([target, by]) => `${by}: imports ${target}, which main never imported`);
 }
 
 // ── (c) the compiled comparison ─────────────────────────────────────────────
@@ -277,12 +337,75 @@ async function compileClassic(text: string) {
   });
 }
 
+/**
+ * globals.css through Tailwind with HEAD's whole source as the class list:
+ * Tailwind's automatic scan of apps/web, as the app builds it (its PostCSS
+ * plugin runs from apps/web, the base of that scan), and nothing else.
+ */
+async function compileFullScan(text: string) {
+  const importLine = "@import 'tailwindcss';";
+  if (!text.includes(importLine)) throw new Error('globals.css no longer imports Tailwind');
+  const web = posix.relative(APP.split(sep).join('/'), WEB.split(sep).join('/'));
+  compiles += 1;
+  return postcss([tailwindcss({ optimize: false })]).process(
+    text.replace(importLine, `@import 'tailwindcss' source('${web}');`),
+    { from: join(APP, `classic-css-pin-${compiles}.css`) },
+  );
+}
+
+type GlassFile = { file: string; text: string };
+const GLASS_FILES: GlassFile[] = glassSourceFiles();
+
+/** The files index.css imports, in its order. */
+function indexImports(files: GlassFile[]): GlassFile[] {
+  const index = files.find((f) => f.file === 'index.css');
+  if (!index) throw new Error('styles/liquid-glass/index.css is gone');
+  const out: GlassFile[] = [];
+  postcss.parse(index.text).walkAtRules('import', (at) => {
+    const name = at.params.replace(/['"]/g, '').replace(/^\.\//, '');
+    const file = files.find((f) => f.file === name);
+    if (!file) throw new Error(`index.css imports ${name}, which is not a glass file`);
+    out.push(file);
+  });
+  return out;
+}
+
+/** The glass files the app loads beside globals.css: every one index.css does not import. */
+function glassBeside(files = GLASS_FILES): GlassFile[] {
+  const imported = new Set(['index.css', ...indexImports(files).map((f) => f.file)]);
+  return files.filter((f) => !imported.has(f.file));
+}
+
+/**
+ * globals.css at HEAD with the glass @import, as the app compiles it, and the
+ * glass files the app loads beside it (the unlayered companions from the root
+ * and auth layouts, the page compositions from their routes), in one text.
+ */
+async function compileWithGlass(text: string, planted?: { file: string; text: string }[]) {
+  const importLine = "@import '../styles/liquid-glass/index.css';";
+  if (!text.includes(importLine)) throw new Error('globals.css no longer imports the glass index');
+  const files = planted ?? GLASS_FILES;
+  // Planted copies are put in place of the @import, in index.css's order (what
+  // Tailwind's @import does with the files on disk; a control shows the two agree).
+  const input = planted
+    ? text.replace(importLine, () =>
+        indexImports(files)
+          .map((f) => f.text)
+          .join('\n'),
+      )
+    : text;
+  const { css } = await compileClassic(input);
+  return [css, ...glassBeside(files).map((f) => `/* ${f.file} */\n${f.text}`)].join('\n');
+}
+
 interface Entry {
   /** The at-rules around it, outermost first. */
   where: string;
   /** The selector, or "@keyframes name", "@property --x", "@font-face". */
   what: string;
   decls: [string, string][];
+  /** The selectors of the rules it is nested in, outermost first. */
+  inside: string[];
   /** A whole at-rule's body (keyframes): frame -> declarations. */
   frames?: [string, string][];
 }
@@ -290,11 +413,22 @@ interface Entry {
 const BODY_AT_RULES =
   /^(keyframes|-webkit-keyframes|property|font-face|counter-style|page|font-feature-values|font-palette-values)$/;
 
+/**
+ * A value with its whitespace outside quotes collapsed: Tailwind's @import
+ * keeps a multi-line value of an imported file on one line, the file's own
+ * text keeps its line breaks, and the two mean the same.
+ */
+const squashValue = (value: string) =>
+  value
+    .split(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/)
+    .map((part, i) => (i % 2 === 1 ? part : part.replace(/\s+/g, ' ')))
+    .join('')
+    .trim();
 const declsOf = (node: Container): [string, string][] => {
   const out: [string, string][] = [];
   node.each((child) => {
     if (child.type === 'decl')
-      out.push([child.prop, `${child.value}${child.important ? ' !important' : ''}`]);
+      out.push([child.prop, `${squashValue(child.value)}${child.important ? ' !important' : ''}`]);
   });
   return out;
 };
@@ -313,15 +447,17 @@ function entriesOf(css: string): { entries: Entry[]; layers: string[] } {
       if (!layers.includes(name)) layers.push(name);
     }
   };
-  const visit = (node: ChildNode, where: string[]) => {
+  const visit = (node: ChildNode, where: string[], inside: string[]) => {
     if (node.type === 'rule') {
+      const selector = squash((node as Rule).selector);
       entries.push({
         where: where.join(' > '),
-        what: squash((node as Rule).selector),
+        what: selector,
         decls: declsOf(node as Rule),
+        inside,
       });
       (node as Rule).each((child) => {
-        if (child.type !== 'decl') visit(child, [...where, squash((node as Rule).selector)]);
+        if (child.type !== 'decl') visit(child, [...where, selector], [...inside, selector]);
       });
       return;
     }
@@ -330,7 +466,7 @@ function entriesOf(css: string): { entries: Entry[]; layers: string[] } {
     const label = squash(`@${at.name} ${at.params}`);
     if (at.name === 'layer') addLayers(at.params);
     if (!at.nodes) {
-      entries.push({ where: where.join(' > '), what: label, decls: [] });
+      entries.push({ where: where.join(' > '), what: label, decls: [], inside });
       return;
     }
     if (BODY_AT_RULES.test(at.name)) {
@@ -338,15 +474,15 @@ function entriesOf(css: string): { entries: Entry[]; layers: string[] } {
       at.each((child) => {
         if (child.type === 'rule') frames.push([squash(child.selector), declText(declsOf(child))]);
       });
-      entries.push({ where: where.join(' > '), what: label, decls: declsOf(at), frames });
+      entries.push({ where: where.join(' > '), what: label, decls: declsOf(at), inside, frames });
       return;
     }
     if (at.nodes.some((n) => n.type === 'decl')) {
-      entries.push({ where: where.join(' > '), what: label, decls: declsOf(at) });
+      entries.push({ where: where.join(' > '), what: label, decls: declsOf(at), inside });
     }
-    at.each((child) => visit(child, [...where, label]));
+    at.each((child) => visit(child, [...where, label], inside));
   };
-  postcss.parse(css).each((node) => visit(node, []));
+  postcss.parse(css).each((node) => visit(node, [], []));
   return { entries, layers };
 }
 
@@ -363,22 +499,42 @@ function keyed(entries: Entry[]): Map<string, Entry> {
   return out;
 }
 
-/** (c) Every way the compiled branch differs from compiled main, by kind. */
-function compiledFindings(mainCss: string, branchCss: string): string[] {
+/** What a comparison may let through on the branch's side, and nothing else. */
+interface Allow {
+  /** Dropped from the branch before comparing (the glass entries of (c)). */
+  entry?(e: Entry): boolean;
+  /** A layer name dropped from the branch's layer order. */
+  layer?(name: string): boolean;
+  /** An entry main does not have that is not a finding ((d): a utility for a class Classic never had). */
+  newEntry?(e: Entry): boolean;
+  /** A declaration main's entry does not have that is not a finding ((d): an unread theme variable). */
+  newDecl?(key: string, prop: string): boolean;
+  /** The texts may differ in layout (line breaks, indentation) alone. */
+  layout?: boolean;
+}
+
+/** (c), (d) Every way the compiled branch differs from compiled main, by kind. */
+function compiledFindings(mainCss: string, branchCss: string, allow: Allow = {}): string[] {
   if (mainCss === branchCss) return [];
   const out: string[] = [];
   const main = entriesOf(mainCss);
   const branch = entriesOf(branchCss);
-  if (main.layers.join(', ') !== branch.layers.join(', ')) {
-    out.push(`layer order: main ${main.layers.join(', ')}, branch ${branch.layers.join(', ')}`);
+  const branchLayers = branch.layers.filter((l) => !allow.layer?.(l));
+  // Whether an allowance let something through: then the texts differ by it.
+  let allowed = allow.layout === true || branchLayers.length !== branch.layers.length;
+  if (main.layers.join(', ') !== branchLayers.join(', ')) {
+    out.push(`layer order: main ${main.layers.join(', ')}, branch ${branchLayers.join(', ')}`);
   }
   const a = keyed(main.entries);
-  const b = keyed(branch.entries);
+  const kept = branch.entries.filter((e) => !allow.entry?.(e));
+  allowed ||= kept.length !== branch.entries.length;
+  const b = keyed(kept);
   for (const [key, e] of b) {
-    if (!a.has(key)) {
-      const body = e.frames
-        ? e.frames.map(([f, d]) => `${f} { ${d} }`).join(' ')
-        : declText(e.decls);
+    if (!a.has(key) && allow.newEntry?.(e)) allowed = true;
+    else if (!a.has(key)) {
+      const body = [declText(e.decls), ...(e.frames ?? []).map(([f, d]) => `${f} { ${d} }`)]
+        .filter(Boolean)
+        .join(' ');
       out.push(`new in the branch: ${key} { ${body} }`);
     }
   }
@@ -401,18 +557,24 @@ function compiledFindings(mainCss: string, branchCss: string): string[] {
     const after = new Map(now.decls);
     for (const prop of new Set([...before.keys(), ...after.keys()])) {
       if (before.get(prop) === after.get(prop)) continue;
+      if (!before.has(prop) && allow.newDecl?.(key, prop)) {
+        after.delete(prop);
+        allowed = true;
+        continue;
+      }
       const kind = prop.startsWith('--') ? 'custom property ' : '';
       out.push(
         `${kind}${prop} in ${key}: main ${before.get(prop) ?? '(none)'}, branch ${after.get(prop) ?? '(none)'}`,
       );
     }
+    const nowDecls = now.decls.filter(([p]) => before.has(p) || after.has(p));
     if (
-      declText(was.decls) !== declText(now.decls) &&
+      declText(was.decls) !== declText(nowDecls) &&
       before.size === after.size &&
       [...before].every(([p, v]) => after.get(p) === v)
     ) {
       out.push(
-        `declaration order in ${key}: main ${declText(was.decls)}, branch ${declText(now.decls)}`,
+        `declaration order in ${key}: main ${declText(was.decls)}, branch ${declText(nowDecls)}`,
       );
     }
   }
@@ -425,7 +587,176 @@ function compiledFindings(mainCss: string, branchCss: string): string[] {
   if (at !== -1) {
     out.push(`cascade order: at rule ${at + 1} main has ${oa[at]}, the branch has ${ob[at]}`);
   }
-  if (out.length === 0) out.push(lineDiff('compiled globals.css', mainCss, branchCss));
+  // Every kind the entries hold is compared above; a text difference beyond
+  // them, with nothing allowed, is still reported.
+  if (out.length === 0 && !allowed) out.push(lineDiff('compiled globals.css', mainCss, branchCss));
+  return out;
+}
+
+/** Every selector of the list starts with the glass root. */
+const glassScoped = (selector: string) => splitSelectors(selector).every((s) => GLASS_ROOT.test(s));
+const isLgLayer = (name: string) => name === 'lg' || name.startsWith('lg.');
+
+/** The two glass rules that act outside the glass root, by place, text and declarations. */
+const GLASS_UNSCOPED: readonly { where: string; what: string; decls: string }[] = [
+  { where: '@layer lg', what: CLASSIC_HIDE_RULE, decls: 'display: none' },
+  { where: '@layer lg > @media print', what: '[data-glass-only]', decls: 'display: none' },
+];
+
+/**
+ * (c) The glass entries, dropped from HEAD's compile before it is held to
+ * main's: a rule every selector of which (or of a rule around it) starts with
+ * the glass root, the two allowed unscoped rules, @keyframes lg-*, @property
+ * --lg-*, a layer statement that only adds lg to main's layers, and layer lg in
+ * the layer order. Anything else a glass file brings in is compared.
+ */
+function glassAllow(mainLayers: readonly string[]): Allow {
+  return {
+    entry(e) {
+      if (e.inside.some(glassScoped)) return true;
+      if (!e.what.startsWith('@')) {
+        if (glassScoped(e.what)) return true;
+        return GLASS_UNSCOPED.some(
+          (r) =>
+            r.where === e.where &&
+            r.what === normaliseQuotes(e.what) &&
+            r.decls === declText(e.decls),
+        );
+      }
+      if (/^@(-webkit-)?keyframes lg-[\w-]+$/.test(e.what)) return true;
+      if (/^@property --lg-[\w-]+$/.test(e.what)) return true;
+      const layer = /^@layer ([\w.\-, ]+)$/.exec(e.what);
+      if (layer && !e.frames && e.decls.length === 0) {
+        const names = layer[1]!.split(',').map((n) => n.trim());
+        return names.some(isLgLayer) && names.every((n) => isLgLayer(n) || mainLayers.includes(n));
+      }
+      return false;
+    },
+    layer: isLgLayer,
+  };
+}
+
+const CANDIDATE_SET = new Set(CANDIDATES);
+/** The first class of a selector, unescaped: a backslash escape becomes its character. */
+const firstClass = (selector: string) =>
+  /\.((?:\\.|[^\s.#:[\]>+~,()\\])+)/.exec(selector)?.[1]?.replace(/\\(.)/g, '$1');
+
+/** Every custom property a stylesheet reads with var(). */
+const varReads = (css: string) => [...css.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]!);
+
+/**
+ * (d) What HEAD's whole source may add to the Classic compile: a utility for a
+ * class Classic's source never had (its first class is not in candidates.dat,
+ * so no Classic element carries it; changing Classic markup is defence (f)'s),
+ * and a theme variable on :root that nothing Classic reads (main's compiled
+ * globals.css and main's other Classic stylesheets name it in no var()).
+ */
+function fullScanAllow(mainCss: string): Allow {
+  const reads = new Set([mainCss, ...FIXTURE.values()].flatMap(varReads));
+  return {
+    newEntry(e) {
+      if (!e.where.startsWith('@layer utilities')) return false;
+      if (e.what.startsWith('@') && e.inside.length === 0) return false;
+      return splitSelectors(e.inside[0] ?? e.what).every((sel) => {
+        const cls = firstClass(sel);
+        return cls !== undefined && !CANDIDATE_SET.has(cls);
+      });
+    },
+    newDecl: (key, prop) =>
+      key === '@layer theme > :root, :host' && prop.startsWith('--') && !reads.has(prop),
+  };
+}
+
+// ── the toolchain and the provenance ────────────────────────────────────────
+
+/** The CSS toolchain the compiles above run with (the packages the app's build resolves). */
+function installedToolchain(): Record<string, string> {
+  const versionOf = (resolveFrom: NodeRequire, name: string) => {
+    let dir = posix.dirname(resolveFrom.resolve(name).split(sep).join('/'));
+    for (;;) {
+      try {
+        const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {
+          name?: string;
+          version: string;
+        };
+        if (pkg.name === name) return pkg.version;
+      } catch {
+        // No package.json at this level: keep climbing.
+      }
+      const up = posix.dirname(dir);
+      if (up === dir) throw new Error(`no package.json for ${name}`);
+      dir = up;
+    }
+  };
+  const fromWeb = createRequire(join(WEB, 'package.json'));
+  return {
+    '@tailwindcss/node': versionOf(fromTailwind, '@tailwindcss/node'),
+    '@tailwindcss/oxide': versionOf(fromTailwind, '@tailwindcss/oxide'),
+    '@tailwindcss/postcss': versionOf(fromWeb, '@tailwindcss/postcss'),
+    postcss: versionOf(fromWeb, 'postcss'),
+    tailwindcss: versionOf(fromWeb, 'tailwindcss'),
+    'tailwindcss-animate': versionOf(fromWeb, 'tailwindcss-animate'),
+  };
+}
+
+type Git = (...args: string[]) => string | undefined;
+
+/**
+ * The fixture is main's text at the branch's merge base. Returns 'skip' only
+ * outside CI with no git repository at all; in CI, and wherever git works, a
+ * missing commit or origin/main is a finding, never a skip.
+ */
+function provenanceFindings(
+  git: Git,
+  ci: boolean,
+  manifest: Manifest = MANIFEST,
+  fixture: Sheets = FIXTURE,
+): string[] | 'skip' {
+  const fetch = 'the CI Test job checks out with fetch-depth: 0; locally: git fetch origin';
+  if (git('rev-parse', '--git-dir') === undefined) {
+    return ci ? [`git is not available, so the fixture cannot be tied to main (${fetch})`] : 'skip';
+  }
+  const sha = manifest.mergeBase;
+  if (git('cat-file', '-e', `${sha}^{commit}`) === undefined) {
+    return [`the recorded merge base ${sha} is not in this clone (${fetch})`];
+  }
+  const main = git('rev-parse', '--verify', 'origin/main^{commit}')?.trim();
+  if (!main) return [`origin/main is not in this clone (${fetch})`];
+  const out: string[] = [];
+  for (const file of manifest.files) {
+    if (git('show', `${sha}:apps/web/src/${file}`) !== fixture.get(file)) {
+      out.push(`classic-css-pin/files/${file} is not ${sha.slice(0, 9)}'s text`);
+    }
+  }
+  const atBase = (
+    git('ls-tree', '--full-tree', '-r', '--name-only', sha, '--', 'apps/web/src') ?? ''
+  )
+    .split('\n')
+    .filter((p) => STYLESHEET.test(p) && !p.startsWith(`apps/web/src/${GLASS_PREFIX}`))
+    .map((p) => p.slice('apps/web/src/'.length))
+    .sort();
+  if (atBase.join('\n') !== [...manifest.files].sort().join('\n')) {
+    out.push(
+      `manifest files are not ${sha.slice(0, 9)}'s Classic stylesheets: ${atBase.join(', ')}`,
+    );
+  }
+  const isAncestor = (a: string, b: string) =>
+    git('merge-base', '--is-ancestor', a, b) !== undefined;
+  if (!isAncestor(sha, main)) out.push(`${sha} is not on origin/main`);
+  if (!isAncestor(sha, 'HEAD')) out.push(`${sha} is not in HEAD's history`);
+  // The branch's tip: HEAD, or for a pull request's merge commit (main first,
+  // the branch second) its second parent.
+  const second = git('rev-parse', '--verify', '--quiet', 'HEAD^2^{commit}')?.trim();
+  const tip = second && isAncestor('HEAD^1', main) && !isAncestor(second, main) ? second : 'HEAD';
+  const tipSha = git('rev-parse', `${tip}^{commit}`)?.trim();
+  const base = git('merge-base', tip, main)?.trim();
+  // Once the branch is on main (after its merge) there is no merge base to hold it to.
+  if (base !== tipSha && base !== sha) {
+    out.push(
+      `manifest mergeBase ${sha} is not the merge base of the branch and origin/main (${base}): ` +
+        'run classic-css-pin/refresh.mjs',
+    );
+  }
   return out;
 }
 
@@ -449,8 +780,7 @@ describe('the Classic CSS pin (defence g)', () => {
     }
   });
 
-  // Where git and the recorded commit are at hand (not in a shallow CI clone).
-  const git = (...args: string[]) => {
+  const git: Git = (...args) => {
     try {
       return execFileSync('git', args, {
         cwd: WEB,
@@ -461,20 +791,21 @@ describe('the Classic CSS pin (defence g)', () => {
       return undefined;
     }
   };
-  const recorded = git('cat-file', '-e', `${MANIFEST.mergeBase}^{commit}`) !== undefined;
-  it.runIf(recorded)(
-    'the fixture is the recorded commit’s text, and that commit is on origin/main',
+  const provenance = provenanceFindings(git, Boolean(process.env.CI));
+  // Skipped only outside CI where there is no git repository at all.
+  it.runIf(provenance !== 'skip')(
+    'the fixture is the recorded commit’s text, that commit is on origin/main and is the branch’s merge base (CI: required)',
     () => {
-      for (const file of MANIFEST.files) {
-        expect(git('show', `${MANIFEST.mergeBase}:apps/web/src/${file}`), file).toBe(
-          FIXTURE.get(file),
-        );
-      }
-      if (git('rev-parse', '--verify', 'origin/main^{commit}') !== undefined) {
-        expect(git('merge-base', '--is-ancestor', MANIFEST.mergeBase, 'origin/main')).toBe('');
-      }
+      expect(provenance).toEqual([]);
     },
   );
+
+  it('the CSS toolchain is the merge base’s: the same packages and postcss.config.mjs', () => {
+    expect(installedToolchain()).toEqual(MANIFEST.toolchain.packages);
+    expect(readFileSync(join(WEB, 'postcss.config.mjs'), 'utf8')).toBe(
+      MANIFEST.toolchain.postcssConfig,
+    );
+  });
 
   it('the candidate list is sorted and unique, and Tailwind’s scanner reads it back whole', () => {
     expect(CANDIDATES.length).toBe(MANIFEST.candidates);
@@ -529,22 +860,29 @@ describe('the Classic CSS pin (defence g)', () => {
     ]);
   });
 
-  it('(b) no source file imports a stylesheet outside styles/liquid-glass that main did not', () => {
-    const branch = stylesheetImports();
-    const fresh = [...branch].filter(([target]) => !MANIFEST.stylesheetImports.includes(target));
-    expect(
-      fresh.map(([target, by]) => `${by}: imports ${target}, which main never imported`),
-    ).toEqual([]);
-    expect([...branch.keys()]).toEqual(expect.arrayContaining(['app/globals.css']));
+  it('(b) no source file imports a stylesheet that main did not, other than a glass sheet', () => {
+    expect(importedFindings()).toEqual([]);
+    expect([...stylesheetImports().keys()]).toEqual(expect.arrayContaining(['app/globals.css']));
   });
 
-  it('(c) globals.css compiled at main’s text and at HEAD without the glass @import is the same', async () => {
-    const branch = await compileClassic(withoutAllowedHunks(HEAD_GLOBALS));
-    expect(withoutAllowedHunks(HEAD_GLOBALS)).not.toContain('liquid-glass/index.css');
+  it('(c) globals.css compiled at main’s text, and at HEAD with the glass @import and the glass files beside it, is the same once the glass entries are dropped', async () => {
     const main = await compiledMain();
     expect(main).toContain('@keyframes nav-progress-climb');
     expect(main).toContain('@property --tw-');
-    expect(compiledFindings(main, branch.css)).toEqual([]);
+    const beside = glassBeside().map((f) => f.file);
+    expect(beside).toEqual(expect.arrayContaining(['globals.glass.css', 'pages/items.css']));
+    const branch = await compileWithGlass(HEAD_GLOBALS);
+    // The glass is in it (so the drop below is what keeps (c) passing).
+    expect(branch).toMatch(/:root\[data-appearance=["']liquid-glass["']\]/);
+    expect(branch.length).toBeGreaterThan(main.length);
+    expect(compiledFindings(main, branch, glassAllow(entriesOf(main).layers))).toEqual([]);
+  });
+
+  it('(d) globals.css compiled from HEAD’s whole source adds only utilities for classes Classic never had and theme variables nothing Classic reads', async () => {
+    const main = await compiledMain();
+    const { css } = await compileFullScan(withoutAllowedHunks(HEAD_GLOBALS));
+    expect(css.length).toBeGreaterThan(main.length);
+    expect(compiledFindings(main, css, fullScanAllow(main))).toEqual([]);
   });
 });
 
@@ -706,14 +1044,13 @@ describe('controls', () => {
     expect(textFindings(glass)).toEqual([]);
     expect(newFileFindings(glass)).toEqual([]);
     expect(importFindings(glass)).toEqual([]);
-    // (c) never reads a glass file: it compiles globals.css without the glass
-    // @import, so its only dependencies are Tailwind's own and the candidates.
-    const branch = await compileClassic(withoutAllowedHunks(HEAD_GLOBALS));
-    const deps = branch.messages
-      .filter((m) => m.type === 'dependency')
-      .map((m) => String((m as { file?: string }).file));
-    expect(deps.some((d) => d.includes('liquid-glass'))).toBe(false);
-    expect(deps).toContain(CANDIDATE_FILE);
+    // (c) reads the glass and drops what is scoped to the glass root.
+    const planted = plantGlass({ 'shell.css': rule });
+    planted.push({ file: 'pages/control.css', text: rule });
+    const main = await compiledMain();
+    const css = await compileWithGlass(HEAD_GLOBALS, planted);
+    expect(css).toContain('stroke-dashoffset: 115');
+    expect(compiledFindings(main, css, glassAllow(entriesOf(main).layers))).toEqual([]);
     // The same rule in a Classic file is caught by (a), and a new Classic file by (b).
     const classic = new Map(SHEETS);
     classic.set('components/po/po-list.css', SHEETS.get('components/po/po-list.css')! + rule);
@@ -722,7 +1059,7 @@ describe('controls', () => {
       expect.stringMatching(/^components\/po\/po-list\.css:\d+: differs/),
     ]);
     expect(newFileFindings(classic)).toEqual([
-      'components/po/control.css: a new Classic stylesheet (outside styles/liquid-glass; main has no such file)',
+      'components/po/control.css: a new Classic stylesheet (not a glass sheet the glass guards read; main has no such file)',
     ]);
   });
 
@@ -735,5 +1072,241 @@ describe('controls', () => {
     expect(importFindings(withGlobals(css))).toEqual([
       "app/globals.css: imports something new: @import './extra.css'",
     ]);
+  });
+});
+
+// ── the fix round's attacks (glass at-rules, the subfolder, the provenance, (d)) ─
+
+/** The glass files with text appended to some of them. */
+function plantGlass(extra: Record<string, string>): GlassFile[] {
+  for (const file of Object.keys(extra)) {
+    if (!GLASS_FILES.some((f) => f.file === file)) throw new Error(`no glass file ${file}`);
+  }
+  return GLASS_FILES.map((f) => ({ file: f.file, text: f.text + (extra[f.file] ?? '') }));
+}
+
+async function glassFindings(planted: GlassFile[]) {
+  const main = await compiledMain();
+  return compiledFindings(
+    main,
+    await compileWithGlass(HEAD_GLOBALS, planted),
+    glassAllow(entriesOf(main).layers),
+  );
+}
+
+const PULSE_VAR = `--${PULSE}`;
+const PROPERTY_ATTACK = `\n@layer lg { @media screen { @property ${PULSE_VAR} { syntax: '<time>'; inherits: true; initial-value: 0s; } } }\n`;
+
+describe('the fix round’s attacks fail the pin', () => {
+  it('control: the glass inlined in place of its @import compiles as the @import does', async () => {
+    const main = await compiledMain();
+    const viaImport = await compileWithGlass(HEAD_GLOBALS);
+    const inlined = await compileWithGlass(HEAD_GLOBALS, plantGlass({}));
+    expect(viaImport).not.toBe(inlined);
+    expect(compiledFindings(viaImport, inlined, { layout: true })).toEqual([]);
+    expect(compiledFindings(main, inlined, glassAllow(entriesOf(main).layers))).toEqual([]);
+  });
+
+  it('control: without the glass drop, (c) sees the glass (so the drop is what lets it pass)', async () => {
+    const main = await compiledMain();
+    const css = await compileWithGlass(HEAD_GLOBALS);
+    const raw = compiledFindings(main, css);
+    expect(raw.length).toBeGreaterThan(10);
+    expect(raw).toEqual(expect.arrayContaining([expect.stringMatching(/^layer order: .*, lg/)]));
+  });
+
+  it('@property for a Classic custom property in shell.css (@layer lg > @media screen) fails (c)', async () => {
+    expect(await glassFindings(plantGlass({ 'shell.css': PROPERTY_ATTACK }))).toEqual([
+      `new in the branch: @layer lg > @media screen > @property ${PULSE_VAR} { syntax: '<time>'; inherits: true; initial-value: 0s }`,
+    ]);
+  });
+
+  it('@property and @font-face in the unlayered companion globals.glass.css fail (c)', async () => {
+    const found = await glassFindings(
+      plantGlass({
+        'globals.glass.css': `\n@property ${PULSE_VAR} { syntax: '<time>'; inherits: true; initial-value: 0s; }\n@font-face { font-family: 'Tinos'; src: local('Comic Sans MS'); }\n`,
+      }),
+    );
+    expect(found).toEqual([
+      `new in the branch: @property ${PULSE_VAR} { syntax: '<time>'; inherits: true; initial-value: 0s }`,
+      "new in the branch: @font-face { font-family: 'Tinos'; src: local('Comic Sans MS') }",
+    ]);
+  });
+
+  it('@config in shell.css that changes the pulse animation fails (c)', async () => {
+    const config = join(TMP, 'lg.config.cjs');
+    writeFileSync(
+      config,
+      "module.exports = { theme: { extend: { animation: { pulse: 'pulse 0.4s linear infinite' } } } };\n",
+    );
+    const found = await glassFindings(plantGlass({ 'shell.css': `\n@config '${config}';\n` }));
+    expect(found).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(
+          new RegExp(
+            `^animation in @layer utilities > \\.${PULSE}: main var\\(${PULSE_VAR}\\), branch pulse 0\\.4s linear infinite$`,
+          ),
+        ),
+      ]),
+    );
+  });
+
+  it('@page and an unscoped rule inside @layer lg fail (c)', async () => {
+    const found = await glassFindings(
+      plantGlass({
+        'shell.css': `\n@layer lg { @page { margin: 3in; } @media screen { .sp-mark-spath { stroke-dashoffset: 115; } } }\n`,
+      }),
+    );
+    expect(found).toEqual([
+      'new in the branch: @layer lg > @page { margin: 3in }',
+      'new in the branch: @layer lg > @media screen > .sp-mark-spath { stroke-dashoffset: 115 }',
+    ]);
+  });
+
+  it('a stylesheet in a subfolder of styles/liquid-glass, imported from the root layout, fails (b) twice', () => {
+    const sub = 'styles/liquid-glass/extra/x.css';
+    const sheets = new Map([...SHEETS, [sub, `.${PULSE} { animation-duration: 0.4s; }\n`]]);
+    expect(newFileFindings(sheets)).toEqual([
+      `${sub}: a new Classic stylesheet (not a glass sheet the glass guards read; main has no such file)`,
+    ]);
+    const sources = readSources();
+    const layout = sources.get('app/layout.tsx')!;
+    sources.set('app/layout.tsx', `import '../styles/liquid-glass/extra/x.css';\n${layout}`);
+    expect(importedFindings(sources)).toEqual([
+      `app/layout.tsx: imports ${sub}, which main never imported`,
+    ]);
+  });
+
+  it('a source file importing the pin’s fixture copy of globals.css fails (b), and a copy is not a Classic sheet', () => {
+    const sources = readSources();
+    sources.set(
+      'components/po/control.tsx',
+      "import '@/styles/liquid-glass/classic-css-pin/files/app/globals.css';\n",
+    );
+    expect(importedFindings(sources)).toEqual([
+      'components/po/control.tsx: imports styles/liquid-glass/classic-css-pin/files/app/globals.css, which main never imported',
+    ]);
+    expect(isClassic(`${PIN_PREFIX}files/app/globals.css`)).toBe(false);
+    expect(isClassic(`${PIN_PREFIX}files/app/other.css`)).toBe(true);
+  });
+
+  it('isGlassSheet names exactly the files glassSourceFiles() reads', () => {
+    const onDisk = [...SHEETS.keys()].filter((f) => f.startsWith(GLASS_PREFIX) && isGlassSheet(f));
+    expect(onDisk.sort()).toEqual(GLASS_FILES.map((f) => GLASS_PREFIX + f.file).sort());
+  });
+
+  describe('provenance: a fixture changed in step with globals.css fails', () => {
+    const real: Git = (...args) => {
+      try {
+        return execFileSync('git', args, {
+          cwd: WEB,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore'],
+        });
+      } catch {
+        return undefined;
+      }
+    };
+    const hasRepo = real('rev-parse', '--git-dir') !== undefined;
+    const FAKE = '0123456789abcdef0123456789abcdef01234567';
+    const matched = new Map(FIXTURE);
+    matched.set(
+      'app/globals.css',
+      once(FIXTURE.get('app/globals.css')!, '--chart-4: 95 28% 58%;', '--chart-4: 95 28% 38%;'),
+    );
+
+    it('in CI, a shallow clone (no recorded commit, no origin/main) is a finding, not a skip', () => {
+      const shallow: Git = (...args) =>
+        args[0] === 'rev-parse' && args[1] === '--git-dir' ? '.git\n' : undefined;
+      expect(provenanceFindings(shallow, true)).toEqual([
+        `the recorded merge base ${MANIFEST.mergeBase} is not in this clone (the CI Test job checks out with fetch-depth: 0; locally: git fetch origin)`,
+      ]);
+      expect(provenanceFindings(() => undefined, true)).toEqual([
+        'git is not available, so the fixture cannot be tied to main (the CI Test job checks out with fetch-depth: 0; locally: git fetch origin)',
+      ]);
+      expect(provenanceFindings(() => undefined, false)).toBe('skip');
+    });
+
+    it.runIf(hasRepo)('a made-up merge base fails, in CI and out of it', () => {
+      for (const ci of [true, false]) {
+        expect(provenanceFindings(real, ci, { ...MANIFEST, mergeBase: FAKE }, matched)).toEqual([
+          `the recorded merge base ${FAKE} is not in this clone (the CI Test job checks out with fetch-depth: 0; locally: git fetch origin)`,
+        ]);
+      }
+    });
+
+    it.runIf(hasRepo)('the real merge base with a matched edit fails', () => {
+      expect(provenanceFindings(real, true, MANIFEST, matched)).toEqual([
+        `classic-css-pin/files/app/globals.css is not ${MAIN_SHORT}'s text`,
+      ]);
+    });
+
+    it.runIf(hasRepo)('an older commit of main, not the merge base, fails', () => {
+      const older = real('rev-parse', `${MANIFEST.mergeBase}~1`)!.trim();
+      const found = provenanceFindings(real, true, { ...MANIFEST, mergeBase: older });
+      expect(found).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            new RegExp(
+              `^manifest mergeBase ${older} is not the merge base of the branch and origin/main \\(${MANIFEST.mergeBase}\\)`,
+            ),
+          ),
+        ]),
+      );
+    });
+  });
+
+  describe('(d) lets through only unread theme variables and utilities for classes Classic never had', () => {
+    const THEME_OPEN = /(@layer theme \{\s*:root, :host \{\n)/;
+    const withTheme = (css: string, decl: string) => {
+      expect(css).toMatch(THEME_OPEN);
+      return css.replace(THEME_OPEN, `$1    ${decl}\n`);
+    };
+    const withUtility = (css: string, rule: string) => {
+      const at = css.lastIndexOf('@layer utilities {');
+      expect(at).toBeGreaterThan(-1);
+      const open = at + '@layer utilities {'.length;
+      return `${css.slice(0, open)}\n  ${rule}${css.slice(open)}`;
+    };
+
+    it('a new theme variable nothing Classic reads passes; one Classic reads fails', async () => {
+      const main = await compiledMain();
+      // A variable Classic reads that the theme block does not set.
+      const read = varReads(main).find((v) => v.startsWith('--ed-'));
+      expect(read).toBeDefined();
+      const unread = '--lgx-unread-zz';
+      expect(
+        compiledFindings(main, withTheme(main, `${unread}: 1px;`), fullScanAllow(main)),
+      ).toEqual([]);
+      expect(compiledFindings(main, withTheme(main, `${read}: red;`), fullScanAllow(main))).toEqual(
+        [`custom property ${read} in @layer theme > :root, :host: main (none), branch red`],
+      );
+    });
+
+    it('a changed theme value, a new @property and a new rule for a Classic class fail; a utility for a new class passes', async () => {
+      const main = await compiledMain();
+      const allow = fullScanAllow(main);
+      const changed = main.replace(
+        `${PULSE_VAR}: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;`,
+        `${PULSE_VAR}: pulse 0.4s linear infinite;`,
+      );
+      expect(changed).not.toBe(main);
+      expect(compiledFindings(main, changed, allow)).toEqual([
+        `custom property ${PULSE_VAR} in @layer theme > :root, :host: main pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite, branch pulse 0.4s linear infinite`,
+      ]);
+      const property = `${main}\n@property --tw-lgx-zz { syntax: '*'; inherits: false; initial-value: 6px; }\n`;
+      expect(compiledFindings(main, property, allow)).toEqual([
+        "new in the branch: @property --tw-lgx-zz { syntax: '*'; inherits: false; initial-value: 6px }",
+      ]);
+      const classic = withUtility(
+        main,
+        `@media (prefers-reduced-motion: no-preference) { .${PULSE} { opacity: 0.6; } }`,
+      );
+      expect(compiledFindings(main, classic, allow)).toEqual([
+        `new in the branch: @layer utilities > @media (prefers-reduced-motion: no-preference) > .${PULSE} { opacity: 0.6 }`,
+      ]);
+      const fresh = withUtility(main, '.lgx-new-zz { opacity: 0.6; }');
+      expect(compiledFindings(main, fresh, allow)).toEqual([]);
+    });
   });
 });
