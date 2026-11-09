@@ -6,6 +6,13 @@ import Link from 'next/link';
 import type * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { BooksGlassColumnsMenu } from '@/components/books/books-glass-columns';
+import {
+  ItemGlassAside,
+  ItemGlassSummary,
+  type ItemGlassFacts,
+} from '@/components/inventory/item-glass-summary';
+import { ItemMoreActions } from '@/components/inventory/item-more-actions';
 import { OrderFulfilmentBadge } from '@/components/orders/order-fulfilment-badge';
 import { OrderPhoneCards } from '@/components/orders/order-phone-cards';
 import { OrderRequesterNoteAside } from '@/components/orders/order-requester-note-aside';
@@ -144,7 +151,14 @@ describe('the twin carriers a tour can meet', () => {
     expect(touredCarriers()).toEqual([
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       'app/(dashboard)/dashboard/reports/page.tsx',
+      'components/books/books-glass-columns.tsx',
       'components/dashboard/sidebar.tsx',
+      'components/dashboard/topbar.tsx',
+      'components/dashboard/user-menu.tsx',
+      'components/inventory/inventory-table.tsx',
+      'components/inventory/item-detail.tsx',
+      'components/inventory/item-glass-summary.tsx',
+      'components/inventory/item-more-actions.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',
@@ -193,9 +207,50 @@ const REPORTS: HubReport[] = [
   { slug: 'inventory-valuation', name: 'Inventory valuation', desc: 'Value' },
 ];
 
+/** A book with every glass-only part the item page's summary and side column draw. */
+const BOOK_FACTS: ItemGlassFacts = {
+  isBook: true,
+  unit: 'each',
+  onHand: 6,
+  reserved: 2,
+  reorderPoint: 10,
+  reorderQuantity: 24,
+  retailPrice: 35,
+  unitCost: 22,
+  value: 132,
+  status: 'active',
+  awaitingFirstReceipt: true,
+  staged: 1,
+  photoSrc: null,
+  book: {
+    isbn: '9780000000000',
+    author: 'A. Writer',
+    grade: '9',
+    crate: { label: 'Crate', hex: null, number: '12' },
+    rack: 'R1',
+  },
+  ordering: { visible: true },
+  inFamily: true,
+  bookReportHref: '/dashboard/reports/book-order-totals',
+};
+
 function Twins() {
   return (
     <>
+      <header>
+        <div data-twin="components/dashboard/topbar.tsx">
+          <div data-glass-only="" data-glass="tb-title">
+            Books
+          </div>
+        </div>
+        <div data-twin="components/dashboard/user-menu.tsx">
+          <div data-glass-only="" data-glass="um-whats-new">
+            <div role="menuitem" aria-label="What’s new">
+              What’s new
+            </div>
+          </div>
+        </div>
+      </header>
       <aside id="dashboard-sidebar">
         <div data-twin="components/dashboard/sidebar.tsx">
           <Link href="/dashboard/orders/new" data-glass-only="" data-glass="sb-cta">
@@ -215,6 +270,38 @@ function Twins() {
               </li>
             ))}
           </ul>
+        </div>
+        <div data-twin="components/books/books-glass-columns.tsx">
+          <BooksGlassColumnsMenu shown={new Set()} onChange={() => {}} />
+        </div>
+        <div data-twin="components/inventory/inventory-table.tsx">
+          <table>
+            <tbody>
+              <tr>
+                <td>
+                  <span>Gr 9</span>
+                  <span data-glass-only="" data-glass="book-grade-bare">
+                    9
+                  </span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div data-twin="components/inventory/item-detail.tsx">
+          <div data-testid="item-figures" data-classic-only="">
+            <span>On hand</span> <span>6</span>
+          </div>
+          <DetailSection title="Reorder" flush data-classic-only="">
+            <p>Reorder at 10 each</p>
+          </DetailSection>
+        </div>
+        <div data-twin="components/inventory/item-more-actions.tsx">
+          <ItemMoreActions />
+        </div>
+        <div data-twin="components/inventory/item-glass-summary.tsx">
+          <ItemGlassSummary facts={BOOK_FACTS} />
+          <ItemGlassAside facts={BOOK_FACTS} />
         </div>
         <div data-twin="components/orders/order-phone-cards.tsx">
           <OrderPhoneCards rows={[ROW]} />
@@ -271,6 +358,23 @@ describe('the tour steps that match a twin', () => {
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       /<DetailSection\s+title="Requester note"[\s\S]{0,200}?data-classic-only=""/u,
     );
+    sourceHas('components/dashboard/topbar.tsx', /<div data-glass-only="" data-glass="tb-title">/u);
+    sourceHas(
+      'components/dashboard/user-menu.tsx',
+      /<div data-glass-only="" data-glass="um-whats-new">\s*<DropdownMenuItem aria-label=\{label\}/u,
+    );
+    sourceHas(
+      'components/inventory/inventory-table.tsx',
+      /<span data-glass-only="" data-glass="book-grade-bare">/u,
+    );
+    sourceHas(
+      'components/inventory/item-detail.tsx',
+      /<StatStrip variant="detail" data-testid="item-figures" data-classic-only="">/u,
+    );
+    sourceHas(
+      'components/inventory/item-detail.tsx',
+      /<DetailSection title="Reorder" flush data-classic-only="">/u,
+    );
     // The export menu's glass-only parts are an icon and two spans of words.
     const menu = FILES.get('components/orders/orders-export-menu.tsx')!;
     expect(menu.match(/<(\w+)[^>]*data-glass-only=""/gu)?.map((m) => m.split(/\s/u)[0])).toEqual([
@@ -311,11 +415,36 @@ describe('the tour steps that match a twin', () => {
         }
       }
     }
+    // Every step runs against every twin here, whatever its route. The item
+    // page's glass side column (an <aside> with the Book Order Totals link)
+    // matches the order page's and the Reports hub's selectors, but neither
+    // tour runs on a route that renders it (the next test), so no running
+    // tour meets it.
     expect([...new Set(hits)].sort()).toEqual([
+      'order-detail | main aside | glass-only | components/inventory/item-glass-summary.tsx',
       'orders-page | a[href="/dashboard/orders/new"] | glass-only | components/dashboard/sidebar.tsx',
       'reports | main a[href^="/dashboard/reports/"] | classic-only | app/(dashboard)/dashboard/reports/page.tsx',
+      'reports | main a[href^="/dashboard/reports/"] | glass-only | components/inventory/item-glass-summary.tsx',
       'reports | main a[href^="/dashboard/reports/"] | glass-only | components/reports/reports-hub-glass.tsx',
     ]);
     expect(TOUR_LIST.length).toBe(14);
+  });
+
+  it('the order page and Reports hub tours never run on a route that renders the item page glass side column', () => {
+    const carrier = 'components/inventory/item-glass-summary.tsx';
+    const mounts = /<PageTour tour=\{(?:ORDER_DETAIL_TOUR|REPORTS_TOUR)\}/u;
+    const pages = [...FILES.keys()].filter((f) => /^app\/.*\/page\.tsx$/.test(f));
+    const withCarrier = pages.filter((page) =>
+      routeFiles(page).some((f) => closure(f).has(carrier)),
+    );
+    expect(withCarrier.length).toBeGreaterThan(0);
+    expect(pages.filter((page) => mounts.test(FILES.get(page)!)).length).toBe(2);
+    for (const page of withCarrier) {
+      const all = new Set(routeFiles(page).flatMap((f) => [...closure(f)]));
+      expect(
+        [...all].filter((f) => mounts.test(FILES.get(f)!)),
+        page,
+      ).toEqual([]);
+    }
   });
 });
