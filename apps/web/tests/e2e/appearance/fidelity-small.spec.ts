@@ -9,8 +9,9 @@ import { chooseLook, glassBuild, settleIntroNotice, type Look } from './look';
  *  1. Night glass: no missing-photo thumbnail is a white tile (Manage order
  *     items, the Overview's low-stock list);
  *  2. the phone bar (390 px): the page title, the round search, the
- *     warehouse picker as an icon, What's New and the account menu, and
- *     nothing past the bar's edge;
+ *     warehouse picker as an icon, the account menu (What's New inside it),
+ *     and nothing past the bar's edge; on a touch phone (375 and 390 px,
+ *     every control 44 px) the title "Overview" reads whole;
  *  3. the Books cover view: about six 2:3 cover cards to a row at 1440;
  *  4. the Books table: the board's columns (classic's others one tick away
  *     in the Columns chooser), one-line rows, the header actions on the
@@ -62,7 +63,7 @@ test('1. Night glass: no Thumb is a white tile on Manage order items or the Over
   }
 });
 
-test('2. The phone bar: title, round search, picker as an icon, What’s New and the account menu', async ({
+test('2. The phone bar: title, round search, picker as an icon, and What’s New in the account menu', async ({
   page,
 }) => {
   await open(page, '/dashboard/inventory', DAY);
@@ -82,7 +83,12 @@ test('2. The phone bar: title, round search, picker as an icon, What’s New and
     const titleBox = (await title.boundingBox())!;
     expect(titleBox.x + titleBox.width).toBeLessThanOrEqual(box.x);
   }
-  await expect(bar.getByRole('button', { name: /^What’s new/u })).toBeVisible();
+  // What's New is in the account menu at a phone width (round 2, finding 1),
+  // not in the bar.
+  await expect(bar.getByRole('button', { name: /^What’s new/u })).toBeHidden();
+  await bar.getByRole('button', { name: /^Account menu/u }).click();
+  await expect(page.getByRole('menuitem', { name: /^What’s new/u })).toBeVisible();
+  await page.keyboard.press('Escape');
   const overflow = await bar.evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
   // Every control in the bar ends inside the window.
@@ -95,6 +101,47 @@ test('2. The phone bar: title, round search, picker as an icon, What’s New and
       .map((b) => b.getAttribute('aria-label') ?? b.textContent),
   );
   expect(outside).toEqual([]);
+});
+
+// Round 2, finding 1: on a touch phone every bar control is 44 px; the
+// title must still read whole. /dashboard is "Overview" (about 72 px at
+// 16 / 600). A touch context of its own (hasTouch, isMobile), so
+// (pointer: coarse) holds.
+test.describe('2b. The phone bar on a touch phone', () => {
+  test.use({ hasTouch: true, isMobile: true });
+  for (const width of [375, 390]) {
+    test(`at ${width} px the page title "Overview" is not cut`, async ({ page }) => {
+      // The look is chosen from the header menu, drawn from a 680 px bar.
+      await open(page, '/dashboard', DAY);
+      await page.setViewportSize({ width, height: 812 });
+      expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+      const bar = page.locator('header[data-glass="topbar"]');
+      const title = bar.locator('[data-glass="tb-title"]');
+      await expect(title).toBeVisible();
+      await expect(title).toHaveText('Overview');
+      const fit = await title.evaluate((el) => ({
+        scroll: el.scrollWidth,
+        client: el.clientWidth,
+      }));
+      expect(fit.scroll).toBeLessThanOrEqual(fit.client);
+      // Every bar control keeps its 44 px and ends inside the window.
+      const small = await bar.evaluate((el) =>
+        [...el.querySelectorAll('a, button')]
+          .filter((b) => {
+            const r = b.getBoundingClientRect();
+            return r.width > 0 && (r.width < 43.5 || r.height < 43.5);
+          })
+          .map((b) => b.getAttribute('aria-label') ?? b.textContent),
+      );
+      expect(small).toEqual([]);
+      const overflow = await bar.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect(overflow).toBeLessThanOrEqual(0);
+      // What's New is one tap away in the account menu.
+      await bar.getByRole('button', { name: /^Account menu/u }).tap();
+      await expect(page.getByRole('menuitem', { name: /^What’s new/u })).toBeVisible();
+      await page.keyboard.press('Escape');
+    });
+  }
 });
 
 test('3. Books cover view: 2:3 cover cards, about six to a row at 1440', async ({ page }) => {
@@ -136,6 +183,16 @@ test('3. Books cover view: 2:3 cover cards, about six to a row at 1440', async (
       expect(m.padding).toBe('12px');
       expect(m.radius).toBe('18px');
     }
+    // Round 2, finding 3: a card with a one- or two-digit grade reads
+    // "Grade 9" (the fact's label, then the bare number), never "Gr 9".
+    const grades = await cards.evaluateAll((els) =>
+      els
+        .map((el) => el.querySelector('[data-glass-fact="Grade"]'))
+        .filter((f): f is Element => f !== null)
+        .map((f) => (f as HTMLElement).innerText.replace(/\s+/gu, ' ').trim()),
+    );
+    for (const text of grades) expect(text).not.toMatch(/\bGr\b/u);
+    for (const text of grades) expect(text).toMatch(/^Grade /u);
   } finally {
     // Leave the list as the next spec expects it: the Table view.
     await page
@@ -200,6 +257,14 @@ test('5. Settings > Appearance: the chosen option in the accent, Theme as segmen
   expect(style.border).toBe('rgb(11, 122, 92)');
   expect(style.ring).toContain('rgb(11, 122, 92)');
   expect(style.dot).toBe('rgb(11, 122, 92)');
+  // Round 2, finding 2: an unchosen option takes the light field line
+  // (rgba(255, 255, 255, 0.78) in Day), as the board's glass .choice does.
+  const unchosen = page.locator('[data-glass="appearance-choice"]:not([data-glass-state="on"])');
+  if (await unchosen.count()) {
+    expect(await unchosen.first().evaluate((el) => getComputedStyle(el).borderTopColor)).toBe(
+      'rgba(255, 255, 255, 0.78)',
+    );
+  }
   const seg = page.locator('[data-glass="appearance-seg"]');
   expect(await seg.evaluate((el) => getComputedStyle(el).display)).toBe('inline-flex');
   const on = seg.locator('[data-glass-state="on"]');

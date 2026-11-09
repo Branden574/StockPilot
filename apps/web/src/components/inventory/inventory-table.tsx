@@ -2549,7 +2549,7 @@ export function InventoryTable({
       location: facts.location?.name ?? '—',
       facts: storage
         ? [
-            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} /> },
+            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} glassBare /> },
             { label: 'Rack', value: <BookRackContent item={item} /> },
             {
               label: 'Crate',
@@ -4070,12 +4070,38 @@ function ItemsRackContent({ item }: { item: Item }) {
   );
 }
 
-/** The Books layout's Grade cell: "Gr N" for a one- or two-digit grade. */
-function BookGradeLabel({ grade }: { grade: string | null | undefined }) {
-  return grade ? (
-    <span className="font-mono">{/^\d{1,2}$/.test(grade) ? `Gr ${grade}` : grade}</span>
-  ) : (
-    <span className="text-muted-foreground">—</span>
+/**
+ * The Books layout's Grade cell: "Gr N" for a one- or two-digit grade.
+ *
+ * `glassBare` (the cover card's Grade fact): with Liquid Glass in the build a
+ * glass-only copy holds the number alone, beside the classic "Gr N" (which
+ * carries an inert hook and is unchanged). The Books cover view under glass
+ * draws the fact's own "Grade" label and the bare number, so the card reads
+ * "Grade 9" as Books.dc.html's does, to a screen reader too; everywhere else
+ * the copy is hidden and "Gr N" is drawn (styles/liquid-glass/pages/
+ * items.css). Under `off` the copy is not rendered.
+ */
+function BookGradeLabel({
+  grade,
+  glassBare = false,
+}: {
+  grade: string | null | undefined;
+  glassBare?: boolean;
+}) {
+  if (!grade) return <span className="text-muted-foreground">—</span>;
+  const numeric = /^\d{1,2}$/.test(grade);
+  const bare = glassBare && numeric && liquidGlassRollout() !== 'off';
+  return (
+    <>
+      <span className="font-mono" data-glass={bare ? 'book-grade-classic' : undefined}>
+        {numeric ? `Gr ${grade}` : grade}
+      </span>
+      {bare ? (
+        <span data-glass-only="" data-glass="book-grade-bare">
+          {grade}
+        </span>
+      ) : null}
+    </>
   );
 }
 

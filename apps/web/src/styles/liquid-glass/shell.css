@@ -631,6 +631,14 @@
         padding: 10px 12px 8px;
       }
     }
+    /* At 390 px and under the bar packs to 4 px between its pieces, as
+       classic's does (topbar.tsx max-[390px]:gap-1), so the page title keeps
+       its room on a 390, 375 or 360 px phone (the phone bar below). */
+    @media (max-width: 390px) {
+      :root[data-appearance='liquid-glass'] [data-glass='topbar'] {
+        gap: 4px;
+      }
+    }
     /* Crumbs (.crumbs): 13 px ink 3, a 13 px chevron between them. */
     :root[data-appearance='liquid-glass'] [data-glass='crumbs'],
     :root[data-appearance='liquid-glass'] [data-glass='crumbs'] > li {
@@ -777,7 +785,17 @@
        control); classic has them only in this bar, so they stay, and the
        picker yields its words: a round glass button with the warehouse icon
        alone, its full name still its accessible name and title
-       (warehouse-filter-picker.tsx), so the title has the room. ────────── */
+       (warehouse-filter-picker.tsx), so the title has the room.
+       The bar packs so the title can be read on a touch phone, where every
+       control is 44 px (pointer: coarse, below): the icon cluster drops its
+       4 px padding and 2 px gap and the account button its 4 px margin (its
+       round buttons are 36 px, the size of the lone ones, for a mouse), the
+       bar's gap is 4 px at 390 px and under (above), and What's New leaves
+       the bar for the account menu (user-menu.tsx GlassWhatsNewItem, drawn
+       only here; the bar's button is the same action). The title then has
+       about 130 px at 390, 115 at 375 and 100 at 360 beside the picker
+       (48 px more without one), where it had 54, 39 and 24, and
+       "Overview" (about 72 px) reads whole on every one. ────────────────── */
     :root[data-appearance='liquid-glass'] [data-glass='tb-title'] {
       display: none;
     }
@@ -824,6 +842,27 @@
         display: block;
         width: 16px;
         height: 16px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] {
+        gap: 0;
+        padding: 0;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] :is(a, button) {
+        width: 36px;
+        height: 36px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] > #user-menu-trigger {
+        margin-left: 0;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] > [data-glass='tb-whats-new'] {
+        display: none;
+      }
+    }
+    /* The account menu's What's New is drawn only where the bar leaves its
+       own button out. */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass'] [data-glass='um-whats-new'] {
+        display: none;
       }
     }
     @media (pointer: coarse) {

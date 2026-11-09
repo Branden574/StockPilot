@@ -217,6 +217,47 @@ const ENTRIES: Entry[] = [
     'display',
     'block',
   ],
+  [
+    'phone bar: 4 px between its pieces at 390 px and under, as classic',
+    SHELL,
+    '(max-width: 390px)',
+    S("[data-glass='topbar']"),
+    'gap',
+    '4px',
+  ],
+  [
+    'phone bar: the icon cluster has no padding',
+    SHELL,
+    PHONE,
+    S("[data-glass='tb-cap']"),
+    'padding',
+    '0',
+  ],
+  ['phone bar: the icon cluster has no gap', SHELL, PHONE, S("[data-glass='tb-cap']"), 'gap', '0'],
+  [
+    'phone bar: the account button drops its 4 px margin',
+    SHELL,
+    PHONE,
+    S("[data-glass='tb-cap'] > #user-menu-trigger"),
+    'margin-left',
+    '0',
+  ],
+  [
+    'phone bar: What’s New leaves the bar for the account menu',
+    SHELL,
+    PHONE,
+    S("[data-glass='tb-cap'] > [data-glass='tb-whats-new']"),
+    'display',
+    'none',
+  ],
+  [
+    'account menu: its What’s New is not drawn from 761 px',
+    SHELL,
+    DESKTOP,
+    S("[data-glass='um-whats-new']"),
+    'display',
+    'none',
+  ],
   // 3. The Books cover card (Books.dc.html 64-72).
   [
     'covers: auto-fill 170 px columns',
@@ -338,6 +379,38 @@ const ENTRIES: Entry[] = [
     'display',
     'none',
   ],
+  [
+    'cover card: "Grade" then the number, from the left',
+    ITEMS,
+    '',
+    S(`${BOOKS_GRID} [data-glass-fact='Grade']`),
+    'justify-content',
+    'flex-start',
+  ],
+  [
+    'cover card: classic’s "Gr 9" not drawn',
+    ITEMS,
+    '',
+    S(`${BOOKS_GRID} [data-glass-fact='Grade'] [data-glass='book-grade-classic']`),
+    'display',
+    'none',
+  ],
+  [
+    'cover card: the bare number drawn',
+    ITEMS,
+    '',
+    S(`${BOOKS_GRID} [data-glass-fact='Grade'] [data-glass='book-grade-bare']`),
+    'display',
+    'inline',
+  ],
+  [
+    'the bare number is drawn nowhere else',
+    PRIMITIVES,
+    '',
+    S("[data-glass='book-grade-bare']"),
+    'display',
+    'none',
+  ],
   // 4. The Books table and its header.
   [
     'books table: the title on one line',
@@ -399,6 +472,14 @@ const ENTRIES: Entry[] = [
     S("[data-glass='appearance-choice']"),
     'border-radius',
     '12px',
+  ],
+  [
+    'design option: the glass .choice field line (sp.css:995), not the dark line 2',
+    PRIMITIVES,
+    '',
+    S("[data-glass='appearance-choice']"),
+    'border-color',
+    'var(--lg-field-line)',
   ],
   [
     'chosen design: accent edge',
@@ -543,6 +624,66 @@ describe('stage 3 fidelity, small lane: the board values', () => {
         'border-color',
       ),
     ).toBe('var(--lg-card-line)');
+  });
+
+  it('the cover card draws the Grade fact’s own label (never visually hidden), so it reads "Grade 9"', () => {
+    const hidden = ITEMS.filter(
+      (d) =>
+        d.selector.includes("[data-glass-fact='Grade'] > dt") &&
+        ((d.prop === 'position' && d.value === 'absolute') ||
+          (d.prop === 'display' && d.value === 'none') ||
+          d.prop === 'clip-path'),
+    );
+    expect(hidden).toEqual([]);
+  });
+
+  // The phone bar's room for the page title on a touch phone (pointer:
+  // coarse: every control 44 px), from the values this file declares: the
+  // bar's side padding and gap, the icon cluster's padding and gap, the
+  // account button's margin and whether What's New is in the bar. The bar
+  // holds the menu button, the title, the warehouse picker, the round search
+  // and the cluster (the bell, What's New, the account menu): four gaps. At
+  // 16 / 600 "Overview" is about 72 px; the review asked for about 90 at 375.
+  it.each([
+    [390, 90],
+    [375, 90],
+    [360, 72],
+  ])('phone bar at %i px on touch: the title has at least %i px', (width, floor) => {
+    const px = (v: string | undefined, fallback: number) =>
+      v === undefined ? fallback : Number.parseFloat(v.split(' ')[0]!);
+    const sidePadding = (() => {
+      const parts = value(SHELL, PHONE, S("[data-glass='topbar']"), 'padding')!.split(' ');
+      return Number.parseFloat(parts[1] ?? parts[0]!);
+    })();
+    const gap =
+      width <= 390
+        ? px(
+            value(SHELL, '(max-width: 390px)', S("[data-glass='topbar']"), 'gap'),
+            px(value(SHELL, PHONE, S("[data-glass='topbar']"), 'gap'), 8),
+          )
+        : px(value(SHELL, PHONE, S("[data-glass='topbar']"), 'gap'), 8);
+    const touch = px(value(SHELL, COARSE, S("[data-glass='tb-cap'] button"), 'min-width'), 0);
+    expect(touch).toBe(44);
+    const capPadding = px(
+      value(SHELL, PHONE, S("[data-glass='tb-cap']"), 'padding'),
+      px(value(SHELL, '', S("[data-glass='tb-cap']"), 'padding'), 0),
+    );
+    const capGap = px(
+      value(SHELL, PHONE, S("[data-glass='tb-cap']"), 'gap'),
+      px(value(SHELL, '', S("[data-glass='tb-cap']"), 'gap'), 0),
+    );
+    // Classic's ml-1 (user-menu.tsx) unless glass sets the margin.
+    const accountMargin = px(
+      value(SHELL, PHONE, S("[data-glass='tb-cap'] > #user-menu-trigger"), 'margin-left'),
+      4,
+    );
+    const whatsNewInBar =
+      value(SHELL, PHONE, S("[data-glass='tb-cap'] > [data-glass='tb-whats-new']"), 'display') !==
+      'none';
+    const capButtons = whatsNewInBar ? 3 : 2;
+    const cap = 2 * capPadding + capButtons * touch + (capButtons - 1) * capGap + accountMargin;
+    const room = width - 2 * sidePadding - 3 * touch - cap - 4 * gap;
+    expect(room).toBeGreaterThanOrEqual(floor);
   });
 
   it('every Books column glass leaves out has its own key on the table hook, and the six keys are distinct', () => {

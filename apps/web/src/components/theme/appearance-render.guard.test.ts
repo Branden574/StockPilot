@@ -211,6 +211,21 @@ describe('appearance render guard', () => {
         expect(classic.name, entry.id).toEqual(expect.any(String));
       }
     }
+    // A classic control moved into a menu below a width: the glass item and
+    // the classic control each named, the width given.
+    const moved = allowlist.entries.filter((e) => e.kind === 'moved into a menu below a width');
+    expect(moved.map((e) => e.id)).toEqual(['account-menu-whats-new']);
+    for (const entry of moved) {
+      expect(entry.role, entry.id).toBe('menuitem');
+      expect(entry.name, entry.id).toEqual(expect.any(String));
+      expect(entry.maxWidth, entry.id).toEqual(expect.any(Number));
+      expect(entry.replaces?.length, entry.id).toBeGreaterThan(0);
+      for (const classic of entry.replaces ?? []) {
+        expect(classic.role, entry.id).toEqual(expect.any(String));
+        expect(classic.selector, entry.id).toEqual(expect.any(String));
+        expect(classic.name, entry.id).toEqual(expect.any(String));
+      }
+    }
     for (const entry of hidden) {
       expect(entry.role, entry.id).toEqual(expect.any(String));
       expect(entry.name, entry.id).toEqual(expect.any(String));

@@ -178,6 +178,14 @@
       box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
     }
 
+    /* ── A book's bare grade (inventory-table.tsx BookGradeLabel): a
+       glass-only copy of the number that only the Books cover view draws
+       (pages/items.css), in place of "Gr 9"; everywhere else glass draws
+       classic's "Gr 9" alone. ──────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='book-grade-bare'] {
+      display: none;
+    }
+
     /* ── Selection controls (12.2-12.3) ───────────────────────────────── */
     :root[data-appearance='liquid-glass'] [data-glass='checkbox'] {
       border-radius: 5px;
@@ -267,11 +275,11 @@
        .choice 194-195 / 995 / 1000, .rb 180-188 / 625-627 / 876, .seg
        203-207 / 1004-1006), on the panel's inert hooks: classic draws its
        selected option in ink (a black edge, a black dot). ─────────────────
-       A Design option is the board's .choice: radius 12, the line 2 edge on
-       the field frost; the chosen one takes the accent edge (its 1 px edge
+       A Design option is the board's glass .choice (sp.css:995): radius 12,
+       the field line (the light frost edge) on the field frost; the chosen one takes the accent edge (its 1 px edge
        plus a 1 px inset ring, as .choice.on) on the selection wash. */
     :root[data-appearance='liquid-glass'] [data-glass='appearance-choice'] {
-      border-color: var(--lg-line-2);
+      border-color: var(--lg-field-line);
       border-radius: 12px;
       background-color: var(--lg-field-fill);
     }
