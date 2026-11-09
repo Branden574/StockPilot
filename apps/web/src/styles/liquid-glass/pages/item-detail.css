@@ -38,6 +38,14 @@
    order, the Reserved card's orders, the Expected card's purchase order,
    Other editions, the owner charter and the Book Order Totals figure need
    reads the page does not make (DECISIONS.md: omitted and recorded). The
+   side column comes BEFORE the panels in the DOM, so it reads summary, side
+   column, panels in the keyboard order, and at 1100 px and narrower it sits
+   between the summary and the panels; the boards put the aside after the main
+   column (Item-Detail.dc.html:84, Book-Detail.dc.html:55), so there it drops
+   below them. After the panels it would be the Overview panel's last child
+   and take :last-child from the Classic panels grid (classicStructure fails);
+   moving it down by grid areas alone would put it after the panels on screen
+   but before them in the keyboard order (plan 4.6, WCAG 2.4.3). The
    sticky header keeps its overlay glass (it keeps every action on screen as
    the page scrolls, and globals.css's focus margin keys on it).
 
@@ -676,8 +684,18 @@
       color: var(--lg-danger);
       font-weight: 500;
     }
-    /* .badge (22 px, 12 / 600, radius 6): Shown on the accent wash, Hidden on
-       the neutral wash. */
+    /* .badge (22 px, 12 / 600, radius 6): Shown on the accent wash, Hidden and
+       Expected on the neutral wash. The Ordering card's badges sit together at
+       the right of its title (.row.g6), as Manage order items pairs them. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='badges'] {
+      display: inline-flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
       [data-glass='item-aside-card']
@@ -761,8 +779,11 @@
       text-align: right;
     }
 
-    /* ── One column at 1100 px and narrower (sp.css:292): the summary, the
-       side column and the panels, in their DOM order. ──────────────────── */
+    /* ── One column at 1100 px and narrower (sp.css:292). The boards' DOM
+       puts the aside last, so they show summary, panels, aside; here the
+       side column precedes the panels in the DOM (see the recorded
+       deviations above), so the column follows the DOM: summary, side
+       column, panels. ──────────────────────────────────────────────────── */
     @media (max-width: 1100px) {
       :root[data-appearance='liquid-glass']
         [data-glass-page='item-detail']

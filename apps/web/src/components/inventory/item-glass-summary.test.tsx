@@ -92,6 +92,34 @@ describe('ItemGlassSummary and ItemGlassAside', () => {
     expect(a).toHaveTextContent('9 each reserved for open orders, so 0 each available.');
   });
 
+  it('Ordering on a record awaiting its first receipt: the Expected badge Manage order items shows, and orderable from that receipt', () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const ordering = (facts: ItemGlassFacts) => {
+      const a = render(<ItemGlassAside facts={facts} />).container as HTMLElement;
+      const card = within(a).getByRole('heading', { name: 'Ordering' }).closest('section')!;
+      const badges = Array.from(card.querySelectorAll('[data-glass-part="badge"]')).map(
+        (b) => b.textContent,
+      );
+      return { badges, text: card.textContent ?? '' };
+    };
+    // Manage order items' StateBadges: the state badge, then Expected
+    // (order-catalog-visibility.ts: expected = awaiting_first_receipt).
+    const shown = ordering({ ...FACTS, ordering: { visible: true }, awaitingFirstReceipt: true });
+    expect(shown.badges).toEqual(['Shown in Orders', 'Expected']);
+    expect(shown.text).toContain(
+      'Requesters can order this record in Place an Order from its first receipt, where they are allowed to order.',
+    );
+    const hidden = ordering({ ...FACTS, ordering: { visible: false }, awaitingFirstReceipt: true });
+    expect(hidden.badges).toEqual(['Hidden from Orders', 'Expected']);
+    expect(hidden.text).toContain('Requesters cannot order this record in Place an Order.');
+    // Received: one badge and today's sentence.
+    const received = ordering({ ...FACTS, ordering: { visible: true } });
+    expect(received.badges).toEqual(['Shown in Orders']);
+    expect(received.text).toContain(
+      'Requesters can order this record in Place an Order where they are allowed to order.',
+    );
+  });
+
   it('the Book Order Totals link renders only when the page passes its href (the page checks the gate)', () => {
     vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
     const book = { ...FACTS, isBook: true, bookReportHref: '/dashboard/reports/book-order-totals' };

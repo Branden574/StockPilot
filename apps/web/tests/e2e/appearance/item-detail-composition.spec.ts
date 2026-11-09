@@ -17,7 +17,9 @@ import { chooseLook, glassBuild, settleIntroNotice, waitForLook, type Look } fro
  *     hidden until More is pressed and shown in the same row after it, in
  *     their DOM order; Duplicate's dialog opened from there keeps More open
  *     and returns focus to its trigger on Escape;
- *   - Liquid Glass at 390: one column (summary, side column, panels), the
+ *   - Liquid Glass at 390: one column (summary, side column, panels: the
+ *     side column precedes the panels in the DOM, a recorded deviation from
+ *     the boards, which put it last; stage3/fidelity-rows.md, lane detail), the
  *     head's actions and More inside the page with no sideways scroll;
  *   - the summary photo is fetched only in glass (it is lazy and not drawn in
  *     Classic).
@@ -197,6 +199,9 @@ test.describe('the item page on a 390 px phone', () => {
     const a = await box(page.locator('[data-glass="item-aside"]'));
     expect(a.y).toBeGreaterThan(s.y + s.height);
     expect(Math.abs(a.x - s.x)).toBeLessThanOrEqual(1);
+    // The column follows the DOM: the panels (Details first) after the side column.
+    const details = await box(page.getByRole('heading', { level: 2, name: 'Details' }));
+    expect(details.y).toBeGreaterThan(a.y + a.height);
     const more = await box(page.getByRole('button', { name: 'More actions' }));
     expect(more.x + more.width).toBeLessThanOrEqual(390);
     const overflow = await page.evaluate(

@@ -705,6 +705,11 @@ describe('the Liquid Glass composition (default rollout)', () => {
     expect(kids[1]).toHaveAttribute('aria-label', 'Item summary');
     expect(kids[2]!.tagName).toBe('ASIDE');
     expect(kids[2]).toHaveAttribute('data-glass-only', '');
+    // The side column precedes the panels (a recorded deviation: the boards
+    // put the aside last). After them it would take :last-child from the
+    // Classic panels grid, which classicStructure forbids.
+    expect(kids[3]!.matches(':last-child')).toBe(true);
+    expect(kids[3]).not.toHaveAttribute('data-glass-only');
     // The Reorder card is Classic-only; its glass copy sits in the side column.
     const reorder = screen
       .getAllByRole('heading', { name: 'Reorder' })

@@ -187,6 +187,9 @@ describe('the Overview (.cols-side) and the summary card', () => {
       'var(--lg-accent-text)',
     );
     expect(value(`${A} [data-glass-part='link-button']`, 'height')).toBe('30px');
+    // The Ordering card's state and Expected badges, side by side (.row.g6).
+    expect(value(`${A} [data-glass-part='badges']`, 'display')).toBe('inline-flex');
+    expect(value(`${A} [data-glass-part='badges']`, 'gap')).toBe('6px');
   });
 
   it('forced colours: the glass-only cards, wells, alert, badge and link keep an edge on Canvas', () => {

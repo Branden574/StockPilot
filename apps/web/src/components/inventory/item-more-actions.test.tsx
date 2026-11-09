@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import * as React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ITEM_MORE_ACTIONS_NAME, ItemMoreActions } from './item-more-actions';
@@ -45,4 +46,39 @@ describe('ItemMoreActions', () => {
       expect(button).toHaveAttribute('aria-expanded', 'false');
     });
   }
+
+  it('its open state survives every appearance switch: same node, still open, mounted once (plan 4.6 identity)', () => {
+    // The one glass-only element on the page that holds state (open or
+    // closed). Plan 4.6 keeps stateful leaves out of glass-only elements so a
+    // switch cannot lose their state; this one is rendered in every
+    // appearance (only CSS hides it in Classic) and reads no appearance while
+    // rendering, so a switch never unmounts it and the state stays.
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const html = document.documentElement;
+    const before = html.getAttribute('data-appearance');
+    let mounts = 0;
+    function Probe() {
+      React.useEffect(() => {
+        mounts += 1;
+      }, []);
+      return <ItemMoreActions />;
+    }
+    try {
+      html.setAttribute('data-appearance', 'liquid-glass');
+      const { rerender } = render(<Probe />);
+      const button = screen.getByRole('button', { name: ITEM_MORE_ACTIONS_NAME });
+      fireEvent.click(button);
+      for (const look of ['classic', 'liquid-glass', 'classic', 'liquid-glass']) {
+        html.setAttribute('data-appearance', look);
+        rerender(<Probe />);
+        const now = screen.getByRole('button', { name: ITEM_MORE_ACTIONS_NAME, hidden: true });
+        expect(now).toBe(button);
+        expect(now).toHaveAttribute('aria-expanded', 'true');
+      }
+      expect(mounts).toBe(1);
+    } finally {
+      if (before === null) html.removeAttribute('data-appearance');
+      else html.setAttribute('data-appearance', before);
+    }
+  });
 });

@@ -1035,7 +1035,9 @@ export async function ItemDetail({
           {/* Liquid Glass's summary card and side column (glass-only; the
               figure strip above and the Reorder card carry data-classic-only).
               A <section> and an <aside> between the strip and the grid, so
-              no Classic element changes its place among its siblings. */}
+              no Classic element changes its place among its siblings: the
+              boards put the aside after the panels, but there it would take
+              :last-child from the grid below (a recorded deviation). */}
           <ItemGlassSummary facts={glassFacts} />
           <ItemGlassAside facts={glassFacts} />
 

@@ -266,7 +266,7 @@ const PAIRS: Array<[string, string, string[], number]> = [
     4.5,
   ],
   [
-    'Hidden from Orders (ink 2) on the neutral wash',
+    'Hidden from Orders and Expected (ink 2) on the neutral wash',
     '--lg-ink-2',
     ['--lg-pane', '--lg-card-fill', '--lg-neutral-wash'],
     4.5,

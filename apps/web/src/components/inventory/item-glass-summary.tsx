@@ -10,6 +10,7 @@ import {
   BOOK_REPORT_CARD_DESCRIPTION,
   BOOK_REPORT_TITLE,
   formatStockQuantity,
+  ORDER_ITEMS_STATE_EXPECTED_COPY,
   ORDER_ITEMS_STATE_HIDDEN_COPY,
   ORDER_ITEMS_STATE_SHOWN_COPY,
   stockAvailability,
@@ -308,18 +309,31 @@ export function ItemGlassAside({ facts }: { facts: ItemGlassFacts }) {
         <AsideCard
           title="Ordering"
           badge={
-            <span
-              data-glass-part="badge"
-              data-glass-tone={f.ordering.visible ? 'accent' : 'neutral'}
-            >
-              {f.ordering.visible ? ORDER_ITEMS_STATE_SHOWN_COPY : ORDER_ITEMS_STATE_HIDDEN_COPY}
+            // Manage order items' badges (StateBadges): the state, then
+            // Expected while the record awaits its first receipt (its
+            // `expected` is awaiting_first_receipt, order-catalog-visibility.ts),
+            // since Place an Order lists such a record only from that receipt.
+            <span data-glass-part="badges">
+              <span
+                data-glass-part="badge"
+                data-glass-tone={f.ordering.visible ? 'accent' : 'neutral'}
+              >
+                {f.ordering.visible ? ORDER_ITEMS_STATE_SHOWN_COPY : ORDER_ITEMS_STATE_HIDDEN_COPY}
+              </span>
+              {f.awaitingFirstReceipt ? (
+                <span data-glass-part="badge" data-glass-tone="neutral">
+                  {ORDER_ITEMS_STATE_EXPECTED_COPY}
+                </span>
+              ) : null}
             </span>
           }
         >
           <p>
-            {f.ordering.visible
-              ? 'Requesters can order this record in Place an Order where they are allowed to order.'
-              : 'Requesters cannot order this record in Place an Order.'}
+            {!f.ordering.visible
+              ? 'Requesters cannot order this record in Place an Order.'
+              : f.awaitingFirstReceipt
+                ? 'Requesters can order this record in Place an Order from its first receipt, where they are allowed to order.'
+                : 'Requesters can order this record in Place an Order where they are allowed to order.'}
           </p>
           <p data-glass-part="note">Hidden items stay in Inventory, existing orders and reports.</p>
         </AsideCard>
