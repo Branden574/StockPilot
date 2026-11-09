@@ -193,6 +193,23 @@ export function GlassSheetBackdrop({ radius = GLASS_METRICS.sheet.radius }: { ra
   );
 }
 
+/**
+ * The sheet's grabber (.ios-grabber [742]: 36 x 5, radius 3, --ios-sep,
+ * 2 above and 4 below) for a sheet whose Classic card draws none. Decoration
+ * only: hidden from VoiceOver, no touches.
+ */
+export function GlassSheetGrabber() {
+  const { ios, c } = useTheme();
+  return (
+    <View
+      pointerEvents="none"
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      style={[styles.grabber, { backgroundColor: ios?.sep ?? c.ink5 }]}
+    />
+  );
+}
+
 /** The 4pt-in large title row a screen header uses (.ios-large [702]) with its sub-line. */
 export const GLASS_SCREEN = StyleSheet.create({
   /** .ios-scroll [698]: 16 side padding, 22 between sections. */
@@ -214,6 +231,14 @@ export const GLASS_SCREEN = StyleSheet.create({
 
 const styles = StyleSheet.create({
   heading: { marginHorizontal: 4 },
+  grabber: {
+    width: GLASS_METRICS.sheet.grabberWidth,
+    height: GLASS_METRICS.sheet.grabberHeight,
+    borderRadius: 3,
+    alignSelf: 'center',
+    marginTop: 2,
+    marginBottom: 4,
+  },
   tile: { borderRadius: 8, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   capsule: {
     minHeight: 44,

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { classicHash, printClassic, projectionLeaks } from './__fixtures__/classic-projection';
+import {
+  classicFlat,
+  classicHash,
+  flatNorm,
+  printClassic,
+  projectionLeaks,
+} from './__fixtures__/classic-projection';
 
 /**
  * The classic projection (lib/__fixtures__/classic-projection.ts) is the
@@ -273,5 +279,47 @@ describe('classic projection', () => {
     );
     // An empty string child stays a child.
     differs('export const A = () => <T></T>;', "export const A = () => <T>{''}</T>;");
+  });
+});
+
+describe('classicFlat: a source pin reads Classic in one spelling', () => {
+  const file = 'pin.tsx';
+  const glass = `
+import * as React from 'react';
+import { Text } from 'react-native';
+import { useGlass } from '@/components/ui/glass/use-glass';
+export function A({ fg }: { fg: string }) {
+  const lg = useGlass();
+  return (
+    <Text
+      style={[
+        styles.label,
+        lg && glassLabel(lg),
+        { color: fg },
+      ]}
+    >
+      Deny
+    </Text>
+  );
+}
+`;
+
+  it('reads the Classic text whatever the formatting, with the glass entries folded away', () => {
+    expect(classicFlat(glass, file)).toContain(
+      flatNorm('<Text style={[styles.label, { color: fg }]}>Deny</Text>'),
+    );
+    expect(classicFlat(glass, file)).not.toContain('glassLabel');
+  });
+
+  it('still tells different Classic code apart', () => {
+    expect(classicFlat(glass, file)).not.toContain(
+      flatNorm('<Text style={[styles.label, { color: ink }]}>Deny</Text>'),
+    );
+    expect(classicFlat(glass, file)).not.toContain(
+      flatNorm('<Text style={[{ color: fg }, styles.label]}>Deny</Text>'),
+    );
+    expect(flatNorm('a ,b')).toBe(flatNorm('a, b'));
+    expect(flatNorm('[a, b,\n]')).toBe('[a,b]');
+    expect(flatNorm('x - 1')).not.toBe(flatNorm('x + 1'));
   });
 });

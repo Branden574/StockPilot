@@ -4,6 +4,7 @@ import { StyleSheet, Text, View, type TextProps, type ViewStyle } from 'react-na
 import { FONT, TYPE_CEILING, capTo, resolveFontCap } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
+import { facedProp } from './glass/merge-styles';
 import { glassBody, glassDisplay, glassEyebrow } from './glass/primitive-styles';
 import { useGlass } from './glass/use-glass';
 
@@ -154,7 +155,7 @@ export function Display({
         },
         // Liquid Glass: the system face at 700, as the boards' titles.
         lg && glassDisplay(lg, size),
-        style,
+        lg ? facedProp(lg, style) : style,
       ]}
     >
       {children}
@@ -234,7 +235,7 @@ export function Body({
         },
         // Liquid Glass: the system face, 1.35 line height as the boards' copy.
         lg && glassBody(lg, size),
-        style,
+        lg ? facedProp(lg, style) : style,
       ]}
     >
       {children}

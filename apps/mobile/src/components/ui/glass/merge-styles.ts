@@ -54,6 +54,18 @@ function refaced(style: object, lg: GlassLook): object {
   return role ? { ...style, ...lg.font[role] } : style;
 }
 
+/**
+ * A `style` prop a caller hands a text primitive, drawn in the glass face of
+ * its role: `<Body style={{ fontFamily: FONT.display }}>` is a call site's
+ * Classic weight choice, and the caller's style is laid last, so without this
+ * the Classic face would win in Liquid Glass. Anything else passes through.
+ */
+export function facedProp<S>(lg: GlassLook, style: S): S {
+  if (!style || typeof style !== 'object') return style;
+  const flat = StyleSheet.flatten(style as never) as object | undefined;
+  return (flat ? refaced(flat, lg) : style) as S;
+}
+
 const recipes = new WeakMap<object, WeakMap<GlassLook, object>>();
 
 /**

@@ -545,3 +545,26 @@ export function printClassic(source: string, fileName: string): string {
     .createPrinter({ removeComments: true, newLine: ts.NewLineKind.LineFeed })
     .printFile(classicTree(source, fileName));
 }
+
+/**
+ * Code text in one spelling, so the same code written two ways compares
+ * equal: every whitespace run one space, no space beside a bracket, a JSX
+ * tag's angle bracket or a comma, and no trailing comma. A source pin on
+ * Classic's exact text normalises both its expected text and what it reads.
+ */
+export function flatNorm(code: string): string {
+  return code
+    .replace(/\s+/g, ' ')
+    .replace(/,\s*([\]})])/g, '$1')
+    .replace(/\s*([[\]{}()<>,])\s*/g, '$1')
+    .trim();
+}
+
+/**
+ * The Classic projection of a file, printed and normalised (flatNorm): what a
+ * source pin on Classic's exact text reads, so a Liquid Glass branch beside a
+ * Classic value can neither hide it nor break the pin.
+ */
+export function classicFlat(source: string, fileName: string): string {
+  return flatNorm(printClassic(source, fileName));
+}

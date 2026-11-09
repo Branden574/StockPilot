@@ -38,9 +38,12 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
   'app/cycle-count/[id].tsx': '225237c617095b0e9b0857ca262bbefdb109bc9524436b38f1d34309b31e731e',
   'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
+  'app/order/[id].tsx': 'fe0632b2ab978336d25fd87fcca26c0b30931d8cef06edd4216aeda13304ce6f',
   'app/po/[id].tsx': 'ae76a1de33a4ed14e77b401349006835bb401d9c8f8c77f036f384a989496e74',
   'src/components/biometric-optin-sheet.tsx':
     '2a1823f24f727ab701e3f4383bd35b5be640ee2076cb8f683d8ea2dcb902b30e',
+  'src/components/digital-pick.tsx':
+    'dddd6f275d2176dcd34675cd1aa2b3caac84d241718575451e5af72502eab656',
   'src/components/filter-sheet.tsx':
     '9c7be38b2ee7fe64a52b2928ef53f717683cfc2515fe7f08a95888018ceb29ce',
   'src/components/item-history-sheet.tsx':
