@@ -166,8 +166,13 @@ describe('the per-mode palette on every list of the package', () => {
   });
 
   it('the supplier well is recessed too (sunk, never the card colour)', () => {
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(SUPPLIERS), SUPPLIERS)).toContain(
+      flatNorm('<View style={[styles.well, { borderColor: c.hair, backgroundColor: c.sunk }]}>'),
+    );
+    // Liquid Glass: the well on the iOS fill.
     expect(flatCode(SUPPLIERS)).toContain(
-      '<View style={[styles.well, { borderColor: c.hair, backgroundColor: c.sunk }]}>',
+      '{ borderColor: c.hair, backgroundColor: c.sunk }, lg && glassIconWell(lg), ]}',
     );
   });
 });

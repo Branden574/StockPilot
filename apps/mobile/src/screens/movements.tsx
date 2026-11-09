@@ -11,6 +11,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { glassIconWell, glassOpsGroupRow } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
@@ -275,6 +277,9 @@ function LedgerRow({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the ledger as one grouped glass surface (.ios-group), a
+  // hairline in --line-2 between its rows, each glyph on the iOS fill.
+  const lg = useGlass();
   const isAdd = m.quantity_change > 0;
   const Icon = isAdd ? Plus : m.quantity_change < 0 ? Minus : RotateCcw;
   const pipColor = isAdd ? c.accent : m.quantity_change < 0 ? c.critText : c.warnText;
@@ -298,20 +303,28 @@ function LedgerRow({
           borderBottomRightRadius: last ? LIST_RADIUS : 0,
           marginBottom: last ? 0 : -LIST_GAP,
         },
+        lg && [
+          glassOpsGroupRow(lg, first, last),
+          !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: lg.g.line2 },
+          pressed && { opacity: 0.7 },
+        ],
       ]}
     >
       <View
-        style={{
-          width: 32,
-          height: 32,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: c.hair,
-          alignItems: 'center',
-          justifyContent: 'center',
-          position: 'relative',
-          backgroundColor: c.sunk,
-        }}
+        style={[
+          {
+            width: 32,
+            height: 32,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: c.hair,
+            alignItems: 'center',
+            justifyContent: 'center',
+            position: 'relative',
+            backgroundColor: c.sunk,
+          },
+          lg && glassIconWell(lg),
+        ]}
       >
         <Icon size={14} color={c.ink} strokeWidth={1.6} />
         <View

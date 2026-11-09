@@ -7,6 +7,8 @@ import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body } from '@/components/ui/text';
+import { glassIconWell } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import {
   LOCATIONS_LIST_CEILING_COPY,
   LOCATIONS_LIST_UNAVAILABLE_COPY,
@@ -160,6 +162,8 @@ export default function LocationsScreen() {
 
 function LocationCard({ loc, onPress }: { loc: LocationListRow; onPress: () => void }) {
   const { c } = useTheme();
+  // Liquid Glass: the pin's well on the iOS fill.
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -172,16 +176,19 @@ function LocationCard({ loc, onPress }: { loc: LocationListRow; onPress: () => v
           {/* The pin sits in a recessed well (sunk, the reference's inset
               fill), as the other list rows' glyphs do. */}
           <View
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              borderWidth: 1,
-              borderColor: c.hair,
-              backgroundColor: c.sunk,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            style={[
+              {
+                width: 32,
+                height: 32,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: c.hair,
+                backgroundColor: c.sunk,
+                alignItems: 'center',
+                justifyContent: 'center',
+              },
+              lg && glassIconWell(lg),
+            ]}
           >
             <MapPin size={16} color={c.ink} strokeWidth={1.5} />
           </View>
