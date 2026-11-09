@@ -104,10 +104,7 @@ export function ReportsHubGlass({ reports }: { reports: readonly HubReport[] }) 
   return (
     <section data-glass-only="" data-glass="reports-hub">
       {feature ? (
-        <IntentLink
-          href={`/dashboard/reports/${feature.slug}`}
-          data-glass="reports-feature"
-        >
+        <IntentLink href={`/dashboard/reports/${feature.slug}`} data-glass="reports-feature">
           <span data-glass="reports-feature-text">
             <span aria-hidden="true" data-glass="reports-feature-eyebrow">
               Orders &amp; books

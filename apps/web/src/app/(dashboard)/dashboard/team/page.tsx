@@ -58,22 +58,19 @@ export default async function TeamPage() {
     effectiveNavLabel('/dashboard/team', 'Team').catch(() => 'Team'),
   ]);
 
-  const [members, invites, chartersList, warehousesList, warehouseCharters] =
-    await Promise.all([
-      team.listMembers(),
-      team.listPendingInvites(),
-      charterSvc.list(),
-      warehouseSvc.listNames(),
-      whCharterSvc.listPairs(),
-    ]);
+  const [members, invites, chartersList, warehousesList, warehouseCharters] = await Promise.all([
+    team.listMembers(),
+    team.listPendingInvites(),
+    charterSvc.list(),
+    warehouseSvc.listNames(),
+    whCharterSvc.listPairs(),
+  ]);
 
   // Load categories + grants in a second wave so the grants query can
   // scope to ACTUAL viewer user_ids (avoiding orphan rows for users
   // who were once viewers, since RLS only deletes assignments when
   // the user is removed from the org).
-  const viewerUserIds = members
-    .filter((m) => m.role === 'viewer')
-    .map((m) => m.user_id);
+  const viewerUserIds = members.filter((m) => m.role === 'viewer').map((m) => m.user_id);
 
   // Charters members hold that the active list lacks: an archived or inactive
   // charter keeps its warehouse links and members' assignments, so the member
@@ -134,14 +131,16 @@ export default async function TeamPage() {
     // dialog showed a viewer with fewer grants than they have, and saving
     // it would have written that back. A failed batch THROWS (error
     // boundary) rather than show wrong access.
-    fetchAllRowsByIds<GrantRow>(viewerUserIds, (batch) => (from, to) =>
-      supabase
-        .from('user_category_assignments')
-        .select('user_id, category_id')
-        .eq('organization_id', ctx.organizationId)
-        .in('user_id', batch)
-        .order('id', { ascending: true })
-        .range(from, to),
+    fetchAllRowsByIds<GrantRow>(
+      viewerUserIds,
+      (batch) => (from, to) =>
+        supabase
+          .from('user_category_assignments')
+          .select('user_id, category_id')
+          .eq('organization_id', ctx.organizationId)
+          .in('user_id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
     ),
     readCharterLabels(
       (ids) => charterSvc.namesByIds(ids),

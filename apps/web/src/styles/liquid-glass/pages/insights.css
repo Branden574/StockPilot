@@ -321,9 +321,7 @@
     }
 
     /* ── Empty and failed states (.empty: the 56 px wash tile) ─────────── */
-    :root[data-appearance='liquid-glass']
-      [data-glass-page='insights']
-      [data-glass='state-panel'] {
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='state-panel'] {
       gap: 10px;
       padding: 44px 24px;
     }

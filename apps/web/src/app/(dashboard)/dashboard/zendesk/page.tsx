@@ -76,14 +76,16 @@ export default async function ZendeskPage() {
             <ZendeskConnectCard status={conn?.status ?? null} subdomain={conn?.subdomain ?? null} />
           </div>
         ) : (
-          <p className="text-muted-foreground mt-3 text-[12.5px]">Ask an admin to connect Zendesk.</p>
+          <p className="text-muted-foreground mt-3 text-[12.5px]">
+            Ask an admin to connect Zendesk.
+          </p>
         )}
       </DetailSection>
 
       <DetailSection title="Open your Zendesk">
         <p className="text-muted-foreground mb-4 text-[13.5px]">
-          View and work your tickets in the full Zendesk agent interface, signed in with your
-          normal Zendesk login — no API key needed.
+          View and work your tickets in the full Zendesk agent interface, signed in with your normal
+          Zendesk login — no API key needed.
         </p>
         <ZendeskQuickAccess subdomain={conn?.subdomain ?? null} canManage={canManage} />
       </DetailSection>

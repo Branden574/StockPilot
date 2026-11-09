@@ -329,7 +329,9 @@ function StatusControl({
               onClick={() => {
                 setOpen(false);
                 onChange(
-                  withBookReportFilter(query, { statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS] }),
+                  withBookReportFilter(query, {
+                    statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
+                  }),
                 );
               }}
             >
