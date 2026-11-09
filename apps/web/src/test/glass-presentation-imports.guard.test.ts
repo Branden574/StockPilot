@@ -20,9 +20,15 @@ import { describe, expect, it } from 'vitest';
  *     'server-only', '@/lib/permissions...', '@/lib/reports/report-access'
  *     (the report gate's module), and a relative path into src/server,
  *     src/lib/supabase or src/lib/auth;
+ *   - the gates: '@/lib/modules/module-gate', org-may-use-module and
+ *     effective-modules, every '@/lib/verification/<x>-access' predicate,
+ *     '@/lib/dashboard/request-cache' and cached-org;
+ *   - any in-app module (by '@/' or a relative path) that itself imports
+ *     'server-only', whatever its path;
  *   - from '@stockpilot/core', a permission helper: any name with
- *     "permission" in it, and every function packages/core/src/constants/
- *     permissions.ts and roles.ts export (hasPermission, can, roleRank, ...).
+ *     "permission" in it, every function packages/core/src/constants/
+ *     permissions.ts and roles.ts export (hasPermission, can, roleRank, ...),
+ *     MODULE_REGISTRY and any module gate or access name.
  * A type-only import is allowed: it is erased at build time.
  */
 
@@ -36,8 +42,49 @@ const FORBIDDEN_PREFIXES = [
   '@/lib/permissions',
   '@supabase/',
 ];
-const FORBIDDEN_EXACT = ['server-only', '@/lib/reports/report-access'];
+const FORBIDDEN_EXACT = [
+  'server-only',
+  '@/lib/reports/report-access',
+  // The gates that decide what an organisation or a person may open.
+  '@/lib/modules/module-gate',
+  '@/lib/modules/org-may-use-module',
+  '@/lib/modules/effective-modules',
+  '@/lib/dashboard/request-cache',
+  '@/lib/dashboard/cached-org',
+];
+/** Every page-access predicate (count-page-access and its kin). */
+const FORBIDDEN_PATTERNS = [/^@\/lib\/verification\/[^/]*-access$/u];
 const FORBIDDEN_DIRS = ['server', join('lib', 'supabase'), join('lib', 'auth')];
+/** From @stockpilot/core: the module registry (module gating) and module gate names. */
+const FORBIDDEN_CORE_NAMES = [/^MODULE_REGISTRY$/u, /module.?(gate|access)/iu, /mayUseModule/iu];
+
+/**
+ * The source file an in-app import resolves to ('@/...' or a relative path
+ * from `file`), or null for a package or a path with no source file.
+ */
+function resolveSource(file: string, spec: string): string | null {
+  let base: string;
+  if (spec.startsWith('@/')) base = join(WEB_SRC, spec.slice(2));
+  else if (spec.startsWith('.')) base = resolve(dirname(join(WEB_SRC, file)), spec);
+  else return null;
+  for (const candidate of [
+    base,
+    ...['.ts', '.tsx', '.js', '.mjs'].map((ext) => `${base}${ext}`),
+    ...['index.ts', 'index.tsx'].map((name) => join(base, name)),
+  ]) {
+    try {
+      if (statSync(candidate).isFile()) return candidate;
+    } catch {
+      /* not this one */
+    }
+  }
+  return null;
+}
+
+/** Whether a source text is a server-only module (it imports 'server-only'). */
+function isServerOnly(source: string): boolean {
+  return /(?:^|[;\n])\s*import\s+['"]server-only['"]/u.test(source);
+}
 
 /** The functions a constants module exports (its permission and role helpers). */
 function exportedFunctions(source: string): string[] {
@@ -91,18 +138,34 @@ function importsOf(source: string): ImportUse[] {
   return out;
 }
 
-/** What one glass file imports that it must not (empty: clean). */
+/**
+ * What one glass file imports that it must not (empty: clean). `read` reads
+ * an in-app module the file imports (by its resolved path), so a module that
+ * is itself server-only is refused whatever its path; the rule cases pass a
+ * stub.
+ */
 function forbiddenImports(
   file: string,
   source: string,
   coreHelpers: ReadonlySet<string>,
+  read: (path: string) => string | null = readResolved,
 ): string[] {
   const out: string[] = [];
   for (const use of importsOf(source)) {
     if (use.typeOnly) continue;
     const spec = use.specifier;
-    if (FORBIDDEN_EXACT.includes(spec) || FORBIDDEN_PREFIXES.some((p) => spec.startsWith(p))) {
+    if (
+      FORBIDDEN_EXACT.includes(spec) ||
+      FORBIDDEN_PREFIXES.some((p) => spec.startsWith(p)) ||
+      FORBIDDEN_PATTERNS.some((p) => p.test(spec))
+    ) {
       out.push(`${file}: imports ${spec}`);
+      continue;
+    }
+    const resolved = resolveSource(file, spec);
+    const target = resolved === null ? null : read(resolved);
+    if (target !== null && isServerOnly(target)) {
+      out.push(`${file}: imports ${spec}, a server-only module`);
       continue;
     }
     if (spec.startsWith('.')) {
@@ -114,7 +177,11 @@ function forbiddenImports(
     }
     if (spec === '@stockpilot/core' || spec.startsWith('@stockpilot/core/')) {
       const helpers = use.names.filter(
-        (name) => /permission/iu.test(name) || coreHelpers.has(name) || name === '*',
+        (name) =>
+          /permission/iu.test(name) ||
+          coreHelpers.has(name) ||
+          name === '*' ||
+          FORBIDDEN_CORE_NAMES.some((p) => p.test(name)),
       );
       if (spec.includes('constants/permissions') || spec.includes('constants/roles'))
         out.push(`${file}: imports ${spec}`);
@@ -122,6 +189,14 @@ function forbiddenImports(
     }
   }
   return out;
+}
+
+function readResolved(path: string): string | null {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
 }
 
 const SOURCE = /\.(ts|tsx|js|mjs)$/u;
@@ -216,6 +291,38 @@ describe('glass presentation imports (plan 8.5 static guard a)', () => {
       ]);
       expect(check("import { PERMISSION_META } from '@stockpilot/core';")).toHaveLength(1);
       expect(check("import * as core from '@stockpilot/core';")).toHaveLength(1);
+    });
+    it('a module or page-access gate and the dashboard request cache', () => {
+      expect(check("import { checkModuleAccess } from '@/lib/modules/module-gate';")).toHaveLength(
+        1,
+      );
+      expect(
+        check("import { orgMayUseModule } from '@/lib/modules/org-may-use-module';"),
+      ).toHaveLength(1);
+      expect(
+        check("import { canOpenCountPage } from '@/lib/verification/count-page-access';"),
+      ).toHaveLength(1);
+      expect(check("import { getOrgModules } from '@/lib/dashboard/request-cache';")).toHaveLength(
+        1,
+      );
+    });
+    it('the module registry from core', () => {
+      expect(check("import { MODULE_REGISTRY, formatNumber } from '@stockpilot/core';")).toEqual([
+        `${file}: imports MODULE_REGISTRY from @stockpilot/core`,
+      ]);
+    });
+    it('any module that is itself server-only, by alias or relative path', () => {
+      // A real server-only module under src, reached by alias and by a relative path.
+      expect(check("import { x } from '@/lib/modules/module-gate';")).toHaveLength(1);
+      expect(
+        forbiddenImports(
+          join('lib', 'dashboard', 'zz-glass.tsx'),
+          "import { y } from './cached-org';",
+          helpers,
+        ),
+      ).toEqual([
+        `${join('lib', 'dashboard', 'zz-glass.tsx')}: imports ./cached-org, a server-only module`,
+      ]);
     });
     it('allows type-only imports, presentation helpers and the appearance flag', () => {
       expect(
