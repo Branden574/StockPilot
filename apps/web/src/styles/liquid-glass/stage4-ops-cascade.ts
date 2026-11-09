@@ -213,6 +213,54 @@ function declarations(file: string): Declaration[] {
   return out;
 }
 
+/** The selector with each :not(...) outside any other parentheses taken out. */
+export function withoutTopLevelNot(selector: string): string {
+  let out = '';
+  let depth = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < selector.length; i += 1) {
+    const ch = selector[i]!;
+    if (ch === '\\') {
+      out += selector.slice(i, i + 2);
+      i += 1;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+    } else if (ch === '"' || ch === "'") quote = ch;
+    else if (depth === 0 && selector.startsWith(':not(', i)) {
+      let inner = 0;
+      for (; i < selector.length; i += 1) {
+        if (selector[i] === '(') inner += 1;
+        else if (selector[i] === ')' && --inner === 0) break;
+      }
+      // Alone in its compound, it leaves the universal selector there.
+      const before = out.at(-1);
+      const after = selector[i + 1];
+      const opens = before === undefined || /[\s>+~(,]/u.test(before);
+      const closes = after === undefined || /[\s>+~),]/u.test(after);
+      if (opens && closes) out += '*';
+      continue;
+    } else if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * Whether `selector` matches `el`. happy-dom 21 matches a compound that
+ * starts with :is(...) or :where(...) and ends in :not(...) without the
+ * classes between them (`:is(div, li).rounded-lg:not([data-glass])` matched
+ * a `rounded-md` row), so a selector counts only when it also matches with
+ * its outer :not(...) taken out, which can only widen what it matches.
+ */
+export function matches(el: Element, selector: string): boolean {
+  if (!el.matches(selector)) return false;
+  const wider = withoutTopLevelNot(selector);
+  return wider === selector || el.matches(wider);
+}
+
 /** The declaration that wins `prop` on `el`, and the selector it came from. */
 export interface Cascaded {
   value: string;
@@ -237,7 +285,7 @@ export function cascaded(
     rank += 1_000_000;
     for (const d of declarations(file)) {
       if (d.prop !== prop || !d.media.every((q) => widthApplies(q, width))) continue;
-      if (!el.matches(d.selector)) continue;
+      if (!matches(el, d.selector)) continue;
       const candidate = {
         value: d.value,
         selector: d.selector,
