@@ -46,7 +46,7 @@ const FILES = walk(SRC).map((f) => ({
 }));
 
 /** Either appearance hook: the provider's own, or the selectors' (appearance-select.tsx). */
-const USES_APPEARANCE = /\buseAppearance(?:Choice)?\b/u;
+const USES_APPEARANCE = /\buseAppearance(?:Choice|Actions)?\b/u;
 
 const MAY_USE_APPEARANCE = new Set([
   // The appearance modules.
@@ -74,6 +74,8 @@ describe('appearance render guard', () => {
     expect(USES_APPEARANCE.test('const a = useAppearance();')).toBe(true);
     expect(USES_APPEARANCE.test('const { style } = useAppearanceChoice();')).toBe(true);
     expect(USES_APPEARANCE.test('import { useAppearanceChoice } from "x";')).toBe(true);
+    // The actions alone (the recovery): still the appearance layer's own hook.
+    expect(USES_APPEARANCE.test('const a = useAppearanceActions();')).toBe(true);
     expect(USES_APPEARANCE.test('const a = useAppearances();')).toBe(false);
   });
 

@@ -58,6 +58,13 @@ import {
   LOW_POWER_ATTRIBUTE_VALUE,
   type LowPowerNavigator,
 } from './appearance-script';
+import {
+  createFactStore,
+  NO_FACT_STORE,
+  type AppearanceFacts,
+  type AppearanceInnerFacts,
+  type FactStore,
+} from './appearance-store';
 import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-paint';
 
 /**
@@ -84,10 +91,23 @@ import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-pai
  *
  * NO REMOUNT. The provider is mounted once in app/layout.tsx, renders its
  * children as given, never keys anything and never branches the tree on the
- * appearance. The context value does not depend on the pathname, except
- * `glassApplied`, which changes only when the attribute does (into and out of
- * the print route). Only the selectors read this context
+ * appearance. Only the selectors read the appearance
  * (appearance-render.guard.test.ts).
+ *
+ * ONE CONTEXT VALUE, FOR GOOD (L4 triage BF1). The provider is above every
+ * page, and a context value that changes above a Suspense boundary whose
+ * server content is still streaming makes React render that boundary in the
+ * browser and throw the server's HTML for it away (appearance-store.ts has
+ * the React code path). So the value given to the tree is ONE object from the
+ * first render on: the actions, whose identities never change, and two
+ * stores. Everything this layer learns after that (the device records at
+ * mount, the attribute it wrote, the Theme, the person the shell names, the
+ * account's answer, a choice) goes into the stores, which only their readers
+ * subscribe to (useSyncExternalStore). The provider itself keeps no React
+ * state: it renders again only when next-themes' Theme or the pathname
+ * changes, and its children are handed on as given.
+ * appearance-provider.streaming.test.tsx streams a page through the real
+ * provider and checks that the late content is adopted.
  *
  * PERSISTENCE AND SYNC follow core's pure reducer (packages/core/src/
  * appearance). This file performs its effects: the device record and the
@@ -145,10 +165,65 @@ export interface AppearanceContextValue {
   signedInUserId: () => string | null;
 }
 
-const AppearanceContext = React.createContext<AppearanceContextValue | null>(null);
+/** The half of AppearanceContextValue that never changes: the actions. */
+export type AppearanceActions = Pick<
+  AppearanceContextValue,
+  'rollout' | 'chooseStyle' | 'chooseTheme' | 'keepGlass' | 'retry' | 'signedInUserId'
+>;
 
-/** For the selectors and the recovery action only (appearance-render.guard.test.ts). */
+/**
+ * What the context really holds: one object, the same from the provider's
+ * first render to its last. Nothing in it may ever be replaced (see ONE
+ * CONTEXT VALUE above).
+ */
+interface AppearanceApi extends AppearanceActions {
+  facts: FactStore<AppearanceFacts>;
+  inner: FactStore<AppearanceInnerFacts>;
+}
+
+const AppearanceContext = React.createContext<AppearanceApi | null>(null);
+
+/**
+ * The appearance as it is now, for the selectors only
+ * (appearance-render.guard.test.ts). The component that calls this renders
+ * again when a fact changes; nothing else does. On the server, and while
+ * React adopts server HTML, it gets the facts of the server render.
+ */
 export function useAppearance(): AppearanceContextValue | null {
+  const api = React.useContext(AppearanceContext);
+  const store = api ? api.facts : NO_FACT_STORE;
+  const facts = React.useSyncExternalStore<AppearanceFacts | null>(
+    store.subscribe,
+    store.getSnapshot,
+    store.getServerSnapshot,
+  );
+  return React.useMemo<AppearanceContextValue | null>(
+    () =>
+      api && facts
+        ? {
+            hydrated: facts.hydrated,
+            style: facts.style,
+            theme: facts.theme,
+            shownStyle: facts.shownStyle,
+            glassApplied: facts.glassApplied,
+            rollout: api.rollout,
+            chooseStyle: api.chooseStyle,
+            chooseTheme: api.chooseTheme,
+            keepGlass: api.keepGlass,
+            status: facts.status,
+            retry: api.retry,
+            signedInUserId: api.signedInUserId,
+          }
+        : null,
+    [api, facts],
+  );
+}
+
+/**
+ * The actions alone, for a caller that shows nothing of the appearance (the
+ * error boundaries' Use classic design). It never renders again for a fact.
+ */
+export function useAppearanceActions(): AppearanceActions | null {
   return React.useContext(AppearanceContext);
 }
 
@@ -217,6 +292,22 @@ function currentPath(pathname: string | null): string {
   return typeof window === 'undefined' ? '' : window.location.pathname;
 }
 
+/**
+ * The facts of the server render and of the first client render: nothing of
+ * this device is known yet. Under `off` they are also the facts for good.
+ */
+export function initialAppearanceFacts(rollout: GlassRollout): AppearanceFacts {
+  const inert = rollout === 'off';
+  return {
+    hydrated: inert,
+    style: null,
+    theme: undefined,
+    shownStyle: inert ? 'classic' : defaultStyle(rollout),
+    glassApplied: false,
+    status: inert ? 'signed-out' : INITIAL_APPEARANCE_STATE.status,
+  };
+}
+
 export function AppearanceProvider({ children }: { children: React.ReactNode }) {
   const rollout = liquidGlassRollout();
   const inert = rollout === 'off';
@@ -224,10 +315,15 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   const { theme: nextTheme, setTheme } = useTheme();
   const themeRef = React.useRef(nextTheme);
   const setThemeRef = React.useRef(setTheme);
+  /** publish(), once it exists (it is declared after the refs it reads). */
+  const publishRef = React.useRef<() => void>(noop);
   // Kept current before any effect of this tree runs that reaches apply().
   React.useLayoutEffect(() => {
     themeRef.current = nextTheme;
     setThemeRef.current = setTheme;
+    // The selectors' Theme follows next-themes (a choice here, another tab).
+    // At mount this is still a no-op: the mount effect below publishes.
+    publishRef.current();
   }, [nextTheme, setTheme]);
 
   const stateRef = React.useRef<AppearanceState>(INITIAL_APPEARANCE_STATE);
@@ -239,13 +335,42 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   const twinOverrideRef = React.useRef<boolean | null>(null);
   /** The Theme the last apply carried: a later apply changes next-themes only when it differs. */
   const appliedThemeRef = React.useRef<ThemeSetting | null>(null);
-  const [snapshot, setSnapshot] = React.useState<AppearanceState>(INITIAL_APPEARANCE_STATE);
-  const [hydrated, setHydrated] = React.useState(false);
-  const [fallback, setFallback] = React.useState(false);
   /** The signed-in person's row was read (for the intro notice). */
-  const [accountRead, setAccountRead] = React.useState<string | null>(null);
-  /** What the last write after hydrate put on <html> (the context's glassApplied). */
-  const [glassApplied, setGlassApplied] = React.useState(false);
+  const accountReadRef = React.useRef<string | null>(null);
+  // No React state here, on purpose: whatever this layer learns goes into the
+  // two stores, never into a context value (ONE CONTEXT VALUE above).
+  const [facts] = React.useState(() => createFactStore(initialAppearanceFacts(rollout)));
+  const [inner] = React.useState(() =>
+    createFactStore<AppearanceInnerFacts>({ fallback: false, accountRead: null }),
+  );
+
+  /** Tell the readers what the refs hold now. Never under `off`: its facts are fixed. */
+  const publish = React.useCallback(() => {
+    if (inert) return;
+    const isHydrated = hydratedRef.current;
+    facts.set({
+      hydrated: isHydrated,
+      style: stateRef.current.style,
+      status: stateRef.current.status,
+      // next-themes' setting, known once this device was read.
+      theme: isHydrated ? (parseThemeSetting(themeRef.current) ?? 'system') : undefined,
+      shownStyle: isHydrated
+        ? shownStyleOf(stateRef.current.style, rollout, fallbackRef.current)
+        : defaultStyle(rollout),
+    });
+    inner.set({ fallback: fallbackRef.current, accountRead: accountReadRef.current });
+  }, [inert, rollout, facts, inner]);
+  React.useLayoutEffect(() => {
+    publishRef.current = publish;
+  }, [publish]);
+
+  const setAccountRead = React.useCallback(
+    (userId: string | null) => {
+      accountReadRef.current = userId;
+      publish();
+    },
+    [publish],
+  );
 
   const writeAttributes = React.useCallback(() => {
     if (inert) {
@@ -259,8 +384,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     if (twinOverrideRef.current !== null) on = twinOverrideRef.current;
     setGlassAttributes(on);
     // Only ever after a write in an effect or a handler, never in render.
-    setGlassApplied(on);
-  }, [inert, rollout]);
+    facts.set({ glassApplied: on });
+  }, [inert, rollout, facts]);
 
   // dispatch and run are mutually recursive through the async effects.
   const dispatchRef = React.useRef<(event: AppearanceEvent) => void>(noop);
@@ -344,17 +469,18 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         }
       }
     },
-    [writeAttributes],
+    [writeAttributes, setAccountRead],
   );
 
   const reduce = React.useCallback(
     (event: AppearanceEvent) => {
       const { state, effects } = reduceAppearance(stateRef.current, event);
       stateRef.current = state;
-      setSnapshot(state);
       for (const effect of effects) run(effect);
+      // After the effects: an apply may have handed next-themes a new Theme.
+      publish();
     },
-    [run],
+    [run, publish],
   );
 
   /** Read the device records once, before anything else is reduced. */
@@ -362,7 +488,6 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     if (inert || hydratedRef.current) return;
     hydratedRef.current = true;
     fallbackRef.current = isCrashFallbackActive();
-    setFallback(fallbackRef.current);
     const now = Date.now();
     reduce({
       type: 'hydrate',
@@ -377,8 +502,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     // one at most once a day; a matching cookie is never written by script
     // (WebKit would cap it at 7 days again).
     ensureStyleCookie(now);
-    setHydrated(true);
-  }, [inert, reduce]);
+    publish();
+  }, [inert, reduce, publish]);
 
   const dispatch = React.useCallback(
     (event: AppearanceEvent) => {
@@ -426,7 +551,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       if (style === 'liquid-glass' && fallbackRef.current) {
         clearCrashFallback();
         fallbackRef.current = false;
-        setFallback(false);
+        publish();
       }
       dispatch({
         type: 'choose',
@@ -436,7 +561,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         now: Date.now(),
       });
     },
-    [dispatch],
+    [dispatch, publish],
   );
 
   const chooseTheme = React.useCallback(
@@ -471,7 +596,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         dispatch({ type: 'authenticated', userId, now: Date.now() });
       },
     }),
-    [inert, dispatch],
+    [inert, dispatch, setAccountRead],
   );
 
   React.useEffect(() => {
@@ -491,7 +616,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
           onClick: () => {
             clearCrashFallback();
             fallbackRef.current = false;
-            setFallback(false);
+            publish();
             writeAttributes();
           },
         },
@@ -548,14 +673,71 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // One object for the whole life of the provider: every dependency below is
+  // itself stable (the callbacks hang on `inert` and `rollout`, which a build
+  // fixes, and on the two stores, which are created once).
+  const value = React.useMemo<AppearanceApi>(
+    () =>
+      inert
+        ? {
+            rollout,
+            chooseStyle: noop,
+            chooseTheme: noop,
+            keepGlass: noop,
+            retry: noop,
+            signedInUserId,
+            facts,
+            inner,
+          }
+        : { rollout, chooseStyle, chooseTheme, keepGlass, retry, signedInUserId, facts, inner },
+    [inert, rollout, chooseStyle, chooseTheme, keepGlass, retry, signedInUserId, facts, inner],
+  );
+
+  return (
+    <AccountContext.Provider value={account}>
+      <AppearanceContext.Provider value={value}>
+        {/* One slot before the children, as before: the ids React makes for
+            the page (useId) depend on how many siblings it has here. */}
+        {inert ? null : <AppearanceWatchers api={value} setOverride={setTwinOverride} />}
+        {children}
+      </AppearanceContext.Provider>
+    </AccountContext.Provider>
+  );
+}
+
+/**
+ * The provider's own two readers of the stores, kept out of the provider so
+ * that it never renders for a fact: the marketing variant guard (R8) and the
+ * one-time "new look" notice (R13). Never rendered under `off`.
+ */
+function AppearanceWatchers({
+  api,
+  setOverride,
+}: {
+  api: AppearanceApi;
+  setOverride: (on: boolean | null) => void;
+}) {
+  const { facts, inner, rollout, chooseStyle, keepGlass, signedInUserId } = api;
+  const pathname = currentPath(usePathname());
+  const { hydrated, style, shownStyle } = React.useSyncExternalStore(
+    facts.subscribe,
+    facts.getSnapshot,
+    facts.getServerSnapshot,
+  );
+  const { accountRead, fallback } = React.useSyncExternalStore(
+    inner.subscribe,
+    inner.getSnapshot,
+    inner.getServerSnapshot,
+  );
+
   // The one-time "new look" notice (R13): default rollout, signed in, the
   // account read, no Design of their own, glass on screen, not seen on this
   // device. Never on the print route or in classic (the attribute decides).
   const introShownRef = React.useRef(false);
   React.useEffect(() => {
     if (rollout !== 'default' || introShownRef.current) return;
-    if (accountRead === null || accountRead !== userIdRef.current) return;
-    if (snapshot.style !== null || !isGlassShowing() || readIntroSeen()) return;
+    if (accountRead === null || accountRead !== signedInUserId()) return;
+    if (style !== null || !isGlassShowing() || readIntroSeen()) return;
     introShownRef.current = true;
     toast(INTRO_NOTICE, {
       duration: Infinity,
@@ -575,79 +757,17 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       },
       onDismiss: () => markIntroSeen(),
     });
-  }, [rollout, accountRead, snapshot.style, pathname, fallback, chooseStyle, keepGlass]);
+  }, [rollout, accountRead, style, pathname, fallback, chooseStyle, keepGlass, signedInUserId]);
 
-  const theme = hydrated ? (parseThemeSetting(nextTheme) ?? 'system') : undefined;
-  const shownStyle = hydrated
-    ? shownStyleOf(snapshot.style, rollout, fallback)
-    : inert
-      ? 'classic'
-      : defaultStyle(rollout);
-
-  const value = React.useMemo<AppearanceContextValue>(
-    () =>
-      inert
-        ? {
-            hydrated: true,
-            style: null,
-            theme,
-            shownStyle: 'classic',
-            glassApplied: false,
-            rollout,
-            chooseStyle: noop,
-            chooseTheme: noop,
-            keepGlass: noop,
-            status: 'signed-out',
-            retry: noop,
-            signedInUserId,
-          }
-        : {
-            hydrated,
-            style: snapshot.style,
-            theme,
-            shownStyle,
-            glassApplied,
-            rollout,
-            chooseStyle,
-            chooseTheme,
-            keepGlass,
-            status: snapshot.status,
-            retry,
-            signedInUserId,
-          },
-    [
-      inert,
-      hydrated,
-      snapshot.style,
-      snapshot.status,
-      theme,
-      shownStyle,
-      glassApplied,
-      rollout,
-      chooseStyle,
-      chooseTheme,
-      keepGlass,
-      retry,
-      signedInUserId,
-    ],
-  );
-
-  return (
-    <AccountContext.Provider value={account}>
-      <AppearanceContext.Provider value={value}>
-        {MARKETING_TWINS_BUILT && !inert ? (
-          <MarketingVariantGuard
-            rollout={rollout}
-            hydrated={hydrated}
-            shownStyle={shownStyle}
-            fallback={fallback}
-            setOverride={setTwinOverride}
-          />
-        ) : null}
-        {children}
-      </AppearanceContext.Provider>
-    </AccountContext.Provider>
-  );
+  return MARKETING_TWINS_BUILT ? (
+    <MarketingVariantGuard
+      rollout={rollout}
+      hydrated={hydrated}
+      shownStyle={shownStyle}
+      fallback={fallback}
+      setOverride={setOverride}
+    />
+  ) : null;
 }
 
 /** The inert marker the glass-site layout puts on its root (stage 3). */

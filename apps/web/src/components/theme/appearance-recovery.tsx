@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 
 import { isGlassShowing, noteGlassCrash } from './appearance-cookie';
 import { isLiquidGlassEnabled } from './appearance-flag';
-import { useAppearance } from './appearance-provider';
+import { useAppearanceActions } from './appearance-provider';
 import { isServerRenderError, switchToClassicOnThisDevice } from './appearance-recovery-plain';
 
 /** The attribute on <html> does not change while an error page shows. */
@@ -45,7 +45,9 @@ export function AppearanceRecovery({
   size?: 'sm' | 'default';
   variant?: 'outline' | 'ghost';
 }) {
-  const appearance = useAppearance();
+  // The actions only: this button shows nothing of the appearance, so it
+  // never renders again for it.
+  const appearance = useAppearanceActions();
   // Read after hydration only: the server and the first client render say
   // false, so a classic error page is byte-for-byte what it was.
   const offered = React.useSyncExternalStore(
