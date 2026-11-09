@@ -355,6 +355,44 @@ describe('Liquid Glass phone cards: each phone rule lands on its column', () => 
     });
   }
 
+  it("books: the Columns chooser's Coverage and 14-day boxes rule the phone card too", () => {
+    document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+    try {
+      const { container } = render(<div data-glass-page="books">{booksTable()}</div>);
+      const table = container.querySelector('[data-glass="items-table"]')!;
+      const heads = [...table.querySelectorAll(':scope > thead th')];
+      const record = table.querySelector(':scope > tbody > tr[data-row-kind="record"]')!;
+      // The chooser's rules (every width) hide Coverage (10th) and 14-day
+      // (11th) while unticked; on the phone only the generic cell rules
+      // (display block, and none when empty) also give them a display, and
+      // each of those is less specific than the chooser's, so no phone rule
+      // keeps them hidden, or shown, against the viewer's choice.
+      for (const [nth, from] of [
+        [10, 4],
+        [11, 3],
+      ] as const) {
+        const cell = record.children[nth - 1]!;
+        expect(cell).toBe(record.children[heads.length - from]);
+        const phoneDisplay = notEmptyRules
+          .filter((r) => phone(r.media) && r.decls.display !== undefined)
+          .flatMap((r) => r.selectors.map((sel) => sel.replace(/\s+/g, ' ')))
+          .filter((sel) => !/::|:(hover|focus)/.test(sel) && cell.matches(sel));
+        expect(phoneDisplay).toEqual([
+          ":root[data-appearance='liquid-glass'] :is([data-glass-page='items'], [data-glass-page='books']) [data-glass='items-table'] > tbody > tr > td",
+        ]);
+        const chooser = rules.filter(
+          (r) =>
+            r.media.length === 0 &&
+            r.decls.display === 'none' &&
+            r.selectors.some((sel) => sel.includes(`> :nth-child(${nth})`)),
+        );
+        expect(chooser).toHaveLength(1);
+      }
+    } finally {
+      document.documentElement.removeAttribute('data-appearance');
+    }
+  });
+
   for (const [page, draw] of LAYOUTS) {
     it(`${page}: the cards' lines and the shown headings`, () => {
       document.documentElement.setAttribute('data-appearance', 'liquid-glass');
@@ -362,7 +400,13 @@ describe('Liquid Glass phone cards: each phone rule lands on its column', () => 
         const { container } = render(<div data-glass-page={page}>{draw()}</div>);
         const table = container.querySelector('[data-glass="items-table"]')!;
         const heads = [...table.querySelectorAll(':scope > thead th')];
-        const label = (i: number) => (i === 0 ? 'select' : heads[i]!.textContent!.trim());
+        // The 14-day heading holds its mode menu ("14-day · qty"); its
+        // cells' label is the column's name.
+        const label = (i: number) => {
+          if (i === 0) return 'select';
+          const text = heads[i]!.textContent!.trim();
+          return text.startsWith('14-day') ? '14-day' : text;
+        };
         expect(label(1)).toBe('Item');
         expect(heads.length - 5).toBe(heads.findIndex((th) => th.textContent === 'On hand'));
 
@@ -392,13 +436,12 @@ describe('Liquid Glass phone cards: each phone rule lands on its column', () => 
                     ? '3'
                     : '4';
             expect(declared(td, 'order'), where).toBe(want);
-            // Every fact of words is named by its column's label; the status
-            // badge names itself; the coverage bar and the 14-day line are
-            // not drawn on the card; a group's Updated (always the dash) is
-            // not drawn either.
+            // Every fact is named by its column's label, the coverage bar
+            // and the 14-day line among them (Classic draws both; the 14-day
+            // mode menu in the heading acts on the line); the status badge
+            // names itself; a group's Updated (always the dash) is not drawn.
             const fact = !['select', 'Item', 'On hand', 'Status'].includes(col) && !isRack;
-            const hidden =
-              col === 'Coverage' || col.startsWith('14-day') || (isHeader && col === 'Updated');
+            const hidden = isHeader && col === 'Updated';
             if (hidden) expect(shown(td), where).toBe('none');
             else if (col !== 'select') expect(shown(td), where).toBe('block');
             if (!hidden) {
@@ -439,16 +482,35 @@ describe('Liquid Glass phone cards: each phone rule lands on its column', () => 
         expect([...labelled].sort()).toEqual(
           page === 'books'
             ? [
+                "'14-day '",
                 "'Category '",
                 "'Charter '",
+                "'Coverage '",
                 "'Crate '",
                 "'Grade '",
                 "'Location '",
                 "'Rack '",
                 "'Updated '",
               ]
-            : ["'Category '", "'Charter '", "'Location '", "'Rack '", "'Updated '"],
+            : [
+                "'14-day '",
+                "'Category '",
+                "'Charter '",
+                "'Coverage '",
+                "'Location '",
+                "'Rack '",
+                "'Updated '",
+              ],
         );
+        // A record's coverage bar and 14-day line are drawn on the card, on
+        // the label's middle.
+        for (const tr of rows.filter((r) => r.getAttribute('data-row-kind') !== 'header')) {
+          const bar = tr.children[heads.length - 4]!.firstElementChild!;
+          const line = tr.children[heads.length - 3]!.firstElementChild!;
+          expect(bar.tagName).toBe('SPAN');
+          expect(declared(bar, 'vertical-align')).toBe('middle');
+          expect(declared(line, 'vertical-align')).toBe('middle');
+        }
 
         // The top pager is not drawn on a phone; the one under the list is
         // the same pager (every page control stays).

@@ -115,23 +115,32 @@ for (const [route, root] of [
         page.locator(`[data-glass-page="${root}"] [data-glass="items-pager"]`),
       ).toBeVisible();
     }
-    // A record's facts are named; the drawings are not on the card.
+    // A record's facts are named, the coverage bar and the 14-day line
+    // among them (on Books while their Columns boxes are ticked, as at
+    // every width), so the 14-day mode menu acts on what the card shows.
     const record = table.locator(':scope > tbody > tr[data-row-kind="record"]').first();
     if ((await record.count()) > 0) {
+      const cols = (await table.getAttribute('data-glass-cols')) ?? '';
+      const drawn = (col: string) =>
+        root === 'items' || cols.split(/\s+/).includes(col) ? 'block' : 'none';
       const facts = await record.evaluate((tr) => {
         const cell = (sel: string) => tr.querySelector(`:scope > td:${sel}`)!;
         return {
           category: getComputedStyle(cell('nth-child(3)'), '::before').content,
           updated: getComputedStyle(cell('last-child'), '::before').content,
           coverage: getComputedStyle(cell('nth-last-child(4)')).display,
+          coverageLabel: getComputedStyle(cell('nth-last-child(4)'), '::before').content,
           trend: getComputedStyle(cell('nth-last-child(3)')).display,
+          trendLabel: getComputedStyle(cell('nth-last-child(3)'), '::before').content,
         };
       });
       expect(facts).toEqual({
         category: '"Category "',
         updated: '"Updated "',
-        coverage: 'none',
-        trend: 'none',
+        coverage: drawn('coverage'),
+        coverageLabel: '"Coverage "',
+        trend: drawn('trend'),
+        trendLabel: '"14-day "',
       });
     }
     // Tick a record: the bar floats at the foot, inside the screen; untick.

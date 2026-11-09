@@ -851,9 +851,10 @@
        card (deviation from the board, which draws only photo, name, SKU,
        racks and on hand): the rack on its own line, then the status and,
        each after its quiet label, category, charter, location (on Books
-       grade and crate) and the last update, wrapped. The coverage bar and
-       the 14-day line (drawings, no words or controls) are not drawn on a
-       phone, as on the board. The checkboxes stay on every card (the board
+       grade and crate), the coverage bar, the 14-day line and the last
+       update, wrapped (the board draws neither drawing; Classic draws both,
+       and the 14-day mode menu and the Books Columns chooser act on them).
+       The checkboxes stay on every card (the board
        shows them only in a Select mode, which would be new state). The
        column headings are not drawn on a phone (the labels name the
        facts), apart from the two header cells that hold a control: select
@@ -1385,17 +1386,21 @@
         > td:nth-last-child(2) {
         order: 3;
       }
-      /* Coverage and the 14-day line are drawings, not words or controls,
-         and the board's card draws neither: not on the phone card (the
-         14-day mode menu stays in the heading row; the status keeps the
-         stock level's word). */
+      /* Coverage and the 14-day line stay on the card (the board's card
+         draws neither; Classic draws both in its sideways-scrolling table),
+         each after its quiet label like every other fact, so the 14-day
+         mode menu in the heading row changes what the card shows, and on
+         Books the Columns chooser's Coverage and 14-day boxes work at every
+         width (their rules hide these cells while unticked). The bar and
+         the line sit on the label's middle. */
       :root[data-appearance='liquid-glass']
         :is([data-glass-page='items'], [data-glass-page='books'])
         [data-glass='items-table']
         > tbody
         > tr
-        > td:is(:nth-last-child(4), :nth-last-child(3)) {
-        display: none;
+        > td:is(:nth-last-child(4), :nth-last-child(3))
+        > :is(span, svg) {
+        vertical-align: middle;
       }
       /* A group header's Updated cell is always the em dash (it has no one
          update): not drawn. */
@@ -1411,7 +1416,7 @@
          and Location third to fifth on both lists; on Books Grade sixth and
          Crate sixth from the end; a group header's Rack (no data-glass hook:
          the record's rack line is named above) sixth on Items and seventh on
-         Books; Updated last.
+         Books; Coverage fourth and 14-day third from the end; Updated last.
          Spoken too, as the order page's line labels are, since the cards
          may not be read as a table. */
       :root[data-appearance='liquid-glass']
@@ -1476,6 +1481,22 @@
         > tr
         > td:nth-child(7):not([data-glass='rack'])::before {
         content: 'Rack ';
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-last-child(4)::before {
+        content: 'Coverage ';
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-last-child(3)::before {
+        content: '14-day ';
       }
       :root[data-appearance='liquid-glass']
         :is([data-glass-page='items'], [data-glass-page='books'])
