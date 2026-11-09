@@ -20,6 +20,22 @@ import { Field } from '@/components/ui/field';
 import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import {
+  glassChip,
+  glassChipLabel,
+  glassSegLabel,
+  glassSegment,
+  glassSegTrack,
+} from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import {
+  GLASS_OPS,
+  glassNavPrimary,
+  glassNavPrimaryLabel,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { showWriteCta } from '@/lib/cta-gating';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -63,6 +79,12 @@ const SEARCH_DEBOUNCE_MS = 250;
 
 export default function MaintenanceListScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Routes-Gallery-2's maintenance rows
+  // as an iOS list): the scene, the glass nav with New as the small accent
+  // button, the large title over its line, My / All as the iOS segmented
+  // control, the status chips as iOS capsules, the rows as grouped glass
+  // cards. Every control, filter, state and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const navigation = useNavigation();
   const enabledModules = useEnabledModules();
@@ -142,10 +164,11 @@ export default function MaintenanceListScreen() {
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={styles.chips}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
+          <View style={lg ? GLASS_LIST.navGroup : styles.chips}>
             <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
@@ -159,10 +182,10 @@ export default function MaintenanceListScreen() {
               accessibilityLabel="New maintenance request"
               style={({ pressed }) => [styles.newFrame, { opacity: pressed ? 0.7 : 1 }]}
             >
-              <View style={[styles.newBtn, { backgroundColor: c.accent }]}>
+              <View style={[styles.newBtn, { backgroundColor: c.accent }, lg && glassNavPrimary(lg)]}>
                 <Plus size={14} color={c.accentInk} strokeWidth={1.8} />
                 <Text
-                  style={[styles.newLabel, { color: c.accentInk }]}
+                  style={[styles.newLabel, { color: c.accentInk }, lg && glassNavPrimaryLabel(lg)]}
                   maxFontSizeMultiplier={CONTROL_CAP}
                 >
                   New
@@ -171,19 +194,31 @@ export default function MaintenanceListScreen() {
             </Pressable>
           ) : null}
         </View>
-        <View style={styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>MAINTENANCE · {scope === 'all' ? 'ALL REQUESTS' : 'MY REQUESTS'}</Eyebrow>
-          </View>
-          <Display size={32} style={{ marginTop: 12 }}>
-            Maintenance <Em>requests.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>MAINTENANCE · {scope === 'all' ? 'ALL REQUESTS' : 'MY REQUESTS'}</Eyebrow>
+            </View>
+          )}
+          <Display
+            size={lg ? 34 : 32}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Maintenance {lg ? 'requests' : <Em>requests.</Em>}
           </Display>
+          {lg ? (
+            <GlassSubline style={GLASS_LIST.sub}>
+              {scope === 'all' ? 'Maintenance · All requests' : 'Maintenance · My requests'}
+            </GlassSubline>
+          ) : null}
         </View>
       </SafeAreaView>
 
       {!enabled ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 8 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 8 }}>
           <Card padding={16}>
             <Body size={14.5}>
               Maintenance requests aren’t enabled for this workspace. Ask an admin to enable it in
@@ -193,10 +228,16 @@ export default function MaintenanceListScreen() {
         </View>
       ) : (
         <>
-          <View style={styles.toolbar}>
+          <View style={lg ? [styles.toolbar, GLASS_OPS.controls] : styles.toolbar}>
             {/* My / All requests: the reference's segmented control (DESIGN-SPEC
                 6.5), each segment a button that says it is selected. */}
-            <View style={[styles.segmentTrack, { backgroundColor: c.sunk, borderColor: c.hair }]}>
+            <View
+              style={[
+                styles.segmentTrack,
+                { backgroundColor: c.sunk, borderColor: c.hair },
+                lg && glassSegTrack(lg),
+              ]}
+            >
               <ScopeSegment
                 label="My requests"
                 selected={scope === 'mine'}
@@ -238,7 +279,7 @@ export default function MaintenanceListScreen() {
           </View>
 
           {loadError ? (
-            <View style={{ paddingHorizontal: 20, marginTop: 8 }}>
+            <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 8 }}>
               <Card padding={16}>
                 <Body size={14.5} accessibilityRole="alert">
                   {loadError}
@@ -256,7 +297,7 @@ export default function MaintenanceListScreen() {
             <FlatList
               data={rows}
               keyExtractor={(r) => r.id}
-              contentContainerStyle={styles.list}
+              contentContainerStyle={lg ? [styles.list, GLASS_LIST.list] : styles.list}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
               }
@@ -302,6 +343,8 @@ function ScopeSegment({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: an iOS segment, the chosen one ringed in ink-3.
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -313,10 +356,15 @@ function ScopeSegment({
           ? { backgroundColor: c.ink, borderColor: c.ink }
           : { backgroundColor: 'transparent', borderColor: 'transparent' },
         { opacity: pressed ? 0.7 : 1 },
+        lg && [glassSegment(lg, selected), { borderColor: selected ? c.ink3 : 'transparent' }],
       ]}
     >
       <Text
-        style={[styles.segmentLabel, { color: selected ? c.paper : c.ink3 }]}
+        style={[
+          styles.segmentLabel,
+          { color: selected ? c.paper : c.ink3 },
+          lg && [glassSegLabel(lg), { color: selected ? c.ink : c.ink3 }],
+        ]}
         maxFontSizeMultiplier={CONTROL_CAP}
       >
         {label}
@@ -336,6 +384,8 @@ function StatusChip({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS capsule (the chosen one in the accent).
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -349,10 +399,15 @@ function StatusChip({
           selected
             ? { backgroundColor: c.ink, borderColor: c.ink }
             : { backgroundColor: 'transparent', borderColor: c.hair2 },
+          lg && glassChip(lg, selected),
         ]}
       >
         <Text
-          style={[styles.chipLabel, { color: selected ? c.paper : c.ink2 }]}
+          style={[
+            styles.chipLabel,
+            { color: selected ? c.paper : c.ink2 },
+            lg && glassChipLabel(lg, selected),
+          ]}
           maxFontSizeMultiplier={CONTROL_CAP}
         >
           {label}

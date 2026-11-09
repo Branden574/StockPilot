@@ -18,6 +18,7 @@ import {
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
 import { returnRowWaiting, returnStatusTone } from './returns-view';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -295,9 +296,16 @@ describe('Returns list', () => {
     expect(code).toContain(
       "filter === f.id ? { backgroundColor: c.ink, borderColor: c.ink } : { backgroundColor: 'transparent', borderColor: c.hair2 },",
     );
-    expect(code).toContain(
-      'style={[styles.chipLabel, { color: filter === f.id ? c.paper : c.ink2 }]} maxFontSizeMultiplier={CONTROL_CAP} > {f.label}',
+    // Classic's label, read off the list's Classic projection (every Liquid
+    // Glass branch folded to Classic: lib/__fixtures__/classic-projection.ts);
+    // Liquid Glass lays the iOS capsule over the same chip and words.
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm(
+        'style={[styles.chipLabel, { color: filter === f.id ? c.paper : c.ink2 }]} maxFontSizeMultiplier={CONTROL_CAP} > {f.label}',
+      ),
     );
+    expect(code).toContain('lg && glassChip(lg, filter === f.id),');
+    expect(code).toContain('lg && glassChipLabel(lg, filter === f.id),');
     expect(code).toContain('const CONTROL_CAP = capTo(13, TYPE_CEILING.control);');
   });
 
@@ -309,9 +317,14 @@ describe('Returns list', () => {
     expect(code).toContain(
       '<Field label="SEARCH" value={q} onChangeText={setQ} placeholder={RETURNS_COPY.listSearchPlaceholder}',
     );
-    expect(code).toContain(
-      '<Display size={32} style={{ marginTop: 12 }}> Returns <Em>and RMAs.</Em> </Display>',
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm(
+        '<Display size={32} style={{ marginTop: 12 }}> Returns <Em>and RMAs.</Em> </Display>',
+      ),
     );
+    // Liquid Glass: the same words as the large title, the eyebrow's under it.
+    expect(code).toContain("Returns {lg ? 'and RMAs' : <Em>and RMAs.</Em>}");
+    expect(code).toContain('<GlassSubline style={GLASS_LIST.sub}>Returns</GlassSubline>');
     expect(code).toContain('<Display size={18}>{RETURNS_COPY.listEmpty}</Display>');
     const words = wordsOf(LIST);
     for (const w of [
@@ -354,9 +367,13 @@ describe('Returns list', () => {
     );
     // DESIGN-SPEC 6.18: the chosen row's 3pt accent rail on the recessed
     // fill; the padding gives the rail's extra 2pt back.
-    expect(code).toContain(
-      'selected ? { borderLeftWidth: 3, borderLeftColor: c.accent, backgroundColor: c.sunk, paddingLeft: 14, } : undefined',
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm(
+        'selected ? { borderLeftWidth: 3, borderLeftColor: c.accent, backgroundColor: c.sunk, paddingLeft: 14, } : undefined',
+      ),
     );
+    // Liquid Glass: the same rail, on the selection fill.
+    expect(code).toContain('backgroundColor: lg ? lg.g.selFill : c.sunk,');
   });
 
   it('each RMA: a button named with its words, its status on the shared pill tones, its wait in the warning ink past the prompt', () => {
@@ -383,7 +400,13 @@ describe('Returns list', () => {
     expect(code).toContain(
       '<TriangleAlert size={32} color={c.warnText} strokeWidth={1.3} style={{ marginBottom: 12 }} /> <Body size={14.5} accessibilityRole="alert" style={{ textAlign: \'center\', maxWidth: 320 }} > {loadError} </Body>',
     );
-    expect(code).toContain('<View style={[styles.banner, { backgroundColor: c.warnWash }]}>');
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm('<View style={[styles.banner, { backgroundColor: c.warnWash }]}>'),
+    );
+    // Liquid Glass: the same note on the boards' status line.
+    expect(code).toContain(
+      '<View style={[styles.banner, { backgroundColor: c.warnWash }, lg && GLASS_NOTE]} >',
+    );
     expect(code).toContain(
       '<Body size={13.5} color={c.warnText} accessibilityRole="alert" style={{ flex: 1 }} > {loadError} </Body>',
     );
@@ -501,8 +524,14 @@ describe('the workbench', () => {
     expect(code).toContain(
       '<TriangleAlert size={16} color={c.warnText} strokeWidth={1.75} style={{ marginTop: 2 }} /> <Body size={13.5} color={c.warnText} accessibilityRole="alert" style={{ flex: 1 }}> {RETURNS_COPY.destinationsUnavailable} </Body>',
     );
+    // Classic's two notes, read off the workbench's Classic projection; Liquid
+    // Glass draws the same notes on the boards' status line.
+    const banner = flatNorm('<View style={[styles.banner, { backgroundColor: c.warnWash }]}>');
+    expect(classicFlat(sourceOf(VIEW), VIEW).split(banner)).toHaveLength(3);
     expect(
-      code.match(/<View style=\{\[styles\.banner, \{ backgroundColor: c\.warnWash \}\]\}>/g),
+      code.match(
+        /<View style=\{\[styles\.banner, \{ backgroundColor: c\.warnWash \}, lg && GLASS_NOTE\]\}>/g,
+      ),
     ).toHaveLength(2);
     expect(styleBlock(VIEW, 'banner')).toMatch(/padding: 12,\s*borderRadius: 10,/);
   });

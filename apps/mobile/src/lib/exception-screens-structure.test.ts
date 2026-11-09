@@ -14,6 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -189,7 +190,14 @@ describe('Exceptions list: words, tabs and the recount selection', () => {
     expect(body).toContain("backgroundColor: active ? c.card : 'transparent',");
     expect(body).toContain("borderColor: active ? c.ink3 : 'transparent',");
     expect(styleBlock(LIST, 'tab')).toMatch(/minHeight: MIN_TAP\b/);
-    expect(code).toContain('<View style={[styles.tabs, { backgroundColor: c.sunk }]}>');
+    // Classic's track, read off the list's Classic projection (every Liquid
+    // Glass branch folded to Classic: lib/__fixtures__/classic-projection.ts);
+    // Liquid Glass lays the iOS segmented track and segments over it.
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm('<View style={[styles.tabs, { backgroundColor: c.sunk }]}>'),
+    );
+    expect(code).toContain('lg && glassSegTrack(lg)');
+    expect(body).toContain('lg && glassSegment(lg, active),');
     expect(code).toMatch(
       /<StatusTab label="Open" active=\{status === 'open'\} onPress=\{\(\) => setStatus\('open'\)\} \/>/,
     );
@@ -242,9 +250,11 @@ describe('Exceptions list: words, tabs and the recount selection', () => {
   });
 
   it('a picked card takes the accent wash', () => {
-    expect(code).toContain(
-      'style={picked && selecting ? { backgroundColor: c.accentWash } : undefined}',
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm('style={picked && selecting ? { backgroundColor: c.accentWash } : undefined}'),
     );
+    // Liquid Glass: the selection fill (--sel-fill), on the same condition.
+    expect(code).toContain('{ backgroundColor: lg ? lg.g.selFill : c.accentWash }');
   });
 
   it('Recount selected stays the select bar’s one ink button, off with the reason', () => {

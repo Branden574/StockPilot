@@ -1,5 +1,5 @@
 import { Stack, useRouter } from 'expo-router';
-import { ChevronRight, RefreshCw } from 'lucide-react-native';
+import { ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -13,6 +13,17 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Card } from '@/components/ui/card';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import {
+  GLASS_NAV_CAPSULE,
+  GLASS_NAV_CIRCLE,
+  GLASS_NAV_TITLE,
+  GLASS_OPS,
+  GLASS_OPS_NAV,
+  GlassCapsuleBackdrop,
+  GlassCircleLook,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { listBundles, type CachedBundle } from '@/lib/db-reads';
 import { syncNow } from '@/lib/sync';
@@ -58,6 +69,11 @@ function bundlesListBody(
  */
 export default function BundlesList() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Routes-Gallery-1's bundles panel as
+  // an iOS list): the scene, the glass nav with Back as a 44pt glass circle,
+  // "Bundles" as its title and Refresh as a glass capsule, the bundles as
+  // grouped glass cards. Every control, state and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const [rows, setRows] = React.useState<CachedBundle[]>([]);
   const [read, setRead] = React.useState<CacheRead>('pending');
@@ -114,27 +130,40 @@ export default function BundlesList() {
   const body = bundlesListBody(read, rows.length, refreshing, pulling);
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+    <SafeAreaView
+      style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+      edges={['top']}
+    >
+      {lg ? <SceneBackground /> : null}
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={[styles.header, { borderBottomColor: c.hair }]}>
+      <View style={[styles.header, { borderBottomColor: c.hair }, lg && GLASS_OPS_NAV]}>
         <Pressable
           onPress={() => router.back()}
-          style={styles.backBtn}
+          style={[styles.backBtn, lg && GLASS_NAV_CIRCLE]}
           accessibilityRole="button"
           accessibilityLabel="Back"
         >
-          <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+          {lg ? (
+            <GlassCircleLook icon={ChevronLeft} />
+          ) : (
+            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+          )}
         </Pressable>
-        <Display size={24} style={styles.title}>
+        <Display
+          size={lg ? 17 : 24}
+          style={[styles.title, lg && GLASS_NAV_TITLE]}
+          accessibilityRole={lg ? 'header' : undefined}
+        >
           Bundles
         </Display>
         <Pressable
           onPress={refresh}
-          style={styles.refreshBtn}
+          style={[styles.refreshBtn, lg && GLASS_NAV_CAPSULE]}
           accessibilityRole="button"
           accessibilityLabel="Refresh"
           accessibilityState={{ busy: refreshing }}
         >
+          {lg ? <GlassCapsuleBackdrop /> : null}
           {/* While it syncs, a spinner stands in for the arrow; the word
               stays, so the button keeps its name on screen. */}
           {refreshing ? (
@@ -142,12 +171,14 @@ export default function BundlesList() {
           ) : (
             <RefreshCw size={14} color={c.ink} strokeWidth={1.75} />
           )}
-          <Text style={[styles.refreshLabel, { color: c.ink }]}>Refresh</Text>
+          <Text style={[styles.refreshLabel, { color: c.ink }, lg && lg.font.displaySemi]}>
+            Refresh
+          </Text>
         </Pressable>
       </View>
 
       <ScrollView
-        contentContainerStyle={styles.body}
+        contentContainerStyle={lg ? [styles.body, GLASS_OPS.scroll] : styles.body}
         refreshControl={
           <RefreshControl refreshing={pulling} onRefresh={() => void pull()} tintColor={c.ink} />
         }

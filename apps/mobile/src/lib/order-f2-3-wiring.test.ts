@@ -4,6 +4,8 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
+
 import {
   TOUCHABLE_TAG,
   attrText,
@@ -319,7 +321,14 @@ describe('the Staging tab, opened from the order', () => {
     // The 44 pt frame is 3 pt wider than the 38 pt chip on every side: the bar,
     // the gap between the chips and the head each give those 3 pt back.
     expect(code).toMatch(/topbar: \{\s*paddingHorizontal: 9,\s*paddingTop: 5,/);
-    expect(code).toMatch(/<View style=\{\{ flexDirection: 'row', alignItems: 'center', gap: 2 \}\}>\s*<IconChip\s+icon=\{ArrowLeft\}/);
+    // Classic's chip group, read off the screen's Classic projection; Liquid
+    // Glass puts the same two chips in the glass nav's group.
+    expect(classicFlat(staging, STAGING_FILE)).toContain(
+      flatNorm("<View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}><IconChip icon={ArrowLeft}"),
+    );
+    expect(flatNorm(code)).toContain(
+      flatNorm("lg ? GLASS_LIST.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }"),
+    );
     expect(code).toMatch(/head: \{\s*paddingHorizontal: 20,\s*paddingTop: 9,/);
   });
 
@@ -331,8 +340,17 @@ describe('the Staging tab, opened from the order', () => {
 
   it('the chip’s two actions are 44 pt buttons, named, labels capped at the control ceiling', () => {
     const fn = code.slice(code.indexOf('function StagingFilterChipCard('));
-    expect(fn).toMatch(
-      /<Pressable\s+onPress=\{onPress\}\s+accessibilityRole="button"\s+accessibilityLabel=\{label\}\s+accessibilityHint=\{hint\}\s+style=\{\(\{ pressed \}\) => \(\{\s*minHeight: MIN_TAP,/,
+    const classic = classicFlat(staging, STAGING_FILE);
+    expect(classic.slice(classic.indexOf('function StagingFilterChipCard('))).toContain(
+      flatNorm(
+        '<Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} accessibilityHint={hint} style={({ pressed }) => ({ minHeight: MIN_TAP,',
+      ),
+    );
+    // Liquid Glass keeps the 44 pt frame and lays the gray capsule over it.
+    expect(flatNorm(fn)).toContain(
+      flatNorm(
+        '<Pressable onPress={onPress} accessibilityRole="button" accessibilityLabel={label} accessibilityHint={hint} style={({ pressed }) => [ { minHeight: MIN_TAP,',
+      ),
     );
     expect(fn).toContain('maxFontSizeMultiplier={CHIP_ACTION_CAP}');
     expect(code).toContain('const CHIP_ACTION_CAP = capTo(12.5, TYPE_CEILING.control);');

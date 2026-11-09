@@ -10,6 +10,8 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Thumb } from '@/components/ui/thumb';
 import { Body, Mono } from '@/components/ui/text';
+import { glassSegLabel, glassSegment, glassSegTrack } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { showWriteCta } from '@/lib/cta-gating';
 import { signListThumbnails } from '@/lib/image-cache';
 import {
@@ -496,6 +498,9 @@ const SEGMENT_CAP = capTo(13, TYPE_CEILING.control);
  */
 function ViewSwitch({ view, onChange }: { view: RentalsView; onChange: (v: RentalsView) => void }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS segmented control (.ios-seg), the chosen segment
+  // keeping Classic's ink-3 ring so the choice never rests on a faint fill.
+  const lg = useGlass();
   const segment = (value: RentalsView, label: string) => {
     const active = view === value;
     return (
@@ -510,13 +515,14 @@ function ViewSwitch({ view, onChange }: { view: RentalsView; onChange: (v: Renta
             backgroundColor: active ? c.card : 'transparent',
             opacity: pressed ? 0.7 : 1,
           },
+          lg && glassSegment(lg, active),
         ]}
       >
         <Body
-          size={13}
+          size={lg ? 14 : 13}
           color={active ? c.ink : c.ink3}
           maxFontSizeMultiplier={SEGMENT_CAP}
-          style={[styles.segmentLabel, active && styles.segmentLabelOn]}
+          style={[styles.segmentLabel, active && styles.segmentLabelOn, lg && glassSegLabel(lg)]}
         >
           {label}
         </Body>
@@ -524,7 +530,7 @@ function ViewSwitch({ view, onChange }: { view: RentalsView; onChange: (v: Renta
     );
   };
   return (
-    <View style={[styles.track, { backgroundColor: c.sunk }]}>
+    <View style={[styles.track, { backgroundColor: c.sunk }, lg && glassSegTrack(lg)]}>
       {segment('checkouts', 'Checkouts')}
       {segment('items', 'Items')}
     </View>

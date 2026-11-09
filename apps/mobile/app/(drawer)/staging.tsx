@@ -21,6 +21,17 @@ import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import {
+  glassCardStyle,
+  glassSegLabel,
+  glassSegment,
+  glassSegTrack,
+} from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_NOTE, glassGrayCapsule } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { api } from '@/lib/api';
 import { canMintPlacementDestination } from '@/lib/move-stock-form';
 import {
@@ -108,6 +119,11 @@ import { useWorkspace } from '@/lib/use-workspace';
  */
 export default function StagingScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Routes-Gallery-1's staging panel as
+  // an iOS list): the scene, the glass nav, the large title over its line,
+  // All / Books / Items as the iOS segmented control, the rows as grouped
+  // glass cards. Every control, filter, state and word stays.
+  const lg = useGlass();
   const navigation = useNavigation();
   const router = useRouter();
   const { orgId } = useOrg();
@@ -273,14 +289,19 @@ export default function StagingScreen() {
   const listEmpty = stagingListEmptyState({ loading, error, filterEmpty });
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           {/* 44 pt frames (minTap), named for VoiceOver: opened from an
               order, the arrow is the way back to it ("Back to the order",
               the chip's own words), the only one left once Show all hides
               the chip. */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <View
+            style={
+              lg ? GLASS_LIST.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip
               icon={ArrowLeft}
               onPress={goBack}
@@ -290,13 +311,25 @@ export default function StagingScreen() {
             <IconChip icon={Menu} onPress={openDrawer} minTap accessibilityLabel="Open menu" />
           </View>
         </View>
-        <View style={styles.head}>
-          <Eyebrow>
-            {loading ? 'PUT AWAY' : `PUT AWAY · ${stagingCountLabel(rows.length)}`}
-          </Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Staging <Em>worklist.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : (
+            <Eyebrow>
+              {loading ? 'PUT AWAY' : `PUT AWAY · ${stagingCountLabel(rows.length)}`}
+            </Eyebrow>
+          )}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Staging {lg ? 'worklist' : <Em>worklist.</Em>}
           </Display>
+          {lg ? (
+            <GlassSubline style={GLASS_LIST.sub}>
+              {loading ? 'Put away' : `Put away · ${stagingCountLabel(rows.length)}`}
+            </GlassSubline>
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -307,7 +340,7 @@ export default function StagingScreen() {
       <FlatList
         data={loading ? [] : rows}
         keyExtractor={(row) => stagingRowKey(row)}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={lg ? [styles.list, GLASS_LIST.list] : styles.list}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />
         }
@@ -333,7 +366,7 @@ export default function StagingScreen() {
                 reference's hairline ring is 1.4:1), so which filter is on
                 never rests on a faint fill or a colour alone. Each segment is
                 a 44pt target; the same buttons, words and selected state. */}
-            <View style={[styles.filterRow, { backgroundColor: c.sunk }]}>
+            <View style={[styles.filterRow, { backgroundColor: c.sunk }, lg && glassSegTrack(lg)]}>
               {STAGING_TYPE_OPTIONS.map((opt) => {
                 const active = opt.value === filter;
                 return (
@@ -349,13 +382,19 @@ export default function StagingScreen() {
                         backgroundColor: active ? c.card : 'transparent',
                         opacity: pressed ? 0.7 : 1,
                       },
+                      // Liquid Glass: an iOS segment (Classic's ink-3 ring kept).
+                      lg && glassSegment(lg, active),
                     ]}
                   >
                     <Body
-                      size={13}
+                      size={lg ? 14 : 13}
                       color={active ? c.ink : c.ink3}
                       maxFontSizeMultiplier={SEGMENT_CAP}
-                      style={[styles.segmentLabel, active && styles.segmentLabelOn]}
+                      style={[
+                        styles.segmentLabel,
+                        active && styles.segmentLabelOn,
+                        lg && glassSegLabel(lg),
+                      ]}
                     >
                       {opt.label}
                     </Body>
@@ -603,6 +642,9 @@ function StagingFilterChipCard({
   onBack: (orderId: string) => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the note on the grouped glass surface (the board's status
+  // line), its two actions as iOS gray capsules with 15/600 words.
+  const lg = useGlass();
   const backOrderId = chip.backOrderId;
   const action = (label: string, hint: string, onPress: () => void) => (
     <Pressable
@@ -610,32 +652,43 @@ function StagingFilterChipCard({
       accessibilityRole="button"
       accessibilityLabel={label}
       accessibilityHint={hint}
-      style={({ pressed }) => ({
-        minHeight: MIN_TAP,
-        paddingHorizontal: 12,
-        justifyContent: 'center',
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: c.hair2,
-        backgroundColor: c.card,
-        opacity: pressed ? 0.7 : 1,
-      })}
+      style={({ pressed }) => [
+        {
+          minHeight: MIN_TAP,
+          paddingHorizontal: 12,
+          justifyContent: 'center',
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: c.hair2,
+          backgroundColor: c.card,
+          opacity: pressed ? 0.7 : 1,
+        },
+        lg && [glassGrayCapsule(lg), { paddingHorizontal: 16 }],
+      ]}
     >
-      <Mono size={12.5} color={c.ink} maxFontSizeMultiplier={CHIP_ACTION_CAP}>
+      <Mono
+        size={lg ? 15 : 12.5}
+        color={c.ink}
+        maxFontSizeMultiplier={CHIP_ACTION_CAP}
+        style={lg ? [lg.font.displaySemi, { letterSpacing: 0 }] : undefined}
+      >
         {label}
       </Mono>
     </Pressable>
   );
   return (
     <View
-      style={{
-        gap: 8,
-        padding: 12,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: c.hair,
-        backgroundColor: c.sunk,
-      }}
+      style={[
+        {
+          gap: 8,
+          padding: 12,
+          borderRadius: 10,
+          borderWidth: 1,
+          borderColor: c.hair,
+          backgroundColor: c.sunk,
+        },
+        lg && [glassCardStyle(lg), GLASS_NOTE],
+      ]}
     >
       <Body size={14} color={c.ink} accessibilityRole="header" style={{ fontFamily: FONT.display }}>
         {chip.headline}

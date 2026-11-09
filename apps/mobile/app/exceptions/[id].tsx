@@ -43,6 +43,12 @@ import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_RECORD_BODY } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -161,6 +167,11 @@ const EXCEPTION_NOT_AVAILABLE_COPY =
 
 export default function ExceptionDetailScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html's cards with
+  // Order-Detail.dc.html's timeline): the scene, Back in the glass nav, the
+  // cards on the grouped glass surface under iOS headings; the note, recount
+  // and evidence sheets take the glass sheet. Every action, gate and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { orgId, loading: workspaceLoading } = useOrg();
@@ -324,15 +335,16 @@ export default function ExceptionDetailScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
 
       {!orgId && !workspaceLoading ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 9 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {EXCEPTION_WORKSPACE_UNAVAILABLE}
@@ -351,7 +363,7 @@ export default function ExceptionDetailScreen() {
       ) : state.kind === 'loading' ? (
         <ActivityIndicator color={c.ink3} style={{ marginTop: 29 }} />
       ) : state.kind === 'error' ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 9 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {state.message}
@@ -489,6 +501,7 @@ function Detail({
   verificationRefreshKey: number;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const o = detail.occurrence;
   // The item's last physical count (F1-3), read for the workspace this
   // exception belongs to. Not read for an item this reader cannot see (the
@@ -538,7 +551,7 @@ function Detail({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.body}
+      contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />}
     >
       {banner ? (
@@ -1129,9 +1142,11 @@ function RuledRows({ children }: { children: React.ReactNode }) {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  // Liquid Glass: an iOS section heading (.ios-h) over its group.
+  const lg = useGlass();
   return (
     <View style={{ gap: 8 }}>
-      <Eyebrow>{title}</Eyebrow>
+      {lg ? <GlassHeading>{sentenceCase(title)}</GlassHeading> : <Eyebrow>{title}</Eyebrow>}
       {children}
     </View>
   );

@@ -77,6 +77,24 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/ui/thumb.tsx': 'f4d2621d886f4d549cb2cf539e5cbaad27d3cc8959a5e0cc0092a68892c617ae',
   'src/components/ui/toggle.tsx':
     '0f94a5d9eef3cc588556141111590fb16586e13b31dde062d0bb1b1b42aa2786',
+  // ---- Stage 4, native-ops lane (lg/s4-native-ops): the operations screens. ----
+  'app/(drawer)/exceptions.tsx': 'ab2fd7042ee896ac2f2c8a7cf478de3a708cb04fb38867043098fa5a5f94ea6d',
+  'app/(drawer)/maintenance.tsx':
+    '9bf1602fce0e5569a335be53b7ac8d4933078975bc2d1fd02d54479376301557',
+  'app/(drawer)/returns.tsx': '2e39381f23762d920821d12cf8479f364de946d901331fafd9cc012005f416ec',
+  'app/(drawer)/staging.tsx': '52122f436736abaf6fe696759a1be6b32620d2361b8c3df5500c12eac86834d3',
+  'app/bundles/[id].tsx': '2cd32b5020886e99d1cee8a46797d998dd9cab20c1c96a931d1ec4024249e1c9',
+  'app/bundles/index.tsx': 'edbf916d7a856984cad1b751d6e399f89c0e653b333de65541892bcd31ea8aff',
+  'app/exceptions/[id].tsx': '7562d38c59ec2f655fabac8cf198bfabb9b367a436b0720a80c5916d62b0fa11',
+  'app/returns/[id].tsx': '92e9db95b722388ef09f399cd2e85ca79ce850905d81b076fbc699143e4c0a3a',
+  'src/components/return-workbench-view.tsx':
+    'f8b2d3c8c57b2e070ba709b1ac77663cfaecf187ef394f396013b8ee2eb3932e',
+  'src/screens/po-imports.tsx': '109f59e68d08223f885bc75e859feb002eecbb42f26f74499848ef656a243d4e',
+  'src/screens/purchase-orders.tsx':
+    '4430bcc012491aeccacf7dbbb6cc87b912162b73d406ed288417e7e3361f05c6',
+  'src/screens/rentals.tsx': 'a9b4f8ac55497379cbcfbdc1dcf11542586119945845d22499019565f2db0559',
+  'src/screens/reports.tsx': 'd0f88aacf47a52b6cccda08c287e3d26ee4ff690e42a52cc19b77fac12b13074',
+  // ---- end native-ops lane ----
 };
 
 function walk(dir: string, out: string[] = []): string[] {

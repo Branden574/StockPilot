@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { unsentWorkDetail } from './rejected-work';
 import { palette, type Palette } from './theme';
 
@@ -574,8 +575,17 @@ describe('Reports hub: the look', () => {
       '<IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />',
       '{BOOK_REPORT_KPI_LOAD_ERROR}',
     ]) {
-      expect(hub).toContain(words);
+      // Read off the hub's Classic projection (every Liquid Glass branch
+      // folded to Classic: lib/__fixtures__/classic-projection.ts).
+      // (The printer closes a tag with no space before "/>".)
+      expect(classicFlat(sourceOf(REPORTS_HUB), REPORTS_HUB)).toContain(
+        flatNorm(words).replace(/\s+\/>/g, '/>'),
+      );
     }
+    // Liquid Glass says the same title and eyebrow words (the eyebrow's under
+    // the title, as the list frame does).
+    expect(hub).toContain("glassListTitle('Reports', '& insights.')");
+    expect(hub).toContain('<GlassSubline style={GLASS_LIST.sub}>Analytics</GlassSubline>');
   });
 });
 
