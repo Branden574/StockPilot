@@ -416,12 +416,21 @@ const BODY_AT_RULES =
 /**
  * A value with its whitespace outside quotes collapsed: Tailwind's @import
  * keeps a multi-line value of an imported file on one line, the file's own
- * text keeps its line breaks, and the two mean the same.
+ * text keeps its line breaks, and the two mean the same. Whitespace just
+ * inside a function's parentheses is dropped too: the @import writes a
+ * multi-line `image-set(\n url(...)\n)` (scene.css) as `image-set(url(...))`.
  */
 const squashValue = (value: string) =>
   value
     .split(/("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/)
-    .map((part, i) => (i % 2 === 1 ? part : part.replace(/\s+/g, ' ')))
+    .map((part, i) =>
+      i % 2 === 1
+        ? part
+        : part
+            .replace(/\s+/g, ' ')
+            .replace(/\(\s+/g, '(')
+            .replace(/\s+\)/g, ')'),
+    )
     .join('')
     .trim();
 const declsOf = (node: Container): [string, string][] => {
