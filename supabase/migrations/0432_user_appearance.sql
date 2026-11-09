@@ -25,7 +25,7 @@
 --   metadata is unvalidated and rides in every token. A self-only table is the
 --   smallest store that fits.
 --
--- WHAT IT ADDS (tier A: additive only)
+-- WHAT IT ADDS (tier B: a new table and its grants; additive only)
 --   1. public.user_appearance: one row per person; `style` ('liquid-glass' or
 --      'classic') and `theme` ('light', 'dark' or 'system'), each nullable,
 --      because a person may choose only one of them: null means "not chosen on
@@ -54,6 +54,16 @@
 --   Leave the table in place: nothing reads it once the app is rolled back.
 --   If it ever has to go: drop table public.user_appearance;
 -- ─────────────────────────────────────────────────────────────────────────────
+
+-- LOCKS: the foreign key holds SHARE ROW EXCLUSIVE on auth.users to commit,
+-- and on this platform each CREATE POLICY run by postgres also takes ACCESS
+-- EXCLUSIVE, to commit, on every table supautils.policy_grants lists for the
+-- role, auth.users and auth.sessions among them (0400 has the note). Each
+-- waits behind any open transaction on that table, and sign-ins queue behind
+-- the wait. lock_timeout 900ms, as in 0416 and 0417, ends such a wait with
+-- 55P03 and nothing applied; the push can be run again once that transaction
+-- has finished.
+set lock_timeout = '900ms';
 
 create table public.user_appearance (
   user_id    uuid        primary key references auth.users(id) on delete cascade,
@@ -84,10 +94,16 @@ create trigger user_appearance_touch_updated_at
   before update on public.user_appearance
   for each row execute function public.tg_set_updated_at();
 
--- Supabase's default privileges grant every new public table to anon,
--- authenticated and service_role (until 2026-10-30; after it, nothing). Take
--- the API roles' privileges back and grant exactly what each needs, so the
--- table ends with the same ACL whichever defaults applied.
+-- Supabase's default privileges give anon, authenticated and service_role
+-- every privilege on a new public table (production's still did on
+-- 2026-11-03). The change Supabase set for 2026-10-30 (0402's note) takes
+-- SELECT, INSERT, UPDATE and DELETE out of them and leaves TRUNCATE,
+-- REFERENCES, TRIGGER and MAINTAIN. PUBLIC, anon and authenticated lose
+-- everything here and get back exactly what they need. service_role is
+-- granted its four and not revoked, so it keeps the rest from the defaults:
+-- it ends with every table privilege (SELECT, INSERT, UPDATE, DELETE,
+-- TRUNCATE, REFERENCES, TRIGGER, MAINTAIN) under either set of defaults, and
+-- with only its four where the defaults grant it nothing.
 revoke all on table public.user_appearance from public, anon, authenticated;
 grant select, insert, update on table public.user_appearance to authenticated;
 grant select, insert, update, delete on table public.user_appearance to service_role;
