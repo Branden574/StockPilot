@@ -3,6 +3,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   Building2,
+  ChevronRight,
   FileLock,
   Layers,
   MapPin,
@@ -17,6 +18,9 @@ import { Pressable, View } from 'react-native';
 import type { ModuleId } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
+import { GlassTile } from '@/components/ui/glass/parts';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body } from '@/components/ui/text';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -56,6 +60,10 @@ const LINKS: AdminLink[] = [
  */
 export default function AdminOverview() {
   const router = useRouter();
+  // Liquid Glass (inferred: the iOS grouped list): the destinations as one
+  // grouped surface of iOS rows, each with its icon on the accent tile and a
+  // chevron (decoration: the row is still the one button).
+  const lg = useGlass();
   const { isAdmin, loading } = useRole();
   const enabledModules = useEnabledModules();
   // A link to a module the org has turned off would open a screen that answers
@@ -68,7 +76,7 @@ export default function AdminOverview() {
   if (loading) {
     return (
       <DataListScreen
-        eyebrow="ADMIN"
+        eyebrow={lg ? 'Admin' : 'ADMIN'}
         title="Loading"
         emptyTitle="Checking access…"
         emptyBody=""
@@ -83,7 +91,7 @@ export default function AdminOverview() {
   if (!isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN"
+        eyebrow={lg ? 'Admin' : 'ADMIN'}
         title="Restricted"
         italic="access."
         emptyIcon={Network}
@@ -99,7 +107,7 @@ export default function AdminOverview() {
 
   return (
     <DataListScreen
-      eyebrow="ADMIN OVERVIEW"
+      eyebrow={lg ? 'Admin overview' : 'ADMIN OVERVIEW'}
       title="System"
       italic="settings."
       emptyTitle=""
@@ -107,40 +115,60 @@ export default function AdminOverview() {
       data={links}
       loading={false}
       keyExtractor={(l) => l.href}
-      renderItem={(l) => (
-        <Pressable
-          onPress={() => router.push(l.href as never)}
-          accessibilityRole="button"
-          style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
-        >
-          <Card padding={14}>
-            <AdminRow link={l} />
-          </Card>
-        </Pressable>
-      )}
+      renderItem={
+        lg
+          ? (l, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={links.length} inset={58}>
+                <Pressable
+                  onPress={() => router.push(l.href as never)}
+                  accessibilityRole="button"
+                  style={({ pressed }) => ({ transform: [{ scale: pressed ? 0.98 : 1 }] })}
+                >
+                  <Card padding={14} style={GLASS_BARE_CARD}>
+                    <AdminRow link={l} />
+                  </Card>
+                </Pressable>
+              </GlassJoinedRow>
+            )
+          : (l) => (
+              <Pressable
+                onPress={() => router.push(l.href as never)}
+                accessibilityRole="button"
+                style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+              >
+                <Card padding={14}>
+                  <AdminRow link={l} />
+                </Card>
+              </Pressable>
+            )
+      }
     />
   );
 }
 
 function AdminRow({ link }: { link: AdminLink }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const Icon = link.icon;
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
-      <View
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 8,
-          borderWidth: 1,
-          borderColor: c.hair,
-          backgroundColor: c.card,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Icon size={18} color={c.ink} strokeWidth={1.5} />
-      </View>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: lg ? 12 : 14 }}>
+      {lg ? <GlassTile icon={Icon} fill={lg.g.accent} /> : null}
+      {lg ? null : (
+        <View
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 8,
+            borderWidth: 1,
+            borderColor: c.hair,
+            backgroundColor: c.card,
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <Icon size={18} color={c.ink} strokeWidth={1.5} />
+        </View>
+      )}
       <View style={{ flex: 1, minWidth: 0 }}>
         <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
           {link.label}
@@ -149,6 +177,7 @@ function AdminRow({ link }: { link: AdminLink }) {
           {link.description}
         </Body>
       </View>
+      {lg ? <ChevronRight size={14} color={lg.ios.l2} strokeWidth={1.8} /> : null}
     </View>
   );
 }

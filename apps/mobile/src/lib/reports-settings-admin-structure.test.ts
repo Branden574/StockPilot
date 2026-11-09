@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm, printClassic } from './__fixtures__/classic-projection';
 import { unsentWorkDetail } from './rejected-work';
 import { palette, type Palette } from './theme';
 
@@ -87,6 +88,24 @@ function codeOnly(src: string): string {
 /** One file's code with every run of white space made one space. */
 function flatCode(file: string): string {
   return codeOnly(sourceOf(file)).replace(/\s+/g, ' ');
+}
+
+/**
+ * A file's Classic projection in one spelling (lib/__fixtures__/
+ * classic-projection.ts). A pin on Classic's exact text reads this, with its
+ * expected text through flatNorm, so a Liquid Glass branch beside the Classic
+ * value can neither hide it nor break the pin (stage 4, native-admin lane).
+ */
+function classicCode(file: string): string {
+  return classicFlat(sourceOf(file), file);
+}
+
+/** `function name(...)` in the file's Classic projection, in one spelling. */
+function classicFunction(file: string, name: string): string {
+  const sf = parseTsx(printClassic(sourceOf(file), file), file);
+  const fn = sf.statements.find((s) => ts.isFunctionDeclaration(s) && s.name?.text === name);
+  expect(fn, `${file}: function ${name}`).toBeTruthy();
+  return flatNorm(fn!.getText(sf));
 }
 
 /** The declaration of `function name(...)`, comments dropped. */
@@ -644,14 +663,28 @@ describe('Settings: the account screen', () => {
   const settings = flatCode(SETTINGS);
 
   it("a row's detail, the email and the version footer are the muted ink; Sign out the per-mode red", () => {
-    expect(settings).toContain(
-      "<Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> {profile.email ?? ''} </Mono>",
+    const classic = classicCode(SETTINGS);
+    expect(classic).toContain(
+      flatNorm(
+        "<Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> {profile.email ?? ''} </Mono>",
+      ),
     );
-    expect(settings).toContain('<Body size={13.5} color={c.ink3}');
-    expect(settings).toContain('<LogOut size={16} color={c.critText} strokeWidth={1.5} />');
-    expect(settings).toMatch(/<Body size=\{14\.5\} color=\{c\.critText\}[^>]*> Sign out <\/Body>/);
-    expect(settings).toContain(
-      "<Mono size={10} tracking={0.1} color={c.ink3} style={{ flexShrink: 1, minWidth: 0 }}> {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`} </Mono>",
+    expect(classic).toContain(flatNorm('<Body size={13.5} color={c.ink3}'));
+    expect(classic).toContain(
+      flatNorm('<LogOut size={16} color={c.critText} strokeWidth={1.5} />'),
+    );
+    expect(classic).toMatch(/<Body size=\{14\.5\}color=\{c\.critText\}[^>]*>Sign out<\/Body>/);
+    expect(classic).toContain(
+      flatNorm(
+        "<Mono size={10} tracking={0.1} color={c.ink3} style={{ flexShrink: 1, minWidth: 0 }}> {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`} </Mono>",
+      ),
+    );
+    // Liquid Glass keeps the same inks: the muted ink on the detail, the email
+    // and the footer, the per-mode red on Sign out (only sizes and faces move).
+    expect(settings).toContain('size={lg ? 15 : 13.5} color={c.ink3}');
+    expect(settings).toContain('<LogOut size={lg ? 18 : 16} color={c.critText}');
+    expect(settings).toMatch(
+      /<Body size=\{lg \? 17 : 14\.5\} color=\{c\.critText\}[^>]*> Sign out <\/Body>/,
     );
   });
 
@@ -793,7 +826,8 @@ describe('Settings: the account screen', () => {
       'DELETE_ACCOUNT_CONFIRM_COPY',
       "const showIntegrations = enabledModules.has('integrations') && isAdmin;",
     ]) {
-      expect(settings).toContain(words);
+      // A trailing comma is layout once printed (flatNorm drops it before a bracket).
+      expect(classicCode(SETTINGS)).toContain(flatNorm(words.replace(/,$/, '')));
     }
   });
 });
@@ -809,13 +843,16 @@ describe('Settings: Change email', () => {
   });
 
   it('the card labels are the muted ink', () => {
+    const classic = classicCode(CHANGE_EMAIL);
     for (const label of ['SIGN-IN EMAIL', 'PENDING CHANGE']) {
-      expect(email).toContain(
-        `<Mono size={10} tracking={0.12} upper color={c.ink3}> ${label} </Mono>`,
+      expect(classic).toContain(
+        flatNorm(`<Mono size={10} tracking={0.12} upper color={c.ink3}> ${label} </Mono>`),
       );
     }
-    expect(email).toContain(
-      "<Mono size={10} tracking={0.12} upper color={c.ink3}> {pending ? 'CHANGE TO A DIFFERENT ADDRESS' : 'CHANGE EMAIL'} </Mono>",
+    expect(classic).toContain(
+      flatNorm(
+        "<Mono size={10} tracking={0.12} upper color={c.ink3}> {pending ? 'CHANGE TO A DIFFERENT ADDRESS' : 'CHANGE EMAIL'} </Mono>",
+      ),
     );
   });
 
@@ -884,16 +921,26 @@ describe('Settings: Customize tab bar', () => {
   const tabs = flatCode(CUSTOMIZE_TABS);
 
   it('every word reads in the muted ink or stronger: the hints, the note, a greyed choice, the preview', () => {
-    expect(tabs).toContain(
-      '<Mono size={10} tracking={0.1} color={c.ink3}> HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED </Mono>',
+    const classic = classicCode(CUSTOMIZE_TABS);
+    expect(classic).toContain(
+      flatNorm(
+        '<Mono size={10} tracking={0.1} color={c.ink3}> HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED </Mono>',
+      ),
     );
+    expect(classic).toContain(flatNorm('color={unavailable ? c.ink3 : undefined}'));
+    expect(classic).toContain('UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR');
+    expect(classic).toContain(flatNorm('const tint = active ? c.accent : c.ink3;'));
+    expect(classic).toContain(
+      flatNorm(
+        '<Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> Home · Items · Books · POs · Scan </Mono>',
+      ),
+    );
+    expect(classic).toContain(
+      flatNorm('<Mono size={10} tracking={0.1} color={c.ink3}> {text} </Mono>'),
+    );
+    // Liquid Glass: a greyed choice keeps the muted ink, in sentence case.
     expect(tabs).toContain('color={unavailable ? c.ink3 : undefined}');
-    expect(tabs).toContain('UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR');
-    expect(tabs).toContain('const tint = active ? c.accent : c.ink3;');
-    expect(tabs).toContain(
-      '<Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}> Home · Items · Books · POs · Scan </Mono>',
-    );
-    expect(tabs).toContain('<Mono size={10} tracking={0.1} color={c.ink3}> {text} </Mono>');
+    expect(tabs).toContain("'Unavailable right now · hidden from the bar'");
   });
 
   // The preview is the real bar in miniature. The bar (the tab layout,
@@ -904,12 +951,15 @@ describe('Settings: Customize tab bar', () => {
   // Mutation caught: the active tint back to the ink, the label face back to
   // mono or the same on both tabs, or the iOS mono tiers back.
   it('the preview draws the bar as the tab layout does: its tints, its label face and its tiers', () => {
-    const { sf, fn } = functionNamed(CUSTOMIZE_TABS, 'PreviewTab');
-    const preview = codeOnly(fn.getText(sf)).replace(/\s+/g, ' ');
-    expect(preview).toContain('const tint = active ? c.accent : c.ink3;');
-    expect(preview).toContain('<Icon size={20} color={tint} strokeWidth={active ? 1.7 : 1.4} />');
+    const preview = classicFunction(CUSTOMIZE_TABS, 'PreviewTab');
+    expect(preview).toContain(flatNorm('const tint = active ? c.accent : c.ink3;'));
     expect(preview).toContain(
-      'style={[ styles.previewLabel, { color: tint, fontFamily: active ? FONT.displaySemi : FONT.display }, metrics, ]}',
+      flatNorm('<Icon size={20} color={tint} strokeWidth={active ? 1.7 : 1.4} />'),
+    );
+    expect(preview).toContain(
+      flatNorm(
+        'style={[ styles.previewLabel, { color: tint, fontFamily: active ? FONT.displaySemi : FONT.display }, metrics, ]}',
+      ),
     );
     expect(styleBlock(CUSTOMIZE_TABS, 'previewLabel')).not.toMatch(/fontFamily|FONT\.mono/);
     expect(tabs).toContain("const PREVIEW_LABEL_TIERS: TabLabelPlatform = 'android';");
@@ -943,7 +993,9 @@ describe('Settings: Customize tab bar', () => {
     );
     expect(styleBlock(CUSTOMIZE_TABS, 'control')).toMatch(/width: 30,\s*height: 30,/);
     expect(styleBlock(CUSTOMIZE_TABS, 'controls')).not.toMatch(/gap/);
-    expect(tabs).toContain('<View style={[styles.control, { borderColor: c.hair2 }]}>');
+    expect(classicCode(CUSTOMIZE_TABS)).toContain(
+      flatNorm('<View style={[styles.control, { borderColor: c.hair2 }]}>'),
+    );
     // The frame's 7pt above and below fits in the row's 12pt padding.
     expect(styleBlock(CUSTOMIZE_TABS, 'row')).toMatch(/paddingVertical: 12,/);
   });
@@ -970,7 +1022,7 @@ describe('Settings: Customize tab bar', () => {
       'previewLabelStyleForCount(1 + previewSlots.length, PREVIEW_LABEL_TIERS)',
       'if (reduceMotion) return;',
     ]) {
-      expect(tabs).toContain(words);
+      expect(classicCode(CUSTOMIZE_TABS)).toContain(flatNorm(words));
     }
     expect(tabs).toMatch(/<Pressable onPress=\{reset\} accessibilityRole="button"/);
   });
@@ -1068,9 +1120,13 @@ describe('Settings: Unsent work', () => {
     expect(unsent).toContain(
       '<Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}> {row.idempotencyKey.slice(0, 8).toUpperCase()} </Mono>',
     );
-    expect(unsent).toContain(
-      '{`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}',
+    expect(classicCode(UNSENT_WORK)).toContain(
+      flatNorm(
+        '{`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}',
+      ),
     );
+    // Liquid Glass says the same line in sentence case, in the same muted ink.
+    expect(unsent).toContain('These records are kept for ${REJECTED_RETENTION_DAYS} days');
   });
 
   it('Discard and Clear this list are named buttons in 44pt frames, in the per-mode red', () => {
@@ -1200,16 +1256,25 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
     // expression over each state.
     const eyebrow = attrText(el, 'eyebrow', sf)!;
     const failedFlag = list.file.endsWith('warehouses.tsx') ? 'list' : true;
-    expect(runCondition(eyebrow, { failed: failedFlag, rows: [] })).toBe(list.neutral);
-    expect(runCondition(eyebrow, { failed: failedFlag, rows: [{}, {}] })).toBe(
+    const answered = list.file.endsWith('warehouses.tsx') ? null : false;
+    // Classic (lg null) word for word; Liquid Glass (a look) the same words in
+    // sentence case, with no count it did not read.
+    expect(runCondition(eyebrow, { lg: null, failed: failedFlag, rows: [] })).toBe(list.neutral);
+    expect(runCondition(eyebrow, { lg: null, failed: failedFlag, rows: [{}, {}] })).toBe(
       `ADMIN · 2 ${list.noun}`,
     );
-    expect(
-      runCondition(eyebrow, {
-        failed: list.file.endsWith('warehouses.tsx') ? null : false,
-        rows: [],
-      }),
-    ).toBe(`ADMIN · 0 ${list.noun}`);
+    expect(runCondition(eyebrow, { lg: null, failed: answered, rows: [] })).toBe(
+      `ADMIN · 0 ${list.noun}`,
+    );
+    const glassNeutral = runCondition(eyebrow, { lg: {}, failed: failedFlag, rows: [] });
+    expect(String(glassNeutral).toUpperCase()).toBe(list.neutral);
+    expect(String(glassNeutral)).not.toBe(list.neutral);
+    expect(runCondition(eyebrow, { lg: {}, failed: failedFlag, rows: [{}, {}] })).toMatch(
+      /^Admin · 2 [a-z ]+$/,
+    );
+    expect(runCondition(eyebrow, { lg: {}, failed: answered, rows: [] })).toMatch(
+      /^Admin · 0 [a-z ]+$/,
+    );
   });
 
   it.each(ADMIN_LISTS)(
@@ -1356,7 +1421,9 @@ describe('Admin overview', () => {
     expect(index).toContain('LINKS.filter((l) => !l.module || enabledModules.has(l.module))');
     expect(index).toContain('title="Restricted" italic="access."');
     expect(index).toContain('emptyTitle="Admin only."');
-    expect(index).toContain('eyebrow="ADMIN OVERVIEW" title="System" italic="settings."');
+    expect(classicCode(ADMIN_INDEX)).toContain(
+      flatNorm('eyebrow="ADMIN OVERVIEW" title="System" italic="settings."'),
+    );
     expect(index).not.toContain('reconciliation');
   });
 });
@@ -1416,8 +1483,14 @@ describe('Admin · Users', () => {
     expect(users).toContain('const mailto = plainAddressMailtoUrl(email);');
     expect(users).not.toMatch(/`mailto:\$\{/);
     expect(users).toMatch(/\{email && mailto \? \( <Pressable onPress=\{openEmail\}/);
+    expect(classicCode(ADMIN_USERS)).toContain(
+      flatNorm(
+        ") : email ? ( <View style={{ minHeight: 44, justifyContent: 'center' }}> <Mono size={11} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}",
+      ),
+    );
+    // Liquid Glass: the same frame and words, no touchable, the same muted ink.
     expect(users).toContain(
-      ") : email ? ( <View style={{ minHeight: 44, justifyContent: 'center' }}> <Mono size={11} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}",
+      ") : email ? ( <View style={{ minHeight: 44, justifyContent: 'center' }}> <Mono size={11} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined}> {email} </Mono> </View> ) : null}",
     );
     expect(users).toContain("const canEdit = canChangeRoles && user.role !== 'owner' && !isSelf;");
   });
@@ -1442,8 +1515,10 @@ describe('Admin · Users', () => {
     expect(style).not.toMatch(/justifyContent|marginTop|height: \d/);
     // Still inside the card, which keeps its own press and VoiceOver actions.
     expect(link.ancestors.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toHaveLength(1);
-    expect(users).toContain(
-      '<Mail size={11} color={c.ink4} strokeWidth={1.5} /> <Mono size={11} tracking={0.04} color={c.ink3}> {email} </Mono>',
+    expect(classicCode(ADMIN_USERS)).toContain(
+      flatNorm(
+        '<Mail size={11} color={c.ink4} strokeWidth={1.5} /> <Mono size={11} tracking={0.04} color={c.ink3}> {email} </Mono>',
+      ),
     );
   });
 
@@ -1472,8 +1547,13 @@ describe('Admin · Users', () => {
       const above = n.ancestors.slice(n.ancestors.indexOf(card));
       expect(above.filter((a) => TOUCHABLE_TAG.test(tagOf(a, sf)))).toEqual([]);
     }
-    expect(users).toContain('{ backgroundColor: c.card, borderColor: c.hair }, SHADOW.sheet,');
-    expect(users).toContain('<View style={[pickerStyles.grabber, { backgroundColor: c.ink5 }]} />');
+    const classic = classicCode(ADMIN_USERS);
+    expect(classic).toContain(
+      flatNorm('{ backgroundColor: c.card, borderColor: c.hair }, SHADOW.sheet'),
+    );
+    expect(classic).toContain(
+      flatNorm('<View style={[pickerStyles.grabber, { backgroundColor: c.ink5 }]} />'),
+    );
     expect(users).not.toContain("'#ccc'");
   });
 

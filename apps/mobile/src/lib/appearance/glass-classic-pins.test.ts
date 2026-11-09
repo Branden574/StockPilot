@@ -77,6 +77,42 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/ui/thumb.tsx': 'f4d2621d886f4d549cb2cf539e5cbaad27d3cc8959a5e0cc0092a68892c617ae',
   'src/components/ui/toggle.tsx':
     '0f94a5d9eef3cc588556141111590fb16586e13b31dde062d0bb1b1b42aa2786',
+  // Stage 4, native-admin lane (admin, AI, notifications, settings, support,
+  // team, Zendesk): each pinned to its file at b64bd37cc.
+  'app/(drawer)/admin/audit.tsx':
+    '983e3696acaac9e4e8f6501d97390001a5bc65b3f1fb7876f210cd684e87b18f',
+  'app/(drawer)/admin/bins.tsx': '38b016049c29d882aa27b051e8558470fe353248f7cb90fdd3f160c6c77b23a0',
+  'app/(drawer)/admin/charters.tsx':
+    'd71f88437c13a5e0ddc900fbe6f9d50bd0705696807b6b44f7da74d4aff55524',
+  'app/(drawer)/admin/index.tsx':
+    '812d807e0efd520dcb2e150a1f4b086d2b20d4524cce49da22e7bd0a70bb31cd',
+  'app/(drawer)/admin/uom-conversions.tsx':
+    '8ee431a8368e292fcd40c570f5bcf81f30cc7dc67aeca08e5f22f13206fef564',
+  'app/(drawer)/admin/users.tsx':
+    'fa67ffef5600aaa7c640afab7448bbccbf7af0c4e1cb9fa17f2f56ddaa8ff540',
+  'app/(drawer)/admin/vendor-mappings.tsx':
+    'e2c340ced7072d8312586d2ee85e592e8e19ddbc68116908a5d14beb9847a6b3',
+  'app/(drawer)/admin/warehouses.tsx':
+    '4fa3b12d3e6b909f2b0505a42b3fa4182355a4476ad023a23dbe016079a78a08',
+  'app/(drawer)/ai.tsx': '1e1f6b6e86817bb952cd00ddaf5cd0eb32273ef8053b99fd32f15fd79e914371',
+  'app/(drawer)/notifications.tsx':
+    '9d359357d41c32952be12437de57a44ce4fb26da377a900eb1ed7dfe833b439c',
+  'app/(drawer)/settings.tsx': 'ff6897c5b3ab23508af66fd677dc59a3c05d259848a50238b187af36070e9d57',
+  'app/(drawer)/settings/appearance.tsx':
+    '5be7c846e7321ca0bb6176b29f9374888e0ae3cc101f13c40c2b5a1ff94bafd8',
+  'app/(drawer)/settings/change-email.tsx':
+    '0b582f2e6ae8bbe851b4292b7ac68b8b94cf4b44eac3025fd4d3cc464dd0bcc0',
+  'app/(drawer)/settings/customize-tabs.tsx':
+    'a9c807b6b4c6ac952e4acbc4bb669e7bb5f0dfd915f1a658974af35a303295e3',
+  'app/(drawer)/settings/integrations.tsx':
+    '4e9cfedca6a436d95860e616e57a285d90cbe9d94529a2c1a0065a0f0525d96f',
+  'app/(drawer)/settings/rejected-work.tsx':
+    '0cab0f20fa2da439c9c09375c7d8aa0bcf12eba91b829a8bae67c6129528139c',
+  'app/(drawer)/support.tsx': '6816e88712a54644b3f57f13d490f1eab9fa587554f645e53b64f3a3ca5a847f',
+  'app/(drawer)/team.tsx': '5c1cba9c4e9dea371901ea7fd4236944ae365cd9d364b22ea64ff0016041217d',
+  'app/(drawer)/zendesk.tsx': '53a784e1a2119769e0669f9da86b2c22a782f4455b20aa04a347950dbb6464be',
+  'app/ai/chat.tsx': '112e04c250f2cf054204891311dc633b9c2f889a7f41152824a0f8585ddce1be',
+  'app/zendesk/web.tsx': '1d00e40d375eabdb833a1c39f915c14ce8e9eca03e5751f47c4ae608fb06a4e4',
 };
 
 function walk(dir: string, out: string[] = []): string[] {

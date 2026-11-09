@@ -40,6 +40,20 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Avatar } from '@/components/ui/avatar';
 import { Card, Hair } from '@/components/ui/card';
+import { GlassHeading, GlassSubline, GlassTile } from '@/components/ui/glass/parts';
+import { glassRowSub } from '@/components/ui/glass/primitive-styles';
+import {
+  GLASS_PAGE,
+  GLASS_TILED_INSET,
+  glassSettingDetail,
+  glassSettingTitle,
+  glassSettingTone,
+  glassTileFill,
+} from '@/components/ui/glass/screens/admin';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Toggle } from '@/components/ui/toggle';
@@ -103,6 +117,11 @@ export default function Settings() {
   const { signOut, biometricEnabled, enableBiometric, disableBiometric } = useAuth();
   const profile = useProfile();
   const { c } = useTheme();
+  // Liquid Glass (inferred: Routes-Gallery-2's settings panel as the iOS
+  // Settings list): the scene, the glass nav, the large title, each section
+  // as an iOS heading over one grouped surface of tiled iOS rows. Every row,
+  // switch, link, alert and the sign out stay.
+  const lg = useGlass();
   const appearance = useAppearance();
   const router = useRouter();
   const { isAdmin, role } = useRole();
@@ -225,16 +244,17 @@ export default function Settings() {
   const fullName = profile.fullName ?? profile.email ?? 'Account';
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => goBackFromReturn(router, returnPath)}
             accessibilityLabel="Back"
             minTap
           />
-          <View style={{ flexDirection: 'row', gap: 2 }}>
+          <View style={lg ? GLASS_LIST.navGroup : { flexDirection: 'row', gap: 2 }}>
             <IconChip
               icon={Menu}
               onPress={() => (navigation as { openDrawer?: () => void }).openDrawer?.()}
@@ -253,16 +273,23 @@ export default function Settings() {
             />
           </View>
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SETTINGS</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Account<Em>.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {lg ? null : <Eyebrow>SETTINGS</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Account{lg ? null : <Em>.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Settings</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
+        contentContainerStyle={
+          lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
+        }
         showsVerticalScrollIndicator={false}
       >
         <Card
@@ -274,7 +301,12 @@ export default function Settings() {
             <Body size={16} style={{ fontFamily: FONT.display }}>
               {fullName}
             </Body>
-            <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
+            <Mono
+              size={11.5}
+              tracking={0.04}
+              color={c.ink3}
+              style={lg ? [glassRowSub(lg), { marginTop: 3 }] : { marginTop: 3 }}
+            >
               {profile.email ?? ''}
             </Mono>
           </View>
@@ -299,7 +331,7 @@ export default function Settings() {
             chevron
             onPress={() => router.push('/locations?return=/settings')}
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={User}
             title="Profile"
@@ -310,7 +342,7 @@ export default function Settings() {
               )
             }
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Mail}
             title="Email"
@@ -318,7 +350,7 @@ export default function Settings() {
             chevron
             onPress={() => router.push('/settings/change-email' as never)}
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Bell}
             title="Notifications"
@@ -326,7 +358,7 @@ export default function Settings() {
             chevron
             onPress={() => router.push('/notifications?return=/settings')}
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Bell}
             title="Send test push"
@@ -404,7 +436,7 @@ export default function Settings() {
               />
             </Pressable>
           )}
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Lock}
             title="Change password"
@@ -415,7 +447,7 @@ export default function Settings() {
               )
             }
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Shield}
             title="Two-factor"
@@ -437,7 +469,7 @@ export default function Settings() {
             chevron
             onPress={() => router.push('/settings/customize-tabs' as never)}
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           {/* Liquid Glass rollout opt-in or default: Appearance, the Design
               (Liquid Glass or Classic) and the Theme (Light, Dark or System),
               e.g. "Liquid Glass · System". Every signed-in person can change
@@ -469,7 +501,7 @@ export default function Settings() {
               }
             />
           )}
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={RefreshCcw}
             title="Sync"
@@ -482,7 +514,7 @@ export default function Settings() {
               )
             }
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           {/* The record of work that was queued on this device and can never be
               sent — today, whatever was in the outbox when the account was
               disabled. Those rows are kept deliberately and excluded from every
@@ -505,7 +537,7 @@ export default function Settings() {
             chevron
             onPress={() => router.push('/settings/rejected-work' as never)}
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={WifiOff}
             title="Offline cache"
@@ -575,7 +607,7 @@ export default function Settings() {
               )
             }
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Shield}
             title="Privacy Policy"
@@ -584,7 +616,7 @@ export default function Settings() {
               Linking.openURL('https://stockpilotusa.com/privacy').catch(() => undefined)
             }
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={FileText}
             title="Terms of Service"
@@ -593,7 +625,7 @@ export default function Settings() {
               Linking.openURL('https://stockpilotusa.com/terms').catch(() => undefined)
             }
           />
-          <Hair inset={70} />
+          <Hair inset={lg ? GLASS_TILED_INSET : 70} />
           <SettingRow
             icon={Sparkles}
             title="What's new"
@@ -623,16 +655,25 @@ export default function Settings() {
               opacity: pressed ? 0.7 : 1,
             })}
           >
-            <LogOut size={16} color={c.critText} strokeWidth={1.5} />
+            <LogOut size={lg ? 18 : 16} color={c.critText} strokeWidth={lg ? 1.8 : 1.5} />
             <Body
-              size={14.5}
+              size={lg ? 17 : 14.5}
               color={c.critText}
               style={{ fontFamily: FONT.display, flexShrink: 1 }}
             >
               Sign out
             </Body>
           </Pressable>
-          <Mono size={10} tracking={0.1} color={c.ink3} style={{ flexShrink: 1, minWidth: 0 }}>
+          <Mono
+            size={10}
+            tracking={0.1}
+            color={c.ink3}
+            style={
+              lg
+                ? [glassRowSub(lg), { flexShrink: 1, minWidth: 0, marginTop: 0 }]
+                : { flexShrink: 1, minWidth: 0 }
+            }
+          >
             {OTA_DATE ? `v${APP_VERSION} · ${OTA_DATE}${OTA_ID ? ` · #${OTA_ID}` : ''}` : `v${APP_VERSION}`}
           </Mono>
         </View>
@@ -642,10 +683,11 @@ export default function Settings() {
 }
 
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  const lg = useGlass();
   return (
-    <View style={{ marginTop: 24 }}>
-      <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-        <Eyebrow>{label}</Eyebrow>
+    <View style={lg ? GLASS_PAGE.section : { marginTop: 24 }}>
+      <View style={lg ? GLASS_PAGE.sectionHead : { paddingHorizontal: 4, paddingBottom: 10 }}>
+        {lg ? <GlassHeading>{sentenceCase(label)}</GlassHeading> : <Eyebrow>{label}</Eyebrow>}
       </View>
       <Card padding={0}>{children}</Card>
     </View>
@@ -668,6 +710,7 @@ function SettingRow({
   onPress?: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   // Title and detail are both content and neither can be clamped, but they
   // share one row with a fixed icon well, a Toggle and a chevron. Past the
@@ -676,24 +719,32 @@ function SettingRow({
   const stacked = shouldStackRow(fontScale);
   const detailNode = detail ? (
     <Body
-      size={13.5}
+      size={lg ? 15 : 13.5}
       color={c.ink3}
-      style={
+      style={[
         stacked
           ? { marginTop: 3 }
-          : { flexShrink: 1, textAlign: 'right', marginRight: chevron ? 6 : 0 }
-      }
+          : { flexShrink: 1, textAlign: 'right', marginRight: chevron ? 6 : 0 },
+        lg && glassSettingDetail(lg),
+      ]}
     >
       {detail}
     </Body>
   ) : null;
   const inner = (
-    <View style={rowStyles.row}>
-      <View style={[rowStyles.iconWell, { borderColor: c.hair }]}>
-        <Icon size={16} color={c.ink} strokeWidth={1.5} />
-      </View>
+    <View style={[rowStyles.row, lg && GLASS_PAGE.row]}>
+      {lg ? (
+        <GlassTile icon={Icon} fill={glassTileFill(lg, glassSettingTone(title))} />
+      ) : (
+        <View style={[rowStyles.iconWell, { borderColor: c.hair }]}>
+          <Icon size={16} color={c.ink} strokeWidth={1.5} />
+        </View>
+      )}
       <View style={rowStyles.labelCol}>
-        <Body size={15.5} style={{ fontFamily: FONT.display }}>
+        <Body
+          size={lg ? 16 : 15.5}
+          style={lg ? glassSettingTitle(lg) : { fontFamily: FONT.display }}
+        >
           {title}
         </Body>
         {stacked ? detailNode : null}
@@ -703,8 +754,8 @@ function SettingRow({
       {chevron ? (
         <ChevronLeft
           size={14}
-          color={c.ink4}
-          strokeWidth={1.5}
+          color={lg ? lg.ios.l2 : c.ink4}
+          strokeWidth={lg ? 1.8 : 1.5}
           style={{ transform: [{ rotate: '180deg' }] }}
         />
       ) : null}
@@ -716,7 +767,11 @@ function SettingRow({
       onPress={onPress}
       accessibilityRole="button"
       android_ripple={{ color: c.hair }}
-      style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+      style={({ pressed }) =>
+        lg
+          ? { backgroundColor: pressed ? lg.ios.fill : 'transparent' }
+          : { opacity: pressed ? 0.7 : 1 }
+      }
     >
       {inner}
     </Pressable>

@@ -16,6 +16,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { glassChip, glassChipLabel } from '@/components/ui/glass/primitive-styles';
+import { GLASS_SUPPORT } from '@/components/ui/glass/screens/admin';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Field } from '@/components/ui/field';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
@@ -50,6 +55,10 @@ type Category = (typeof CATEGORIES)[number]['value'];
 
 export default function SupportScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: Site-Support.dc.html's form as a native grouped
+  // form): the scene, the glass nav with the centred title, the categories as
+  // iOS capsules and the form on the grouped surface. Every field stays.
+  const lg = useGlass();
   const navigation = useNavigation();
   const router = useRouter();
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
@@ -173,9 +182,13 @@ export default function SupportScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: c.paper }} edges={['top']}>
-      <View style={[styles.topbar, { borderBottomColor: c.hair }]}>
-        <View style={styles.chips}>
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}
+      edges={['top']}
+    >
+      {lg ? <SceneBackground /> : null}
+      <View style={[styles.topbar, { borderBottomColor: c.hair }, lg && GLASS_SUPPORT.nav]}>
+        <View style={lg ? GLASS_LIST.navGroup : styles.chips}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           <IconChip
             icon={Menu}
@@ -185,11 +198,14 @@ export default function SupportScreen() {
           />
         </View>
         <View style={styles.topbarTitle}>
-          <LifeBuoy size={16} color={c.ink3} />
-          <Body color={c.ink2} style={{ flexShrink: 1 }}>Support &amp; feedback</Body>
+          <LifeBuoy size={lg ? 18 : 16} color={c.ink3} strokeWidth={lg ? 1.8 : undefined} />
+          <Body
+            color={lg ? c.ink : c.ink2}
+            style={lg ? [{ flexShrink: 1 }, GLASS_SUPPORT.navTitle] : { flexShrink: 1 }}
+          >Support &amp; feedback</Body>
         </View>
         {/* Balances the two chips, so the title stays centred. */}
-        <View style={styles.chipsSpacer} />
+        <View style={lg ? GLASS_SUPPORT.spacer : styles.chipsSpacer} />
       </View>
 
       <ScrollView
@@ -198,7 +214,7 @@ export default function SupportScreen() {
       >
         <Eyebrow>WE READ EVERYTHING</Eyebrow>
         <Display color={c.ink} style={{ marginTop: 4 }}>
-          How can we <Em>help?</Em>
+          How can we {lg ? 'help?' : <Em>help?</Em>}
         </Display>
         <Body color={c.ink3} style={{ marginTop: 8 }}>
           Report a bug, request a feature, or ask a question. Attach a screenshot if it helps — it
@@ -232,7 +248,11 @@ export default function SupportScreen() {
                       onPress={() => setCategory(cat.value)}
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
-                      style={({ pressed }) => [styles.chipFrame, { opacity: pressed ? 0.7 : 1 }]}
+                      style={({ pressed }) =>
+                        lg
+                          ? [styles.chipFrame, { transform: [{ scale: pressed ? 0.97 : 1 }] }]
+                          : [styles.chipFrame, { opacity: pressed ? 0.7 : 1 }]
+                      }
                     >
                       <View
                         style={[
@@ -240,10 +260,15 @@ export default function SupportScreen() {
                           selected
                             ? { backgroundColor: c.ink, borderColor: c.ink }
                             : { backgroundColor: 'transparent', borderColor: c.hair2 },
+                          lg && glassChip(lg, selected),
                         ]}
                       >
                         <Text
-                          style={[styles.chipLabel, { color: selected ? c.paper : c.ink2 }]}
+                          style={[
+                            styles.chipLabel,
+                            { color: selected ? c.paper : c.ink2 },
+                            lg && glassChipLabel(lg, selected),
+                          ]}
                           maxFontSizeMultiplier={CHIP_CAP}
                         >
                           {cat.label}
@@ -275,7 +300,13 @@ export default function SupportScreen() {
             <View>
               <Eyebrow style={{ marginBottom: 8 }}>SCREENSHOT (OPTIONAL)</Eyebrow>
               {attachment ? (
-                <View style={[styles.attachRow, { borderColor: c.hair }]}>
+                <View
+                  style={[
+                    styles.attachRow,
+                    { borderColor: c.hair },
+                    lg && [GLASS_SUPPORT.attach, { backgroundColor: lg.ios.fill }],
+                  ]}
+                >
                   {/* The photo ground: white with a hairline in both modes. */}
                   <Image
                     source={{ uri: attachment.uri }}
