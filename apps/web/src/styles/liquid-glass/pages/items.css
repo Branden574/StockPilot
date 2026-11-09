@@ -521,16 +521,18 @@
        leaf (each row's checkbox, the select-all box, every group's
        disclosure and its Rename / Remove / Add to group, the 14-day mode
        menu, the name link) is the one node it is in Classic and keeps its
-       state through a switch. Every classic column stays on the card
-       (deviation from the board, which draws only photo, name, SKU, racks
-       and on hand): the rack on its own line, then category, charter,
-       location (and on Books grade and crate), the coverage bar, the 14-day
-       line, the status and the last update as one quiet wrapped line. The
-       checkboxes stay on every card (the board shows them only in a Select
-       mode, which would be new state). The column headings are not drawn on
-       a phone (words only; the cells say what they are), apart from the two
-       header cells that hold a control: select all (left, over the cards'
-       checkboxes) and the 14-day mode menu (right).
+       state through a switch. Every classic column of words stays on the
+       card (deviation from the board, which draws only photo, name, SKU,
+       racks and on hand): the rack on its own line, then the status and,
+       each after its quiet label, category, charter, location (on Books
+       grade and crate) and the last update, wrapped. The coverage bar and
+       the 14-day line (drawings, no words or controls) are not drawn on a
+       phone, as on the board. The checkboxes stay on every card (the board
+       shows them only in a Select mode, which would be new state). The
+       column headings are not drawn on a phone (the labels name the
+       facts), apart from the two header cells that hold a control: select
+       all (left, over the cards' checkboxes) and the 14-day mode menu
+       (right).
 
        Columns are found by position, which every row kind shares
        (TABLE_COLUMNS in components/inventory/inventory-table.tsx: the
@@ -547,6 +549,46 @@
        while the filters scroll. Nothing is hidden: a control past the edge
        scrolls into view when it takes focus. */
     @media (max-width: 760px) {
+      /* The page head's actions (Active / Archived, Rack, the tour, Import
+         CSV or the Books tools, + New item last): one row that scrolls
+         sideways like the views row, in DOM order, instead of two wrapped
+         rows. Their menus and dialogs open in portals, so the scroll box
+         clips none of them. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='page-header']
+        [data-slot='page-header-actions'] {
+        flex: none;
+        flex-wrap: nowrap;
+        width: calc(100% + 32px);
+        margin-right: -16px;
+        margin-left: -16px;
+        padding: 2px 16px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='page-header']
+        [data-slot='page-header-actions']::-webkit-scrollbar {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='page-header']
+        [data-slot='page-header-actions']
+        > * {
+        flex: none;
+      }
+      /* The top pager is not drawn on a phone (the board draws none): the
+         pager under the list (items-pager) is the same Pagination with the
+         same pages, links and buttons, so every page control stays. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-count']
+        > div {
+        display: none;
+      }
       /* The views row: stock views, the Expected / archived / saved-view
          chips, Save view and Table / Grid in one scrolling row. */
       :root[data-appearance='liquid-glass']
@@ -968,7 +1010,9 @@
         font-weight: 400;
         line-height: 16px;
       }
-      /* The rack chips: a line of their own under the name (records). */
+      /* The rack chips: a line of their own under the name (records),
+         named like the facts, so a record with no rack reads "Rack —", not
+         a lone dash. */
       :root[data-appearance='liquid-glass']
         :is([data-glass-page='items'], [data-glass-page='books'])
         [data-glass='items-table']
@@ -977,8 +1021,21 @@
         > td[data-glass='rack'] {
         flex: 1 1 100%;
       }
-      /* The facts: category, charter, location (grade, crate), coverage,
-         14-day, status and the last update, one quiet wrapped line. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td[data-glass='rack']::before {
+        content: 'Rack ';
+        color: var(--lg-ink-3);
+        font-size: 12.5px;
+        font-weight: 400;
+      }
+      /* The facts: the status, then category, charter, location (on Books
+         grade and crate; on a group its rack) and the last update, each
+         named by a quiet label (the column headings are not drawn on a
+         phone), wrapped under the card's first lines. */
       :root[data-appearance='liquid-glass']
         :is([data-glass-page='items'], [data-glass-page='books'])
         [data-glass='items-table']
@@ -986,11 +1043,174 @@
         > tr
         > td:not(:first-child, :nth-child(2), :nth-last-child(5), [data-glass='rack']) {
         flex: 0 1 auto;
-        color: var(--lg-ink-3);
+        color: var(--lg-ink-2);
         font-size: 12.5px;
         line-height: 18px;
         text-align: left;
         white-space: normal;
+      }
+      /* The status badge says what it is: it leads the facts (the rack's
+         line, when there is one, comes first, then the status). */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-last-child(2) {
+        order: 3;
+      }
+      /* Coverage and the 14-day line are drawings, not words or controls,
+         and the board's card draws neither: not on the phone card (the
+         14-day mode menu stays in the heading row; the status keeps the
+         stock level's word). */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:is(:nth-last-child(4), :nth-last-child(3)) {
+        display: none;
+      }
+      /* A group header's Updated cell is always the em dash (it has no one
+         update): not drawn. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr[data-row-kind='header']
+        > td:last-child {
+        display: none;
+      }
+      /* Each fact's label, by its column (TABLE_COLUMNS): Category, Charter
+         and Location third to fifth on both lists; on Books Grade sixth and
+         Crate sixth from the end; a group header's Rack (no data-glass hook:
+         the record's rack line is named above) sixth on Items and seventh on
+         Books; Updated last.
+         Spoken too, as the order page's line labels are, since the cards
+         may not be read as a table. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:not(:first-child, :nth-child(2), :nth-last-child(5), [data-glass='rack'])::before {
+        color: var(--lg-ink-3);
+        font-weight: 400;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-child(3)::before {
+        content: 'Category ';
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-child(4)::before {
+        content: 'Charter ';
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-child(5)::before {
+        content: 'Location ';
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='books']
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-child(6)::before {
+        content: 'Grade ';
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='books']
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-last-child(6)::before {
+        content: 'Crate ';
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='items']
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-child(6):not([data-glass='rack'])::before,
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='books']
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:nth-child(7):not([data-glass='rack'])::before {
+        content: 'Rack ';
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr
+        > td:last-child::before {
+        content: 'Updated ';
+      }
+
+      /* A group or product family (the board's group row: the disclosure,
+         the name, then its count): no checkbox, so no 46 px gutter; the
+         disclosure and the photo at the top of the card; the name over its
+         count or SKU line with the on-hand figure at the card's top right,
+         so Rename group and Remove from group share one line under them,
+         across the room the figure leaves free. */
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr[data-row-kind='header'] {
+        padding-left: 12px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr[data-row-kind='header']
+        > td:nth-child(2) {
+        flex: 1 1 100%;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr[data-row-kind='header']
+        > td:nth-child(2)
+        [data-slot='item-cell'] {
+        align-items: flex-start;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr[data-row-kind='header']
+        > td:nth-child(2)
+        [data-slot='item-cell']
+        > div:last-child
+        > :not([data-slot='item-cell-actions']) {
+        padding-right: 94px;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='items'], [data-glass-page='books'])
+        [data-glass='items-table']
+        > tbody
+        > tr[data-row-kind='header']
+        > td:nth-last-child(5) {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        width: 86px;
       }
     }
 

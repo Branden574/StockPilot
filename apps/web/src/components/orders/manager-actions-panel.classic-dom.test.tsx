@@ -158,7 +158,7 @@ describe('Manager actions card, Classic DOM', () => {
 
 /**
  * THE PHONE'S NEXT-STEP BAR (Liquid Glass, fidelity lane phone;
- * Order-Detail-Mobile.dc.html .cartbar "Next step"). At 760 px and under,
+ * Order-Detail-Mobile.dc.html .cartbar). At 760 px and under,
  * pages/order-detail.css fixes the card's own step that moves the order on
  * (the FIRST default-variant button of its button row) to the foot of the
  * screen and draws the bar behind it with that row's ::after: no copy of the
@@ -191,7 +191,11 @@ describe('Liquid Glass phone next-step bar', () => {
     });
     const bar = ruleFor(`${ROOT} ${ROW}:has(> [data-glass-variant='default'])::after`)?.decls;
     expect(bar).toMatchObject({
-      content: "'Next step' / ''",
+      // The order's status, as the page head's badge names it (the row's
+      // data-glass-status), in the 104 px the widest button leaves.
+      content: "attr(data-glass-status) / ''",
+      padding: '0 calc(100vw - 144px) 0 16px',
+      overflow: 'hidden',
       position: 'fixed',
       left: '12px',
       right: '12px',
@@ -199,6 +203,30 @@ describe('Liquid Glass phone next-step bar', () => {
       'z-index': '40',
       'pointer-events': 'none',
     });
+  });
+
+  // The bar's words: the status badge's label for each state.
+  const STATUS_WORDS: Record<string, string> = {
+    'pending-approval-deny-open': 'Pending',
+    approved: 'Approved',
+    'picking-unassigned-staff': 'Pick slip',
+    'picking-mine-staff': 'Picking',
+    denied: 'Denied',
+  };
+
+  it('lifts the toast dock over the bar while there is a step', () => {
+    const globals = cssRules('globals.glass.css');
+    const STEP_ON_PAGE = `${ROW} > [data-glass-variant='default']`;
+    const lift = globals.find(
+      (r) =>
+        phone(r.media) &&
+        r.selectors.some(
+          (sel) =>
+            normaliseQuotes(sel.replace(/\s+/g, ' ').replace(/\( | \)/g, (m) => m.trim())) ===
+            `${ROOT}:has(${STEP_ON_PAGE}) ol[data-sonner-toaster][data-y-position='bottom']`,
+        ),
+    );
+    expect(lift?.decls.bottom).toBe('calc(84px + var(--sp-update-card-offset, 0px))');
   });
 
   const EXPECTED: Record<string, string | null> = {
@@ -236,10 +264,15 @@ describe('Liquid Glass phone next-step bar', () => {
         expect(picked.map((el) => el.textContent?.trim())).toEqual(
           EXPECTED[state.name] ? [EXPECTED[state.name]] : [],
         );
-        // The bar (and the page's room for it) only with a step.
+        // The bar (and the page's room for it, and the toast dock's lift)
+        // only with a step.
         expect(row.matches(`${ROOT} ${ROW}:has(> [data-glass-variant='default'])`)).toBe(
           picked.length > 0,
         );
+        expect(document.querySelector(`${ROW} > [data-glass-variant='default']`) !== null).toBe(
+          picked.length > 0,
+        );
+        expect(row.getAttribute('data-glass-status')).toBe(STATUS_WORDS[state.name]);
       } finally {
         document.documentElement.removeAttribute('data-appearance');
       }

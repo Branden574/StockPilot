@@ -1017,14 +1017,13 @@
 
      Same DOM as Classic (plan M1). The setup keeps its four cells and
      their popovers in Classic's order (Ship from, For, the segment, Pick up
-     at or Deliver to), each one line of label and value with the icon
-     tiles and the hint lines left out on a phone (the popovers and the
-     review still name every choice in full); a popover opens under the
-     whole card, across its width. The segment's words stay its buttons'
-     names (drawn at no size, so a screen reader still reads Pickup and
-     Delivery). Deviations: the board's one sentence summary is drawn as
-     the cells' own labels and values, and the segment sits third, where
-     the keyboard reaches it (plan 4.6: the DOM order wins).
+     at or Deliver to), laid out on the card's two lines with the segment
+     at the right of both: each cell a label over its value, the value
+     wrapping in its column (never cut), with the icon tiles left out on a
+     phone; a popover opens under the whole card, across its width. The
+     segment's words stay its buttons' names (drawn at no size, so a screen
+     reader still reads Pickup and Delivery). Deviation: the board's one
+     sentence summary is drawn as the cells' own labels and values.
 
      The cart bar is the floating cart button itself (it still scrolls to
      the cart) drawn across the foot, and the cart's own Review order
@@ -1055,10 +1054,16 @@
       max-width: 22px;
     }
 
-    /* The setup on one line (.card.mob-f.row: radius 18, 16 px a side). */
+    /* The setup card (.card.mob-f.row: radius 18, 16 px a side), on two
+       lines: Ship from and For on the first, Pick up at or Deliver to
+       across the second, and the Pickup / Delivery segment at the right of
+       both (where the board draws it). A grid, so each value has the room
+       of its own column and wraps there instead of being cut: a long
+       warehouse or site name and its chevron always show. */
     :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page > .sf-setup {
-      display: flex;
-      align-items: center;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      align-items: stretch;
       border-radius: 18px;
     }
     :root[data-appearance='liquid-glass']
@@ -1067,7 +1072,7 @@
       > .sf-setup
       > :is(.sf-setup-cell, .sf-seg-wrap) {
       min-height: 0;
-      padding: 12px 10px;
+      padding: 10px 12px;
       border-top: 0;
       border-left: 0;
       border-radius: 0;
@@ -1078,9 +1083,10 @@
       > .sf-setup
       > .sf-setup-cell {
       position: static;
-      flex: 1 1 0;
+      align-items: flex-start;
       min-width: 0;
     }
+    /* For, beside Ship from. */
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)
       .sf-page
@@ -1089,26 +1095,39 @@
       + .sf-setup-cell {
       border-left: 1px solid var(--lg-line);
     }
+    /* Ship from, and Pick up at or Deliver to under it: 16 px from the
+       card's edge. */
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)
       .sf-page
       > .sf-setup
       > :first-child {
       padding-left: 16px;
-      border-radius: 17px 0 0 17px;
+      border-radius: 17px 0 0 0;
     }
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)
       .sf-page
       > .sf-setup
-      > :last-child {
-      border-radius: 0 17px 17px 0;
+      > .sf-seg-wrap
+      ~ .sf-setup-cell {
+      grid-row: 2;
+      grid-column: 1 / span 2;
+      padding-left: 16px;
+      border-top: 1px solid var(--lg-line);
+      border-radius: 0 0 0 17px;
     }
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)
       .sf-page
       > .sf-setup
-      :is(.sf-setup-ic, .hint) {
+      .sf-setup-ic,
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell.static
+      .hint {
       display: none;
     }
     :root[data-appearance='liquid-glass']
@@ -1123,6 +1142,43 @@
       white-space: nowrap;
       text-overflow: ellipsis;
     }
+    /* A value wraps in its column (Classic's one clipped flex line drew no
+       ellipsis: text-overflow does not apply to a flex box), its chevron
+       inline after the last word. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .vl {
+      display: block;
+      overflow: visible;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .vl
+      .icon {
+      display: inline-flex;
+      vertical-align: -1px;
+    }
+    /* The hint under For (yourself, or "On behalf · their email") and
+       under Deliver to (the site's code); Pick up at's sentence repeats its
+       value and is left to the review. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .hint {
+      margin-top: 1px;
+      font-size: 11.5px;
+      line-height: 15px;
+    }
     /* A setup popover opens under the whole card, across its width. */
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)
@@ -1134,14 +1190,18 @@
       left: 0;
       min-width: 0;
     }
-    /* The Pickup / Delivery segment as two 40 px icons. */
+    /* The Pickup / Delivery segment as two 40 px icons, at the right of
+       both lines. */
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)
       .sf-page
       > .sf-setup
       > .sf-seg-wrap {
-      flex: none;
-      padding: 8px 6px;
+      grid-row: 1 / span 2;
+      grid-column: 3;
+      padding: 8px 10px;
+      border-left: 1px solid var(--lg-line);
+      border-radius: 0 17px 17px 0;
     }
     :root[data-appearance='liquid-glass']
       .sp-storefront:not(.sf-public)

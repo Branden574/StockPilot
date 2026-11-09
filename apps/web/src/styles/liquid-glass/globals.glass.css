@@ -120,11 +120,31 @@
     }
   }
   /* On a phone the bar floats 14 px up and is 58 px tall (pages/items.css,
-     lane phone): the dock sits 12 px above it. */
+     lane phone): the dock sits 12 px above it. The order page's next-step
+     bar (pages/order-detail.css, drawn while Manager actions holds a step)
+     and Place an order's cart bar (storefront.glass.css, while the cart
+     holds something) float 14 px up and are 60 px tall: the dock sits 10 px
+     above them, so a toast (Approve's "Request approved", an error) never
+     covers the step it follows. */
   @media (max-width: 760px) {
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='items'], [data-glass-page='books'])
           [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(84px + var(--sp-update-card-offset, 0px));
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='order-detail']
+          [data-glass-role='order-manager-actions']
+          [data-testid='manager-actions-buttons']
+          > [data-glass-variant='default']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(84px + var(--sp-update-card-offset, 0px));
+    }
+    :root[data-appearance='liquid-glass']:has(
+        .sp-storefront:not(.sf-public) .sf-fab[data-show='true']
       )
       ol[data-sonner-toaster][data-y-position='bottom'] {
       bottom: calc(84px + var(--sp-update-card-offset, 0px));

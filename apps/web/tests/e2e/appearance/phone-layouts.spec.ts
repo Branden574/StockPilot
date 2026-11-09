@@ -19,9 +19,14 @@ import {
  *  - an order page: the lines table as the phone line list, and Manager
  *    actions' own step that moves the order on fixed in the bottom
  *    next-step bar;
- *  - Place an order: the steps and the order setup on one line each, and
- *    the cart bar at the foot (the floating cart button and the cart's own
- *    Review order button).
+ *  - Place an order: the steps on one line, the order setup on the card's
+ *    two lines with every value readable (wrapped, never cut) and the
+ *    segment at the right, and the cart bar at the foot (the floating cart
+ *    button and the cart's own Review order button).
+ *
+ * Fix round: the cards' facts carry their labels, the page head's actions
+ * scroll as one row with no top pager, and the next-step bar names the
+ * order's status.
  *
  * Nothing is submitted: a row is ticked and unticked, one product is added
  * to the cart and the cart is emptied again; no step button is pressed.
@@ -92,6 +97,43 @@ for (const [route, root] of [
     // The search over the filters; the filters scroll sideways in one row.
     const toolbar = page.locator(`[data-glass-page="${root}"] [data-glass="items-toolbar"]`);
     expect(await toolbar.evaluate((e) => getComputedStyle(e).overflowX)).toBe('auto');
+    // The page head's actions: one row that scrolls sideways.
+    const actions = page.locator(
+      `[data-glass-page="${root}"] [data-glass="page-header"] [data-slot="page-header-actions"]`,
+    );
+    if (await actions.isVisible().catch(() => false)) {
+      expect(await actions.evaluate((e) => getComputedStyle(e).overflowX)).toBe('auto');
+      expect((await actions.boundingBox())!.height, 'the actions on one row').toBeLessThanOrEqual(
+        48,
+      );
+    }
+    // No top pager; the pager under the list keeps every page control.
+    const top = page.locator(`[data-glass-page="${root}"] [data-glass="items-count"] > div`);
+    if ((await top.count()) > 0) {
+      await expect(top).toBeHidden();
+      await expect(
+        page.locator(`[data-glass-page="${root}"] [data-glass="items-pager"]`),
+      ).toBeVisible();
+    }
+    // A record's facts are named; the drawings are not on the card.
+    const record = table.locator(':scope > tbody > tr[data-row-kind="record"]').first();
+    if ((await record.count()) > 0) {
+      const facts = await record.evaluate((tr) => {
+        const cell = (sel: string) => tr.querySelector(`:scope > td:${sel}`)!;
+        return {
+          category: getComputedStyle(cell('nth-child(3)'), '::before').content,
+          updated: getComputedStyle(cell('last-child'), '::before').content,
+          coverage: getComputedStyle(cell('nth-last-child(4)')).display,
+          trend: getComputedStyle(cell('nth-last-child(3)')).display,
+        };
+      });
+      expect(facts).toEqual({
+        category: '"Category "',
+        updated: '"Updated "',
+        coverage: 'none',
+        trend: 'none',
+      });
+    }
     // Tick a record: the bar floats at the foot, inside the screen; untick.
     const box = first.locator('td:first-child [role="checkbox"]');
     if (await box.isVisible().catch(() => false)) {
@@ -136,9 +178,17 @@ test('An order page: the phone line list and the bottom next-step bar', async ({
     return [a.position, a.left, a.right, a.height];
   });
   expect(bar).toEqual(['fixed', '12px', '12px', '60px']);
+  // The bar's words are the order's status, as the page head's badge says it.
+  const status = (await page.locator('[data-glass-role="order-status"]').first().textContent())!;
+  const words = await page
+    .locator('[data-testid="manager-actions-buttons"]')
+    .evaluate((r) => r.getAttribute('data-glass-status'));
+  expect(words).toBe(status.trim());
 });
 
-test('Place an order: steps and setup on one line, the cart bar at the foot', async ({ page }) => {
+test('Place an order: the steps on one line, the setup readable, the cart bar at the foot', async ({
+  page,
+}) => {
   await page.goto('/dashboard/orders/new');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   if (
@@ -153,7 +203,22 @@ test('Place an order: steps and setup on one line, the cart bar at the foot', as
   const flow = await page.locator('.sf-flow').boundingBox();
   expect(flow!.height, 'the steps on one line').toBeLessThanOrEqual(24);
   const setup = await page.locator('.sf-page > .sf-setup').boundingBox();
-  expect(setup!.height, 'the setup on one line').toBeLessThanOrEqual(80);
+  expect(setup!.height, 'the setup on its two lines').toBeLessThanOrEqual(150);
+  // Every value is readable: nothing is cut inside its cell, and Ship
+  // from's chevron is on screen inside its cell.
+  const cut = await page
+    .locator('.sf-page > .sf-setup .sf-setup-cell .vl')
+    .evaluateAll((els) =>
+      els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent),
+    );
+  expect(cut).toEqual([]);
+  const ship = page.locator('.sf-page > .sf-setup > .sf-setup-cell').first();
+  const shipBox = (await ship.boundingBox())!;
+  const chevron = (await ship.locator('.vl .icon').boundingBox())!;
+  expect(chevron.x + chevron.width).toBeLessThanOrEqual(shipBox.x + shipBox.width);
+  // The segment at the right of both lines.
+  const seg = (await page.locator('.sf-page > .sf-setup > .sf-seg-wrap').boundingBox())!;
+  expect(seg.x + seg.width).toBeGreaterThan(setup!.x + setup!.width - 4);
   const add = page.getByRole('button', { name: /Add to cart/ }).first();
   if (!(await add.isVisible().catch(() => false)))
     test.skip(true, 'Nothing to add in this catalog.');

@@ -68,6 +68,7 @@ import {
   derivePickingStatus,
   describeDepartureRisk,
   isManagerOrAbove,
+  orderStatusLabelForFulfillment,
   previewPartialFulfilment,
   releaseOutcomeLine,
   returnCancelledReplacementLine,
@@ -85,6 +86,7 @@ import {
 
 import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
+import { useOrderStatusMeta } from '@/components/orders/order-status-config-provider';
 import { ReleaseEarlyDialog } from '@/components/returns/exchange-panel';
 import { releaseReturnReplacementAction } from '@/server/actions/returns';
 import { DOWNSTREAM_PACKING_STATUSES } from '@/lib/orders/actions-panel-reads';
@@ -305,6 +307,12 @@ export function ManagerActionsPanel({
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [releaseOpen, setReleaseOpen] = React.useState(false);
+  // The status as the page head's badge names it (OrderStatusBadge: the
+  // org's label, a completed pickup "Handed over"). Liquid Glass's phone
+  // next-step bar reads it from the button row's data-glass-status, an inert
+  // hook (no Classic CSS reads it; the classic proof drops it).
+  const statusMeta = useOrderStatusMeta(status);
+  const statusLabel = orderStatusLabelForFulfillment(status, statusMeta.label, fulfillmentType);
   const gated = replacement?.waitingForReturn === true;
   // Desk check F3: a replacement whose RMA was cancelled or denied is never
   // picked again (the gate refuses it), so the pick slip and Resume go too.
@@ -777,7 +785,11 @@ export function ManagerActionsPanel({
       }
       bodyClassName="space-y-3"
     >
-      <div className="flex flex-wrap items-center gap-2" data-testid="manager-actions-buttons">
+      <div
+        className="flex flex-wrap items-center gap-2"
+        data-testid="manager-actions-buttons"
+        data-glass-status={statusLabel}
+      >
         {status === 'pending_approval' && approves && (
           <>
             <NeededBySuggest

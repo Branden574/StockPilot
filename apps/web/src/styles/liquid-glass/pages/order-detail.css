@@ -1201,9 +1201,15 @@
        (alternative text empty: the button names the step). Drawn only while
        such a step is on screen; a requester, or an order with no step left,
        gets no bar (manager-actions-panel.classic-dom.test.tsx, "Liquid Glass
-       phone next-step bar"). Deviation: the board's per-state title and sub-line
-       ("Approved / Next: generate the pick slip") have no one source on the
-       page, so the bar says "Next step"; the status is in the page head. */
+       phone next-step bar"). The bar's words are the order's status as the
+       page head's badge names it (the button row's data-glass-status, from
+       the same label: the org's name for it, "Handed over" for a completed
+       pickup), so the bar says where the order stands and its button the
+       step: up to three lines in the 104 px the widest button leaves (the
+       button takes at most the screen less 160 px; the words' right padding
+       is that plus the 8 px inset and an 8 px gap). Deviation: the board's sub-line
+       ("2 of 3 sections approved", "Next: generate the pick slip") has no
+       one source on the page and is not drawn. */
     @media (max-width: 760px) {
       :root[data-appearance='liquid-glass']
         [data-glass-page='order-detail']
@@ -1226,7 +1232,7 @@
         [data-glass-page='order-detail']
         [data-glass-role='order-manager-actions']
         [data-testid='manager-actions-buttons']:has(> [data-glass-variant='default'])::after {
-        content: 'Next step' / '';
+        content: attr(data-glass-status) / '';
         position: fixed;
         right: 12px;
         bottom: calc(14px + env(safe-area-inset-bottom, 0px));
@@ -1234,8 +1240,11 @@
         z-index: 40;
         display: flex;
         align-items: center;
+        box-sizing: border-box;
         height: 60px;
-        padding: 0 16px;
+        padding: 0 calc(100vw - 144px) 0 16px;
+        overflow: hidden;
+        overflow-wrap: anywhere;
         border-radius: 22px;
         background-color: var(--lg-glass);
         -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
@@ -1245,9 +1254,9 @@
           0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
           var(--lg-glass-shadow);
         color: var(--lg-ink);
-        font-size: 14px;
+        font-size: 13px;
         font-weight: 600;
-        line-height: 20px;
+        line-height: 16px;
         pointer-events: none;
       }
       /* Room under the last card for the bar (.page.has-cartbar: 108). */

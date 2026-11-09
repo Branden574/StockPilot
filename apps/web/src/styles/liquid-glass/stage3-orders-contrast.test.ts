@@ -260,6 +260,20 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['focus ring on the bar glass', '--lg-focus', ['--lg-pane', '--lg-glass'], 3],
   ['phone card name and figure (ink) on the card', '--lg-ink', CARD, 4.5],
   ['phone card facts and "on hand" (ink 3) on the card', '--lg-ink-3', CARD, 4.5],
+  // Fix round: a fact's value in ink 2 after its ink 3 label.
+  ['phone card fact values (ink 2) on the card', '--lg-ink-2', CARD, 4.5],
+  [
+    'phone group card fact values (ink 2) on the second fill',
+    '--lg-ink-2',
+    ['--lg-pane', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'ticked phone card fact values (ink 2) on the accent wash',
+    '--lg-ink-2',
+    ['--lg-pane', '--lg-accent-wash'],
+    4.5,
+  ],
   ['phone group card (ink) on the second fill', '--lg-ink', ['--lg-pane', '--lg-card-fill-2'], 4.5],
   [
     'phone group card facts (ink 3) on the second fill',

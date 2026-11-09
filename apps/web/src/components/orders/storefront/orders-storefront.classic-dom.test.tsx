@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cssRules, declaredFor } from '@/styles/liquid-glass/glass-css';
+import { cssRules, declaredFor, normaliseQuotes } from '@/styles/liquid-glass/glass-css';
 import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 import type { CatalogItem } from '../v2/types';
@@ -175,6 +175,7 @@ describe('Place an order storefront, Classic DOM', () => {
  */
 describe('Liquid Glass phone: one-line setup and steps, the cart bar', () => {
   const rules = cssRules('storefront.glass.css');
+  const globals = cssRules('globals.glass.css');
   const phone = (media: string[]) => media.includes('(max-width: 760px)');
   const declared = (el: Element, prop: string) => declaredFor(el, rules, prop, phone);
 
@@ -208,23 +209,45 @@ describe('Liquid Glass phone: one-line setup and steps, the cart bar', () => {
       const root = view.container;
       // Steps on one line.
       expect(declared(root.querySelector('.sf-flow')!, 'flex-wrap')).toBe('nowrap');
-      // The setup: one row of its four parts, in Classic's order.
+      // The setup: its four parts in Classic's order, on the card's two
+      // lines (Ship from and For, then Pick up at across both columns), the
+      // segment at the right of both.
       const setup = root.querySelector('.sf-page > .sf-setup')!;
-      expect(declared(setup, 'display')).toBe('flex');
-      const parts = [...setup.children].map((c) => c.className);
-      expect(parts).toEqual([
+      expect(declared(setup, 'display')).toBe('grid');
+      expect(declared(setup, 'grid-template-columns')).toBe('minmax(0, 1fr) minmax(0, 1fr) auto');
+      const parts = [...setup.children];
+      expect(parts.map((c) => c.className)).toEqual([
         'sf-setup-cell',
         'sf-setup-cell',
         'sf-seg-wrap',
         'sf-setup-cell static',
       ]);
-      for (const cell of setup.querySelectorAll(':scope > .sf-setup-cell')) {
+      const [shipFrom, forCell, segWrap, pickUp] = parts as [Element, Element, Element, Element];
+      for (const cell of [shipFrom, forCell, pickUp]) {
         expect(declared(cell, 'position')).toBe('static');
-        expect(declared(cell, 'flex')).toBe('1 1 0');
+        expect(declared(cell, 'min-width')).toBe('0');
       }
-      for (const hidden of setup.querySelectorAll('.sf-setup-ic, .hint')) {
+      expect(declared(segWrap, 'grid-column')).toBe('3');
+      expect(declared(segWrap, 'grid-row')).toBe('1 / span 2');
+      expect(declared(pickUp, 'grid-column')).toBe('1 / span 2');
+      expect(declared(pickUp, 'grid-row')).toBe('2');
+      expect(declared(forCell, 'border-left')).toBe('1px solid var(--lg-line)');
+      expect(declared(pickUp, 'border-top')).toBe('1px solid var(--lg-line)');
+      // Each value wraps in its column with its chevron (never clipped:
+      // text-overflow draws nothing on Classic's flex value).
+      for (const vl of setup.querySelectorAll('.sf-setup-cell .vl')) {
+        expect(declared(vl, 'display')).toBe('block');
+        expect(declared(vl, 'white-space')).toBe('normal');
+        expect(declared(vl, 'overflow')).toBe('visible');
+      }
+      expect(shipFrom.querySelector('.vl .icon svg')).not.toBeNull();
+      for (const hidden of setup.querySelectorAll('.sf-setup-ic, .static .hint')) {
         expect(declared(hidden, 'display')).toBe('none');
       }
+      // For's hint (yourself, or the on-behalf email) stays on the card.
+      const forHint = forCell.querySelector('.hint')!;
+      expect(forHint.textContent).toBe('Robin Example');
+      expect(declared(forHint, 'display')).toBeUndefined();
       const seg = [...setup.querySelectorAll('.sf-seg button')];
       expect(seg.map((b) => b.textContent?.trim())).toEqual(['Pickup', 'Delivery']);
       for (const b of seg) {
@@ -239,6 +262,22 @@ describe('Liquid Glass phone: one-line setup and steps, the cart bar', () => {
       expect(fab().getAttribute('data-show')).toBe('false');
       expect(declared(fab(), 'height')).toBeUndefined();
       expect(declared(review(), 'position')).toBeUndefined();
+      // The toast dock (sonner's list, globals.glass.css) rises over the bar
+      // only while the bar is up: the rule is pinned, and its :has() condition
+      // is evaluated on the page (happy-dom matches a :not() inside :has()
+      // wrongly, so the whole selector cannot be matched here).
+      const BAR = ".sp-storefront:not(.sf-public) .sf-fab[data-show='true']";
+      const lift = globals.find(
+        (r) =>
+          phone(r.media) &&
+          r.selectors.some(
+            (sel) =>
+              normaliseQuotes(sel.replace(/\s+/g, ' ').replace(/\( | \)/g, (m) => m.trim())) ===
+              `:root[data-appearance='liquid-glass']:has(${BAR}) ol[data-sonner-toaster][data-y-position='bottom']`,
+          ),
+      );
+      expect(lift?.decls.bottom).toBe('calc(84px + var(--sp-update-card-offset, 0px))');
+      expect(document.querySelector(BAR)).toBeNull();
 
       await act(async () => {
         fireEvent.click(screen.getAllByRole('button', { name: /Add to cart/ })[0]!);
@@ -251,6 +290,7 @@ describe('Liquid Glass phone: one-line setup and steps, the cart bar', () => {
       expect(declared(review(), 'position')).toBe('fixed');
       expect(declared(review(), 'z-index')).toBe('41');
       expect(declared(root.querySelector('.sf-page')!, 'padding-bottom')).toBe('108px');
+      expect(document.querySelector(BAR)).toBe(fab());
     } finally {
       document.documentElement.removeAttribute('data-appearance');
       cleanup();
