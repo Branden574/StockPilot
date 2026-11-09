@@ -280,7 +280,7 @@ function StatusControl({
             />
           </button>
         </PopoverTrigger>
-        <PopoverContent className="w-72 p-3">
+        <PopoverContent className="w-72 p-3" data-glass-role="bot-status-menu">
           <fieldset className="space-y-1">
             <legend className="text-foreground mb-1.5 text-[13.5px] font-medium">
               {BOOK_REPORT_UI.status}

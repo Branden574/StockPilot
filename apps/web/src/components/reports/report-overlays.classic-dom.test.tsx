@@ -20,6 +20,8 @@ import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom
  *   - the charter selector on Inventory valuation, closed and open;
  *   - Book Order Totals' Orders placed range, its Status choice and the
  *     orders behind a total.
+ * The second half asserts the hooks themselves, so a rename that leaves the
+ * glass rules pointing at nothing fails here.
  *
  * Class tokens are sorted before comparing, as the lab comparison sorts
  * them (DECISIONS.md, CLASS-ORDER NORMALISATION).
@@ -251,4 +253,71 @@ describe('report overlays: the Classic DOM is the pinned one', () => {
       await expect(off.dom).toMatchFileSnapshot(`./__classic__/overlays.${name}.txt`);
     });
   }
+});
+
+describe('report overlays: the role hooks the glass rules read', () => {
+  it("the PDF menu, its second line and the covers note (pages/insights.css 'report-pdf-*')", async () => {
+    const menu = await openPdfExport();
+    expect(menu).toHaveAttribute('data-glass', 'menu');
+    expect(menu).toHaveAttribute('data-glass-role', 'report-pdf-menu');
+    expect(
+      within(menu).getByText('Covers for the first 500 books; every row and total is included.'),
+    ).toHaveAttribute('data-glass-role', 'report-pdf-note');
+    expect(within(menu).getByText('Faster · smaller file')).toHaveAttribute(
+      'data-glass-role',
+      'report-pdf-sub',
+    );
+  });
+
+  it('the charter selector and its menu', async () => {
+    const trigger = await openCharterClosed();
+    expect(trigger).toHaveAttribute('data-glass', 'select');
+    expect(trigger).toHaveAttribute('data-glass-role', 'report-charter-select');
+    cleanup();
+    const list = await openCharterOpen();
+    const menu = list.closest('[data-glass="menu"]');
+    expect(menu).toHaveAttribute('data-glass-role', 'report-charter-menu');
+    expect(menu!.querySelector(':scope > [data-radix-select-viewport]')).not.toBeNull();
+  });
+
+  it('the Orders placed range popover and the parts its rules name', async () => {
+    const dialog = await openDateRange();
+    expect(dialog).toHaveAttribute('data-glass', 'popover');
+    expect(dialog).toHaveAttribute('data-glass-role', 'bot-date-range');
+    expect(dialog.querySelector('[data-custom-range-body]')).not.toBeNull();
+    expect(dialog.querySelector('[data-custom-range-footer]')).not.toBeNull();
+    expect(dialog.querySelectorAll('[data-typed-date] > label + input')).toHaveLength(2);
+    const calendar = dialog.querySelector('[data-glass="calendar"]');
+    expect(calendar).not.toBeNull();
+    expect(calendar!.querySelectorAll('button[data-day]').length).toBeGreaterThan(27);
+  });
+
+  it('the Status choice popover', async () => {
+    const popover = await openStatus();
+    expect(popover).toHaveAttribute('data-glass', 'popover');
+    expect(popover).toHaveAttribute('data-glass-role', 'bot-status-menu');
+    const boxes = popover.querySelectorAll('input[type="checkbox"]');
+    expect(boxes.length).toBeGreaterThan(1);
+    expect(popover.querySelectorAll('fieldset > label')).toHaveLength(boxes.length);
+    expect(popover.querySelector(':scope > div:last-child [data-glass="button"]')).not.toBeNull();
+  });
+
+  it('the orders drawer: sheet, head, reading well, scope lines and table', async () => {
+    const dialog = await openDrawer();
+    expect(dialog).toHaveAttribute('data-glass', 'sheet');
+    expect(dialog).toHaveAttribute('data-glass-role', 'bot-orders-drawer');
+    const head = dialog.querySelector(':scope > [data-glass-role="bot-drawer-head"]');
+    expect(head?.querySelector(':scope > h2')).not.toBeNull();
+    expect(head?.querySelector(':scope > p')).not.toBeNull();
+    const body = dialog.querySelector(':scope > [data-glass-role="bot-drawer-body"]');
+    expect(body).not.toBeNull();
+    expect(body!.querySelector('dl[data-glass-role="bot-drawer-scope"]')).not.toBeNull();
+    expect(
+      body!.querySelector('[data-glass-role="bot-drawer-table"] > table > thead'),
+    ).not.toBeNull();
+    // The close button the rules move is the sheet's last child.
+    const last = dialog.lastElementChild;
+    expect(last?.tagName).toBe('BUTTON');
+    expect(last).toHaveAccessibleName('Close');
+  });
 });

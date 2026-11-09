@@ -401,6 +401,63 @@
       font-weight: 600;
     }
 
+    /* ── The report menus (portalled, so named through
+       :root:has([data-glass-page='insights']) and their role hooks) ──────
+       The PDF menu, on the hub, the reports and Book Order Totals' Export:
+       Book-Order-Totals.dc.html's Export .menu (270 px, the stage 2 .menu
+       padding and 36 px .mi rows, the ink 3 icons 10 px from the words, the
+       second line as .mi .sub: 12/16 in ink 3, the covers note 12/16 in
+       ink 3). The charter selector on Inventory valuation: DS-Components'
+       "Charter selector — open" (the 240 px .input.select, 36 px; the
+       300 px .menu of .mi rows). */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-menu'] {
+      width: 270px;
+      max-width: calc(100vw - 32px);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-menu']
+      [data-glass='menu-item']
+      > svg {
+      margin-right: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-sub'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-note'] {
+      padding: 4px 10px 6px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='select'][data-glass-role='report-charter-select'] {
+      width: 240px;
+      font-size: 14px;
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights']
+        [data-glass='select'][data-glass-role='report-charter-select'] {
+        height: 36px;
+        padding: 0 12px;
+      }
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='menu'][data-glass-role='report-charter-menu'] {
+      min-width: min(300px, calc(100vw - 32px));
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='menu'][data-glass-role='report-charter-menu']
+      > [data-radix-select-viewport] {
+      padding: 0;
+    }
+
     /* ══ The board panels (Routes-Gallery-2.dc.html) ═════════════════════ */
 
     /* Notifications: the live alerts as the board's list (.list.card,

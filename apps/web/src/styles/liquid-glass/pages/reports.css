@@ -26,8 +26,12 @@
    Every rule is scoped to :root[data-appearance="liquid-glass"] inside
    @media screen and to the page's root (data-glass-page="insights" with its
    data-glass-view), so Classic never matches one and printing never gets
-   one; the orders drawer and the menus are portalled and take the stage 2
-   overlay glass. Imported only by the two pages. */
+   one. The report's overlays (the Orders placed range, the Status choice,
+   the orders behind a total) are portalled out of the page, so their rules
+   name the root through :root:has(...) and the overlay by its inert
+   data-glass-role; the stage 2 overlay glass is their material. The PDF
+   menu and the charter selector are every report's (pages/insights.css).
+   Imported only by the two pages. */
 @layer theme, base, components, utilities, lg;
 
 @layer lg {
@@ -738,6 +742,474 @@
       }
     }
 
+    /* ══ Book Order Totals' overlays (portalled: each named through the
+       page root on :root and its own role hook) ═══════════════════════ */
+
+    /* The Orders placed range (Book-Order-Totals.dc.html .dr-pop: the strong
+       glass at radius 24, 16 px inside; the From and To fields as .field
+       .label over a 36 px .input; the months' title .h4; the .cal grid:
+       11.5 px 600 weekdays in ink 3, 36 px days at 13.5 px 500 with radius
+       10 and the surface 3 hover, today ringed in line 3, the chosen range
+       an accent-wash band in accent text at 600, its ends the accent fill
+       on-accent at 700). The board's presets column is Classic's Orders
+       placed select beside the fields, so it is not drawn twice. */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range'] {
+      border-radius: 24px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-custom-range-body] {
+      padding: 16px 16px 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-typed-date]
+      > label {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-typed-date]
+      > input {
+      height: 36px;
+      padding: 0 12px;
+      border-color: var(--lg-input-line);
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-typed-date]
+      > input:hover {
+      border-color: var(--lg-input-line-hover);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-typed-date]
+      > input:focus-visible {
+      border-color: var(--lg-accent);
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+      outline: none;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-typed-date]
+      > input[aria-invalid='true'] {
+      border-color: var(--lg-danger);
+      box-shadow: 0 0 0 3px var(--lg-danger-wash);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      h3 {
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      th {
+      color: var(--lg-ink-3);
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button[data-day] {
+      color: var(--lg-ink);
+      font-size: 13.5px;
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button:not([data-day]) {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button:not([data-state='selected']):hover {
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button[data-day][aria-current='date']:not([data-state='selected']) {
+      --tw-ring-color: transparent;
+      box-shadow: inset 0 0 0 1.5px var(--lg-line-3);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      td[class~='bg-success-wash'] {
+      background-color: var(--lg-accent-wash);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button[data-state='band'] {
+      color: var(--lg-accent-text);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button[data-state='selected'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+      font-weight: 700;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      :is([data-custom-range-body], [data-custom-range-footer])
+      > p {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      form
+      > p[role='alert'] {
+      margin-inline: 16px;
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-custom-range-footer] {
+      margin: 14px 16px 16px;
+      padding-top: 14px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-custom-range-footer]
+      [data-glass='button'] {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* The Status choice (inferred: a DS-Components .menu holding the
+       checkbox rows: the 12 / 600 .menu-label in ink 3, 36 px rows at
+       radius 9 with the 12% accent hover, 14 px words and the second line
+       12/16 in ink 3, the boxes in the accent, a hairline over the 36 px
+       Reset and Apply). */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu'] {
+      padding: 8px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      legend {
+      padding: 4px 6px 4px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      fieldset
+      > label {
+      align-items: center;
+      gap: 10px;
+      min-height: 36px;
+      margin-inline: 0;
+      padding: 6px 10px;
+      border-radius: 9px;
+      color: var(--lg-ink);
+      font-size: 14px;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      fieldset
+      > label:hover {
+      background-color: color-mix(in srgb, var(--lg-accent) 12%, transparent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      fieldset
+      > label
+      > input {
+      margin-top: 0;
+      accent-color: var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      fieldset
+      > label
+      span
+      > span {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      > p[role='alert'] {
+      padding-inline: 10px;
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      > div:last-child {
+      margin-top: 8px;
+      padding: 10px 2px 2px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-status-menu']
+      > div:last-child
+      > [data-glass='button'] {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* The orders behind a total (Book-Order-Totals.dc.html .scrim.to-end
+       and .drawer: 10 px from the window's right, top and bottom, 600 px
+       wide, every corner 24, the strong glass; the .dlg-h head 20 / 48 /
+       14 / 24 with the 20/26 title; the .dlg-b reading well 8 px in from
+       the sides on the field frost with the card line at radius 16, 18 px
+       inside; the .kv lines with no box, the terms in ink 3; the .dt table
+       with the 38 px band (12 / 600 in ink 3, sentence case), 44 px rows on
+       hairlines, the order numbers in accent text). */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass='sheet'][data-glass-role='bot-orders-drawer'] {
+      top: 10px;
+      right: 10px;
+      bottom: 10px;
+      height: auto;
+      width: min(600px, calc(100vw - 20px));
+      max-width: none;
+      border-radius: 24px;
+    }
+    @media (max-width: 639.98px) {
+      :root[data-appearance='liquid-glass']:has(
+          [data-glass-page='insights'][data-glass-view='book-order-totals']
+        )
+        [data-glass='sheet'][data-glass-role='bot-orders-drawer'] {
+        top: 6px;
+        right: 6px;
+        bottom: 6px;
+        width: calc(100vw - 12px);
+      }
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-orders-drawer']
+      > button:last-child {
+      top: 16px;
+      right: 16px;
+      width: 32px;
+      height: 32px;
+      border-radius: 10px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-orders-drawer']
+      > button:last-child:hover {
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-head'] {
+      padding: 20px 48px 14px 24px;
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-head']
+      > h2 {
+      color: var(--lg-ink);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-head']
+      > p {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-body'] {
+      min-height: 0;
+      margin: 0 8px 8px;
+      padding: 18px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-field-fill);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-scope'] {
+      gap: 8px 16px;
+      padding: 0;
+      border-width: 0;
+      color: var(--lg-ink);
+      font-size: 14px;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-scope']
+      > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-body']
+      :is(p, div)[class~='text-muted-foreground'] {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table'] {
+      border-color: var(--lg-line);
+      border-radius: 12px;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table']
+      thead {
+      border-color: var(--lg-line);
+      background-color: var(--lg-surface-2);
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table']
+      th {
+      height: 38px;
+      padding-block: 0;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table']
+      tbody
+      > tr {
+      height: 44px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table']
+      tbody
+      > tr:hover {
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table']
+      tbody
+      a {
+      color: var(--lg-accent-text);
+      font-weight: 600;
+    }
+
     /* Phones (sp.css 760 px): the fields take the whole width. */
     @media (max-width: 760px) {
       :root[data-appearance='liquid-glass']
@@ -753,6 +1225,22 @@
         border: 1px solid CanvasText;
         background: Canvas;
         box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']:has(
+          [data-glass-page='insights'][data-glass-view='book-order-totals']
+        )
+        [data-glass-role='bot-drawer-body'] {
+        border-color: CanvasText;
+        background: Canvas;
+      }
+      :root[data-appearance='liquid-glass']:has(
+          [data-glass-page='insights'][data-glass-view='book-order-totals']
+        )
+        [data-glass-role='bot-date-range']
+        [data-glass='calendar']
+        button[data-state='selected'] {
+        background: Highlight;
+        color: HighlightText;
       }
     }
   }

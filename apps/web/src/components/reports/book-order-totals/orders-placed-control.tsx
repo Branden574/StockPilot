@@ -298,6 +298,7 @@ export function OrdersPlacedControl({
       </div>
       <PopoverContent
         aria-label={BOOK_REPORT_UI.dateRange}
+        data-glass-role="bot-date-range"
         // Never taller than the room Radix measures on the side it opens on
         // (less the collision padding), so on a short or narrow screen none
         // of it lands off screen: the dates and the calendar scroll inside
