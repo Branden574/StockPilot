@@ -27,6 +27,10 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { glassTypedBox } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import type { ExceptionSheetConfirm } from '@/lib/exception-confirm-view';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { sheetOpeningAfter, type SheetOpening } from '@/lib/sheet-opening';
@@ -185,6 +189,9 @@ function SheetContent({
   onDone: (updated: MobileExceptionOccurrence, done: { mode: ExceptionSheetMode; replay: boolean }) => void;
 }) {
   const { c, mode: themeMode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [mode, setMode] = React.useState<ExceptionSheetMode>(initialMode);
   const [note, setNote] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
@@ -318,13 +325,20 @@ function SheetContent({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            lg && glassScrim(lg),
           ]}
         />
         <View
           onStartShouldSetResponder={kb.claimTapOutside}
           onResponderRelease={kb.onTapOutside}
-          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+          style={[
+            styles.sheet,
+            { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight },
+            lg && GLASS_SHEET_CARD,
+          ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Body
               size={16}
@@ -435,6 +449,7 @@ function SheetContent({
                 style={[
                   styles.input,
                   { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
+                  lg && glassTypedBox(lg),
                 ]}
               />
               <Mono size={11} color={count > EXCEPTION_NOTE_MAX ? c.critText : c.ink3}>

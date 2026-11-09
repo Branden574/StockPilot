@@ -91,6 +91,12 @@ import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { glassSearchBox, glassSearchInput } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_OPS, GLASS_RECORD_PAD, glassFilterChip } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { accountEpoch } from '@/lib/account-epoch';
 import { API_BASE } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -213,6 +219,12 @@ export default function BookOrderTotalsScreen() {
   const router = useRouter();
   const params = useLocalSearchParams() as Record<string, string | string[] | undefined>;
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of the Book-Order-Totals web panel
+  // on the iOS list boards): the scene, Back, Refresh and Export in the glass
+  // nav, the large title over its line, the search as the iOS search, the
+  // filter chips as capsules and the rows 16 from the sides. Every filter,
+  // sheet, row, figure and word stays.
+  const lg = useGlass();
   const { user } = useAuth();
   const userId = user?.id ?? null;
   const ws = useWorkspace();
@@ -589,9 +601,10 @@ export default function BookOrderTotalsScreen() {
 
   if (!orgId && !ws.loading) {
     return (
-      <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+        {lg ? <SceneBackground /> : null}
         <TopBar onBack={goBack} />
-        <View style={styles.pad}>
+        <View style={lg ? [styles.pad, GLASS_RECORD_PAD] : styles.pad}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               Your workspace could not be loaded, so this report cannot be shown. Check your
@@ -638,7 +651,14 @@ export default function BookOrderTotalsScreen() {
         </Card>
       ) : null}
 
-      <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+      <View
+        style={[
+          styles.searchBox,
+          { backgroundColor: c.card, borderColor: c.hair2 },
+          // Liquid Glass: the iOS search field.
+          lg && glassSearchBox(lg),
+        ]}
+      >
         <Search size={16} color={c.ink3} strokeWidth={1.4} />
         <TextInput
           value={draftQ}
@@ -653,7 +673,11 @@ export default function BookOrderTotalsScreen() {
           returnKeyType="search"
           maxLength={BOOK_REPORT_SEARCH_MAX}
           maxFontSizeMultiplier={capTo(14.5, TYPE_CEILING.input)}
-          style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
+          style={[
+            styles.searchInput,
+            { color: c.ink, fontFamily: FONT.displayRegular },
+            lg && glassSearchInput(lg),
+          ]}
         />
         {draftQ ? (
           <Pressable
@@ -874,7 +898,8 @@ export default function BookOrderTotalsScreen() {
     ) : null;
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
       <TopBar
         onBack={goBack}
         onRefresh={offline ? undefined : () => void refresh()}
@@ -887,11 +912,16 @@ export default function BookOrderTotalsScreen() {
             : undefined
         }
       />
-      <View style={styles.head}>
-        <Eyebrow>REPORTS</Eyebrow>
-        <Display size={30} style={{ marginTop: 10 }} accessibilityRole="header">
+      <View style={lg ? GLASS_LIST.head : styles.head}>
+        {lg ? null : <Eyebrow>REPORTS</Eyebrow>}
+        <Display
+          size={30}
+          style={lg ? GLASS_LIST.title : { marginTop: 10 }}
+          accessibilityRole="header"
+        >
           {BOOK_REPORT_TITLE}
         </Display>
+        {lg ? <GlassSubline style={GLASS_LIST.sub}>Reports</GlassSubline> : null}
       </View>
 
       <FlatList
@@ -902,7 +932,7 @@ export default function BookOrderTotalsScreen() {
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
         ListFooterComponent={footer}
-        contentContainerStyle={styles.list}
+        contentContainerStyle={lg ? [styles.list, GLASS_OPS.controls] : styles.list}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -1026,11 +1056,13 @@ function TopBar({
   onExport?: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: Back, Refresh and Export as glass circles in the glass nav.
+  const lg = useGlass();
   return (
-    <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-      <View style={styles.topbar}>
+    <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+      <View style={lg ? GLASS_LIST.nav : styles.topbar}>
         <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" minTap />
-        <View style={{ flexDirection: 'row', gap: 4 }}>
+        <View style={lg ? GLASS_LIST.navGroup : { flexDirection: 'row', gap: 4 }}>
           {onRefresh ? (
             <IconChip icon={RefreshCw} onPress={onRefresh} accessibilityLabel="Refresh" minTap />
           ) : null}
@@ -1062,6 +1094,8 @@ function FilterChip({
   onRemove: (key: BookReportFilterKey) => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS capsule, the selection fill when set.
+  const lg = useGlass();
   const Icon =
     chip.opens === 'charter' ? Building2 : chip.opens === 'dates' ? CalendarDays : SlidersHorizontal;
   const set = chip.remove !== null;
@@ -1071,6 +1105,7 @@ function FilterChip({
       style={[
         styles.chip,
         { borderColor: set ? c.ink3 : c.hair2, backgroundColor: set ? c.card : c.sunk },
+        lg && glassFilterChip(lg, set),
       ]}
     >
       <Pressable

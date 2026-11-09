@@ -14,7 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
-import { printClassic } from './__fixtures__/classic-projection';
+import { classicFlat, flatNorm, printClassic } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -768,11 +768,16 @@ describe.each(REVIEWS)('$name review', (r) => {
   });
 
   it('reserves what its pinned footer really takes, and marks the footer with a hairline', () => {
-    expect(code).toContain('paddingBottom: footerReservation(footerHeight, 170),');
+    // Classic, read through the classic projection: unchanged.
+    const classic = classicFlat(sourceOf(r.file), r.file);
+    expect(classic).toContain(flatNorm('paddingBottom: footerReservation(footerHeight, 170),'));
     expect(code).toContain('onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}');
-    expect(code).toContain(
-      'style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}',
+    expect(classic).toContain(
+      flatNorm('style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}'),
     );
+    // Liquid Glass: the floating bar, its material first, the scroll clear of its lift.
+    expect(code).toMatch(/lg && GLASS_FOOT_BAR,\s*\]\}\s*>\s*\{lg \? <GlassFootBackdrop \/> : null\}/);
+    expect(code).toMatch(/\? footerReservation\(footerHeight, 170\) \+ 8\s*:/);
     expect(styleBlock(sourceOf(r.file), 'footer')).toMatch(/borderTopWidth: 1,/);
   });
 

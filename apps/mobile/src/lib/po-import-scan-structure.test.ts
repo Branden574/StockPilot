@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { actionsForStatus } from './po-import-approve';
 import { FONT, RADIUS, SPACE, TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
@@ -312,11 +313,17 @@ describe('the import review keeps its gates, actions and words', () => {
   // approve note made taller; or a footer in the home indicator's strip.
   it('the parsed lines scroll clear of the footer however tall it grows, and it clears the home indicator', () => {
     expect(code).toContain("import { footerReservation } from '@/lib/dynamic-type-layout';");
-    expect(code).toContain(
-      'paddingBottom: footerReservation(actions.length > 0 ? footerHeight : null, 160),',
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(REVIEW), REVIEW)).toContain(
+      flatNorm('paddingBottom: footerReservation(actions.length > 0 ? footerHeight : null, 160),'),
     );
     expect(code).toContain('onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}');
     expect(code).toContain('paddingBottom: Math.max(28, insets.bottom),');
+    // Liquid Glass: the floating bar's lift added, its material first in it.
+    expect(code).toContain(
+      'paddingBottom: lg ? footerReservation(actions.length > 0 ? footerHeight : null, 160) + GLASS_ACTION_BAR_LIFT : footerReservation(actions.length > 0 ? footerHeight : null, 160),',
+    );
+    expect(code).toContain('lg && GLASS_ACTION_BAR, ]} > {lg ? <GlassFootBackdrop /> : null}');
     expect(code).toContain('const insets = useSafeAreaInsets();');
   });
 

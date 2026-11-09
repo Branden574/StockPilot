@@ -421,9 +421,14 @@ describe('Book Order Totals screens: the per-mode palette', () => {
 
   it('the search box is the reference toolbar search: the card fill, the control border, a muted icon and placeholder', () => {
     const list = flatCode(BOT_LIST);
-    expect(list).toContain(
-      '<View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}> <Search size={16} color={c.ink3} strokeWidth={1.4} />',
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(BOT_LIST), BOT_LIST)).toContain(
+      flatNorm(
+        '<View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}> <Search size={16} color={c.ink3} strokeWidth={1.4}/>',
+      ),
     );
+    // Liquid Glass: the iOS search field.
+    expect(list).toContain('lg && glassSearchBox(lg), ]} > <Search size={16} color={c.ink3} strokeWidth={1.4} />');
     expect(list).toContain('placeholder="Title, SKU or ISBN" placeholderTextColor={c.ink3}');
   });
 

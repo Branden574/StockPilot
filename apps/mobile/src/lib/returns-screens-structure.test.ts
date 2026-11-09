@@ -619,11 +619,14 @@ describe('the action sheet', () => {
   });
 
   it('the reason boxes are on the shared Field recipe with the muted placeholder', () => {
+    // Classic, read through the classic projection: unchanged.
     expect(
-      code.match(
-        /style=\{\[styles\.input, \{ borderColor: c\.hair2, backgroundColor: c\.card, color: c\.ink/g,
+      classicFlat(sourceOf(SHEET), SHEET).match(
+        /style=\{\[styles\.input,\{borderColor: c\.hair2,backgroundColor: c\.card,color: c\.ink/g,
       ),
     ).toHaveLength(2);
+    // Liquid Glass: each a glass field.
+    expect(code.match(/lg && glassTypedBox\(lg\), \]\}/g)).toHaveLength(2);
     expect(code.match(/placeholderTextColor=\{c\.ink3\}/g)).toHaveLength(2);
     expect(code).toContain(
       '<Mono size={11} color={reasonCount > reasonMax ? c.critText : c.ink3}>',
@@ -685,9 +688,16 @@ describe('the release sheet, the replacement picker and its stepper', () => {
     expect(code).toContain(
       "borderColor: reason === preset ? c.ink : c.hair2, backgroundColor: reason === preset ? c.sunk : 'transparent', minHeight: MIN_TAP,",
     );
-    expect(code).toContain(
-      'placeholderTextColor={c.ink3} accessibilityLabel={RETURNS_COPY.releaseEarlyReasonLabel} style={[ styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }, ]}',
+    expect(classicFlat(sourceOf(RELEASE), RELEASE)).toContain(
+      flatNorm(
+        'placeholderTextColor={c.ink3} accessibilityLabel={RETURNS_COPY.releaseEarlyReasonLabel} style={[ styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }, ]}',
+      ),
     );
+    // Liquid Glass: the reason box a glass field, the chosen preset on the selection fill with its ink edge.
+    expect(code).toContain(
+      '{ borderColor: c.hair2, backgroundColor: c.card, color: c.ink }, lg && glassTypedBox(lg), ]}',
+    );
+    expect(code).toContain('lg && glassOptionRow(lg, reason === preset),');
     expect(code).toContain(
       '<Mono size={11} color={count > RETURN_RELEASE_REASON_MAX ? c.critText : c.ink3}>',
     );

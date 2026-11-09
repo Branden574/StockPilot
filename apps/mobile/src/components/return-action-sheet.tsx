@@ -43,6 +43,10 @@ import { ReplacementQuantityStepper } from '@/components/replacement-quantity-st
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { glassTypedBox } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND, toggleTone } from '@/components/ui/tones';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import {
@@ -212,6 +216,9 @@ function SheetContent({
   onDone: (done: ReturnSheetDone) => void;
 }) {
   const { c, mode: themeMode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [wb, setWb] = React.useState(initialWorkbench);
   const [choices, setChoices] = React.useState<Record<string, RestockChoice>>(() => initialChoices(initialWorkbench));
   const [itemIsHere, setItemIsHere] = React.useState(initialWorkbench.createdOnCounter);
@@ -558,13 +565,19 @@ function SheetContent({
           onAccessibilityTap={requestClose}
           accessibilityRole="button"
           accessibilityLabel="Close"
-          style={[StyleSheet.absoluteFill, { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' }]}
+          style={[StyleSheet.absoluteFill, { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' }, lg && glassScrim(lg)]}
         />
         <View
           onStartShouldSetResponder={kb.claimTapOutside}
           onResponderRelease={kb.onTapOutside}
-          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+          style={[
+            styles.sheet,
+            { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight },
+            lg && GLASS_SHEET_CARD,
+          ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Body
               size={16}
@@ -874,7 +887,11 @@ function SheetContent({
                   }
                   placeholderTextColor={c.ink3}
                   accessibilityLabel={reasonFieldLabel(mode, ex.hasApprovedExchange)}
-                  style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
+                  style={[
+                    styles.input,
+                    { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                    lg && glassTypedBox(lg),
+                  ]}
                 />
                 <Mono size={11} color={reasonCount > reasonMax ? c.critText : c.ink3}>
                   {`${reasonCount.toLocaleString('en-US')} / ${reasonMax.toLocaleString('en-US')}`}
@@ -971,6 +988,8 @@ function ExchangeReview({
   onHeading: (id: string, node: View | null) => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the reason box as a glass field.
+  const lg = useGlass();
   const ex = exchangeOf(wb);
   // A photo on the white photo ground in both modes; none, a recessed
   // square in its place (DESIGN-SPEC 6.14).
@@ -1150,7 +1169,11 @@ function ExchangeReview({
             placeholderTextColor={c.ink3}
             accessibilityLabel={v.kind === 'decline' ? RETURNS_COPY.declineReasonLabel : RETURNS_COPY.replacementReasonLabel}
             accessibilityHint={RETURNS_COPY.replacementReasonHelp}
-            style={[styles.input, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink, minHeight: 64 }]}
+            style={[
+              styles.input,
+              { borderColor: c.hair2, backgroundColor: c.card, color: c.ink, minHeight: 64 },
+              lg && glassTypedBox(lg),
+            ]}
           />
         ) : null}
       </View>

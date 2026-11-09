@@ -271,16 +271,19 @@ export const GLASS_RECORD_BODY: ViewStyle = { paddingHorizontal: OPS_SIDE, paddi
 export const GLASS_RECORD_PAD: ViewStyle = { paddingHorizontal: OPS_SIDE };
 
 /** A multi-line text box Classic draws by hand: the glass field (field fill, the 3:1 input line, radius 12) in the system face. */
-export const glassTextArea = cached(
-  (lg): TextStyle => ({ ...glassFieldBox(lg, false), ...glassFieldInput(lg) }),
-);
+export const glassTextArea = cached((lg): TextStyle => ({
+  ...glassFieldBox(lg, false),
+  ...glassFieldInput(lg),
+}));
 /** A read-only copy box keeps its mono words; only its frame is the glass field. */
 export const glassCopyBox = cached((lg): ViewStyle => glassFieldBox(lg, false));
 
 /** A typed box Classic draws by hand with its own colours: the glass field, the system face, ink words. */
-export const glassTypedBox = cached(
-  (lg): TextStyle => ({ ...glassFieldBox(lg, false), ...glassFieldInput(lg), color: lg.c.ink }),
-);
+export const glassTypedBox = cached((lg): TextStyle => ({
+  ...glassFieldBox(lg, false),
+  ...glassFieldInput(lg),
+  color: lg.c.ink,
+}));
 
 /**
  * A footer Classic pins to the screen's foot on the page colour behind a
@@ -306,16 +309,44 @@ export const GLASS_ACTION_BAR: ViewStyle = {
 export const GLASS_ACTION_BAR_LIFT = GLASS_METRICS.actionBar.bottom;
 
 /** A commit Classic draws as its own ink block: the iOS primary button (.ios-btn.primary [716-717]). */
-export const glassAccentButton = cached(
-  (lg): ViewStyle => ({
-    backgroundColor: lg.g.accent,
-    borderRadius: GLASS_METRICS.button.radius,
-    minHeight: GLASS_METRICS.button.minHeight,
-    paddingVertical: GLASS_METRICS.button.paddingVertical,
-    justifyContent: 'center',
-  }),
-);
+export const glassAccentButton = cached((lg): ViewStyle => ({
+  backgroundColor: lg.g.accent,
+  borderRadius: GLASS_METRICS.button.radius,
+  minHeight: GLASS_METRICS.button.minHeight,
+  paddingVertical: GLASS_METRICS.button.paddingVertical,
+  justifyContent: 'center',
+}));
 /** Its words: 17/600 on the accent (--on-accent). */
-export const glassAccentLabel = cached(
-  (lg): TextStyle => ({ ...lg.font.displaySemi, fontSize: 17, letterSpacing: 0, color: lg.g.onAccent }),
-);
+export const glassAccentLabel = cached((lg): TextStyle => ({
+  ...lg.font.displaySemi,
+  fontSize: 17,
+  letterSpacing: 0,
+  color: lg.g.onAccent,
+}));
+
+/**
+ * A filter chip that holds two buttons (its body opens a sheet, an X removes
+ * a set filter), as Book Order Totals draws them: the iOS capsule at the
+ * chip's own 44pt frame, the selection fill when the filter is set so set
+ * and unset differ by more than the X.
+ */
+export function glassFilterChip(lg: GlassLook, set: boolean): ViewStyle {
+  return {
+    borderWidth: 0,
+    borderRadius: 22,
+    backgroundColor: set ? lg.g.selFill : lg.ios.fill,
+  };
+}
+
+/**
+ * A choice row in a sheet (a member, a preset reason): the iOS fill, the
+ * selection fill when chosen, and Classic's ink edge kept on the chosen one
+ * so the choice never rests on a colour alone.
+ */
+export function glassOptionRow(lg: GlassLook, selected: boolean): ViewStyle {
+  return {
+    borderRadius: 12,
+    borderColor: selected ? lg.c.ink : 'transparent',
+    backgroundColor: selected ? lg.g.selFill : lg.ios.fill,
+  };
+}
