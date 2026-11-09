@@ -42,6 +42,8 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'app/po/[id].tsx': 'ae76a1de33a4ed14e77b401349006835bb401d9c8f8c77f036f384a989496e74',
   'src/components/biometric-optin-sheet.tsx':
     '2a1823f24f727ab701e3f4383bd35b5be640ee2076cb8f683d8ea2dcb902b30e',
+  'src/components/data-list-screen.tsx':
+    '63de1a324372f8bb67d3d9e8bf097c5cafa83e976fcb5bd51337b13f7d892058',
   'src/components/digital-pick.tsx':
     'dddd6f275d2176dcd34675cd1aa2b3caac84d241718575451e5af72502eab656',
   'src/components/filter-sheet.tsx':

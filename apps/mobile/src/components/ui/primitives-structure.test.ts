@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { classicFlat, flatNorm, printClassic } from '../../lib/__fixtures__/classic-projection';
 import {
   attr,
   attrText,
@@ -377,14 +378,201 @@ describe('DataListScreen measures its head and rows again at a new text size', (
     const { sf: listSf, els: lists } = elements(file, (el, s) => tagOf(el, s) === 'FlatList');
     expect(lists).toHaveLength(1);
     expect(attrText(lists[0]!, 'key', listSf)).toBe('`list-${scaleKey}`');
-    const { sf, els: heads } = elements(
-      file,
-      (el, s) => attrText(el, 'style', s) === 'styles.head',
-    );
+    // Classic's shape, read off the frame's Classic projection (every Liquid
+    // Glass branch folded to Classic: lib/__fixtures__/classic-projection.ts).
+    const classic = parseTsx(printClassic(readSource(at(file)), file), file);
+    const classicWith = (style: string) => {
+      const out: JsxNode[] = [];
+      walkJsx(classic, (el) => {
+        if (attrText(el, 'style', classic) === style) out.push(el);
+      });
+      return out;
+    };
+    const heads = classicWith('styles.head');
     expect(heads).toHaveLength(1);
-    expect(attrText(heads[0]!, 'key', sf)).toBe('`head-${scaleKey}`');
-    const { els: bars } = elements(file, (el, s) => attrText(el, 'style', s) === 'styles.topbar');
+    expect(attrText(heads[0]!, 'key', classic)).toBe('`head-${scaleKey}`');
+    const bars = classicWith('styles.topbar');
     expect(bars).toHaveLength(1);
-    expect(attrText(bars[0]!, 'key', sf)).toBeUndefined();
+    expect(attrText(bars[0]!, 'key', classic)).toBeUndefined();
+    // Liquid Glass draws the same two elements in its own frames: the head
+    // keyed the same, the nav not keyed (the tour in `trailing` keeps its state).
+    const { sf, els: glassHeads } = elements(
+      file,
+      (el, s) => attrText(el, 'style', s) === 'lg ? GLASS_LIST.head : styles.head',
+    );
+    expect(glassHeads).toHaveLength(1);
+    expect(attrText(glassHeads[0]!, 'key', sf)).toBe('`head-${scaleKey}`');
+    const { els: navs } = elements(
+      file,
+      (el, s) => attrText(el, 'style', s) === 'lg ? GLASS_LIST.nav : styles.topbar',
+    );
+    expect(navs).toHaveLength(1);
+    expect(attrText(navs[0]!, 'key', sf)).toBeUndefined();
+  });
+});
+
+/**
+ * THE LIST FRAME IN LIQUID GLASS (stage 4, an inferred extension of the iOS
+ * list boards: iOS-Lookup, iPad-Compact's Orders list, iOS-Home's title
+ * block). Classic is proved unchanged by the frame's Classic projection pin
+ * (lib/appearance/glass-classic-pins.test.ts); these pin what Liquid Glass
+ * draws instead, and that every control and state Classic has is drawn in
+ * Liquid Glass too, outside any glass branch.
+ */
+describe('DataListScreen in Liquid Glass', () => {
+  const file = 'src/components/data-list-screen.tsx';
+  const src = readSource(at(file));
+  const sf = source(file);
+  // Code text in one spelling on both sides (lib/__fixtures__/classic-projection.ts).
+  const code = flatNorm(src.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/^\s*\/\/.*$/gm, ''));
+  const classicCode = classicFlat(src, file);
+
+  /** True when the node is drawn only in one look: inside a branch on `lg`. */
+  function inGlassBranch(node: ts.Node): boolean {
+    const isLg = (e: ts.Expression) => {
+      let s = e;
+      while (ts.isParenthesizedExpression(s)) s = s.expression;
+      if (ts.isPrefixUnaryExpression(s)) s = s.operand;
+      while (ts.isParenthesizedExpression(s)) s = s.expression;
+      return ts.isIdentifier(s) && s.text === 'lg';
+    };
+    for (let up: ts.Node | undefined = node.parent; up; up = up.parent) {
+      if (ts.isConditionalExpression(up) && isLg(up.condition) && up.condition !== node)
+        return true;
+      if (
+        ts.isBinaryExpression(up) &&
+        up.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken &&
+        isLg(up.left)
+      )
+        return true;
+    }
+    return false;
+  }
+
+  /** The head (the View the eyebrow, the title and the header controls sit in), normalised. */
+  function head(): string {
+    const { sf: s, els } = elements(
+      file,
+      (el, t) => attrText(el, 'style', t) === 'lg ? GLASS_LIST.head : styles.head',
+    );
+    expect(els).toHaveLength(1);
+    return flatNorm(els[0]!.getText(s));
+  }
+
+  /** How many times the code holds this text, both in one spelling. */
+  const count = (text: string) => code.split(flatNorm(text)).length - 1;
+
+  // Mutation caught: Back, Menu, the trailing control, the header controls or
+  // an empty or failed action drawn in one look only.
+  it('every control Classic draws is drawn in Liquid Glass too, in no branch of its own', () => {
+    const controls: [string, (el: JsxNode) => boolean][] = [
+      ['Back', (el) => attrText(el, 'accessibilityLabel', sf) === 'Back'],
+      ['Open menu', (el) => attrText(el, 'accessibilityLabel', sf) === 'Open menu'],
+      ['the list', (el) => tagOf(el, sf) === 'FlatList'],
+      ['the refresh control', (el) => tagOf(el, sf) === 'RefreshControl'],
+      ['the spinner', (el) => tagOf(el, sf) === 'ActivityIndicator'],
+    ];
+    for (const [name, match] of controls) {
+      const found: JsxNode[] = [];
+      walkJsx(sf, (el) => {
+        if (match(el)) found.push(el);
+      });
+      expect(found, name).toHaveLength(1);
+      expect(inGlassBranch(found[0]!), name).toBe(false);
+    }
+    // The slots a screen fills: drawn in both looks, never in a glass branch.
+    for (const slot of ['trailing', 'header', 'failed.action', 'emptyAction']) {
+      const uses: ts.Node[] = [];
+      const visit = (n: ts.Node) => {
+        if (ts.isJsxExpression(n) && n.expression?.getText(sf) === slot) uses.push(n);
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      expect(uses.length, slot).toBeGreaterThan(0);
+      for (const use of uses) expect(inGlassBranch(use), slot).toBe(false);
+    }
+  });
+
+  it('the scene behind the frame, the page and the safe area clear over it', () => {
+    expect(
+      count(
+        "<View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>{lg ? <SceneBackground /> : null}",
+      ),
+    ).toBe(1);
+    expect(
+      count(
+        "<SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>",
+      ),
+    ).toBe(1);
+    expect(count('<View style={lg ? GLASS_LIST.navGroup : styles.chips}>')).toBe(1);
+  });
+
+  // The iOS boards draw no line over a large title: a title's meta line is
+  // under it (iOS-Home). Mutation caught: the eyebrow drawn over the title in
+  // Liquid Glass, or its words dropped.
+  it('the eyebrow’s words are the line under the large title, never over it', () => {
+    const h = head();
+    const pos = (text: string) => h.indexOf(flatNorm(text));
+    const eyebrow = pos('{lg ? null : <Eyebrow>{eyebrow}</Eyebrow>}');
+    const title = pos('<Display');
+    const titleEnd = pos('</Display>');
+    const sub = pos('{lg ? <GlassSubline style={GLASS_LIST.sub}>{eyebrow}</GlassSubline> : null}');
+    const header = pos('{header ?');
+    expect(eyebrow).toBeGreaterThan(-1);
+    expect(eyebrow).toBeLessThan(title);
+    expect(sub).toBeGreaterThan(titleEnd);
+    expect(header).toBeGreaterThan(sub);
+    expect(h.split('{eyebrow}').length - 1).toBe(2);
+    // Classic keeps its eyebrow over the title and draws no line under it.
+    expect(classicCode).toContain(flatNorm('<Eyebrow>{eyebrow}</Eyebrow> <Display size={34}'));
+    expect(classicCode).not.toContain('GlassSubline');
+  });
+
+  it('the large title is one plain line and a header, in the board’s frame', () => {
+    const h = head();
+    expect(h).toContain(
+      flatNorm(
+        "<Display size={34} style={lg ? GLASS_LIST.title : { marginTop: 12 }} accessibilityRole={lg ? 'header' : undefined}>",
+      ),
+    );
+    expect(h).toContain(flatNorm('{lg ? (glassListTitle(title, italic)) : italic ? ('));
+  });
+
+  // iOS-Lookup draws its empty line inside the group. Mutation caught: a panel
+  // left bare on the scene, or the two panels drawn apart.
+  it('the empty, failed and offline panels sit on the grouped surface, at the board’s rhythm', () => {
+    expect(count('style={lg ? [glassCardStyle(lg), GLASS_LIST.empty] : styles.empty}')).toBe(2);
+    expect(count('style={{ marginBottom: lg ? GLASS_LIST_PANEL.gap : 12 }}')).toBe(2);
+    for (const glyph of ['WifiOff', 'TriangleAlert', 'EmptyIcon']) {
+      expect(count(`<${glyph} size={lg ? GLASS_LIST_PANEL.glyph : 32}`), glyph).toBe(1);
+    }
+    expect(count('strokeWidth={lg ? GLASS_LIST_PANEL.strokeWidth : 1.3}')).toBe(3);
+    expect(count('color={lg ? c.ink3 : c.ink4}')).toBe(1);
+    expect(
+      count(
+        "style={{ marginTop: lg ? GLASS_LIST_PANEL.gap : 6, textAlign: 'center', maxWidth: 320 }}",
+      ),
+    ).toBe(2);
+  });
+
+  it('the note over rows a failed read left is said on the warning wash', () => {
+    expect(
+      count(
+        '<View style={lg ? [GLASS_LIST.reloadNote, { backgroundColor: c.warnWash }] : styles.reloadNote}>',
+      ),
+    ).toBe(1);
+    expect(
+      count(
+        '<Body size={lg ? 14 : 13} color={c.warnText} accessibilityRole="alert">{reloadNote}</Body>',
+      ),
+    ).toBe(1);
+  });
+
+  it('the rows: the scroll’s 16pt edges and the tab bar’s room, in both looks', () => {
+    expect(
+      count(
+        'contentContainerStyle={[lg ? GLASS_LIST.list : styles.list, tabBarInset > 0 && { paddingBottom: 24 + tabBarInset }]}',
+      ),
+    ).toBe(1);
   });
 });

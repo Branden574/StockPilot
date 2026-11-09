@@ -435,12 +435,17 @@ describe('Movements: the ledger is one surface of hairline rows (M-SG-08)', () =
   });
 
   // The rows meet only while LIST_GAP is the gap DataListScreen sets between
-  // a list's rows. Mutation caught: either number changed alone (rows drawn
-  // over each other, or apart again with open edges).
+  // a list's rows, in Classic and in Liquid Glass (the frame's glass list,
+  // components/ui/glass/screens/list.tsx). Mutation caught: any of the
+  // numbers changed alone (rows drawn over each other, or apart again with
+  // open edges).
   it("the rows meet: each but the last takes back DataListScreen's list gap", () => {
     expect(code).toContain('const LIST_GAP = 10;');
     const shared = 'src/components/data-list-screen.tsx';
     expect(styleBlockOf(sourceOf(shared), 'list', shared)).toMatch(/\bgap: 10,/);
+    const glass = 'src/components/ui/glass/screens/list.tsx';
+    expect(styleBlockOf(sourceOf(glass), 'list', glass)).toMatch(/\bgap: 10\b/);
+    expect(sourceOf(shared)).toContain('lg ? GLASS_LIST.list : styles.list,');
   });
 });
 
