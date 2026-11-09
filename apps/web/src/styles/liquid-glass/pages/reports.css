@@ -15,13 +15,13 @@
      ink 2, 36 px fields on the field frost), the figures as three cards
      (.kpis, the figure 34/40), and from 1101 px the board's .cols-side: the
      books table beside a 300 to 360 px side column holding the by-charter
-     card (or, with one charter chosen, the scope card as the board's "What
-     these totals cover"); the table card with the 38 px band and 72 px
-     rows, the covers 52 px tall (two thirds wide, 3/5/5/3 radius, the paper
-     shadow), the copies figure at 16/22 600, the View orders button 30 px.
-     The DOM order is Classic's (the side column comes before the table in
-     reading order, as an aside does), so keyboard and screen-reader order
-     are unchanged.
+     card and under it the scope card (alone, with one charter chosen, the
+     board's "What these totals cover"); the table card with the 38 px band
+     and 72 px rows, the covers 52 px tall (two thirds wide, 3/5/5/3 radius,
+     the paper shadow), the copies figure at 16/22 600, the View orders
+     button 30 px. The DOM order is Classic's (both side cards come before
+     the table, so the side column is read first, top to bottom, then the
+     table), so keyboard and screen-reader order are unchanged.
 
    Every rule is scoped to :root[data-appearance="liquid-glass"] inside
    @media screen and to the page's root (data-glass-page="insights" with its
@@ -405,7 +405,11 @@
     :root[data-appearance='liquid-glass']
       [data-glass-page='insights'][data-glass-view='book-order-totals']
       [data-glass-role='bot-filters']
-      :is(select, input:not([type='checkbox']):not([type='radio']), button[aria-haspopup]):focus-visible {
+      :is(
+        select,
+        input:not([type='checkbox']):not([type='radio']),
+        button[aria-haspopup]
+      ):focus-visible {
       border-color: var(--lg-accent);
       box-shadow: 0 0 0 3px var(--lg-focus-halo);
       outline: none;
@@ -650,17 +654,24 @@
       font-size: 13px;
     }
 
-    /* .cols-side from 1101 px (sp.css:291-292): the table, its pager and
-       the grand total in the main column; the by-charter card beside them;
-       the scope card under them, or, with no by-charter card (one charter
-       chosen), in the side column as the board's "What these totals cover". */
+    /* .cols-side from 1101 px (sp.css:291-292): the books table, its pager
+       and the grand total in the main column; the side column beside the
+       table holds the by-charter card (the board's "Books ordered by
+       charter") and under it the scope card, which alone (one charter
+       chosen, no by-charter card) is the board's "What these totals cover".
+       Both side cards come before the table in Classic's DOM, so the reading
+       and keyboard order is the side column top to bottom, then the main
+       column top to bottom (WCAG 2.4.3: the DOM order is kept, plan 4.6).
+       The table spans rows 3 to 5; row 5 is the flexible one, so the table's
+       extra height goes there and the two side cards keep their own heights
+       at the top of the side column. */
     @media (min-width: 1101px) {
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing]) {
         display: grid;
         grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
-        grid-template-rows: auto auto auto auto 1fr auto;
+        grid-template-rows: auto auto auto auto 1fr auto auto;
         gap: 16px;
         align-items: start;
       }
@@ -673,50 +684,57 @@
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing])
-        > :is([data-showing], [data-glass-role='bot-kpis']) {
+        > [data-showing] {
+        grid-row: 1;
+        grid-column: 1 / -1;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        div:has(> [data-showing])
+        > [data-glass-role='bot-kpis'] {
+        grid-row: 2;
         grid-column: 1 / -1;
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing])
         > :is([data-glass-role='bot-table'], [data-glass='state-panel']) {
-        grid-row: 3;
+        grid-row: 3 / span 3;
         grid-column: 1;
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing])
         > [data-glass-role='bot-pager'] {
-        grid-row: 4;
+        grid-row: 6;
         grid-column: 1;
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing])
         > [data-glass-role='bot-total'] {
-        grid-row: 5;
+        grid-row: 7;
         grid-column: 1;
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing])
         > [data-by-charter] {
-        grid-row: 3 / span 3;
+        grid-row: 3;
         grid-column: 2;
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
         div:has(> [data-showing])
         > [data-glass-role='bot-scope'] {
-        grid-row: 3 / span 3;
+        grid-row: 4;
         grid-column: 2;
       }
       :root[data-appearance='liquid-glass']
         [data-glass-page='insights'][data-glass-view='book-order-totals']
-        div:has(> [data-by-charter])
+        div:has(> [data-showing]):not(:has(> [data-by-charter]))
         > [data-glass-role='bot-scope'] {
-        grid-row: 6;
-        grid-column: 1 / -1;
+        grid-row: 3;
       }
     }
 
