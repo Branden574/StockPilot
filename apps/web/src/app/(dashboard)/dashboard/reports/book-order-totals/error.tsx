@@ -36,7 +36,13 @@ export default function BookOrderTotalsError({
   }, [error]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    // data-glass and data-glass-width: inert hooks for Liquid Glass
+    // (styles/liquid-glass/states.css: the report's box and the error state).
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass="state-page"
+      data-glass-width="wide"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title={BOOK_REPORT_TITLE}

@@ -1,0 +1,35 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div aria-hidden="true" data-aria-hidden="true">
+  <button aria-controls="radix-«id2»" aria-expanded="true" aria-haspopup="menu" class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-card border border-[var(--ed-line-strong)] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-8 hover:bg-muted inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-3 relative rounded-md text-[13px] text-foreground transition-colors whitespace-nowrap" data-radix-popper-align="end" data-radix-popper-side="bottom" data-state="open" id="radix-«id1»" type="button">
+    <svg aria-hidden="true" class="h-4 lucide lucide-file-text w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z">
+      <path d="M14 2v5a1 1 0 0 0 1 1h5">
+      <path d="M10 9H8">
+      <path d="M16 13H8">
+      <path d="M16 17H8">
+    " PDF"
+    <svg aria-hidden="true" class="!size-3.5 -mr-0.5 lucide lucide-chevron-down text-muted-foreground" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="m6 9 6 6 6-6">
+<div data-radix-popper-content-wrapper="" dir="ltr" style="position: fixed; left: 0px; top: 0px; transform: translate(0px, 6px); min-width: max-content; --radix-popper-available-width: 0px; --radix-popper-available-height: -6px; --radix-popper-anchor-width: 0px; --radix-popper-anchor-height: 0px; --radix-popper-transform-origin: 100% 0px;">
+  <div aria-labelledby="radix-«id1»" aria-orientation="vertical" class="bg-popover border border-[var(--ed-line-strong)] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 focus-visible:ring-0 focus-visible:ring-offset-0 min-w-[10rem] overflow-hidden p-1 rounded-lg shadow-md text-popover-foreground w-64 z-50" data-align="end" data-orientation="vertical" data-radix-menu-content="" data-side="bottom" data-state="open" dir="ltr" id="radix-«id2»" role="menu" style="--radix-dropdown-menu-content-transform-origin: var(--radix-popper-transform-origin); --radix-dropdown-menu-content-available-width: var(--radix-popper-available-width); --radix-dropdown-menu-content-available-height: var(--radix-popper-available-height); --radix-dropdown-menu-trigger-width: var(--radix-popper-anchor-width); --radix-dropdown-menu-trigger-height: var(--radix-popper-anchor-height); pointer-events: auto; outline-color: none; outline-style: none; outline-width: initial;" tabindex="-1">
+    <div class="font-normal leading-[18px] px-2 py-1.5 text-[12px] text-muted-foreground tracking-[0.06em] uppercase">
+      "Covers for the first 500 books; every row and total is included."
+    <a class="cursor-pointer cursor-pointer data-[disabled]:opacity-50 data-[disabled]:pointer-events-none flex focus:bg-muted focus:text-foreground gap-2 items-center outline-none px-2 py-1.5 relative rounded-sm select-none text-[13px] transition-colors" data-orientation="vertical" data-radix-collection-item="" href="/api/v1/reports/book-order-totals/export?format=pdf&warehouse=all" rel="noopener noreferrer" role="menuitem" tabindex="-1" target="_blank">
+      <svg aria-hidden="true" class="h-4 lucide lucide-image mr-2 text-ink-2 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+        <rect height="18" rx="2" ry="2" width="18" x="3" y="3">
+        <circle cx="9" cy="9" r="2">
+        <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21">
+      <span class="flex-1">
+        "PDF with covers"
+    <a class="cursor-pointer cursor-pointer data-[disabled]:opacity-50 data-[disabled]:pointer-events-none flex focus:bg-muted focus:text-foreground gap-2 items-center outline-none px-2 py-1.5 relative rounded-sm select-none text-[13px] transition-colors" data-orientation="vertical" data-radix-collection-item="" href="/api/v1/reports/book-order-totals/export?format=pdf&warehouse=all&photos=0" rel="noopener noreferrer" role="menuitem" tabindex="-1" target="_blank">
+      <svg aria-hidden="true" class="h-4 lucide lucide-file-x-2 lucide-file-x-corner mr-2 self-start text-ink-2 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M11 22H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v5">
+        <path d="M14 2v5a1 1 0 0 0 1 1h5">
+        <path d="m15 17 5 5">
+        <path d="m20 17-5 5">
+      <div class="flex-1">
+        <div>
+          "PDF without covers"
+        <div class="text-[11.5px] text-muted-foreground">
+          "Faster · smaller file"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

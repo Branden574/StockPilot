@@ -83,10 +83,19 @@ function cardPosition(rect: Rect | null, placement?: 'top' | 'bottom'): React.CS
  * (`button[aria-label^="Hide "]`) used to spotlight the top bar's "Hide
  * sidebar" instead of the editor's eye toggles. A selector that matches only
  * outside the page (`#dashboard-sidebar …`) still finds its one match.
+ *
+ * A drawn match comes first: Liquid Glass can hold two twins of a target in
+ * the page, one of them hidden (display:none: a glass-only element in
+ * Classic, or the Classic part it replaces in glass, such as the Reports
+ * hub's tiles), and a hidden match has no box to spotlight. An element that
+ * renders no box has no client rects. Where no match is drawn (a test DOM
+ * has no layout), the first match as before.
  */
-function findTarget(selector: string): Element | null {
-  const all = document.querySelectorAll(selector);
-  return Array.from(all).find((el) => el.closest('main') !== null) ?? all[0] ?? null;
+export function findTarget(selector: string): Element | null {
+  const all = Array.from(document.querySelectorAll(selector));
+  const first = (list: Element[]) =>
+    list.find((el) => el.closest('main') !== null) ?? list[0] ?? null;
+  return first(all.filter((el) => el.getClientRects().length > 0)) ?? first(all);
 }
 
 /**

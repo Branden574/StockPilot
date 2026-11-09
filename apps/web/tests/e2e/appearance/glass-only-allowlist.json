@@ -251,6 +251,16 @@
       "$comment": "Cycle-Count-Detail.dc.html's note at the end of the lines toolbar (.xs.muted.ml-a.desk): \"Expected is the system quantity when the line was counted.\", the short form of the Expected column's help, which stays. Words only, between the search and the views in the DOM (pages/counts.css draws it last, not on a phone). Not rendered under off.",
       "classicTwin": null,
       "gate": null
+    },
+    {
+      "id": "reports-hub-glass",
+      "source": "apps/web/src/components/reports/reports-hub-glass.tsx",
+      "selector": "[data-glass=\"reports-hub\"]",
+      "kind": "duplicate action",
+      "routes": ["/dashboard/reports"],
+      "$comment": "Reports.dc.html's grouped hub: the Book Order Totals feature tile, then Inventory, Purchasing & cost, Bundles and Lots. One link per report in the page's own module-filtered list, with the name, the description and the target of the Classic tile it stands for; Classic's tiles carry data-classic-only and are hidden in glass, so each report is one link in either design. The eyebrow, the chips and the cover fan are aria-hidden decoration.",
+      "classicTwin": "the Classic tile of the same report (data-classic-only, hidden in glass), same name, description and href",
+      "gate": "the page's report list, filtered by reportModules(slug) on the modules enabled for the organization"
     }
   ]
 }

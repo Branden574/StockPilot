@@ -29,7 +29,7 @@ import '@/components/orders/public-v2/public-orders.css';
  */
 export default function PublicOrderRequestLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="bg-background text-foreground min-h-screen">
+    <div className="bg-background text-foreground min-h-screen" data-glass-page="links">
       {/* Open the TLS connection to the book-cover CDN before the catalog
           markup references it, so covers (shipped in the initial payload)
           start downloading a round-trip sooner. Next hoists these into

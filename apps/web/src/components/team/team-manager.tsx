@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader } from '@/components/patterns/page-header';
+import { avatarHue } from '@/components/team/avatar-hue';
 import { CategoryAccessCard } from '@/components/team/category-access-card';
 import { RoleBadge } from '@/components/team/role-badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -419,11 +420,13 @@ function MemberRow({
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-3">
-          <Avatar className="h-8 w-8">
+          <Avatar className="h-8 w-8" data-glass-role="member-avatar">
             {member.avatarUrl && (
               <AvatarImage src={member.avatarUrl} alt={member.fullName ?? member.email} />
             )}
-            <AvatarFallback>{initials}</AvatarFallback>
+            <AvatarFallback data-glass-role="member-initials" data-glass-hue={avatarHue(member.id)}>
+              {initials}
+            </AvatarFallback>
           </Avatar>
           <div className="min-w-0">
             <p className="text-foreground truncate font-medium">

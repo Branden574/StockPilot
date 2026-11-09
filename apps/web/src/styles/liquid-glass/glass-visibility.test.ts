@@ -74,12 +74,15 @@ describe('glass-only and classic-only elements', () => {
   // words from the lines); a cycle count's status beside its title (the card
   // head's badge, which glass hides while the copy is drawn) and the board's
   // note on Expected in its lines toolbar (words only).
+  // Stage 4, insights lane: the Reports hub's grouped tiles (the same links
+  // as Classic's flat list, marked Classic-only in the page).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
       ...Array<string>(2).fill('app/(auth)/layout.tsx'),
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       ...Array<string>(2).fill('app/(dashboard)/dashboard/purchase-orders/[id]/page.tsx'),
+      'app/(dashboard)/dashboard/reports/page.tsx',
       'components/auth/external-shell.tsx',
       ...Array<string>(4).fill('components/cycle-counts/count-glass-summary.tsx'),
       'components/dashboard/sidebar.tsx',
@@ -88,6 +91,7 @@ describe('glass-only and classic-only elements', () => {
       'components/orders/order-requester-note-aside.tsx',
       ...Array<string>(6).fill('components/orders/orders-export-menu.tsx'),
       ...Array<string>(9).fill('components/po/po-receiving-glass.tsx'),
+      'components/reports/reports-hub-glass.tsx',
       'components/returns/return-progress-rail.tsx',
     ]);
   });

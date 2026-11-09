@@ -43,7 +43,12 @@ export default function GlobalError({
   // A full-screen state (this boundary sits outside every shell): the page
   // colour, a 28px Inter Tight heading, the explanation in ink-3, one action.
   return (
-    <div className="bg-background flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center">
+    // data-glass: an inert hook for Liquid Glass (styles/liquid-glass/
+    // states.css: the board's status card on the scene).
+    <div
+      className="bg-background flex min-h-screen flex-col items-center justify-center gap-3 px-6 text-center"
+      data-glass="state-screen"
+    >
       <h1 className="font-display text-[28px] font-medium leading-tight tracking-[-0.025em]">
         Something went wrong
       </h1>

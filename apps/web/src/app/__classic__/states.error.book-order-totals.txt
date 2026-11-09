@@ -1,0 +1,32 @@
+<div class="flex flex-col gap-5 max-w-[1320px] mx-auto pb-16 pt-6 px-4 sm:pt-7 sm:px-8 w-full">
+  <div class="flex flex-col min-w-0" data-slot="page-header">
+    <div class="mb-2">
+      <a class="gap-1 hover:text-foreground inline-flex items-center text-[13px] text-muted-foreground transition-colors" href="/dashboard/reports">
+        "← Back to reports"
+    <div class="flex flex-wrap gap-4 items-end justify-between min-w-0">
+      <div class="max-w-full min-w-0">
+        <div class="min-w-0">
+          <div class="flex flex-wrap gap-x-3 gap-y-1 items-center min-w-0">
+            <h1 class="[font-family:var(--font-display)] [overflow-wrap:anywhere] font-medium leading-[1.5] min-w-0 text-[28px] text-foreground tracking-[-0.025em]">
+              "Book Order Totals"
+  <div class="bg-card border border-border flex flex-col gap-3 items-center justify-center min-h-[320px] min-w-0 px-6 py-14 rounded-lg text-center w-full" data-slot="state-panel" data-state-kind="failed" role="alert">
+    <div aria-hidden="true" class="bg-destructive-wash flex items-center justify-center rounded-full size-11 text-destructive" data-slot="state-panel-icon">
+      <svg aria-hidden="true" class="h-5 lucide lucide-alert-triangle lucide-triangle-alert w-5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+        <path d="M12 9v4">
+        <path d="M12 17h.01">
+    <p class="font-medium leading-5 max-w-md text-[14px] text-foreground">
+      "Couldn't load Book Order Totals. Try again."
+    <div class="leading-[20.25px] max-w-md text-[13.5px] text-muted-foreground">
+      <span class="font-mono text-[11px]">
+        "Error id: "
+        "digest-1"
+    <div class="flex flex-wrap gap-2 items-center justify-center mt-2">
+      <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-card border border-[var(--ed-line-strong)] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-muted inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] text-foreground transition-colors whitespace-nowrap" type="button">
+        <svg aria-hidden="true" class="lucide lucide-refresh-cw" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8">
+          <path d="M21 3v5h-5">
+          <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16">
+          <path d="M8 16H3v5">
+        ␣
+        "Try again"

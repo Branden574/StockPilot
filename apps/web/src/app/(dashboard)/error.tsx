@@ -59,8 +59,13 @@ export default function DashboardError({
   }, [error]);
 
   return (
-    <div className="flex justify-center px-4 py-16 sm:px-8 sm:py-24">
-      <div className="border-border bg-card w-full max-w-md rounded-lg border p-6">
+    // data-glass and data-glass-role: inert hooks for Liquid Glass
+    // (styles/liquid-glass/states.css: the error card in the pane).
+    <div className="flex justify-center px-4 py-16 sm:px-8 sm:py-24" data-glass="error-frame">
+      <div
+        className="border-border bg-card w-full max-w-md rounded-lg border p-6"
+        data-glass-role="error-card"
+      >
         <div className="flex items-start gap-3">
           <AlertTriangle
             className="text-destructive mt-0.5 size-5 shrink-0"
@@ -76,12 +81,18 @@ export default function DashboardError({
               back in.
             </p>
             {error.digest && (
-              <p className="text-muted-foreground mt-2 font-mono text-[11.5px]">
+              <p
+                className="text-muted-foreground mt-2 font-mono text-[11.5px]"
+                data-glass-role="error-digest"
+              >
                 Error id: {error.digest}
               </p>
             )}
             {error.message && (
-              <p className="text-muted-foreground bg-sunk border-border mt-2 break-words rounded-md border p-2 font-mono text-[11.5px]">
+              <p
+                className="text-muted-foreground bg-sunk border-border mt-2 break-words rounded-md border p-2 font-mono text-[11.5px]"
+                data-glass-role="error-message"
+              >
                 {error.message}
               </p>
             )}

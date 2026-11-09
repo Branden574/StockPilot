@@ -267,6 +267,71 @@ describe('styles/liquid-glass scope guard', () => {
       expect(within('pages/returns.css', ['returns'])).toBe(true);
     });
 
+    it('the insights pages import the shared frame, and the report boards only their own pages', () => {
+      const DASH = join(APP, '(dashboard)', 'dashboard');
+      const lane = [
+        'ai',
+        'audit',
+        'help',
+        'insights',
+        'notifications',
+        'reports',
+        'support',
+        'team',
+        'whats-new',
+        'zendesk',
+      ];
+      const pages = lane
+        .flatMap((d) => routeFiles(join(DASH, d)))
+        .map((f) => relative(APP, f))
+        .filter((f) => /(^|\/)page\.tsx$/.test(f))
+        .sort();
+      expect(importers.get('pages/insights.css')?.sort()).toEqual(pages);
+      // Each of them draws the root the shared frame is scoped to.
+      for (const page of pages) {
+        expect(readFileSync(join(APP, page), 'utf8'), page).toMatch(/data-glass-page="insights"/u);
+      }
+      expect(importers.get('pages/reports.css')?.sort()).toEqual([
+        '(dashboard)/dashboard/reports/book-order-totals/page.tsx',
+        '(dashboard)/dashboard/reports/page.tsx',
+      ]);
+    });
+
+    it('the pages people open from a link import pages/links.css, and each draws its root', () => {
+      // Stage 4, insights lane: the token pages and the portal. A page that
+      // draws the whole external frame names the root on it
+      // (ExternalShell glassPage="links"); the signature page's layout
+      // draws its frame, and the /r layout draws the root its pages'
+      // columns sit in.
+      const links = [
+        'm/[token]/page.tsx',
+        'orders/sign/[token]/page.tsx',
+        'p/items/[id]/page.tsx',
+        'portal/page.tsx',
+        'r/[token]/page.tsx',
+        'r/confirm/page.tsx',
+        'r/track/page.tsx',
+        'returns/request/[token]/page.tsx',
+      ];
+      expect(importers.get('pages/links.css')?.sort()).toEqual(links);
+      const rootOf: Record<string, string> = {
+        'orders/sign/[token]/page.tsx': 'orders/sign/[token]/layout.tsx',
+        'r/[token]/page.tsx': 'r/layout.tsx',
+        'r/confirm/page.tsx': 'r/layout.tsx',
+        'r/track/page.tsx': 'r/layout.tsx',
+      };
+      for (const page of links) {
+        const source = readFileSync(join(APP, rootOf[page] ?? page), 'utf8');
+        expect(source, page).toMatch(/glassPage="links"|data-glass-page="links"/u);
+        // Every external frame the page itself draws names the root.
+        if (!rootOf[page]) {
+          const frames = source.match(/<ExternalShell\b[^>]*>/gu) ?? [];
+          expect(frames.length, page).toBeGreaterThan(0);
+          for (const frame of frames) expect(frame, page).toContain('glassPage="links"');
+        }
+      }
+    });
+
     for (const { file, text } of PAGES) {
       it(`${file}: every selector is scoped to a [data-glass-page] root`, () => {
         const root = parse(text, file);
