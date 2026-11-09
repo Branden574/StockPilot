@@ -57,7 +57,8 @@ export default function SettingsError({
   }, [error, digest, pathname]);
 
   return (
-    <SettingsPage>
+    // The hub draws no settings frame, so its error carries the page root itself.
+    <SettingsPage data-glass-page={onHub ? 'settings' : undefined}>
       <PageHeader
         title={entry?.title ?? 'Settings'}
         back={

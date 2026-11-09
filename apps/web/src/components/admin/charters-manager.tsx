@@ -452,7 +452,7 @@ function CharterDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
-        <DialogHeader>
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>
             {editing ? `Edit ${termSingular.toLowerCase()}` : `New ${termSingular.toLowerCase()}`}
           </DialogTitle>
@@ -460,7 +460,7 @@ function CharterDialog({
             {termSingular}s group warehouses by region, division, or business unit.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4" noValidate>
+        <form data-glass="dialog-form" onSubmit={onSubmit} className="space-y-4" noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="charter-name">Name</Label>
             <Input
@@ -579,7 +579,7 @@ function CharterDialog({
             </Label>
             <Textarea id="charter-notes" rows={2} {...register('notes', { maxLength: 2000 })} />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"

@@ -565,7 +565,7 @@ export function SettingsFrame({
   const pathname = usePathname();
   if (pathname === SETTINGS_HUB_HREF) return <>{children}</>;
   return (
-    <div data-slot="settings-frame" className="xl:flex xl:items-start">
+    <div data-slot="settings-frame" data-glass-page="settings" className="xl:flex xl:items-start">
       <div className="px-4 pt-6 sm:px-8 sm:pt-7 xl:sticky xl:top-0 xl:max-h-[calc(100dvh-56px)] xl:w-[248px] xl:shrink-0 xl:overflow-y-auto xl:pb-8 xl:pr-0">
         {nav}
       </div>
@@ -587,13 +587,17 @@ export function SettingsPage({
   width = 'form',
   className,
   children,
+  'data-glass-page': glassPage,
 }: {
   width?: 'form' | 'wide';
   className?: string;
   children: React.ReactNode;
+  /** Liquid Glass's inert page root, on a page drawn outside the settings frame (the hub's error). */
+  'data-glass-page'?: string;
 }) {
   return (
     <div
+      data-glass-page={glassPage}
       data-slot="settings-page"
       className={cn(
         'flex w-full min-w-0 flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7',
@@ -652,6 +656,8 @@ export function SettingsPanel({
   return (
     <section
       data-slot="settings-panel"
+      data-glass-variant={flush ? 'flush' : 'form'}
+      data-glass-tone={tone}
       aria-labelledby={landmark ? headingId : undefined}
       className={cn(
         'bg-card text-card-foreground min-w-0 rounded-lg border',
@@ -659,7 +665,10 @@ export function SettingsPanel({
         className,
       )}
     >
-      <div className="border-border flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b px-[18px] py-3.5">
+      <div
+        data-glass="settings-panel-head"
+        className="border-border flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b px-[18px] py-3.5"
+      >
         <div className="min-w-0 flex-1">
           <h2
             id={headingId}
@@ -679,7 +688,12 @@ export function SettingsPanel({
         {aside}
       </div>
       {children != null ? (
-        <div className={cn(flush ? null : 'p-[18px]', bodyClassName)}>{children}</div>
+        <div
+          data-glass="settings-panel-body"
+          className={cn(flush ? null : 'p-[18px]', bodyClassName)}
+        >
+          {children}
+        </div>
       ) : null}
     </section>
   );

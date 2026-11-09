@@ -82,6 +82,7 @@ export const RadioGroup = React.forwardRef<HTMLDivElement, RadioGroupProps>(func
       <div
         {...props}
         data-glass="radio-group"
+        data-glass-variant={variant}
         ref={ref}
         role="radiogroup"
         aria-disabled={disabled || undefined}
