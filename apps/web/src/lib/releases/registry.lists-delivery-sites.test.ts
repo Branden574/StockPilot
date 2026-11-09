@@ -130,14 +130,15 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft at 0, a draft, the two newer releases at 1 and 2, ID at 3 and the export fixes release at 4): the two newer releases and ID each move up one place, the update-ready-and-fixes release takes 3, and the export fixes release stays at 4.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[7]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe(RETRIES_ID);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[8]?.id).toBe(AUTH_CODE_ID);
     expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe(ID);
+    expect(RELEASES[9]?.id).toBe(RETRIES_ID);
     expect(RELEASES[9]?.status).toBe('published');
-    expect(RELEASES[10]?.id).toBe('update-ready-and-fixes-2026-11');
-    expect(RELEASES[11]?.id).toBe('export-fixes-2026-10');
+    expect(RELEASES[10]?.id).toBe(ID);
+    expect(RELEASES[10]?.status).toBe('published');
+    expect(RELEASES[11]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[12]?.id).toBe('export-fixes-2026-10');
     expect(
       // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: slice(0, 3)): the web fixes and archived charters releases are published later, at the top.
       // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: slice(2, 5)): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.

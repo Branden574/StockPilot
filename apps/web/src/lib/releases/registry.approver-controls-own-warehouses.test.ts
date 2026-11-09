@@ -136,15 +136,19 @@ const LOAD_UPDATE =
   'tap Restart now when the app says Update ready, or close the app completely and open it again.';
 
 describe('the S2 release: order, status and date', () => {
-  it('is published once, as revision 1, at the top, above the Export items release, and no draft is left', () => {
+  // Renamed by lg/s5-flag-home (2026-11-09; was: "is published once, as revision 1, at the top, above the Export items release, and no draft is left"): the Liquid Glass release is held as a draft at the top until G5. Claim kept: no other draft is left.
+  it('is published once, as revision 1, directly below the Liquid Glass draft at the top, above the Export items release, and no draft but the Liquid Glass release is left', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(RELEASES[1]?.id).toBe(EXPORT_ID);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES[2]?.id).toBe(EXPORT_ID);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
     // Permanent, unused anywhere else, and ends in the month it went out.
     expect(ID).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*-2026-11$/);
     expect(RELEASES.flatMap((r) => r.entries).filter((e) => e.id === ENTRY_ID)).toHaveLength(1);
@@ -159,7 +163,8 @@ describe('the S2 release: order, status and date', () => {
     // 2026-11-03; the phone update was published at 07:35Z on 2026-11-05.
     expect(at).toBeGreaterThan(Date.parse('2026-11-03T01:47:00Z'));
     expect(at).toBeGreaterThan(Date.parse('2026-11-05T07:35:00Z'));
-    for (const r of RELEASES.slice(1)) {
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    for (const r of RELEASES.slice(2)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

@@ -191,10 +191,13 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       expect(byId(id).withdrawnNote, id).toBeUndefined();
     }
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES.slice(1, 6).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES.slice(2, 7).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(S2_ID);
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
   });
 
   it('are dated in the past on a whole minute, each after its change went live, and after every release below', () => {
@@ -214,7 +217,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     expect(at(QW1_ID)).toBeGreaterThan(Date.parse('2026-11-02T22:28:58Z'));
     for (let i = 0; i < NEW_IDS.length; i += 1) {
       // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-      for (const r of RELEASES.slice(i + 2)) {
+      // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one.
+      for (const r of RELEASES.slice(i + 3)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
