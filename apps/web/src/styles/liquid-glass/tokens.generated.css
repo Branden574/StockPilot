@@ -100,7 +100,8 @@
     --lg-warn-fill: #E09B1A;
     --lg-warn-line: #EDC77A;
     --lg-warn-wash: #FCF0D9;
-    --lg-scene-img: var(--lg-scene-photo, none);
+    --lg-scene-img: var(--lg-scene-photo-day, none);
+    --lg-scene-img-night: var(--lg-scene-photo-night, none);
     /* semantic triplets: always opaque (no alpha inside a triplet) */
     --background: 90 7.7% 94.9%;
     --foreground: 150 11.1% 7.1%;
@@ -251,7 +252,8 @@
     --lg-warn-fill: #E5A43A;
     --lg-warn-line: rgba(243,190,90,.35);
     --lg-warn-wash: rgba(243,190,90,.13);
-    --lg-scene-img: var(--lg-scene-photo, none);
+    --lg-scene-img: var(--lg-scene-photo-night, none);
+    --lg-scene-img-night: var(--lg-scene-photo-night, none);
     /* semantic triplets: always opaque (no alpha inside a triplet) */
     --background: 150 6.7% 5.9%;
     --foreground: 140 12% 95.1%;
@@ -420,6 +422,7 @@
       --lg-warn-line: #EDC77A;
       --lg-warn-wash: #FCF0D9;
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       /* semantic triplets: always opaque (no alpha inside a triplet) */
       --background: 90 7.7% 94.9%;
       --foreground: 150 11.1% 7.1%;
@@ -571,6 +574,7 @@
       --lg-warn-line: rgba(243,190,90,.35);
       --lg-warn-wash: rgba(243,190,90,.13);
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       /* semantic triplets: always opaque (no alpha inside a triplet) */
       --background: 150 6.7% 5.9%;
       --foreground: 140 12% 95.1%;
@@ -724,6 +728,7 @@
       --lg-warn-line: #EDC77A;
       --lg-warn-wash: #FCF0D9;
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       /* semantic triplets: always opaque (no alpha inside a triplet) */
       --background: 90 7.7% 94.9%;
       --foreground: 150 11.1% 7.1%;
@@ -875,6 +880,7 @@
       --lg-warn-line: rgba(243,190,90,.35);
       --lg-warn-wash: rgba(243,190,90,.13);
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       /* semantic triplets: always opaque (no alpha inside a triplet) */
       --background: 150 6.7% 5.9%;
       --foreground: 140 12% 95.1%;
@@ -1030,6 +1036,7 @@
     --lg-warn-line: #EDC77A;
     --lg-warn-wash: #FCF0D9;
     --lg-scene-img: none;
+    --lg-scene-img-night: none;
     /* semantic triplets: always opaque (no alpha inside a triplet) */
     --background: 90 7.7% 94.9%;
     --foreground: 150 11.1% 7.1%;
@@ -1181,6 +1188,7 @@
     --lg-warn-line: rgba(243,190,90,.35);
     --lg-warn-wash: rgba(243,190,90,.13);
     --lg-scene-img: none;
+    --lg-scene-img-night: none;
     /* semantic triplets: always opaque (no alpha inside a triplet) */
     --background: 150 6.7% 5.9%;
     --foreground: 140 12% 95.1%;
@@ -1336,6 +1344,7 @@
       --lg-warn-line: #EDC77A;
       --lg-warn-wash: #FCF0D9;
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       /* semantic triplets: always opaque (no alpha inside a triplet) */
       --background: 90 7.7% 94.9%;
       --foreground: 150 11.1% 7.1%;
@@ -1488,6 +1497,7 @@
       --lg-warn-line: rgba(243,190,90,.35);
       --lg-warn-wash: rgba(243,190,90,.13);
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       /* semantic triplets: always opaque (no alpha inside a triplet) */
       --background: 150 6.7% 5.9%;
       --foreground: 140 12% 95.1%;
@@ -1561,6 +1571,7 @@
       --lg-glass-blur: 0px;
       --lg-pane-blur: none;
       --lg-scene-img: none;
+      --lg-scene-img-night: none;
       --lg-scene-veil: none;
     }
   }

@@ -7,7 +7,7 @@ import tailwindcss from '@tailwindcss/postcss';
 import postcss, { type Rule } from 'postcss';
 import { describe, expect, it } from 'vitest';
 
-import { SCENE_OUTPUTS } from '../../../../../scripts/liquid-glass/install-scene.mjs';
+import { SCENE_OUTPUTS, readManifest } from '../../../../../scripts/liquid-glass/install-scene.mjs';
 
 import {
   GLASS_ROOT,
@@ -36,8 +36,14 @@ import {
  * @media screen (the print rule: @media print; the classic hide rule: by
  * text), or when a rule selects [data-glass...] without the glass root. And
  * the scene illustration's files are named only where scene.css names them:
- * by --lg-scene-photo on the Day and Night glass roots, inside @layer lg and
- * @media screen, with the URLs the browser fetches left as written.
+ * by --lg-scene-photo-day and --lg-scene-photo-night on the glass root once
+ * .light or .dark is set, inside the type() test, @media screen and @layer
+ * lg, with the URLs the browser fetches (each with its version) left as
+ * written. An engine that cannot parse type() inside image-set() (Safari up
+ * to 16.x, Chrome and Edge up to 112, inside Next's default targets) must
+ * never meet an image-set() with type(): a custom property keeps any value,
+ * so every background substituting it would turn invalid at computed-value
+ * time and lose its fill colours as well as the picture.
  */
 
 const WEB = join(__dirname, '..', '..', '..');
@@ -66,15 +72,31 @@ function glassLeaks(css: string): string[] {
   return out;
 }
 
-/** The scene files the glass stylesheet names, as the browser fetches them, by scheme. */
+/**
+ * The scene files the glass stylesheet names, as the browser fetches them, by
+ * scheme: the public path, then ?v= and the first 12 hex digits of the
+ * file's pinned SHA-256 (scripts/liquid-glass/scene-files.sha256).
+ */
+const MANIFEST = readManifest();
 const SCENE_URLS = Object.fromEntries(
   (['light', 'dark'] as const).map((scheme) => [
     scheme,
     SCENE_OUTPUTS.filter((o) => o.app === 'web' && o.scheme === scheme)
-      .map((o) => `/${o.path.split('/').slice(3).join('/')}`)
+      .map((o) => {
+        const path = o.path.split('\\').join('/');
+        return `/${path.split('/').slice(3).join('/')}?v=${MANIFEST.get(path)!.slice(0, 12)}`;
+      })
       .sort(),
   ]),
 ) as Record<'light' | 'dark', string[]>;
+
+/** Quotes dropped and the spaces a minifier removes, so source and minified output compare. */
+const squash = (text: string) =>
+  text
+    .replace(/["']/gu, '')
+    .replace(/\s+/gu, ' ')
+    .replace(/\s*([:,])\s*/gu, '$1')
+    .trim();
 
 /**
  * Every rule of a compiled stylesheet that names a scene file, as
@@ -91,9 +113,9 @@ function sceneNames(css: string): string[] {
     const rule = decl.parent as Rule;
     out.push(
       [
-        rule.selector.replace(/["']/gu, ''),
+        squash(rule.selector),
         decl.prop,
-        enclosing(rule).join(' < '),
+        enclosing(rule).map(squash).join(' < '),
         [...urls].sort().join(' '),
       ].join(' | '),
     );
@@ -101,11 +123,51 @@ function sceneNames(css: string): string[] {
   return out;
 }
 
-/** What sceneNames must give: the Day and Night declarations of scene.css, nothing else. */
+/** The at-rule that keeps an image-set() with type() from an engine that cannot parse it. */
+const TYPE_SUPPORT = squash(
+  "@supports (background-image: image-set(url('data:,') 1x type('image/png')))",
+);
+
+/** What sceneNames must give: the two pictures of scene.css, in one rule, nothing else. */
 const SCENE_NAMES = [
-  `:root[data-appearance=liquid-glass] | --lg-scene-photo | @media screen < @layer lg | ${SCENE_URLS.light.join(' ')}`,
-  `:root[data-appearance=liquid-glass].dark | --lg-scene-photo | @media screen < @layer lg | ${SCENE_URLS.dark.join(' ')}`,
+  `:root[data-appearance=liquid-glass]:is(.light,.dark) | --lg-scene-photo-day | ${TYPE_SUPPORT} < @media screen < @layer lg | ${SCENE_URLS.light.join(' ')}`,
+  `:root[data-appearance=liquid-glass]:is(.light,.dark) | --lg-scene-photo-night | ${TYPE_SUPPORT} < @media screen < @layer lg | ${SCENE_URLS.dark.join(' ')}`,
 ];
+
+/** True when a value holds an image-set() (prefixed or not) with a type() option, which old engines cannot parse. */
+const IMAGE_SET_WITH_TYPE = /image-set\([\s\S]*\btype\(/u;
+
+/**
+ * Every declaration that an engine without type() support inside image-set()
+ * would meet: an image-set() with type() whose rule is not inside a positive
+ * @supports test of exactly that.
+ */
+function unguardedImageSets(css: string): string[] {
+  const out: string[] = [];
+  postcss.parse(css).walkDecls((decl) => {
+    if (!IMAGE_SET_WITH_TYPE.test(decl.value)) return;
+    const rule = decl.parent as Rule;
+    const guarded = enclosing(rule).some(
+      (a) =>
+        a.startsWith('@supports ') && IMAGE_SET_WITH_TYPE.test(a) && !/^@supports\s+not\b/u.test(a),
+    );
+    if (!guarded) out.push(`${squash(rule.selector)} | ${decl.prop}`);
+  });
+  return out;
+}
+
+/**
+ * The stylesheet as an engine without type() support inside image-set() reads
+ * it (Safari up to 16.x, Chrome and Edge up to 112): every @supports test of
+ * an image-set() with type() is false there, so its rules are gone.
+ */
+function asOldEngine(css: string): string {
+  const root = postcss.parse(css);
+  root.walkAtRules('supports', (at) => {
+    if (IMAGE_SET_WITH_TYPE.test(at.params) && !/^not\b/u.test(at.params.trim())) at.remove();
+  });
+  return root.toString();
+}
 
 async function compileGlobals(): Promise<string> {
   const input = readFileSync(GLOBALS, 'utf8').replace(
@@ -184,7 +246,7 @@ describe('compiled CSS guard', () => {
     expect(glassLeaks(css)).toEqual([]);
   });
 
-  it('names the scene files only in --lg-scene-photo on the Day and Night glass roots, as Tailwind builds globals.css and as the production minifiers leave it', async () => {
+  it('names the scene files only in the two pictures of scene.css, inside the type() test, as Tailwind builds globals.css and as the production minifiers leave it', async () => {
     expect(SCENE_URLS.light).toHaveLength(5);
     expect(SCENE_URLS.dark).toHaveLength(5);
     expect(sceneNames(await compileGlobals())).toEqual(SCENE_NAMES);
@@ -199,6 +261,53 @@ describe('compiled CSS guard', () => {
     // The check can fail: a scene file named by a classic rule, or by a glass rule outside scene.css.
     expect(sceneNames(`.hero{background:url(/liquid-glass/scene-light-1x.avif)}`)).toEqual([
       '.hero | background |  | /liquid-glass/scene-light-1x.avif',
+    ]);
+  });
+
+  it('an engine that cannot parse type() inside image-set() meets no image-set() with type(), and so names no scene file, as Tailwind builds globals.css and as the production minifiers leave it', async () => {
+    const compiled = await compileGlobals();
+    const minified = await minifiedForProduction(
+      GLOBALS,
+      readFileSync(GLOBALS, 'utf8').replace(
+        "@import 'tailwindcss';",
+        "@import 'tailwindcss' source(none);",
+      ),
+    );
+    for (const css of [compiled, minified]) {
+      expect(unguardedImageSets(css)).toEqual([]);
+      expect(sceneNames(css)).toEqual(SCENE_NAMES);
+      // That engine reads the stylesheet without the type() test's rules:
+      // neither picture is declared, so both fall back to none and every
+      // background that draws the scene keeps its fills.
+      const old = asOldEngine(css);
+      expect(sceneNames(old)).toEqual([]);
+      expect(old).not.toMatch(/--lg-scene-photo-(day|night)\s*:/u);
+      expect(old).toContain('--lg-scene-img');
+    }
+    // The checks can fail: the same declaration outside the test, or under a
+    // test an old engine passes (a negated one, or one without type()).
+    const R = ':root[data-appearance=liquid-glass]:is(.light,.dark)';
+    const set = "image-set(url('/liquid-glass/scene-light-1x.avif?v=0') 1x type('image/avif'))";
+    expect(unguardedImageSets(`@media screen{${R}{--lg-scene-photo-day:${set}}}`)).toEqual([
+      `${R} | --lg-scene-photo-day`,
+    ]);
+    expect(
+      unguardedImageSets(
+        `@supports not (background-image:image-set(url('data:,') 1x type('image/png'))){${R}{--lg-scene-photo-day:${set}}}`,
+      ),
+    ).toEqual([`${R} | --lg-scene-photo-day`]);
+    expect(
+      unguardedImageSets(
+        `@supports (background-image:image-set(url('data:,') 1x)){${R}{--x:${set}}}`,
+      ),
+    ).toEqual([`${R} | --x`]);
+    expect(
+      unguardedImageSets(
+        `@supports (background-image:image-set(url('data:,') 1x type('image/png'))){${R}{--lg-scene-photo-day:${set}}}`,
+      ),
+    ).toEqual([]);
+    expect(sceneNames(asOldEngine(`@media screen{${R}{--lg-scene-photo-day:${set}}}`))).toEqual([
+      `${R} | --lg-scene-photo-day | @media screen | /liquid-glass/scene-light-1x.avif?v=0`,
     ]);
   });
 
@@ -254,12 +363,15 @@ describe('compiled CSS guard', () => {
     ];
     expect(sheets.length).toBeGreaterThanOrEqual(4);
     const leaks: string[] = [];
+    const unguarded: string[] = [];
     for (const [from, input] of sheets) {
       const css = await minifiedForProduction(from, input);
       expect(css, from).toContain('data-appearance=liquid-glass');
       leaks.push(...glassLeaks(css).map((l) => `${from}: ${l}`));
+      unguarded.push(...unguardedImageSets(css).map((l) => `${from}: ${l}`));
     }
     expect(leaks).toEqual([]);
+    expect(unguarded).toEqual([]);
   });
 
   const built = NEXT_CSS_DIRS.flatMap((dir) =>
@@ -287,6 +399,16 @@ describe('compiled CSS guard', () => {
       const names = built.flatMap((f) => sceneNames(readFileSync(f, 'utf8')));
       expect(names.length).toBeGreaterThanOrEqual(SCENE_NAMES.length);
       expect([...new Set(names)].sort()).toEqual([...SCENE_NAMES].sort());
+    },
+  );
+  it.runIf(built.length > 0)(
+    'next build left no image-set() with type() where an engine without type() support meets it',
+    () => {
+      for (const f of built) {
+        const css = readFileSync(f, 'utf8');
+        expect(unguardedImageSets(css), f).toEqual([]);
+        expect(sceneNames(asOldEngine(css)), f).toEqual([]);
+      }
     },
   );
 });

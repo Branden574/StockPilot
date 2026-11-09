@@ -28,8 +28,11 @@
  *
  * What it writes (SCENE_OUTPUTS, imported by the tests so there is one list
  * of names):
- *   web, apps/web/public/liquid-glass/ (named only by the image-set() in
- *   apps/web/src/styles/liquid-glass/scene.css; never preloaded):
+ *   web, apps/web/public/liquid-glass/ (named only by the two image-set()s in
+ *   apps/web/src/styles/liquid-glass/scene.css, never preloaded; each address
+ *   ends in ?v= and the first 12 hex digits of the file's SHA-256 in
+ *   SCENE_MANIFEST, so the files are served as immutable, and
+ *   scene-photo.test.ts fails until a rewritten file's new version is there):
  *     scene-<scheme>.jpg         the original, byte for byte (the JPEG fallback)
  *     scene-<scheme>-1x.avif     1200x750
  *     scene-<scheme>-1x.webp     1200x750

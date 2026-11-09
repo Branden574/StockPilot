@@ -78,6 +78,7 @@ describe('the reduced material under data-lg-material="reduced" (R7)', () => {
       if (!selectorsOf(rule).some((s) => s.startsWith(REDUCED_ROOT))) return;
       seen += 1;
       expect(decls(rule)).toContain('--lg-scene-img: none');
+      expect(decls(rule)).toContain('--lg-scene-img-night: none');
     });
     expect(seen).toBe(2);
   });

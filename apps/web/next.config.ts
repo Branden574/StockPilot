@@ -359,6 +359,17 @@ const nextConfig: NextConfig = {
         source: '/email/:path+',
         headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }],
       },
+      {
+        // The Liquid Glass scene illustrations (public/liquid-glass). The glass
+        // stylesheet (styles/liquid-glass/scene.css) names each one with
+        // ?v= and the start of the SHA-256 the scene manifest pins, and a test
+        // ties the two together, so a changed file is a new address. Without
+        // this rule a public file is served with `public, max-age=0`, and every
+        // hard load of a glass page waits a round trip to revalidate the scene
+        // before it can draw it.
+        source: '/liquid-glass/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
+      },
     ];
   },
 };

@@ -14,6 +14,7 @@ import {
   parseColour,
   readSource,
   SCENE_IMAGE,
+  SCENE_IMAGE_NIGHT,
 } from '../../../scripts/liquid-glass/gen-tokens.mjs';
 
 import { enclosing, glassSourceFiles } from './glass-css';
@@ -41,7 +42,7 @@ const VARIANT_SELECTOR =
 
 describe('tokens.generated.css', () => {
   it('is what the generator makes from tokens.source.json (never edited by hand)', () => {
-    // The scene files never enter it: scene.css names them in --lg-scene-photo.
+    // The scene files never enter it: scene.css names them in --lg-scene-photo-day and -night.
     expect(GENERATED).toBe(generateTokensCss(readSource()));
   });
 
@@ -116,31 +117,47 @@ describe('tokens.generated.css', () => {
       for (const m of text.matchAll(/(--lg-[\w-]+)\s*:/g)) defined.add(m[1]!);
       for (const m of text.matchAll(/var\((--lg-[\w-]+)/g)) used.add(m[1]!);
     }
-    // --lg-scene-photo among them: scene.css declares it (scene-photo.test.ts).
-    expect(defined.has('--lg-scene-photo')).toBe(true);
+    // The two pictures among them: scene.css declares them (scene-photo.test.ts).
+    expect(defined.has('--lg-scene-photo-day')).toBe(true);
+    expect(defined.has('--lg-scene-photo-night')).toBe(true);
     expect([...used].filter((t) => !defined.has(t))).toEqual([]);
   });
 
-  it('draws the scene photo only in the glass material, and only through --lg-scene-photo with a none fallback', () => {
-    expect(SCENE_IMAGE).toBe('var(--lg-scene-photo, none)');
-    const values = new Map<string, string[]>();
-    TREE.walkDecls('--lg-scene-img', (d) => {
-      const rule = d.parent as Rule;
-      // Inside @layer lg and @media screen only: a top-level block; inside
-      // another media or supports query: an OS-setting (opaque) block.
-      const where = enclosing(rule).length > 2 ? 'opaque' : 'top';
-      values.set(where, [...(values.get(where) ?? []), `${rule.selector} => ${d.value}`]);
+  it('draws the scene only in the glass material: Day the day picture, Night the night one, and the night picture for the landing’s band in both, each with a none fallback; every opaque material none', () => {
+    expect(SCENE_IMAGE).toEqual({
+      light: 'var(--lg-scene-photo-day, none)',
+      dark: 'var(--lg-scene-photo-night, none)',
     });
-    const glass = (values.get('top') ?? []).filter((v) => !v.includes('data-lg-material'));
-    expect(glass).toEqual([
-      ':root[data-appearance="liquid-glass"] => var(--lg-scene-photo, none)',
-      ':root[data-appearance="liquid-glass"].dark => var(--lg-scene-photo, none)',
-    ]);
-    for (const v of [
-      ...(values.get('opaque') ?? []),
-      ...(values.get('top') ?? []).filter((x) => x.includes('data-lg-material')),
-    ]) {
-      expect(v).toMatch(/=> none$/u);
+    expect(SCENE_IMAGE_NIGHT).toBe('var(--lg-scene-photo-night, none)');
+    for (const prop of ['--lg-scene-img', '--lg-scene-img-night']) {
+      const values = new Map<string, string[]>();
+      TREE.walkDecls(prop, (d) => {
+        const rule = d.parent as Rule;
+        // Inside @layer lg and @media screen only: a top-level block; inside
+        // another media or supports query: an OS-setting (opaque) block.
+        const where = enclosing(rule).length > 2 ? 'opaque' : 'top';
+        values.set(where, [...(values.get(where) ?? []), `${rule.selector} => ${d.value}`]);
+      });
+      const glass = (values.get('top') ?? []).filter((v) => !v.includes('data-lg-material'));
+      expect(glass, prop).toEqual(
+        prop === '--lg-scene-img'
+          ? [
+              ':root[data-appearance="liquid-glass"] => var(--lg-scene-photo-day, none)',
+              ':root[data-appearance="liquid-glass"].dark => var(--lg-scene-photo-night, none)',
+            ]
+          : [
+              ':root[data-appearance="liquid-glass"] => var(--lg-scene-photo-night, none)',
+              ':root[data-appearance="liquid-glass"].dark => var(--lg-scene-photo-night, none)',
+            ],
+      );
+      const opaque = [
+        ...(values.get('opaque') ?? []),
+        ...(values.get('top') ?? []).filter((x) => x.includes('data-lg-material')),
+      ];
+      // Reduce Transparency, no backdrop-filter, the low-power attribute and
+      // contrast (Day and Night each) and forced colours.
+      expect(opaque, prop).toHaveLength(9);
+      for (const v of opaque) expect(v, prop).toMatch(/=> none$/u);
     }
     expect(GENERATED).not.toMatch(/url\(/u);
   });
