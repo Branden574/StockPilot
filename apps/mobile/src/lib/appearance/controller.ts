@@ -84,7 +84,7 @@ export interface AdoptionHolds {
 
 export interface AppearanceSnapshot {
   readonly state: AppearanceState;
-  /** The stored records were read (or the first-paint wait gave up on them). */
+  /** The stored records were read (or the first-paint wait gave up on them); from the start under 'off'. */
   readonly ready: boolean;
   /** The Design drawn: after the rollout, the crash fallback and a held adoption. */
   readonly style: AppearanceStyle;
@@ -161,7 +161,11 @@ export function createAppearanceController(deps: AppearanceControllerDeps): Appe
   const { storage, account, now, rollout, holds, peekSignedInUser } = deps;
   const inert = rollout === 'off';
   let state: AppearanceState = INITIAL_APPEARANCE_STATE;
-  let ready = false;
+  // Under 'off' nothing stored can change what is drawn (classic, following
+  // the device), so the first paint never waits for the read: the splash and
+  // RootGate mount at fontsReady exactly as before the appearance layer
+  // (stage 4 audit F2). The read still runs, to keep the records.
+  let ready = inert;
   let hydrated = false;
   let fallbackActive = false;
   /** Unknown until the stored flag is read: never shown before. */
