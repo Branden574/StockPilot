@@ -184,10 +184,10 @@
        palette (DESIGN-SPEC 6.17), so 2 and 3 no longer equal --warning and
        --destructive. */
     --chart-1: var(--ed-accent); /* the accent */
-    --chart-2: 38 60% 52%; /* amber */
-    --chart-3: 18 65% 47%; /* terracotta */
-    --chart-4: 95 22% 45%; /* muted olive */
-    --chart-5: 80 7% 35%; /* slate ink */
+    --chart-2: 38 60% 52%;  /* amber */
+    --chart-3: 18 65% 47%;  /* terracotta */
+    --chart-4: 95 22% 45%;  /* muted olive */
+    --chart-5: 80 7% 35%;   /* slate ink */
 
     --radius: 0.4rem;
 
@@ -256,10 +256,10 @@
     /* Chart series palette (dark) — lifted lightness so each hue reads on
        the near-black card surface. */
     --chart-1: var(--ed-accent); /* the accent */
-    --chart-2: 38 70% 62%; /* amber */
-    --chart-3: 12 70% 60%; /* terracotta */
-    --chart-4: 95 28% 58%; /* olive */
-    --chart-5: 56 12% 70%; /* light slate */
+    --chart-2: 38 70% 62%;  /* amber */
+    --chart-3: 12 70% 60%;  /* terracotta */
+    --chart-4: 95 28% 58%;  /* olive */
+    --chart-5: 56 12% 70%;  /* light slate */
   }
 }
 
@@ -332,7 +332,7 @@
   }
 
   :focus-visible {
-    @apply ring-ring ring-offset-background outline-none ring-2 ring-offset-2;
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
   }
 }
 
@@ -374,8 +374,7 @@
 
   /* Subtle warm radial used behind the scrollytelling stage */
   .bg-warm-radial {
-    background-image:
-      radial-gradient(
+    background-image: radial-gradient(
         1200px 600px at 20% 10%,
         color-mix(in oklab, hsl(var(--accent)) 6%, transparent),
         transparent 60%
@@ -515,32 +514,14 @@
    Climb phase: 0 → 80% on a fast-then-slow curve (mimics NProgress).
    Complete phase: 80% → 100% in 240ms, then the bar unmounts. */
 @keyframes nav-progress-climb {
-  0% {
-    transform: scaleX(0);
-    opacity: 0.9;
-  }
-  20% {
-    transform: scaleX(0.35);
-    opacity: 1;
-  }
-  60% {
-    transform: scaleX(0.7);
-    opacity: 1;
-  }
-  100% {
-    transform: scaleX(0.85);
-    opacity: 1;
-  }
+  0% { transform: scaleX(0); opacity: 0.9; }
+  20% { transform: scaleX(0.35); opacity: 1; }
+  60% { transform: scaleX(0.7); opacity: 1; }
+  100% { transform: scaleX(0.85); opacity: 1; }
 }
 @keyframes nav-progress-complete {
-  0% {
-    transform: scaleX(0.85);
-    opacity: 1;
-  }
-  100% {
-    transform: scaleX(1);
-    opacity: 0;
-  }
+  0% { transform: scaleX(0.85); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   .animate-\[nav-progress-climb_2\.8s_cubic-bezier\(0\.2\,0\.8\,0\.2\,1\)_forwards\],
