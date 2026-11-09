@@ -253,6 +253,16 @@ const PAIRS: Array<[string, string, string[], number]> = [
     [...CARD, '--lg-accent'],
     4.5,
   ],
+  ['radio row words (ink) on the surface', '--lg-ink', [...CARD, '--lg-surface'], 4.5],
+  [
+    'chosen radio row words (ink) on the accent wash',
+    '--lg-ink',
+    [...CARD, '--lg-accent-wash'],
+    4.5,
+  ],
+  ['chosen radio row edge (accent) on the card', '--lg-accent', CARD, 3],
+  ['radio dot edge (ink 3) on the surface', '--lg-ink-3', [...CARD, '--lg-surface'], 3],
+  ['chosen radio dot (accent) on the accent wash', '--lg-accent', [...CARD, '--lg-accent-wash'], 3],
   // The procedures list (pages/ops.css): the video count on the panel's dark
   // chip, at its weakest over a white poster frame.
   [

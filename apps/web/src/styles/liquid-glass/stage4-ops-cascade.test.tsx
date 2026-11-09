@@ -3,8 +3,9 @@ import { cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PoReceivingProgress } from '@/components/po/po-receiving-glass';
+import { RestockDestinationPicker } from '@/components/returns/restock-destination-picker';
 
-import { cascaded, specificity } from './stage4-ops-cascade';
+import { cascaded, matches, specificity, withoutTopLevelNot } from './stage4-ops-cascade';
 
 /**
  * THE CASCADE OF THE STAGE 4 OPERATIONS LANE'S GLASS RULES on real markup
@@ -105,5 +106,111 @@ describe('a purchase order (Purchase-Order.dc.html receiving card)', () => {
     expect(cascaded(received, 'font-size', FILES)?.value).toBe('28px');
     expect(cascaded(received, 'line-height', FILES)?.value).toBe('34px');
     expect(cascaded(received, 'font-weight', FILES)?.value).toBe('650');
+  });
+});
+
+describe("a return's radio rows (Return-Detail.dc.html .choice and .rb)", () => {
+  const FILES = ['pages/ops.css', 'pages/returns.css'];
+  const at = (el: Element, prop: string) => cascaded(el, prop, FILES)?.value;
+
+  function picker() {
+    const line = {
+      returnLineId: 'l1',
+      itemId: 'item-1',
+      quantity: 1,
+      disposition: 'restock',
+      applied: false,
+      plan: null,
+      case: 'single_source',
+      notRecordedReason: null,
+      sources: [
+        {
+          locationId: '00000000-0000-4000-8000-000000000031',
+          name: '31-C',
+          kind: 'rack',
+          type: 'shelf',
+          drawn: 1,
+          restored: 0,
+          remaining: 1,
+          cap: 1,
+          valid: true,
+          reason: null,
+          writable: true,
+        },
+      ],
+      offerOriginal: true,
+      offerSourceIds: [],
+      preselect: 'original',
+    } as never;
+    const view = render(
+      <div data-glass-page="ops" data-glass-view="return">
+        <RestockDestinationPicker
+          line={line}
+          choice={{ disposition: 'restock', target: 'original' } as never}
+          onChange={() => {}}
+          itemLabel="Example shirt"
+        />
+      </div>,
+    );
+    const groups = view.container.querySelectorAll("[role='radiogroup']");
+    return { disposition: groups[0]!, destination: groups[1]! };
+  }
+
+  it('draws each row as .choice: 12 px radius, the line 2 edge, the surface, no ink ring', () => {
+    const { disposition, destination } = picker();
+    for (const row of [...disposition.children, ...destination.children]) {
+      expect(at(row, 'border-radius')).toBe('12px');
+      expect(at(row, 'border-color')).toBe('var(--lg-line-2)');
+      expect(at(row, 'background-color')).toBe('var(--lg-surface)');
+      expect(at(row, 'box-shadow')).toBe('none');
+    }
+  });
+
+  it('draws each dot as .rb: 18 px, a 1.5 px edge (ink 3, for 3:1) on the surface', () => {
+    const { disposition, destination } = picker();
+    const dots = [disposition, destination].flatMap((g) => [
+      ...g.querySelectorAll("input[type='radio']"),
+    ]);
+    expect(dots.length).toBeGreaterThanOrEqual(3);
+    for (const dot of dots) {
+      expect(at(dot, 'width')).toBe('18px');
+      expect(at(dot, 'height')).toBe('18px');
+      expect(at(dot, 'border')).toBe('1.5px solid var(--lg-ink-3)');
+      expect(at(dot, 'background-color')).toBe('var(--lg-surface)');
+    }
+  });
+
+  it('leaves a radio group outside a return alone', () => {
+    const view = render(
+      <div data-glass-page="ops" data-glass-view="returns">
+        <div role="radiogroup">
+          <label>
+            <input type="radio" name="x" /> X
+          </label>
+        </div>
+      </div>,
+    );
+    const row = view.container.querySelector("[role='radiogroup'] > label")!;
+    expect(at(row, 'border-radius')).toBeUndefined();
+  });
+});
+
+describe('the matching the cascade relies on', () => {
+  it('takes the outer :not(...) out, and leaves one inside another pseudo-class', () => {
+    expect(withoutTopLevelNot(':is(div, li).a:not([data-glass])')).toBe(':is(div, li).a');
+    expect(withoutTopLevelNot('a > :not(.x) b:has(:not(.y))')).toBe('a > * b:has(:not(.y))');
+  });
+
+  it('does not let happy-dom match :is(...).class:not(...) without the class', () => {
+    const div = document.createElement('div');
+    div.className = 'bg-card rounded-md border';
+    document.body.append(div);
+    const selector = ':is(div, li).bg-card.rounded-lg.border:not([data-glass])';
+    expect(matches(div, selector)).toBe(false);
+    div.className = 'bg-card rounded-lg border';
+    expect(matches(div, selector)).toBe(true);
+    div.setAttribute('data-glass', 'card');
+    expect(matches(div, selector)).toBe(false);
+    div.remove();
   });
 });
