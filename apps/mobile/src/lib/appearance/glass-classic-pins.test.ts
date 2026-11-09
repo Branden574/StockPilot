@@ -118,6 +118,8 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '21f544d9257e4afb823fe7fb80376c32107a4f44c7763cce0ac211a023abdb61',
   'src/components/count-select-bar.tsx':
     '87b37fbb15959b696b5f3eac89e2d0ff1d56d0dd49d0802b9849a984c6777feb',
+  'src/components/onboarding/mobile-tour.tsx':
+    'a101da670e5a3d31fbff28e763e95c0bc9f0cf3cae61d716a5d43efe3abbb2f2',
 };
 
 function walk(dir: string, out: string[] = []): string[] {
