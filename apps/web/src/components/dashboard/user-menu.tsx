@@ -1,6 +1,6 @@
 'use client';
 
-import { BookOpen, LifeBuoy, LogOut, Settings, ShieldAlert, User } from 'lucide-react';
+import { BookOpen, Gift, LifeBuoy, LogOut, Settings, ShieldAlert, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
@@ -28,6 +28,7 @@ import { reset as resetAnalytics } from '@/lib/analytics';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
+import { openWhatsNew, useUpdateState } from '@/lib/updates/update-store';
 import { signOutAction } from '@/server/actions/auth';
 
 interface UserMenuProps {
@@ -43,6 +44,35 @@ interface UserMenuProps {
    */
   density?: Density;
   onDensityChange?: (density: Density) => void;
+}
+
+/**
+ * LIQUID GLASS ONLY: What's New in the account menu, for the glass phone bar
+ * (stage 3 fidelity, small lane, finding 2 round 2). At 760 px and under the
+ * glass bar leaves the top bar's What's New button out (shell.css), so its
+ * page title has the room the board gives it (Overview-Mobile); this item
+ * does what that button does (openWhatsNew, the same panel, with the same
+ * unread count in its name) and is drawn only there. Rendered only in a build
+ * that offers glass; hidden in Classic (visibility.css) and from 761 px
+ * (shell.css), where the bar's own button is on screen. No class sets its
+ * display: the wrapper is the glass-only element and the item inside it is
+ * the menu's own (8.5 allowlist entry account-menu-whats-new).
+ */
+function GlassWhatsNewItem() {
+  const { releases } = useUpdateState();
+  const unread = releases?.unreadCount ?? 0;
+  const label = unread > 0 ? `What’s new, ${unread} unread` : 'What’s new';
+  return (
+    <div data-glass-only="" data-glass="um-whats-new">
+      <DropdownMenuItem aria-label={label} onSelect={() => openWhatsNew(null, 'account-menu')}>
+        <Gift className="mr-2 h-4 w-4" aria-hidden />
+        What’s new
+        {unread > 0 ? (
+          <span aria-hidden className="bg-primary ml-auto size-1.5 shrink-0 rounded-full" />
+        ) : null}
+      </DropdownMenuItem>
+    </div>
+  );
 }
 
 /** Group labels inside the menu: the same quiet uppercase as the sidebar's. */
@@ -178,6 +208,7 @@ export function UserMenu({
               Support & feedback
             </Link>
           </DropdownMenuItem>
+          {glassBuild ? <GlassWhatsNewItem /> : null}
           <DropdownMenuSeparator />
           {glassBuild ? (
             <>

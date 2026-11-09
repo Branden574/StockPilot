@@ -611,6 +611,62 @@ describe('Grid card content: what the row shows, nothing else', () => {
     );
   });
 
+  // Stage 3 fidelity, small lane round 2 (finding 3): Books.dc.html's cover
+  // card reads "Grade 9". With Liquid Glass in the build the Grade fact holds
+  // classic's "Gr 9" (an inert hook added, its text unchanged) and a
+  // glass-only copy with the bare number, which only the glass Books cover
+  // view draws beside the fact's own "Grade" (pages/items.css); under `off`
+  // there is no copy. The Books table's Grade cell never gets one.
+  it.each(['off', 'default'] as const)(
+    'Books grade, %s: classic "Gr 9" as before, and the bare number only in a glass build',
+    (rollout) => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      try {
+        const book = row('dune', {
+          name: 'Dune',
+          sku: 'BK-DUNE',
+          item_type: 'book',
+          custom_fields: { book_grade: '9', book_rack_number: '39', book_rack_row: 'B' },
+          placed_holdings: [],
+        });
+        const { container, unmount } = renderTable({
+          initialView: 'grid',
+          showBookFields: true,
+          basePath: '/dashboard/books',
+          rowLinkPrefix: '/dashboard/books',
+          items: [book] as never,
+        });
+        const fact = container.querySelector('[data-row-key="dune"] [data-glass-fact="Grade"]')!;
+        expect(fact.querySelector('dt')?.textContent).toBe('Grade');
+        const classic = within(fact as HTMLElement).getByText('Gr 9');
+        expect(classic).toHaveClass('font-mono');
+        const bare = fact.querySelectorAll('[data-glass-only]');
+        if (rollout === 'off') {
+          expect(bare).toHaveLength(0);
+          expect(classic.getAttribute('data-glass')).toBeNull();
+        } else {
+          expect([...bare].map((el) => [el.getAttribute('data-glass'), el.textContent])).toEqual([
+            ['book-grade-bare', '9'],
+          ]);
+          expect(classic.getAttribute('data-glass')).toBe('book-grade-classic');
+        }
+        unmount();
+        // The table's Grade cell: "Gr 9" alone in every rollout.
+        const table = renderTable({
+          initialView: 'table',
+          showBookFields: true,
+          basePath: '/dashboard/books',
+          rowLinkPrefix: '/dashboard/books',
+          items: [book] as never,
+        });
+        expect(table.container.querySelectorAll('tbody [data-glass-only]')).toHaveLength(0);
+        expect(within(table.container).getByText('Gr 9')).toBeInTheDocument();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
+
   it('Rentals items: "{avail} avail · {out} out" and the status from available', () => {
     const { container } = renderTable({
       initialView: 'grid',

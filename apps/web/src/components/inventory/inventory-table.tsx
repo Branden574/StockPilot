@@ -21,6 +21,11 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import {
+  BooksGlassColumnsMenu,
+  booksGlassColumnsHook,
+  useBooksGlassColumns,
+} from '@/components/books/books-glass-columns';
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { CategoryLabel } from '@/components/inventory/category-label';
 import {
@@ -48,6 +53,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Thumb } from '@/components/patterns/thumb';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { usePerfUseful } from '@/components/perf/perf-useful';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import {
@@ -924,6 +930,12 @@ export function InventoryTable({
   // (the grid draws the same `styledRenderItems`); the cookie is written for
   // the next visit. It never reaches the URL.
   const [listView, setListView] = React.useState<InventoryView>(initialView);
+  // LIQUID GLASS ONLY: the Books table's column chooser (books-glass-columns.tsx).
+  // Glass draws the board's seven Books columns; the viewer can tick classic's
+  // other six back on. Read only by the glass CSS through the table's inert
+  // data-glass-cols hook; never rendered under the `off` rollout.
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const [booksGlassColumns, setBooksGlassColumns] = useBooksGlassColumns();
   const viewCookieName = inventoryViewCookieFor(basePath);
   const selectListView = React.useCallback(
     (next: InventoryView) => {
@@ -2537,7 +2549,7 @@ export function InventoryTable({
       location: facts.location?.name ?? '—',
       facts: storage
         ? [
-            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} /> },
+            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} glassBare /> },
             { label: 'Rack', value: <BookRackContent item={item} /> },
             {
               label: 'Crate',
@@ -3112,6 +3124,10 @@ export function InventoryTable({
               itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
             />
           ) : null}
+
+          {glassBuild && showBookFields && listView !== 'grid' ? (
+            <BooksGlassColumnsMenu shown={booksGlassColumns} onChange={setBooksGlassColumns} />
+          ) : null}
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -3392,7 +3408,13 @@ export function InventoryTable({
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-[13.5px]" data-glass="items-table">
+            <table
+              className="w-full min-w-[900px] text-[13.5px]"
+              data-glass="items-table"
+              data-glass-cols={
+                glassBuild && showBookFields ? booksGlassColumnsHook(booksGlassColumns) : undefined
+              }
+            >
               <thead>
                 <tr className="border-border border-b">
                   <th className="w-10 py-2.5 pl-4 pr-0 text-left">
@@ -4048,12 +4070,38 @@ function ItemsRackContent({ item }: { item: Item }) {
   );
 }
 
-/** The Books layout's Grade cell: "Gr N" for a one- or two-digit grade. */
-function BookGradeLabel({ grade }: { grade: string | null | undefined }) {
-  return grade ? (
-    <span className="font-mono">{/^\d{1,2}$/.test(grade) ? `Gr ${grade}` : grade}</span>
-  ) : (
-    <span className="text-muted-foreground">—</span>
+/**
+ * The Books layout's Grade cell: "Gr N" for a one- or two-digit grade.
+ *
+ * `glassBare` (the cover card's Grade fact): with Liquid Glass in the build a
+ * glass-only copy holds the number alone, beside the classic "Gr N" (which
+ * carries an inert hook and is unchanged). The Books cover view under glass
+ * draws the fact's own "Grade" label and the bare number, so the card reads
+ * "Grade 9" as Books.dc.html's does, to a screen reader too; everywhere else
+ * the copy is hidden and "Gr N" is drawn (styles/liquid-glass/pages/
+ * items.css). Under `off` the copy is not rendered.
+ */
+function BookGradeLabel({
+  grade,
+  glassBare = false,
+}: {
+  grade: string | null | undefined;
+  glassBare?: boolean;
+}) {
+  if (!grade) return <span className="text-muted-foreground">—</span>;
+  const numeric = /^\d{1,2}$/.test(grade);
+  const bare = glassBare && numeric && liquidGlassRollout() !== 'off';
+  return (
+    <>
+      <span className="font-mono" data-glass={bare ? 'book-grade-classic' : undefined}>
+        {numeric ? `Gr ${grade}` : grade}
+      </span>
+      {bare ? (
+        <span data-glass-only="" data-glass="book-grade-bare">
+          {grade}
+        </span>
+      ) : null}
+    </>
   );
 }
 

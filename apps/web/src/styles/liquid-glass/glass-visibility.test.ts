@@ -76,6 +76,12 @@ describe('glass-only and classic-only elements', () => {
   // note on Expected in its lines toolbar (words only).
   // Stage 4, insights lane: the Reports hub's grouped tiles (the same links
   // as Classic's flat list, marked Classic-only in the page).
+  // Stage 3 fidelity, small lane: the Books table's Columns chooser (the
+  // board's seven columns; classic's other six one tick away, no data
+  // action) and the phone top bar's page title (words only); round 2: the
+  // account menu's What's New (the top bar's button, moved into the menu at
+  // 760 px and under) and the Books cover card's bare grade number (words
+  // only).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
@@ -84,8 +90,12 @@ describe('glass-only and classic-only elements', () => {
       ...Array<string>(2).fill('app/(dashboard)/dashboard/purchase-orders/[id]/page.tsx'),
       'app/(dashboard)/dashboard/reports/page.tsx',
       'components/auth/external-shell.tsx',
+      'components/books/books-glass-columns.tsx',
       ...Array<string>(4).fill('components/cycle-counts/count-glass-summary.tsx'),
       'components/dashboard/sidebar.tsx',
+      'components/dashboard/topbar.tsx',
+      'components/dashboard/user-menu.tsx',
+      'components/inventory/inventory-table.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',
