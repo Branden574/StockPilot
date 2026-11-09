@@ -8,7 +8,8 @@ import { glassSourceFiles, isUnlayeredCompanion, parse } from './glass-css';
 
 /**
  * THE GLASS AT-RULE GUARD (Liquid Glass plan 4.7 item 1; the Classic CSS pin's
- * fix round). The scope guard (glass-scope.guard.test.ts) checks the RULES of
+ * fix round, and one of the checks that stay after the pin's text and compile
+ * checks were retired at the release). The scope guard (glass-scope.guard.test.ts) checks the RULES of
  * the glass files: every selector starts with the glass root, inside @media
  * screen. An at-rule that is not a rule acts on every page whatever selector
  * it sits under: @property registers a custom property for Classic too,
@@ -26,9 +27,9 @@ import { glassSourceFiles, isUnlayeredCompanion, parse } from './glass-css';
  *   - @property for a custom property named --lg-* (no Classic file names one).
  * Anything else fails, and so does a stylesheet under styles/liquid-glass that
  * glassSourceFiles() does not read (a subfolder other than pages/, another
- * extension), so no glass stylesheet is outside the guards. The pin's fixture
- * folder (classic-css-pin/files: main's Classic text, which nothing loads) is
- * the one exception; the pin checks it.
+ * extension), so no glass stylesheet is outside the guards. The folder
+ * classic-css-pin/ holds no stylesheet (only manifest.json and candidates.dat),
+ * so it has no exception here.
  */
 
 const FILES = glassSourceFiles();
@@ -62,14 +63,13 @@ function atRuleFindings(file: string, text: string): string[] {
   return out;
 }
 
-/** Every stylesheet under styles/liquid-glass, by its path there, the pin's fixture copies left out. */
+/** Every stylesheet under styles/liquid-glass, by its path there. */
 function stylesheetsUnder(dir = __dirname, out: string[] = []): string[] {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const full = join(dir, e.name);
     const rel = relative(__dirname, full).split(sep).join('/');
-    if (e.isDirectory()) {
-      if (rel !== 'classic-css-pin/files') stylesheetsUnder(full, out);
-    } else if (/\.(css|scss|sass|less|pcss|postcss)$/.test(e.name)) out.push(rel);
+    if (e.isDirectory()) stylesheetsUnder(full, out);
+    else if (/\.(css|scss|sass|less|pcss|postcss)$/.test(e.name)) out.push(rel);
   }
   return out;
 }

@@ -15,12 +15,7 @@ jobs:
     name: Lint + Typecheck
     runs-on: ubuntu-latest
     steps:
-      # Full history: the Classic CSS pin (apps/web/src/styles/liquid-glass/
-      # classic-css-pin.guard.test.ts) ties its fixture to origin/main and the
-      # recorded merge base, and fails in CI when either is missing.
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
 
       # Reads pnpm version from package.json#packageManager.
       - uses: pnpm/action-setup@v6.1.0
