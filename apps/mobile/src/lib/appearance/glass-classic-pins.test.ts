@@ -100,6 +100,15 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '1ae87bd45b790a7233ed96d7e93c3d7343dfda36fb0f902bf1db758f3f8e5da4',
   'src/components/order-storefront/storefront-state.tsx':
     'f9bee75bc78955389e5f40c9ae4c48ee644748570b7fec73b6b4c4d49a50fd7d',
+  // New item, the count flows, Scan PO and Manage items (native-core).
+  'app/cycle-count/ai-scan/[id].tsx':
+    'ce429361709bc71da56ffdb387155e6b93aa2282d9d3d8dc08d000c569224a5e',
+  'app/cycle-count/new.tsx': 'e0f0dcbd01c04afce172de9e1888ab6a482eb3ff1b9b7d332ad8c35000600072',
+  'app/cycle-count/scan/[id].tsx':
+    '7990871c2db18f31116e0358ce2ac197a5cd1446babf6f3acdd2f523ffb800c2',
+  'app/item/new.tsx': '1869d65fdc462f700a7ba369fbc1874a61728d230f32e1ba59584455dd2a7806',
+  'app/order/manage-items.tsx': 'b3ce102b118248db26bd598f835ecc7532a00e46e7dcaf16a0812d0cbf427e45',
+  'app/scan-po/index.tsx': '30b004eb8c64674aca62d0e528f9156d8175bd96b85a657a40abb3c7c973ee0c',
 };
 
 function walk(dir: string, out: string[] = []): string[] {

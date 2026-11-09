@@ -132,6 +132,7 @@ describe('every shared primitive follows the device mode', () => {
     expect(uses.sort()).toEqual([
       'src/components/data-list-screen.tsx EmptyIcon ink4', // the empty state's glyph
       'src/components/ui/checkbox.tsx (not in JSX) ink4', // checkboxTone: a clear box's edge
+      'src/components/ui/glass/parts.tsx View ink5', // the sheet grabber's fallback (decoration, hidden from VoiceOver)
       'src/components/ui/glass/screens/home.tsx (not in JSX) ink4', // the muted sync dot beside its words
       'src/components/ui/glass/screens/home.tsx ChevronRight ink4', // a movement row's arrow (fallback)
       'src/components/ui/paginator.tsx Mono ink4', // the "·" gap marker, hidden from VoiceOver

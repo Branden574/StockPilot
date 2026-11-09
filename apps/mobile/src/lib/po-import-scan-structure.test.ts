@@ -664,7 +664,7 @@ describe('the camera chrome is dark in both modes', () => {
     });
     const camera = code.slice(
       code.indexOf('if (cameraOpen) {'),
-      code.indexOf('return ( <SafeAreaView style={styles.root}'),
+      code.indexOf('return ( <SafeAreaView style={[styles.root'),
     );
     expect(camera.length).toBeGreaterThan(0);
     expect(camera).not.toMatch(/\bstyles\./);
