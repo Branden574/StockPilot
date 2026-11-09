@@ -22,18 +22,34 @@ git switch main && git pull --ff-only
 git status --short                 # must print nothing
 pnpm install --frozen-lockfile     # whenever a merged PR changed pnpm-lock.yaml or patches/
 cd apps/mobile
-pnpm release:ota -m "What changed, in one sentence"
+EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota -m "What changed, in one sentence"
 ```
 
 `pnpm release:ota` with no arguments uses the last commit's message instead.
 
+`EXPO_PUBLIC_LIQUID_GLASS` is the Liquid Glass rollout the update ships with,
+and every publish must name it: `off` (classic for everyone), `opt-in`
+(classic unless the person chose Liquid Glass) or `default` (Liquid Glass
+unless the person chose Classic). Give the rollout phones have now: the
+value the last production update printed ("Liquid Glass rollout in this
+update: ..." at the top of its release log), unless this update is the one
+meant to change it. It is inlined into the bundle, so an update without it
+would turn every phone it reaches back to classic, and a wrong one changes the
+look of every phone it reaches.
+
 What it does (`apps/mobile/scripts/release-ota.sh`):
 
-1. Stops unless `apps/mobile/.env.local` exists (a link to the real settings,
+1. Stops unless `EXPO_PUBLIC_LIQUID_GLASS` from the command is `off`, `opt-in`
+   or `default` (unset and empty are refused), and prints the value it
+   publishes with. It stops too when `apps/mobile/.env.local` names it (that
+   file would override the command), and sets the command's value again after
+   loading the file. EAS server-side variables of the `production` environment
+   win over the shell, so none may set it.
+2. Stops unless `apps/mobile/.env.local` exists (a link to the real settings,
    kept outside the repository) and sets `EXPO_PUBLIC_SENTRY_DSN` and
    `SENTRY_AUTH_TOKEN`, then loads it into the shell, so its `EXPO_PUBLIC_*`
    values are bundled.
-2. Publishes:
+3. Publishes:
    `pnpm dlx eas-cli@20.3.0 update --channel production --environment production --non-interactive`
    with your `-m "..."`, or with `--auto` (the last commit's message) when you
    gave no arguments.
@@ -43,7 +59,7 @@ What it does (`apps/mobile/scripts/release-ota.sh`):
    - `--environment production` is required; see the next section.
    - No `--platform` flag: with this Expo SDK, eas-cli 20.3.0 exports iOS and
      Android (never web), so one update group carries both.
-3. Uploads that update's source maps from `dist/_expo/static/js` to Sentry
+4. Uploads that update's source maps from `dist/_expo/static/js` to Sentry
    (`@sentry/cli sourcemaps upload`). It needs `SENTRY_ORG` and
    `SENTRY_PROJECT` as well, and checks them only here, after the publish. The
    maps exist only in this checkout's `dist/`, right after the publish;
