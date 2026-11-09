@@ -611,19 +611,21 @@ describe('stage 3 fidelity, small lane: the board values', () => {
     expect(value(decls, media, selector, prop)).toBe(want);
   });
 
-  it('the Items/Books table and the item page still size and round their own thumbs, with rules more specific than the shared one', () => {
+  it('the Items/Books table still sizes and rounds its own thumbs, with rules more specific than the shared one, and the item page head draws none', () => {
     const items = ITEMS.filter(
       (d) => d.selector.endsWith("[data-slot='thumb']") && d.prop === 'width' && d.media === '',
     );
     expect(items.map((d) => d.value)).toEqual(['40px', 'calc(44px * 0.667)']);
+    // The fidelity detail lane draws the record's photo or cover in the glass
+    // summary card and hides the head's Thumb (pages/item-detail.css).
     expect(
       value(
         ITEM_DETAIL,
         '',
-        S("[data-glass-page='item-detail'] [data-glass='page-header'] [data-slot='thumb']"),
-        'border-color',
+        S("[data-glass-page='item-detail'] [data-glass='page-header'] div:has(> [data-slot='thumb'])"),
+        'display',
       ),
-    ).toBe('var(--lg-card-line)');
+    ).toBe('none');
   });
 
   it('the cover card draws the Grade fact’s own label (never visually hidden), so it reads "Grade 9"', () => {

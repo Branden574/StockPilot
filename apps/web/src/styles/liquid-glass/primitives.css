@@ -168,9 +168,9 @@
        this frame in Day and Night with no rule of its own; --ed-line is set
        to the glass line here too, so the hatch keeps it even if the
        editorial token is ever remapped. Sizes and radii stay each Thumb's
-       own; the Items and Books tables (pages/items.css) and the item page
-       header (pages/item-detail.css) size and round theirs with more
-       specific rules, which still win. */
+       own; the Items and Books tables (pages/items.css) size and round
+       theirs with more specific rules, which still win, and the item page
+       head draws no Thumb in glass (pages/item-detail.css). */
     :root[data-appearance='liquid-glass'] [data-slot='thumb'] {
       --ed-line: var(--lg-line);
       border-color: transparent;
