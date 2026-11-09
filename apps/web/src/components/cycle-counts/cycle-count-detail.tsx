@@ -17,6 +17,7 @@ import {
 
 import {
   CountDifferFigure,
+  CountLinesNote,
   CountWideProgress,
 } from '@/components/cycle-counts/count-glass-summary';
 import { CountProgressBar } from '@/components/cycle-counts/count-progress-bar';
@@ -441,6 +442,7 @@ export function CycleCountDetail({
           value={signedDelta}
           valueTone={totalDelta !== 0 ? 'warning' : 'default'}
           data-testid="count-stat-net-variance"
+          data-glass-tone={totalDelta < 0 ? 'down' : totalDelta > 0 ? 'up' : 'none'}
         />
       </StatStrip>
 
@@ -538,6 +540,9 @@ export function CycleCountDetail({
                   className="pl-8"
                 />
               </div>
+              {/* Liquid Glass only: the board's note on Expected
+                  (count-glass-summary.tsx), between two Classic parts. */}
+              <CountLinesNote />
               <SegmentedTabs
                 semantics="nav"
                 size="sm"

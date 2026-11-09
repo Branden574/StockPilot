@@ -1,3 +1,4 @@
+import { CycleCountStatusBadge } from '@/components/cycle-counts/cycle-count-status-badge';
 import { StatStripItem } from '@/components/patterns/stat-strip';
 import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { formatNumber } from '@/lib/utils';
@@ -55,5 +56,42 @@ export function CountWideProgress({ counted, total }: { counted: number; total: 
     >
       <span style={{ width: `${pct}%` }} />
     </div>
+  );
+}
+
+/**
+ * The count's status beside its title (the board's title row: the h1, the
+ * copy button, the status badge). The status the lines card head already
+ * shows, drawn from the header the page already has: the same badge, its
+ * words and tone. The page renders it in the title row BETWEEN the h1 and
+ * the copy button, where neither changes its place among its siblings
+ * (cycle-counts/[id]/page.classic-dom.test.tsx); pages/counts.css draws it
+ * after the button and hides the card head's badge while it is drawn, so the
+ * status is on screen once. Allowlisted as a moved block (no action).
+ */
+export function CountTitleStatus({ status }: { status: string }) {
+  if (liquidGlassRollout() === 'off') return null;
+  return (
+    <span data-glass-only="" data-glass="count-title-status">
+      <CycleCountStatusBadge status={status} />
+    </span>
+  );
+}
+
+/**
+ * The board's note at the end of the lines toolbar ("Expected is the system
+ * quantity when the line was counted."), the short form of the Expected
+ * column's help. Words only, placed BETWEEN the search and the views, where
+ * neither changes its place among its siblings (cycle-count-detail
+ * .classic-dom.test.tsx); pages/counts.css draws it last, at the toolbar's
+ * end, on wide windows only, as the board does. Allowlisted as a decoration
+ * (no action).
+ */
+export function CountLinesNote() {
+  if (liquidGlassRollout() === 'off') return null;
+  return (
+    <span data-glass-only="" data-glass="count-lines-note">
+      Expected is the system quantity when the line was counted.
+    </span>
   );
 }

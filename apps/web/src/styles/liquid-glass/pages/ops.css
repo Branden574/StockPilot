@@ -73,6 +73,29 @@
       font-size: 13px;
       line-height: 18px;
     }
+    /* .page-h .titles: the way back, the title row and the line under it
+       4 px apart; the title row is .row.g10 (the title, its copy or edit
+       button and its badges 10 px apart). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      > .mb-2:first-child {
+      margin-bottom: 4px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      div:has(> h1) {
+      column-gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div {
+      margin-top: 4px;
+    }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops']
       [data-slot='page-header-actions']

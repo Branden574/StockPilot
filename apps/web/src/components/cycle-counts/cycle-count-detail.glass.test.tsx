@@ -157,3 +157,43 @@ describe('A cycle count in Liquid Glass: the board’s fifth figure and wide pro
     expect(container.querySelectorAll('[data-glass-only]')).toHaveLength(0);
   });
 });
+
+/** The lines card's toolbar: the search, then the views (the card's second row). */
+const toolbar = (container: HTMLElement) =>
+  container.querySelector('[role="group"][aria-label="Filter lines"]')!.parentElement!;
+
+describe('A cycle count in Liquid Glass: the lines toolbar and the net variance', () => {
+  it('draws the board’s note on Expected, glass-only, between the search and the views', () => {
+    const { container } = view(SUMMARY);
+    const bar = toolbar(container);
+    const parts = [...bar.children].map(
+      (c) => c.getAttribute('data-glass') ?? c.getAttribute('role') ?? c.tagName.toLowerCase(),
+    );
+    expect(parts).toEqual(['div', 'count-lines-note', 'group']);
+    const note = bar.querySelector('[data-glass="count-lines-note"]')!;
+    expect(note.hasAttribute('data-glass-only')).toBe(true);
+    expect(note.textContent).toBe('Expected is the system quantity when the line was counted.');
+    expect(note.querySelector('a, button, input, select, textarea')).toBeNull();
+  });
+
+  it('draws the note under opt-in too, and none under the off rollout', () => {
+    const optIn = view(SUMMARY, 'opt-in');
+    expect(optIn.container.querySelector('[data-glass="count-lines-note"]')).not.toBeNull();
+    optIn.unmount();
+    const off = view(SUMMARY, 'off');
+    expect(off.container.querySelector('[data-glass="count-lines-note"]')).toBeNull();
+  });
+
+  it.each([
+    [-8, 'down'],
+    [3, 'up'],
+    [0, 'none'],
+  ])('tells glass which way a net variance of %i goes (%s), an inert hook', (netDelta, tone) => {
+    const { container } = view({ ...SUMMARY, netDelta } as CycleCountSummary);
+    expect(
+      container
+        .querySelector('[data-testid="count-stat-net-variance"]')
+        ?.getAttribute('data-glass-tone'),
+    ).toBe(tone);
+  });
+});

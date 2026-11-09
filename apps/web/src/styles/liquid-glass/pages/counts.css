@@ -162,6 +162,65 @@
       clip-path: none;
       white-space: pre;
     }
+    /* The title row is the board's .row.g10: the h1, the copy button, then
+       the status badge. The badge is the glass-only copy the page places
+       between the h1 and the button (components/cycle-counts/
+       count-glass-summary.tsx); drawn last here, after the button. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      [data-glass='count-title-status'] {
+      order: 1;
+    }
+    /* While the title row shows the status, the lines card head does not:
+       the status is on screen once. Without a reference (no title copy) the
+       card head keeps it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']:has([data-glass='count-title-status'])
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass-role='status'] {
+      display: none;
+    }
+    /* The board's one meta line under the title (.sm.ink2: "Main Warehouse
+       · Started Fri, Oct 30 · Full count"): the subline and the start time
+       run on together, the time after a middle dot; 4 px under the title
+       row, as the head's other lines are (the line is inline here, so the
+       title row keeps the 4 px under itself; with a block line under it,
+       the two margins collapse into the same 4 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1) {
+      margin-bottom: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div:has(+ p) {
+      display: inline;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ p {
+      display: inline;
+      margin: 0;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div
+      + p::before {
+      content: ' · ';
+      content: ' · ' / '';
+    }
     /* The Count summary card (section.card, 18 / 20): five figures in the
        auto-fit grid (ops.css draws them as the board's .stat), the glass-only
        "Lines that differ" among them (components/cycle-counts/
@@ -202,6 +261,24 @@
       border-radius: 3px;
       background: var(--lg-ok-fill);
     }
+    /* Net variance in the board's tones (netCls: t-danger below nothing,
+       t-ok above, ink at nothing) where Classic marks any variance in the
+       warning ink; the direction comes from the figure's inert
+       data-glass-tone hook. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-testid='count-stat-net-variance'][data-glass-tone='down']
+      > div:nth-child(2) {
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-testid='count-stat-net-variance'][data-glass-tone='up']
+      > div:nth-child(2) {
+      color: var(--lg-ok);
+    }
     /* Classic's small bar under Counted: the wide bar stands for it. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='cycle-count']
@@ -211,8 +288,12 @@
       display: none;
     }
     /* The lines card's head (status, counted figures, the two actions) as
-       the board's card head (12 x 16, 52 px), and its toolbar (12 x 14):
-       the search (.ctrl.search, max 360) and the segmented views. */
+       the board's card head (12 x 16, 52 px), and its toolbar (.toolbar,
+       12 x 14, 8 between): the search (.ctrl.search: flex 1 1 280px, max
+       360), the segmented views right after it, and the board's note on
+       Expected at the end (.xs.muted.ml-a.desk: the glass-only
+       count-lines-note, placed between the search and the views and drawn
+       last here; not on a phone). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='cycle-count']
       .bg-card.rounded-lg.border
@@ -226,6 +307,8 @@
       .bg-card.rounded-lg.border
       > .min-h-\[49px\]
       + div {
+      justify-content: flex-start;
+      gap: 8px;
       padding: 12px 14px;
       border-color: var(--lg-line);
     }
@@ -235,7 +318,31 @@
       > .min-h-\[49px\]
       + div
       > div:first-child {
-      width: min(360px, 100%);
+      flex: 1 1 280px;
+      width: auto;
+      max-width: 360px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      + div
+      > [data-glass='count-lines-note'] {
+      order: 1;
+      margin-left: auto;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+        .bg-card.rounded-lg.border
+        > .min-h-\[49px\]
+        + div
+        > [data-glass='count-lines-note'] {
+        display: none;
+      }
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='cycle-count']

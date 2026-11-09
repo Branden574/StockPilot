@@ -71,7 +71,9 @@ describe('glass-only and classic-only elements', () => {
   // return's progress rail (words and marks from its status); a purchase
   // order's receiving summary and its four board line columns, with Classic's
   // "Received / ordered" column marked Classic-only in the page (figures and
-  // words from the lines).
+  // words from the lines); a cycle count's status beside its title (the card
+  // head's badge, which glass hides while the copy is drawn) and the board's
+  // note on Expected in its lines toolbar (words only).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
@@ -79,7 +81,7 @@ describe('glass-only and classic-only elements', () => {
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       ...Array<string>(2).fill('app/(dashboard)/dashboard/purchase-orders/[id]/page.tsx'),
       'components/auth/external-shell.tsx',
-      ...Array<string>(2).fill('components/cycle-counts/count-glass-summary.tsx'),
+      ...Array<string>(4).fill('components/cycle-counts/count-glass-summary.tsx'),
       'components/dashboard/sidebar.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',

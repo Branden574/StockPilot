@@ -116,6 +116,31 @@ const ENTRIES: Entry[] = [
   ['title size', OPS, '', S(`${PAGE} [data-glass='page-header'] h1`), 'font-size', '26px'],
   ['title leading', OPS, '', S(`${PAGE} [data-glass='page-header'] h1`), 'line-height', '32px'],
   ['phone title size', OPS, PHONE, S(`${PAGE} [data-glass='page-header'] h1`), 'font-size', '24px'],
+  // .page-h .titles (gap 4) and its title row (.row.g10).
+  [
+    'way back 4 px above the title',
+    OPS,
+    '',
+    S(`${PAGE} [data-glass='page-header'] > .mb-2:first-child`),
+    'margin-bottom',
+    '4px',
+  ],
+  [
+    'title row gap',
+    OPS,
+    '',
+    S(`${PAGE} [data-glass='page-header'] div:has(> h1)`),
+    'column-gap',
+    '10px',
+  ],
+  [
+    'line under the title 4 px down',
+    OPS,
+    '',
+    S(`${PAGE} [data-glass='page-header'] div:has(> h1) + div`),
+    'margin-top',
+    '4px',
+  ],
   // The segmented views (.seg: 3 px track, 30 px segments, 13 px, radius 8).
   ['seg track padding', OPS, '', S(`${PAGE} [data-glass='seg']`), 'padding', '3px'],
   ['seg segment height', OPS, '', S(`${PAGE} [data-glass='seg'] > *`), 'height', '30px'],
@@ -451,6 +476,121 @@ const ENTRIES: Entry[] = [
     ),
     'display',
     'none',
+  ],
+  // A count's head (Cycle-Count-Detail.dc.html .page-h: the status after
+  // the copy button in the .row.g10 title row, the card head's badge hidden
+  // while it is drawn; the subline and the start time as one .sm.ink2 meta
+  // line) and its lines toolbar (.toolbar: 8 between, the search .ctrl.search
+  // flex 1 1 280px up to 360, the note .xs.muted.ml-a, desk only).
+  [
+    'count title status after the copy button',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} [data-glass='page-header'] [data-glass='count-title-status']`),
+    'order',
+    '1',
+  ],
+  [
+    'card head status hidden while the title shows it',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')}:has([data-glass='count-title-status']) .bg-card.rounded-lg.border > .min-h-\\[49px\\] [data-glass-role='status']`,
+    ),
+    'display',
+    'none',
+  ],
+  [
+    'count meta line 4 px under the title row',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} [data-glass='page-header'] div:has(> h1)`),
+    'margin-bottom',
+    '4px',
+  ],
+  [
+    'count start time on the meta line',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} [data-glass='page-header'] div:has(> h1) ~ p`),
+    'display',
+    'inline',
+  ],
+  [
+    'count lines toolbar from the start',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} .bg-card.rounded-lg.border > .min-h-\\[49px\\] + div`),
+    'justify-content',
+    'flex-start',
+  ],
+  [
+    'count lines toolbar gap',
+    COUNTS,
+    '',
+    S(`${VIEW('cycle-count')} .bg-card.rounded-lg.border > .min-h-\\[49px\\] + div`),
+    'gap',
+    '8px',
+  ],
+  [
+    'count lines search',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} .bg-card.rounded-lg.border > .min-h-\\[49px\\] + div > div:first-child`,
+    ),
+    'max-width',
+    '360px',
+  ],
+  [
+    'count lines note at the end',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} .bg-card.rounded-lg.border > .min-h-\\[49px\\] + div > [data-glass='count-lines-note']`,
+    ),
+    'margin-left',
+    'auto',
+  ],
+  [
+    'count lines note size',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} .bg-card.rounded-lg.border > .min-h-\\[49px\\] + div > [data-glass='count-lines-note']`,
+    ),
+    'font-size',
+    '12px',
+  ],
+  [
+    'count lines note not on a phone',
+    COUNTS,
+    PHONE,
+    S(
+      `${VIEW('cycle-count')} .bg-card.rounded-lg.border > .min-h-\\[49px\\] + div > [data-glass='count-lines-note']`,
+    ),
+    'display',
+    'none',
+  ],
+  [
+    'net variance below nothing (t-danger)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='stat-strip'] [data-testid='count-stat-net-variance'][data-glass-tone='down'] > div:nth-child(2)`,
+    ),
+    'color',
+    'var(--lg-danger)',
+  ],
+  [
+    'net variance above nothing (t-ok)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='stat-strip'] [data-testid='count-stat-net-variance'][data-glass-tone='up'] > div:nth-child(2)`,
+    ),
+    'color',
+    'var(--lg-ok)',
   ],
   // A count (Cycle-Count-Detail.dc.html: the 96 x 34 count field).
   [

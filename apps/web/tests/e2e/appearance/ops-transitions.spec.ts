@@ -235,8 +235,17 @@ test('A cycle count: a typed count stays through every switch; Review & post sta
     await expectShownIn(
       page,
       {
-        glass: ['[data-glass="count-differ"]', '[data-glass="count-progress"]'],
-        classic: ['[data-testid="count-stat-counted"] [data-slot="count-progress"]'],
+        glass: [
+          '[data-glass="count-differ"]',
+          '[data-glass="count-progress"]',
+          '[data-glass="page-header"] [data-glass="count-title-status"]',
+          '[data-glass="count-lines-note"]',
+        ],
+        classic: [
+          '[data-testid="count-stat-counted"] [data-slot="count-progress"]',
+          // The lines card head's status: the title row's copy stands for it in glass.
+          '.min-h-\\[49px\\] [data-glass-role="status"]',
+        ],
       },
       look.design === 'liquid-glass',
       `after ${look.design} ${look.theme}`,

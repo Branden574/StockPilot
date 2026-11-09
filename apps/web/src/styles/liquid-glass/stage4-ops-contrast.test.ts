@@ -212,6 +212,9 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ],
   ['count summary bar fill (ok) on its track', '--lg-ok-fill', [...CARD, '--lg-surface-4'], 3],
   ['Lines that differ figure (ink) on the card', '--lg-ink', CARD, 4.5],
+  ['net variance below nothing (danger) on the card', '--lg-danger', CARD, 4.5],
+  ['net variance above nothing (ok) on the card', '--lg-ok', CARD, 4.5],
+  ['note on Expected (ink 3) on the card', '--lg-ink-3', CARD, 4.5],
   // Purchasing (pages/po.css)
   ['PO number (accent text) on the card', '--lg-accent-text', CARD, 4.5],
   ['received figure (ink) on the card', '--lg-ink', CARD, 4.5],

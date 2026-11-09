@@ -231,6 +231,26 @@
       "$comment": "Purchase-Order.dc.html's line columns: Ordered, Received, Outstanding and the line's status (\"n still to come\" or \"Fully received\"). Glass shows them in place of Classic's \"Received / ordered\" column (the head and each line's cell carry data-classic-only and are hidden in glass), so each line's received and ordered figures are on screen once in either design; Outstanding and the status are derived from the same two figures. Figures and words only, no link, button or field. Not rendered under off.",
       "classicTwin": "the lines table's \"Received / ordered\" column (data-classic-only, hidden in glass)",
       "gate": null
+    },
+    {
+      "id": "cycle-count-title-status",
+      "source": "apps/web/src/components/cycle-counts/count-glass-summary.tsx",
+      "selector": "[data-glass=\"count-title-status\"]",
+      "kind": "moved block (no action)",
+      "routes": ["/dashboard/cycle-counts/[id]"],
+      "$comment": "Cycle-Count-Detail.dc.html's title row: the h1, the copy button, then the count's status badge. The page renders this copy of the lines card head's status badge (the same component, words and tone, from the header the page already has) in the title row, between the h1 and the copy button in the DOM (pages/counts.css draws it after the button), when the count's reference can be read. While it is drawn pages/counts.css hides the card head's badge, so the status is on screen once in either design; without a reference the card head keeps it. Words only, no link, button or field. Not rendered under off.",
+      "classicTwin": "the lines card head's status badge (hidden in glass by pages/counts.css while this copy is drawn)",
+      "gate": null
+    },
+    {
+      "id": "cycle-count-lines-note",
+      "source": "apps/web/src/components/cycle-counts/count-glass-summary.tsx",
+      "selector": "[data-glass=\"count-lines-note\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard/cycle-counts/[id]"],
+      "$comment": "Cycle-Count-Detail.dc.html's note at the end of the lines toolbar (.xs.muted.ml-a.desk): \"Expected is the system quantity when the line was counted.\", the short form of the Expected column's help, which stays. Words only, between the search and the views in the DOM (pages/counts.css draws it last, not on a phone). Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
     }
   ]
 }

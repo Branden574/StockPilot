@@ -2,6 +2,7 @@ import { Download } from 'lucide-react';
 import { notFound, redirect } from 'next/navigation';
 import { Suspense } from 'react';
 
+import { CountTitleStatus } from '@/components/cycle-counts/count-glass-summary';
 import { CopyReferenceButton } from '@/components/cycle-counts/copy-reference-button';
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
 import { BackToCycleCounts } from '@/components/cycle-counts/cycle-count-list-memory';
@@ -185,7 +186,17 @@ export default async function CycleCountDetailPage({
           )
         }
         titleId={TITLE_ID}
-        titleAside={reference ? <CopyReferenceButton reference={reference} /> : null}
+        titleAside={
+          reference ? (
+            <>
+              {/* Liquid Glass only: the count's status beside the title, as
+                  the board draws it (count-glass-summary.tsx), between the h1
+                  and the copy button. */}
+              <CountTitleStatus status={header.status} />
+              <CopyReferenceButton reference={reference} />
+            </>
+          ) : null
+        }
         meta={reference ? null : <span>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</span>}
         subline={
           <>
