@@ -16,6 +16,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -297,6 +298,10 @@ describe('D25: a failed read on a drawer list is said, never shown as an empty l
 
 describe('D27: the Receive tab', () => {
   const code = flatCode(RECEIVE);
+  // The code Classic runs (every Liquid Glass branch folded to Classic), in
+  // one spelling: the pins on Classic's exact text read this.
+  const classic = classicFlat(sourceOf(RECEIVE), RECEIVE).replace(/ \/>/g, '/>');
+  const norm = (text: string) => flatNorm(text).replace(/ \/>/g, '/>');
 
   it("its own settleList: a failed read keeps this workspace's purchase orders, never another's", () => {
     expectSettleRule(RECEIVE);
@@ -348,8 +353,19 @@ describe('D27: the Receive tab', () => {
     expect(code).toContain(
       'const countKnown = list !== null && !(list.failed && pos.length === 0);',
     );
+    // The projection prints the held line's no-break space as the character
+    // itself, so the escape is read from the source beside it.
+    expect(classic).toContain(
+      norm(
+        '{countKnown ? ( <Eyebrow>{`${pos.length} OPEN${overdueCount > 0 ? ` · ${overdueCount} OVERDUE` : \'\'}`}</Eyebrow> ) : ( <Eyebrow prefix="" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">',
+      ),
+    );
     expect(code).toContain(
-      '{countKnown ? ( <Eyebrow>{`${pos.length} OPEN${overdueCount > 0 ? ` · ${overdueCount} OVERDUE` : \'\'}`}</Eyebrow> ) : ( <Eyebrow prefix="" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" > {\'\\u00a0\'} </Eyebrow> )}',
+      '<Eyebrow prefix="" accessibilityElementsHidden importantForAccessibility="no-hide-descendants" > {\'\\u00a0\'} </Eyebrow>',
+    );
+    // Liquid Glass says the same count under the title, held the same way.
+    expect(code).toContain(
+      "{countKnown ? `${pos.length} open${overdueCount > 0 ? ` · ${overdueCount} overdue` : ''}` : '\\u00a0'}",
     );
   });
 
@@ -405,8 +421,10 @@ describe('D27: the Receive tab', () => {
       'accessibilityLabel="Back"',
       'accessibilityLabel="Open menu"',
     ]) {
-      expect(code).toContain(words);
+      expect(classic).toContain(norm(words));
     }
+    // Liquid Glass keeps the title's words (the board's large title).
+    expect(code).toContain("Receive {lg ? 'POs' : <Em>POs.</Em>}");
   });
 });
 

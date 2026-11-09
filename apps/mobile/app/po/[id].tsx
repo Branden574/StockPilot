@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { ArrowLeft, Camera, Check } from 'lucide-react-native';
+import { ArrowLeft, Camera, Check, ScanLine } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -21,6 +21,20 @@ import { PoAttachments } from '@/components/po-attachments';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
+import { glassRecipe } from '@/components/ui/glass/merge-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import {
+  GLASS_PO_SCROLL,
+  GlassActionBarBackdrop,
+  GlassNavSpacer,
+  GlassPoHeaderGroup,
+  GlassPoNavTitle,
+  GlassReceiptSummary,
+  GlassSizeRunCard,
+  glassPoShape,
+  receiptTotals,
+} from '@/components/ui/glass/screens/po';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { api, ApiError } from '@/lib/api';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
 import { receiverText } from '@/lib/deleted-user-labels';
@@ -109,7 +123,11 @@ export default function PoReceiveScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { c, mode } = useTheme();
-  const styles = PO_STYLES[mode];
+  const lg = useGlass();
+  // Liquid Glass: this screen's own recipe in the glass palette and faces,
+  // with the iOS Receive board's shape over it (one pick; every element keeps
+  // Classic's style key).
+  const styles = lg ? glassRecipe(lg, makeStyles, glassPoShape) : PO_STYLES[mode];
   const insets = useSafeAreaInsets();
   // The root stack shows no header, so this screen carries its own Back (the
   // other card screens' chip). A draft opened from the order's "Draft PO for
@@ -701,6 +719,7 @@ export default function PoReceiveScreen() {
 
   return (
     <SafeAreaView style={styles.root} edges={['top']}>
+      {lg ? <SceneBackground /> : null}
       <Stack.Screen
         options={{
           title: header?.po_number ?? 'PO',
@@ -711,6 +730,21 @@ export default function PoReceiveScreen() {
       {/* Above every state (loading, "Could not load this PO", the PO). */}
       <View style={styles.topbar}>
         <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+        {/* Liquid Glass (iOS-Receive.dc.html): the PO as the nav's title and
+            Scan as the right-hand glass circle (Classic has it in the header). */}
+        {lg ? (
+          <GlassPoNavTitle
+            lg={lg}
+            title={header ? (readOnly ? header.po_number : `Receive ${header.po_number}`) : 'PO'}
+          />
+        ) : null}
+        {lg ? (
+          !loading && !loadError && header && !readOnly ? (
+            <IconChip icon={ScanLine} onPress={openScanner} accessibilityLabel="Scan" minTap />
+          ) : (
+            <GlassNavSpacer />
+          )
+        ) : null}
       </View>
 
       {loading ? (
@@ -742,36 +776,51 @@ export default function PoReceiveScreen() {
         </View>
       ) : (
         <>
-          <View style={styles.headerBar}>
-            <View style={{ flex: 1, minWidth: 0 }}>
-              <Text style={styles.title}>{header?.po_number ?? 'PO'}</Text>
-              <Text style={styles.subtitle}>
-                {header?.supplier_name ?? 'No supplier'} · {poStatusLabel(header?.status)}
-              </Text>
-            </View>
-            {readOnly ? null : (
-              <Pressable
-                onPress={openScanner}
-                accessibilityRole="button"
-                style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
-              >
-                {/* The camera glyph was an emoji in the words ("📷 Scan"); it
-                    is an icon now, so VoiceOver says "Scan, button". */}
-                <Camera size={16} color={c.ink} strokeWidth={1.75} />
-                <Text style={styles.scanBtnText} numberOfLines={1} maxFontSizeMultiplier={SCAN_CAP}>
-                  Scan
+          {/* Liquid Glass draws the PO's header as the first card in the list. */}
+          {lg ? null : (
+            <View style={styles.headerBar}>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.title}>{header?.po_number ?? 'PO'}</Text>
+                <Text style={styles.subtitle}>
+                  {header?.supplier_name ?? 'No supplier'} · {poStatusLabel(header?.status)}
                 </Text>
-              </Pressable>
-            )}
-          </View>
+              </View>
+              {readOnly ? null : (
+                <Pressable
+                  onPress={openScanner}
+                  accessibilityRole="button"
+                  style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]}
+                >
+                  {/* The camera glyph was an emoji in the words ("📷 Scan"); it
+                      is an icon now, so VoiceOver says "Scan, button". */}
+                  <Camera size={16} color={c.ink} strokeWidth={1.75} />
+                  <Text
+                    style={styles.scanBtnText}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={SCAN_CAP}
+                  >
+                    Scan
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          )}
 
           {/* The focused quantity or note scrolls clear of the keyboard: the
               decimal pad has no key that puts it away, and a box near the end
               of a long PO sat under it. */}
           <ScrollView
-            contentContainerStyle={{ padding: SPACE.md, paddingBottom: 140 }}
+            contentContainerStyle={lg ? GLASS_PO_SCROLL : { padding: SPACE.md, paddingBottom: 140 }}
             automaticallyAdjustKeyboardInsets
           >
+            {lg ? (
+              <GlassPoHeaderGroup
+                lg={lg}
+                supplier={header?.supplier_name ?? 'No supplier'}
+                status={poStatusLabel(header?.status)}
+                guidance={receivable}
+              />
+            ) : null}
             {reviewOnly ? (
               <View style={styles.partNotice}>
                 <Text style={styles.partNoticeText}>{PO_DRAFT_REVIEW_COPY}</Text>
@@ -812,7 +861,24 @@ export default function PoReceiveScreen() {
                 if (block.kind === 'run') {
                   const group = groups[block.groupId];
                   if (group) {
-                    return (
+                    // Liquid Glass: the board's size-run grid over the same draft.
+                    return lg ? (
+                      <GlassSizeRunCard
+                        key={block.groupId}
+                        lg={lg}
+                        group={group}
+                        lines={block.lines}
+                        draft={draft}
+                        highlightLineId={highlightLineId}
+                        onChangeReceived={(lineId, v) => setField(lineId, 'received', v)}
+                        onReceiveAll={() => {
+                          for (const l of block.lines) {
+                            setField(l.id, 'received', String(poOutstanding(l)));
+                            setField(l.id, 'rejected', '0');
+                          }
+                        }}
+                      />
+                    ) : (
                       <SizeRunCard
                         key={block.groupId}
                         group={group}
@@ -991,12 +1057,21 @@ export default function PoReceiveScreen() {
 
           {readOnly ? null : (
             <View style={styles.footer}>
+              {/* Liquid Glass: the floating glass bar (.item-actions) with
+                  what this receipt takes beside the button. */}
+              {lg ? <GlassActionBarBackdrop /> : null}
+              {lg ? <GlassReceiptSummary lg={lg} {...receiptTotals(lines, draft)} /> : null}
               {/* Committing the receipt: the screen's one ink button. */}
-              <Button block onPress={postReceipt} disabled={posting || !receivable}>
+              <Button
+                block
+                {...(lg ? { block: false } : null)}
+                onPress={postReceipt}
+                disabled={posting || !receivable}
+              >
                 {posting ? 'Posting…' : receivable ? 'Post receipt' : 'Fully received'}
               </Button>
               {/* Clear of the home indicator: the button sat in its strip. */}
-              <View style={{ height: Math.max(0, insets.bottom - SPACE.md) }} />
+              {lg ? null : <View style={{ height: Math.max(0, insets.bottom - SPACE.md) }} />}
             </View>
           )}
         </>
@@ -1173,7 +1248,11 @@ function Metric({
   caption?: string;
 }) {
   const { c, mode } = useTheme();
-  const styles = PO_STYLES[mode];
+  const lg = useGlass();
+  // Liquid Glass: this screen's own recipe in the glass palette and faces,
+  // with the iOS Receive board's shape over it (one pick; every element keeps
+  // Classic's style key).
+  const styles = lg ? glassRecipe(lg, makeStyles, glassPoShape) : PO_STYLES[mode];
   return (
     <View style={styles.metric}>
       <Text style={styles.metricLabel}>{label}</Text>

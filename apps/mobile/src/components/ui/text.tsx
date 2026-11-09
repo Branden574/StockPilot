@@ -4,6 +4,10 @@ import { StyleSheet, Text, View, type TextProps, type ViewStyle } from 'react-na
 import { FONT, TYPE_CEILING, capTo, resolveFontCap } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
+import { facedProp } from './glass/merge-styles';
+import { glassBody, glassDisplay, glassEyebrow } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
+
 /**
  * Dynamic Type policy for the four text primitives.
  *
@@ -60,6 +64,7 @@ export function Eyebrow({
   ...rest
 }: EyebrowProps) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View style={[styles.eyebrowWrap, style]}>
       <Text
@@ -67,6 +72,8 @@ export function Eyebrow({
         style={[
           styles.eyebrow,
           { color: color ?? c.ink3 },
+          // Liquid Glass: the boards' eyebrow, 12/16 600 in the system face.
+          lg && glassEyebrow(lg),
         ]}
         numberOfLines={numberOfLines}
         maxFontSizeMultiplier={resolveFontCap(
@@ -74,7 +81,8 @@ export function Eyebrow({
           capTo(11, TYPE_CEILING.eyebrow),
         )}
       >
-        {prefix}
+        {/* The em-dash is Classic's signature; the glass boards draw none. */}
+        {lg ? null : prefix}
         {children}
       </Text>
     </View>
@@ -100,10 +108,7 @@ export function FieldLabel({ maxFontSizeMultiplier, ...rest }: EyebrowProps) {
   return (
     <Eyebrow
       {...rest}
-      maxFontSizeMultiplier={resolveFontCap(
-        maxFontSizeMultiplier,
-        capTo(11, TYPE_CEILING.label),
-      )}
+      maxFontSizeMultiplier={resolveFontCap(maxFontSizeMultiplier, capTo(11, TYPE_CEILING.label))}
     />
   );
 }
@@ -131,6 +136,7 @@ export function Display({
   color?: string;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <Text
       {...rest}
@@ -147,7 +153,9 @@ export function Display({
           letterSpacing: -size * 0.028,
           color: color ?? c.ink,
         },
-        style,
+        // Liquid Glass: the system face at 700, as the boards' titles.
+        lg && glassDisplay(lg, size),
+        lg ? facedProp(lg, style) : style,
       ]}
     >
       {children}
@@ -162,14 +170,23 @@ export function Display({
  * an HTML <em>. Inherits the parent Display's cap.
  */
 export function Em({ children, size }: { children: React.ReactNode; size?: number }) {
+  const lg = useGlass();
   return (
     <Text
-      style={{
-        fontFamily: FONT.serifItalic,
-        fontWeight: '400',
-        ...(size ? { fontSize: size, lineHeight: size * 1.05 } : null),
-        letterSpacing: -0.4,
-      }}
+      style={
+        // Liquid Glass draws no serif emphasis: the boards set these words
+        // upright in the heading's own face and weight, so they inherit it.
+        lg
+          ? size
+            ? { fontSize: size, lineHeight: Math.round(size * 1.2) }
+            : undefined
+          : {
+              fontFamily: FONT.serifItalic,
+              fontWeight: '400',
+              ...(size ? { fontSize: size, lineHeight: size * 1.05 } : null),
+              letterSpacing: -0.4,
+            }
+      }
     >
       {children}
     </Text>
@@ -201,6 +218,7 @@ export function Body({
   color?: string;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <Text
       {...rest}
@@ -215,7 +233,9 @@ export function Body({
           color: color ?? (muted ? c.ink3 : c.ink),
           letterSpacing: -size * 0.012,
         },
-        style,
+        // Liquid Glass: the system face, 1.35 line height as the boards' copy.
+        lg && glassBody(lg, size),
+        lg ? facedProp(lg, style) : style,
       ]}
     >
       {children}

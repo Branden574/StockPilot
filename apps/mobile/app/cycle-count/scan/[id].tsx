@@ -20,6 +20,8 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { countFromText } from '@stockpilot/core';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
 import { countNotSavedAlert } from '@/lib/count-save-refusal';
@@ -93,6 +95,9 @@ function CycleCountScanScreenInner() {
   // The confirm sheet and the permission screen follow the device's mode;
   // the camera chrome is dark in both (CAMERA, below).
   const { c } = useTheme();
+  // Liquid Glass: the scene behind the screen's frame (the camera stays dark,
+  // as the iOS Scan board); every control, line and count stays.
+  const lg = useGlass();
   const stacked = shouldStackRow(useWindowDimensions().fontScale);
 
   const [lines, setLines] = React.useState<CachedCycleCountLine[]>([]);
@@ -236,7 +241,11 @@ function CycleCountScanScreenInner() {
   }
   if (!permission.granted) {
     return (
-      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+      <SafeAreaView
+        style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+        edges={['top']}
+      >
+        {lg ? <SceneBackground /> : null}
         <View style={styles.center}>
           <Text style={[styles.permTitle, { color: c.ink }]}>Camera access needed</Text>
           <Text style={[styles.permBody, { color: c.ink3 }]}>

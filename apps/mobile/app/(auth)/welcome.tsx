@@ -15,6 +15,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_AUTH } from '@/components/ui/glass/screens/auth';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';
 
@@ -36,10 +39,19 @@ const STATS: { value: string; label: string }[] = [
 
 export default function Welcome() {
   const { c } = useTheme();
+  // Liquid Glass (inferred from the Landing-Mobile hero): the scene behind
+  // the page, Sign in in the top bar as the board's glass pill, the headline
+  // in the display face without the italic, and the cards on the grouped glass
+  // surface; every word, figure and button stays.
+  const lg = useGlass();
   const router = useRouter();
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+    <SafeAreaView
+      style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+      edges={['top']}
+    >
+      {lg ? <SceneBackground /> : null}
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 44 }}
         showsVerticalScrollIndicator={false}
@@ -54,9 +66,13 @@ export default function Welcome() {
           <Pressable
             onPress={() => router.push('/(auth)/sign-in')}
             accessibilityRole="button"
-            style={styles.signInFrame}
+            style={[
+              styles.signInFrame,
+              lg && GLASS_AUTH.pill,
+              lg && { backgroundColor: lg.g.glass, borderColor: lg.g.glassRing },
+            ]}
           >
-            <Body size={14} color={c.ink2}>
+            <Body size={14} color={lg ? lg.c.ink : c.ink2}>
               Sign in
             </Body>
           </Pressable>
@@ -66,7 +82,7 @@ export default function Welcome() {
         <View style={{ marginTop: 28 }}>
           <Eyebrow>INVENTORY + ORDER OPS</Eyebrow>
           <Display size={40} style={{ marginTop: 14 }}>
-            Inventory software <Em>quiet enough</Em> to actually use.
+            Inventory software {lg ? 'quiet enough' : <Em>quiet enough</Em>} to actually use.
           </Display>
           <Body muted style={{ marginTop: 14, maxWidth: 340 }}>
             Inventory and order operations for teams that actually run a warehouse — counts, costs,
@@ -127,7 +143,7 @@ export default function Welcome() {
         {/* Final CTA */}
         <View style={{ marginTop: 30, alignItems: 'center' }}>
           <Display size={26} style={{ textAlign: 'center' }}>
-            Get your stock <Em>under control.</Em>
+            Get your stock {lg ? 'under control.' : <Em>under control.</Em>}
           </Display>
           <View style={{ marginTop: 18, width: '100%', gap: 10 }}>
             <Button

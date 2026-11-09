@@ -12,6 +12,17 @@ import { ChevronRight, type LucideIcon } from 'lucide-react-native';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+import { GlassBackdrop } from './glass/glass-backdrop';
+import {
+  GLASS_BADGE_TEXT,
+  GLASS_CIRCLE,
+  GLASS_ROW,
+  glassBadge,
+  glassRowSub,
+  glassRowTitle,
+} from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { COUNT_BADGE } from './tones';
 
 /**
@@ -57,18 +68,22 @@ export function Row({
   numberOfLines?: number;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   const stacked = shouldStackRow(fontScale) && !!trailing;
   const inner = (
-    <View style={[styles.row, stacked && styles.rowStacked, style]}>
+    <View style={[styles.row, stacked && styles.rowStacked, lg && GLASS_ROW, style]}>
       {leading}
       <View style={styles.body}>
-        <Text style={[styles.title, { color: c.ink }]} numberOfLines={numberOfLines}>
+        <Text
+          style={[styles.title, { color: c.ink }, lg && glassRowTitle(lg)]}
+          numberOfLines={numberOfLines}
+        >
           {title}
         </Text>
         {subtitle ? (
           <Text
-            style={[styles.subtitle, { color: c.ink3 }]}
+            style={[styles.subtitle, { color: c.ink3 }, lg && glassRowSub(lg)]}
             numberOfLines={numberOfLines}
           >
             {subtitle}
@@ -78,7 +93,11 @@ export function Row({
       </View>
       {stacked ? null : trailing}
       {chevron ? (
-        <ChevronRight size={16} color={c.ink4} strokeWidth={1.5} />
+        <ChevronRight
+          size={lg ? 14 : 16}
+          color={lg ? lg.ios.l2 : c.ink4}
+          strokeWidth={lg ? 1.8 : 1.5}
+        />
       ) : null}
     </View>
   );
@@ -132,20 +151,28 @@ export function IconChip({
   minTap?: boolean;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const showBadge = typeof badge === 'number' && badge > 0;
-  const chipStyle = [
-    styles.chip,
-    {
-      backgroundColor: c.card,
-      borderColor: c.hair2,
-      borderRadius: shape === 'circle' ? 19 : 10,
-    },
-  ];
+  // Liquid Glass: the 44pt round glass button of the iOS boards (.ios-circ),
+  // its material behind the icon; the count is the boards' .ios-badge.
+  const chipStyle = lg
+    ? GLASS_CIRCLE
+    : [
+        styles.chip,
+        {
+          backgroundColor: c.card,
+          borderColor: c.hair2,
+          borderRadius: shape === 'circle' ? 19 : 10,
+        },
+      ];
   const face = (
     <>
-      <Icon size={18} color={c.ink} strokeWidth={1.5} />
+      {lg ? (
+        <GlassBackdrop variant="floating" radius={GLASS_CIRCLE.borderRadius as number} />
+      ) : null}
+      <Icon size={lg ? 20 : 18} color={c.ink} strokeWidth={lg ? 1.8 : 1.5} />
       {showBadge ? (
-        <View style={[styles.badge, { borderColor: c.paper }]}>
+        <View style={lg ? glassBadge(lg) : [styles.badge, { borderColor: c.paper }]}>
           {/*
             The one place in the shared primitives that opts out of Dynamic
             Type entirely, same reasoning as the tab bar
@@ -156,7 +183,11 @@ export function IconChip({
             also duplicated on the destination screen, so pinning it here costs
             the user no information.
           */}
-          <Text style={styles.badgeText} numberOfLines={1} allowFontScaling={false}>
+          <Text
+            style={lg ? GLASS_BADGE_TEXT : styles.badgeText}
+            numberOfLines={1}
+            allowFontScaling={false}
+          >
             {badge > 99 ? '99+' : String(badge)}
           </Text>
         </View>
@@ -168,7 +199,11 @@ export function IconChip({
       onPress={onPress}
       accessibilityRole={accessibilityLabel ? 'button' : undefined}
       accessibilityLabel={accessibilityLabel}
-      style={({ pressed }) => [minTap ? styles.chipTapFrame : chipStyle, { opacity: pressed ? 0.7 : 1 }]}
+      style={({ pressed }) => [
+        minTap ? styles.chipTapFrame : chipStyle,
+        // A glass material never sits under a fading parent: glass scales.
+        lg ? { transform: [{ scale: pressed ? 0.94 : 1 }] } : { opacity: pressed ? 0.7 : 1 },
+      ]}
     >
       {minTap ? <View style={chipStyle}>{face}</View> : face}
     </Pressable>

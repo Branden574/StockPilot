@@ -17,6 +17,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { printClassic } from './__fixtures__/classic-projection';
 import { syncBadgeState } from './sync-badge';
 import { palette, type Palette } from './theme';
 
@@ -317,6 +318,11 @@ describe('contrast: every pair the screens draw, both modes', () => {
 describe('Home: real figures, real sync words, no fake sparklines (D26)', () => {
   const home = sourceOf(HOME);
   const code = codeOnly(home);
+  // Home draws Liquid Glass differences as \`lg\` branches (stage 4); a pin
+  // on Classic's shape reads Classic's projection, every branch folded to
+  // Classic (lib/__fixtures__/classic-projection.ts), which is the code
+  // Classic runs, printed on one line per element.
+  const classic = codeOnly(printClassic(home, HOME));
   type Read = { count?: number | null; data?: unknown; error: unknown };
   const { homeSummary, FIGURES_LOAD_ERROR, RECENT_LOAD_ERROR } = screenDeclarations(HOME, [
     'homeSummary',
@@ -363,7 +369,7 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
   // Mutation caught: the tiles drawn from a null summary (zeros again), or
   // the failure shown without the alert role.
   it('the tiles render only from read figures; otherwise the failure, as an alert', () => {
-    expect(code).toMatch(/\{figures \? \(\s*<View style=\{styles\.statGrid\}>/);
+    expect(classic).toMatch(/\{figures \? \(\s*<View style=\{styles\.statGrid\}>/);
     expect(code).toMatch(
       /<Body size=\{14\.5\} accessibilityRole="alert">\s*\{FIGURES_LOAD_ERROR\}\s*<\/Body>/,
     );
@@ -423,8 +429,12 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
 
   it('keeps the tour target, every link and the header controls', () => {
     expect(code).toContain("const scanTargetRef = useTourTarget('home-scan');");
-    expect(code).toMatch(
+    expect(classic).toMatch(
       /<View ref=\{scanTargetRef\} collapsable=\{false\}[^>]*>\s*<Pressable\s+onPress=\{\(\) => router\.push\('\/scan'\)\}/,
+    );
+    // Liquid Glass keeps the same target around the same card.
+    expect(code).toMatch(
+      /<View\s+ref=\{scanTargetRef\}\s+collapsable=\{false\}\s+style=\{lg \? GLASS_HOME\.block : \{ paddingHorizontal: 20, marginTop: 20 \}\}\s*>\s*<Pressable\s+onPress=\{\(\) => router\.push\('\/scan'\)\}/,
     );
     for (const href of [
       "'/settings'",
@@ -477,8 +487,12 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
     // the frame and the heading row with it (-15 + 15), where centred ones
     // spilled out of the row into the card below at AX4 and AX5.
     expect(block).toMatch(/paddingVertical: 15,\s*marginVertical: -15,/);
+    expect(classic).toMatch(
+      /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[\s*styles\.seeAll[\s\S]{0,120}color=\{c\.accent\}>\s*See all/,
+    );
+    // Liquid Glass: the same named button in the board's 44pt link frame.
     expect(code).toMatch(
-      /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[styles\.seeAll[\s\S]{0,120}color=\{c\.accent\}>\s*See all/,
+      /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[\s*lg \? GLASS_HOME\.seeAll : styles\.seeAll,/,
     );
   });
 

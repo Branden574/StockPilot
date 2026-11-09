@@ -371,8 +371,14 @@ describe('a tap asks the caller; the checkbox keeps no state of its own', () => 
     expect(every(drawn(checkbox({ checked: true })), 'Check')).toHaveLength(1);
   });
 
-  it('the file calls no state, reducer, ref or effect hook: only the mode and the text size', () => {
-    expect([...new Set(hookCalls(FILE))].sort()).toEqual(['useTheme', 'useWindowDimensions']);
+  it('the file calls no state, reducer, ref or effect hook: only the mode, the look and the text size', () => {
+    // useGlass reads the Liquid Glass look (a context read through useTheme,
+    // components/ui/glass/use-glass.ts): it keeps no state either.
+    expect([...new Set(hookCalls(FILE))].sort()).toEqual([
+      'useGlass',
+      'useTheme',
+      'useWindowDimensions',
+    ]);
   });
 
   it('disabled: a tap does nothing', () => {
@@ -802,6 +808,9 @@ describe('no new dependency', () => {
     expect(imports.map((d) => (d.moduleSpecifier as ts.StringLiteral).text).sort()).toEqual([
       '../../lib/theme',
       '../../lib/use-theme',
+      // The Liquid Glass look and its checkbox tone: app modules, no package.
+      './glass/primitive-styles',
+      './glass/use-glass',
       './text',
       'lucide-react-native',
       'react',

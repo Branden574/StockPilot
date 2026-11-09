@@ -36,6 +36,9 @@ import {
 } from '@stockpilot/core';
 
 import { SmallAction } from '@/components/order-storefront/controls';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Mono } from '@/components/ui/text';
@@ -95,6 +98,10 @@ export default function OrderPlaced() {
   const session = storefrontSession();
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (inferred from the Order-New submitted state): the scene
+  // behind it, the glass nav, and the order's card on the grouped glass
+  // surface; every line, link and action stays.
+  const lg = useGlass();
   const { width, fontScale } = useWindowDimensions();
   const layout = storefrontLayout({ width, fontScale });
 
@@ -202,9 +209,10 @@ export default function OrderPlaced() {
 
   if (!placed) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.paper }}>
+      <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+        {lg ? <SceneBackground /> : null}
         <SafeAreaView edges={['top']}>
-          <View style={styles.topbar}>
+          <View style={lg ? GLASS_LIST.nav : styles.topbar}>
             <IconChip icon={X} onPress={leaveToOrders} accessibilityLabel={STOREFRONT_CLOSE_COPY} minTap />
           </View>
         </SafeAreaView>
@@ -217,9 +225,10 @@ export default function OrderPlaced() {
   const canApprove = context?.canApproveOrders ?? false;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.paper }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={X} onPress={leaveToOrders} accessibilityLabel={STOREFRONT_CLOSE_COPY} minTap />
         </View>
       </SafeAreaView>

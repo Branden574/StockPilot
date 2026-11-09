@@ -1,6 +1,6 @@
 import * as Network from 'expo-network';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { Check } from 'lucide-react-native';
+import { Check, ChevronLeft } from 'lucide-react-native';
 import * as React from 'react';
 import {
   ActivityIndicator,
@@ -28,6 +28,17 @@ import { CycleCountReassignSheet } from '@/components/cycle-count-reassign-sheet
 import { CycleCountReleaseSheet } from '@/components/cycle-count-release-sheet';
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { Button } from '@/components/ui/button';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import {
+  GlassCountTitle,
+  GlassRowSeparator,
+  glassCountBox,
+  glassCountRowEdges,
+  glassCountStyles,
+} from '@/components/ui/glass/screens/count';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { IconChip } from '@/components/ui/row';
 import { StockBar } from '@/components/ui/stock-bar';
 import { BUTTON_RADIUS, buttonTone, pillTone } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
@@ -192,6 +203,10 @@ export default function CycleCountDetail() {
   // The device's palette (it was the light-only legacy alias, so the screen
   // stayed light in dark mode under a sync badge that followed the device).
   const { c } = useTheme();
+  // Liquid Glass (iOS-Count.dc.html): the glass nav, the title block, the
+  // lines as one grouped surface and the entry card at the foot; every
+  // Classic control, box, gate and sentence stays where it is.
+  const lg = useGlass();
   const outline = buttonTone('outline', c);
   const post = buttonTone('primary', c);
   const warnPill = pillTone('warn', c);
@@ -262,9 +277,9 @@ export default function CycleCountDetail() {
   // at accessibility text sizes, so the list's bottom reservation follows it.
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
   const [pendingForThis, setPendingForThis] = React.useState(0);
-  const [emptyState, setEmptyState] = React.useState<
-    'none' | 'offline-uncached' | 'read-failed'
-  >('none');
+  const [emptyState, setEmptyState] = React.useState<'none' | 'offline-uncached' | 'read-failed'>(
+    'none',
+  );
   /** The server's own message for a refused read, shown instead of an empty
    *  count. Only ever set when there is no cached snapshot to fall back to. */
   const [readError, setReadError] = React.useState<string | null>(null);
@@ -383,7 +398,10 @@ export default function CycleCountDetail() {
 
   // Resolve the user's org once — needed to scope server fetches.
 
-  function hydrateFromSnapshot(snap: { header: CachedCycleCountHeader; lines: CachedCycleCountLine[] }) {
+  function hydrateFromSnapshot(snap: {
+    header: CachedCycleCountHeader;
+    lines: CachedCycleCountLine[];
+  }) {
     setHeader(snap.header);
     const ui: UiLine[] = snap.lines
       .map((l) => ({
@@ -499,7 +517,7 @@ export default function CycleCountDetail() {
 
     const ccRow = cc as Record<string, unknown>;
     const wh = ccRow.warehouse as { name: string } | { name: string }[] | null;
-    const whName = Array.isArray(wh) ? wh[0]?.name ?? null : wh?.name ?? null;
+    const whName = Array.isArray(wh) ? (wh[0]?.name ?? null) : (wh?.name ?? null);
 
     setScope((ccRow.scope as string | null | undefined) ?? null);
     const fetchedHeader = {
@@ -518,10 +536,7 @@ export default function CycleCountDetail() {
     };
 
     const fetchedLines = ((lineRows ?? []) as Record<string, unknown>[]).map((r) => {
-      const itm = r.item as
-        | VariantItemRow
-        | VariantItemRow[]
-        | null;
+      const itm = r.item as VariantItemRow | VariantItemRow[] | null;
       const item = Array.isArray(itm) ? itm[0] : itm;
       const updatedAt =
         (r.updated_at as string | null | undefined) ??
@@ -612,7 +627,9 @@ export default function CycleCountDetail() {
     // them). An answer for another workspace is never shown.
     try {
       const links = await getCountLinkedExceptions(id);
-      setLinked(links.organizationId === orgId ? { kind: 'ready', data: links } : { kind: 'failed' });
+      setLinked(
+        links.organizationId === orgId ? { kind: 'ready', data: links } : { kind: 'failed' },
+      );
     } catch {
       setLinked({ kind: 'failed' });
     }
@@ -630,7 +647,6 @@ export default function CycleCountDetail() {
     setEmptyState('read-failed');
     setLoading(false);
   }, [loadOnce]);
-
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
@@ -803,7 +819,11 @@ export default function CycleCountDetail() {
   // Offline with nothing known, it says posting needs a connection and who
   // posts.
   const closeGateView: CloseGateState =
-    closeGate.kind === 'known' ? closeGate : offline ? { kind: 'unknown', offline: true } : closeGate;
+    closeGate.kind === 'known'
+      ? closeGate
+      : offline
+        ? { kind: 'unknown', offline: true }
+        : closeGate;
   const footer = countFooter({
     gate: closeGateView,
     posting,
@@ -815,21 +835,37 @@ export default function CycleCountDetail() {
 
   if (emptyState === 'read-failed') {
     return (
-      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+      <SafeAreaView
+        style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+        edges={['top']}
+      >
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={[styles.header, { borderBottomColor: c.hair }]}>
-          <Pressable
-            onPress={leave}
-            style={styles.backBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-          >
-            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
-          </Pressable>
+        {lg ? <SceneBackground /> : null}
+        <View
+          style={[styles.header, { borderBottomColor: c.hair }, lg && glassCountStyles(lg).header]}
+        >
+          {lg ? (
+            <View style={glassCountStyles(lg).nav}>
+              <IconChip icon={ChevronLeft} onPress={leave} accessibilityLabel="Back" minTap />
+            </View>
+          ) : (
+            <Pressable
+              onPress={leave}
+              style={styles.backBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+            >
+              <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+            </Pressable>
+          )}
         </View>
         <View style={styles.center}>
-          <Text style={[styles.emptyTitle, { color: c.ink }]}>Could not load this count</Text>
-          <Text style={[styles.emptyBody, { color: c.ink3 }]}>
+          <Text
+            style={[styles.emptyTitle, { color: c.ink }, lg && glassCountStyles(lg).emptyTitle]}
+          >
+            Could not load this count
+          </Text>
+          <Text style={[styles.emptyBody, { color: c.ink3 }, lg && glassCountStyles(lg).emptyBody]}>
             {readError}
             {'\n\n'}If the app was just updated, the server may still be catching up.
           </Text>
@@ -852,21 +888,37 @@ export default function CycleCountDetail() {
 
   if (emptyState === 'offline-uncached') {
     return (
-      <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+      <SafeAreaView
+        style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+        edges={['top']}
+      >
         <Stack.Screen options={{ headerShown: false }} />
-        <View style={[styles.header, { borderBottomColor: c.hair }]}>
-          <Pressable
-            onPress={leave}
-            style={styles.backBtn}
-            accessibilityRole="button"
-            accessibilityLabel="Back"
-          >
-            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
-          </Pressable>
+        {lg ? <SceneBackground /> : null}
+        <View
+          style={[styles.header, { borderBottomColor: c.hair }, lg && glassCountStyles(lg).header]}
+        >
+          {lg ? (
+            <View style={glassCountStyles(lg).nav}>
+              <IconChip icon={ChevronLeft} onPress={leave} accessibilityLabel="Back" minTap />
+            </View>
+          ) : (
+            <Pressable
+              onPress={leave}
+              style={styles.backBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Back"
+            >
+              <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+            </Pressable>
+          )}
         </View>
         <View style={styles.center}>
-          <Text style={[styles.emptyTitle, { color: c.ink }]}>Not cached for offline use</Text>
-          <Text style={[styles.emptyBody, { color: c.ink3 }]}>
+          <Text
+            style={[styles.emptyTitle, { color: c.ink }, lg && glassCountStyles(lg).emptyTitle]}
+          >
+            Not cached for offline use
+          </Text>
+          <Text style={[styles.emptyBody, { color: c.ink3 }, lg && glassCountStyles(lg).emptyBody]}>
             Open this cycle count once while online to use it offline next time.
           </Text>
           <Button
@@ -886,67 +938,127 @@ export default function CycleCountDetail() {
   }
 
   return (
-    <SafeAreaView style={[styles.root, { backgroundColor: c.paper }]} edges={['top']}>
+    <SafeAreaView
+      style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
+      edges={['top']}
+    >
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={[styles.header, { borderBottomColor: c.hair }]}>
-        <Pressable
-          onPress={leave}
-          style={styles.backBtn}
-          accessibilityRole="button"
-          accessibilityLabel="Back"
-        >
-          <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
-        </Pressable>
-        <View style={styles.headerRow}>
-          <View style={{ flex: 1 }}>
-            {headerView.kind === 'known' && headerView.reference ? (
-              <>
-                <Text style={[styles.eyebrow, { color: c.ink3 }]}>CYCLE COUNT</Text>
-                {/* Selectable: a long press offers the system Copy, which is the
+      {lg ? <SceneBackground /> : null}
+      <View
+        style={[styles.header, { borderBottomColor: c.hair }, lg && glassCountStyles(lg).header]}
+      >
+        {/* Liquid Glass: the board's nav (Back circle, the reference as the
+            title, the sync capsule); Classic's Back stays its words. */}
+        {lg ? (
+          <View style={glassCountStyles(lg).nav}>
+            <IconChip icon={ChevronLeft} onPress={leave} accessibilityLabel="Back" minTap />
+            <Text
+              style={glassCountStyles(lg).navTitle}
+              numberOfLines={1}
+              selectable
+              accessibilityLabel={
+                headerView.kind === 'known' && headerView.reference
+                  ? `Cycle count ${headerView.reference}`
+                  : 'Cycle count'
+              }
+              accessibilityHint={
+                headerView.kind === 'known' && headerView.reference
+                  ? 'Long press to copy the reference'
+                  : undefined
+              }
+            >
+              {headerView.kind === 'known' && headerView.reference
+                ? headerView.reference
+                : 'Cycle count'}
+            </Text>
+            <SyncStatusBadge />
+          </View>
+        ) : (
+          <Pressable
+            onPress={leave}
+            style={styles.backBtn}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+          >
+            <Text style={[styles.backText, { color: c.ink }]}>← Back</Text>
+          </Pressable>
+        )}
+        <View style={[styles.headerRow, lg && glassCountStyles(lg).headerRow]}>
+          {/* Liquid Glass: where the count is, at 24/700, over its progress. */}
+          {lg ? (
+            <GlassCountTitle
+              lg={lg}
+              title={headerView.kind === 'known' ? headerView.place : 'Cycle count'}
+              sub={
+                headerView.kind === 'known'
+                  ? headerView.progress
+                  : headerView.kind === 'loading'
+                    ? headerView.text
+                    : null
+              }
+              note={
+                headerView.kind === 'known' && !headerView.reference
+                  ? CYCLE_COUNT_REFERENCE_UNAVAILABLE
+                  : null
+              }
+            />
+          ) : null}
+          {lg ? null : (
+            <View style={{ flex: 1 }}>
+              {headerView.kind === 'known' && headerView.reference ? (
+                <>
+                  <Text style={[styles.eyebrow, { color: c.ink3 }]}>CYCLE COUNT</Text>
+                  {/* Selectable: a long press offers the system Copy, which is the
                     copy action here (this binary has no clipboard module, so the
                     app never claims a copy it cannot confirm). */}
-                <Text
-                  style={[styles.title, styles.reference, { color: c.ink }]}
-                  selectable
-                  accessibilityLabel={`Cycle count ${headerView.reference}`}
-                  accessibilityHint="Long press to copy the reference"
-                >
-                  {headerView.reference}
-                </Text>
-              </>
-            ) : (
-              <>
-                <Text style={[styles.title, { color: c.ink }]}>Cycle count</Text>
-                {headerView.kind === 'known' ? (
-                  <Text style={[styles.subtitle, { color: c.ink3 }]}>
-                    {CYCLE_COUNT_REFERENCE_UNAVAILABLE}
+                  <Text
+                    style={[styles.title, styles.reference, { color: c.ink }]}
+                    selectable
+                    accessibilityLabel={`Cycle count ${headerView.reference}`}
+                    accessibilityHint="Long press to copy the reference"
+                  >
+                    {headerView.reference}
                   </Text>
-                ) : null}
-              </>
-            )}
-            {headerView.kind === 'known' ? (
-              <Text style={[styles.subtitle, { color: c.ink3 }]}>
-                {headerView.place} · {headerView.progress}
-              </Text>
-            ) : headerView.kind === 'loading' ? (
-              <Text style={[styles.subtitle, { color: c.ink3 }]}>{headerView.text}</Text>
-            ) : null}
-          </View>
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.title, { color: c.ink }]}>Cycle count</Text>
+                  {headerView.kind === 'known' ? (
+                    <Text style={[styles.subtitle, { color: c.ink3 }]}>
+                      {CYCLE_COUNT_REFERENCE_UNAVAILABLE}
+                    </Text>
+                  ) : null}
+                </>
+              )}
+              {headerView.kind === 'known' ? (
+                <Text style={[styles.subtitle, { color: c.ink3 }]}>
+                  {headerView.place} · {headerView.progress}
+                </Text>
+              ) : headerView.kind === 'loading' ? (
+                <Text style={[styles.subtitle, { color: c.ink3 }]}>{headerView.text}</Text>
+              ) : null}
+            </View>
+          )}
           {header && canAdjust && isOpen ? (
             // AI Scan and Scan are the outline buttons: the count's one ink
             // button is the Post at the foot of the screen.
-            <View style={styles.scanRow}>
+            <View style={[styles.scanRow, lg && glassCountStyles(lg).scanRow]}>
               <Pressable
                 onPress={() => router.push(`/cycle-count/ai-scan/${header.id}`)}
                 accessibilityRole="button"
                 style={({ pressed }) => [
                   styles.scanBtn,
                   { backgroundColor: outline.bg, borderColor: outline.border },
+                  lg && glassCountStyles(lg).capsule,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text
-                  style={[styles.scanBtnLabel, { color: outline.fg }]}
+                  style={[
+                    styles.scanBtnLabel,
+                    { color: outline.fg },
+                    lg && glassCountStyles(lg).capsuleLabel,
+                  ]}
                   maxFontSizeMultiplier={SCAN_LABEL_CAP}
                 >
                   AI Scan
@@ -958,11 +1070,16 @@ export default function CycleCountDetail() {
                 style={({ pressed }) => [
                   styles.scanBtn,
                   { backgroundColor: outline.bg, borderColor: outline.border },
+                  lg && glassCountStyles(lg).capsule,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text
-                  style={[styles.scanBtnLabel, { color: outline.fg }]}
+                  style={[
+                    styles.scanBtnLabel,
+                    { color: outline.fg },
+                    lg && glassCountStyles(lg).capsuleLabel,
+                  ]}
                   maxFontSizeMultiplier={SCAN_LABEL_CAP}
                 >
                   Scan
@@ -970,7 +1087,11 @@ export default function CycleCountDetail() {
               </Pressable>
             </View>
           ) : header && isOpen && !isAssignee && !canManage ? (
-            <Text style={[styles.lockedNote, { color: c.ink3 }]}>Assigned to another employee</Text>
+            <Text
+              style={[styles.lockedNote, { color: c.ink3 }, lg && glassCountStyles(lg).lockedNote]}
+            >
+              Assigned to another employee
+            </Text>
           ) : null}
         </View>
         {/* The reference count card's progress bar (DESIGN-SPEC 6.11): the
@@ -981,9 +1102,10 @@ export default function CycleCountDetail() {
             <StockBar value={countedCount} max={lines.length} height={4} />
           </View>
         ) : null}
-        <View style={styles.badgeRow}>
-          <SyncStatusBadge />
-          <View style={styles.badgeActions}>
+        <View style={[styles.badgeRow, lg && glassCountStyles(lg).badgeRow]}>
+          {/* Liquid Glass shows the sync status in the nav, as the board. */}
+          {lg ? <View /> : <SyncStatusBadge />}
+          <View style={[styles.badgeActions, lg && glassCountStyles(lg).badgeActions]}>
             {isOpen && !!header?.assignedTo && (header.assignedTo === user?.id || canManage) ? (
               <Pressable
                 onPress={() => setReleaseOpen(true)}
@@ -991,11 +1113,16 @@ export default function CycleCountDetail() {
                 style={({ pressed }) => [
                   styles.releaseBtn,
                   { backgroundColor: outline.bg, borderColor: outline.border },
+                  lg && glassCountStyles(lg).capsule,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text
-                  style={[styles.releaseBtnLabel, { color: outline.fg }]}
+                  style={[
+                    styles.releaseBtnLabel,
+                    { color: outline.fg },
+                    lg && glassCountStyles(lg).capsuleLabel,
+                  ]}
                   maxFontSizeMultiplier={SCAN_LABEL_CAP}
                 >
                   Release
@@ -1009,11 +1136,16 @@ export default function CycleCountDetail() {
                 style={({ pressed }) => [
                   styles.releaseBtn,
                   { backgroundColor: outline.bg, borderColor: outline.border },
+                  lg && glassCountStyles(lg).capsule,
                   pressed && styles.pressed,
                 ]}
               >
                 <Text
-                  style={[styles.releaseBtnLabel, { color: outline.fg }]}
+                  style={[
+                    styles.releaseBtnLabel,
+                    { color: outline.fg },
+                    lg && glassCountStyles(lg).capsuleLabel,
+                  ]}
                   maxFontSizeMultiplier={SCAN_LABEL_CAP}
                 >
                   Reassign
@@ -1029,15 +1161,28 @@ export default function CycleCountDetail() {
           style={[
             styles.conflictBanner,
             { backgroundColor: c.warnWash, borderBottomColor: c.hair },
+            lg && glassCountStyles(lg).conflictBanner,
           ]}
         >
-          <Text style={[styles.conflictText, { color: c.ink }]}>{conflictBanner}</Text>
+          <Text
+            style={[styles.conflictText, { color: c.ink }, lg && glassCountStyles(lg).conflictText]}
+          >
+            {conflictBanner}
+          </Text>
           <Pressable
             onPress={() => setConflictBanner(null)}
             accessibilityRole="button"
             style={styles.conflictDismissFrame}
           >
-            <Text style={[styles.conflictDismiss, { color: c.warnText }]}>Dismiss</Text>
+            <Text
+              style={[
+                styles.conflictDismiss,
+                { color: c.warnText },
+                lg && glassCountStyles(lg).conflictDismiss,
+              ]}
+            >
+              Dismiss
+            </Text>
           </Pressable>
         </View>
       )}
@@ -1064,29 +1209,36 @@ export default function CycleCountDetail() {
           }}
         >
           {lines.length > 0 ? (
-            <Text style={[styles.expectedHint, { color: c.ink3 }]}>
-              Expected is the system quantity when the line was counted (the quantity
-              at session start until then). Stock that moves after a line is counted is
-              kept when the count is posted.
+            <Text
+              style={[
+                styles.expectedHint,
+                { color: c.ink3 },
+                lg && glassCountStyles(lg).expectedHint,
+              ]}
+            >
+              Expected is the system quantity when the line was counted (the quantity at session
+              start until then). Stock that moves after a line is counted is kept when the count is
+              posted.
             </Text>
           ) : null}
           {linked.kind === 'failed' ? (
-            <Text style={[styles.linkedNote, { color: c.ink3 }]} accessibilityRole="alert">
+            <Text
+              style={[styles.linkedNote, { color: c.ink3 }, lg && glassCountStyles(lg).linkedNote]}
+              accessibilityRole="alert"
+            >
               {COUNT_LINKED_EXCEPTIONS_UNAVAILABLE_COPY}
             </Text>
           ) : linked.kind === 'ready' && exceptionUnrecognizedCopy(linked.data.unrecognized) ? (
-            <Text style={[styles.linkedNote, { color: c.ink3 }]}>
+            <Text
+              style={[styles.linkedNote, { color: c.ink3 }, lg && glassCountStyles(lg).linkedNote]}
+            >
               {exceptionUnrecognizedCopy(linked.data.unrecognized)}
             </Text>
           ) : null}
           {lines.map((l, i) => {
             const draftVal = draft[l.id];
             const isDrafting = draftVal !== undefined;
-            const display = isDrafting
-              ? draftVal
-              : l.counted !== null
-                ? String(l.counted)
-                : '';
+            const display = isDrafting ? draftVal : l.counted !== null ? String(l.counted) : '';
             // Live variance — reflect whatever is currently in the box
             // (the draft while typing, else the persisted count) so the
             // delta updates immediately instead of only after the
@@ -1095,8 +1247,7 @@ export default function CycleCountDetail() {
             // rule (countFromBox), so a box the saver will not save (a
             // negative number) shows no variance it will never apply.
             const effectiveCounted = isDrafting ? countFromBox(draftVal) : l.counted;
-            const variance =
-              effectiveCounted !== null ? effectiveCounted - l.expected : null;
+            const variance = effectiveCounted !== null ? effectiveCounted - l.expected : null;
             // A count synced from an offline phone was measured against the
             // book when it was taken (server 0369); the reviewer sees when.
             // Not for a pending local edit, which is not the server's count.
@@ -1136,20 +1287,45 @@ export default function CycleCountDetail() {
                   { backgroundColor: c.card, borderColor: c.hair },
                   i === 0 && styles.lineFirst,
                   i === lines.length - 1 && styles.lineLast,
+                  // Liquid Glass: one grouped surface (.ios-group) of iOS rows.
+                  lg && glassCountStyles(lg).line,
+                  lg && glassCountRowEdges(lg, i === 0, i === lines.length - 1),
                 ]}
               >
+                {lg ? i > 0 ? <GlassRowSeparator lg={lg} /> : null : null}
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.itemName, { color: c.ink }]} numberOfLines={2}>
+                  <Text
+                    style={[styles.itemName, { color: c.ink }, lg && glassCountStyles(lg).itemName]}
+                    numberOfLines={2}
+                  >
                     {l.itemName}
                   </Text>
                   {l.itemVariantLabel ? (
-                    <Text style={[styles.itemVariant, { color: c.ink2 }]}>
+                    <Text
+                      style={[
+                        styles.itemVariant,
+                        { color: c.ink2 },
+                        lg && glassCountStyles(lg).itemVariant,
+                      ]}
+                    >
                       {l.itemVariantLabel}
                     </Text>
                   ) : null}
-                  <Text style={[styles.itemSku, { color: c.ink3 }]}>{l.itemSku}</Text>
+                  <Text
+                    style={[styles.itemSku, { color: c.ink3 }, lg && glassCountStyles(lg).itemSku]}
+                  >
+                    {l.itemSku}
+                  </Text>
                   {capturedText ? (
-                    <Text style={[styles.captured, { color: c.ink3 }]}>{capturedText}</Text>
+                    <Text
+                      style={[
+                        styles.captured,
+                        { color: c.ink3 },
+                        lg && glassCountStyles(lg).captured,
+                      ]}
+                    >
+                      {capturedText}
+                    </Text>
                   ) : null}
                   {links.length > 0 ? (
                     <View style={styles.linkRow}>
@@ -1167,10 +1343,15 @@ export default function CycleCountDetail() {
                             style={[
                               styles.linkChip,
                               { backgroundColor: warnPill.bg, borderColor: warnPill.border },
+                              lg && glassCountStyles(lg).linkChip,
                             ]}
                           >
                             <Text
-                              style={[styles.linkChipText, { color: warnPill.fg }]}
+                              style={[
+                                styles.linkChipText,
+                                { color: warnPill.fg },
+                                lg && glassCountStyles(lg).linkChipText,
+                              ]}
                               maxFontSizeMultiplier={LINK_CHIP_CAP}
                             >
                               {`Recount for ${x.occurrence.reference ?? 'an exception'}`}
@@ -1184,14 +1365,28 @@ export default function CycleCountDetail() {
                     <Text
                       style={
                         destination.kind === 'review'
-                          ? [styles.destination, { color: c.ink }]
-                          : [styles.destinationPending, { color: c.ink3 }]
+                          ? [
+                              styles.destination,
+                              { color: c.ink },
+                              lg && glassCountStyles(lg).destination,
+                            ]
+                          : [
+                              styles.destinationPending,
+                              { color: c.ink3 },
+                              lg && glassCountStyles(lg).destinationPending,
+                            ]
                       }
                     >
                       {destination.text}
                     </Text>
                   ) : null}
-                  <Text style={[styles.expected, { color: c.ink3 }]}>
+                  <Text
+                    style={[
+                      styles.expected,
+                      { color: c.ink3 },
+                      lg && glassCountStyles(lg).expected,
+                    ]}
+                  >
                     Expected: {l.expected}
                     {l.localDirty && <Text style={{ color: c.warnText }}> · unsynced</Text>}
                   </Text>
@@ -1203,6 +1398,7 @@ export default function CycleCountDetail() {
                       <Text
                         style={[
                           styles.variance,
+                          lg && glassCountStyles(lg).variance,
                           {
                             color: variance > 0 ? c.accent : variance < 0 ? c.critText : c.ink3,
                           },
@@ -1215,7 +1411,7 @@ export default function CycleCountDetail() {
                     </View>
                   )}
                 </View>
-                <View style={styles.countBox}>
+                <View style={[styles.countBox, lg && glassCountStyles(lg).countBox]}>
                   {/* The reference's count box: recessed, the stronger border,
                       mono and right-aligned. Named for its line, so VoiceOver
                       says which item a count is for (it read only the value). */}
@@ -1223,6 +1419,8 @@ export default function CycleCountDetail() {
                     style={[
                       styles.countInput,
                       { color: c.ink, backgroundColor: c.sunk, borderColor: c.hair2 },
+                      lg && glassCountStyles(lg).countInput,
+                      lg && glassCountBox(lg),
                     ]}
                     value={display}
                     onChangeText={(v) => setDraftValue(l.id, v)}
@@ -1238,7 +1436,9 @@ export default function CycleCountDetail() {
           })}
 
           {lines.length === 0 && (
-            <Text style={[styles.emptyText, { color: c.ink3 }]}>
+            <Text
+              style={[styles.emptyText, { color: c.ink3 }, lg && glassCountStyles(lg).emptyText]}
+            >
               This count has no lines yet. Add lines from the web first.
             </Text>
           )}
@@ -1256,9 +1456,13 @@ export default function CycleCountDetail() {
               borderTopColor: c.hair,
               paddingBottom: space.md + insets.bottom,
             },
+            // Liquid Glass: the board's entry card (.keypad.glass-strong), 8pt in.
+            lg && glassCountStyles(lg).footer,
+            lg && { paddingBottom: Math.max(14, insets.bottom - 8) },
           ]}
           onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
         >
+          {lg ? <GlassSheetBackdrop radius={34} /> : null}
           {footer.kind === 'post' ? (
             // Post commits the count: the ink button. A partial post (some
             // lines not counted) keeps its warning fill, as before, with the
@@ -1272,15 +1476,31 @@ export default function CycleCountDetail() {
               style={({ pressed }) => [
                 styles.postBtn,
                 { backgroundColor: post.bg, borderColor: post.border },
+                lg && glassCountStyles(lg).postBtn,
                 footer.partial && { backgroundColor: c.warnText, borderColor: c.warnText },
                 (pressed || footer.disabled) && { opacity: 0.6 },
               ]}
             >
-              <Text style={[styles.postBtnText, { color: post.fg }]}>{footer.label}</Text>
+              <Text
+                style={[
+                  styles.postBtnText,
+                  { color: post.fg },
+                  lg && glassCountStyles(lg).postBtnText,
+                ]}
+              >
+                {footer.label}
+              </Text>
             </Pressable>
           ) : (
             <View style={{ gap: space.sm }}>
-              <Text style={[styles.footerNote, { color: c.ink3 }]} accessibilityRole="text">
+              <Text
+                style={[
+                  styles.footerNote,
+                  { color: c.ink3 },
+                  lg && glassCountStyles(lg).footerNote,
+                ]}
+                accessibilityRole="text"
+              >
                 {footer.text}
               </Text>
               {footer.kind === 'unknown' && footer.retry ? (
@@ -1292,6 +1512,7 @@ export default function CycleCountDetail() {
                   style={({ pressed }) => [
                     styles.footerRetry,
                     { backgroundColor: outline.bg, borderColor: outline.border },
+                    lg && glassCountStyles(lg).footerRetry,
                     pressed && styles.pressed,
                   ]}
                   accessibilityRole="button"
