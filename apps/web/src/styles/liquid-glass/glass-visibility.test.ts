@@ -66,6 +66,11 @@ describe('glass-only and classic-only elements', () => {
   // badge beside the status (words and an icon); the order page's
   // requester note, Classic-only in the main column (the page) and a
   // glass-only copy in the side column (words only, plan 4.6).
+  // Fidelity lane detail: the item page's figure strip and Reorder card,
+  // Classic-only (the page), the glass summary card and side column (words,
+  // figures and the one Book Order Totals link, built from values the page
+  // already loads, plan 4.6), and the More actions disclosure (shows the
+  // classic actions it holds back, in place; no action of its own).
   // Each is on tests/e2e/appearance/glass-only-allowlist.json.
   it('are listed, so a new one is reviewed here first', () => {
     expect(ELEMENTS.map((e) => e.file)).toEqual([
@@ -73,6 +78,9 @@ describe('glass-only and classic-only elements', () => {
       'app/(dashboard)/dashboard/orders/[id]/page.tsx',
       'components/auth/external-shell.tsx',
       'components/dashboard/sidebar.tsx',
+      ...Array<string>(2).fill('components/inventory/item-detail.tsx'),
+      ...Array<string>(2).fill('components/inventory/item-glass-summary.tsx'),
+      'components/inventory/item-more-actions.tsx',
       'components/orders/order-fulfilment-badge.tsx',
       'components/orders/order-phone-cards.tsx',
       'components/orders/order-requester-note-aside.tsx',

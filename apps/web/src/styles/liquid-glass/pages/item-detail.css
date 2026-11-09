@@ -1,31 +1,55 @@
-/* The item and book page under Liquid Glass (stage 3, items lane):
-   Item-Detail.dc.html and Book-Detail.dc.html ("photos and cost history keep
-   their current layouts with the new tokens"). CSS on today's markup (M1):
-   the page keeps its classic composition (back link, photo, name, meta line,
-   every action, tabs, figures, cards) and takes the board's frame: the 1480
-   page, the 26 px name, the SKU as the outline mono chip, the figures as
-   wells with the figure above its label, radius 20 cards with 52 px headers
-   and 16 px titles, the accent tab underline (primitives.css), the outline
-   focus ring. Cards, badges, buttons, fields and dialogs take their glass
-   from the shared hooks (materials.css, primitives.css).
+/* The item and book page under Liquid Glass: Item-Detail.dc.html and
+   Book-Detail.dc.html ("photos and cost history keep their current layouts
+   with the new tokens"). Stage 3 (items lane) gave today's markup the board's
+   frame: the 1480 page, the 26 px name, the SKU as the outline mono chip,
+   radius 20 cards with 52 px headers and 16 px titles, the accent tab
+   underline (primitives.css), the outline focus ring. The fidelity round
+   (lane detail) composes the page as the boards draw it (plan 4.6, the slot
+   frame), without changing one Classic node:
 
-   Deviations, recorded: the board's summary card (a 160 px photo beside the
-   size selector, Available and Reserved wells and a reorder alert) and its
-   Ordering, Reserved, Expected and Product family cards need data this page
-   does not load, so they are not drawn; the tabs stay in the sticky header,
-   above the overview, where classic has them (the board puts Movements,
-   Orders, Photos and Cost history in a card); every classic action stays a
-   button in the header row at its classic size (the board shows three and a
-   More menu); a book keeps the square header photo (the board's cover sits
-   in the summary card).
+   - the page head: the title on the left, the actions on the right, on its
+     foot (.page-h). The board's three actions show (Edit, Adjust stock,
+     Transfer: the inert data-glass-action hooks), and the glass-only More
+     actions disclosure (components/inventory/item-more-actions.tsx) shows the
+     rest in the same row, in their DOM order, when pressed. Every action
+     stays one Classic node with its own gate and dialog;
+   - the Overview: the board's summary card (photo or cover, the book's
+     facts, the wells, the reorder alert) and side column (Book Order Totals,
+     Ordering, Reserved, Expected, Product family, Reorder) are glass-only
+     blocks built from values the page already holds
+     (components/inventory/item-glass-summary.tsx); the figure strip and the
+     Reorder card they replace are data-classic-only. The panels follow in
+     one main column beside the side column (.cols-side: 300 to 360 px; one
+     column at 1100 px and narrower).
+
+   Recorded deviations (stage3/fidelity-rows.md, lane detail): the cards keep
+   their DOM order (Details before By location, the board's "Where it is"):
+   moving By location above Details would put its controls after Details' in
+   the keyboard order but above them on screen (plan 4.6, WCAG 2.4.3). The
+   tabs stay the page's Overview, Movements and Activity under the head: the
+   board's history card (Movements, Orders, Photos, Cost history beside an
+   always-shown summary) needs the Overview's reads on every tab, which the
+   page skips on purpose (item-detail.tsx, CONFLICTS D7), and an orders feed
+   it does not load. The actions read in their DOM order (Edit, Adjust stock,
+   Transfer; the board draws Transfer, Adjust, Edit), and More shows the
+   others inline rather than in a floating menu, so the keyboard order is the
+   order on screen and a dialog opened from one returns focus to a trigger
+   still shown. The board's size selector, the reorder alert's purchase
+   order, the Reserved card's orders, the Expected card's purchase order,
+   Other editions, the owner charter and the Book Order Totals figure need
+   reads the page does not make (DECISIONS.md: omitted and recorded). The
+   sticky header keeps its overlay glass (it keeps every action on screen as
+   the page scrolls, and globals.css's focus margin keys on it).
 
    Imported by its own routes (app/(dashboard)/dashboard/inventory/[id]/page.tsx
    and books/[id]/page.tsx), scoped to the root ItemDetail draws,
    [data-glass-page=item-detail], an inert hook
-   (components/inventory/item-detail.redesign.test.tsx, classic parity). The
-   sticky header is found by the attribute it already carries,
-   [data-item-detail-header]; the meta line, the figures and the cards by the
-   pattern components' own data-slot attributes. */
+   (components/inventory/item-detail.redesign.test.tsx: classic parity and
+   classicStructure). The sticky header is found by the attribute it already
+   carries, [data-item-detail-header]; the meta line and the cards by the
+   pattern components' own data-slot attributes. No selector list here holds
+   :has(): a minifier folds such a list into an :is() that starts outside
+   the glass root (compiled-css.guard.test.ts). */
 @layer theme, base, components, utilities, lg;
 
 @layer lg {
@@ -54,15 +78,13 @@
       font-size: 26px;
       line-height: 32px;
     }
-    /* The header photo (.thumb-lg): radius 12 on the card hairline, the
-       third surface behind it (classic's white tile glared at Night). */
+    /* The header photo: the summary card draws the record's photo or cover
+       (Item-Detail.dc.html, Book-Detail.dc.html), so the head has none. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
       [data-glass='page-header']
-      [data-slot='thumb'] {
-      border-color: var(--lg-card-line);
-      border-radius: 12px;
-      background-color: var(--lg-surface-3);
+      div:has(> [data-slot='thumb']) {
+      display: none;
     }
     /* The meta line under the name (.titles .row.g6): the SKU is the board's
        outline mono chip (.badge.b-outline.mono), the chips sit 6 px apart,
@@ -96,43 +118,390 @@
       display: none;
     }
 
-    /* ── Figures (.well.p12.stat): one well per figure, 10 px apart, the
-       figure (28 / 34, 650) above its label (13 / 18, ink 3). The strip's
-       own card and the hairlines between its cells are not drawn; the DOM
-       order (label, then figure) is unchanged, so a screen reader still
-       reads "On hand, 14 each". ───────────────────────────────────────── */
+    /* ── The page head (.page-h): the title on the left, the actions on the
+       right, both on its foot; More actions after them. The title row's
+       wrapper gives its two children to the head's grid (display: contents),
+       so the back link, the title, the actions, More and the tabs are one
+       grid in their DOM order. ─────────────────────────────────────────── */
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
-      [data-glass='stat-strip'][data-variant='detail'] {
-      overflow: visible;
-      border-width: 0;
-      border-radius: 0;
-      background-color: transparent;
-      box-shadow: none;
+      [data-item-detail-header] {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-areas:
+        'back back back'
+        'title acts more'
+        'tabs tabs tabs';
+      align-items: end;
+      column-gap: 8px;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
-      [data-glass='stat-strip'][data-variant='detail']
+      [data-item-detail-header]
+      > :first-child {
+      grid-area: back;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]
+      > div:has(> [data-glass='page-header']) {
+      display: contents;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]
+      [data-glass='page-header'] {
+      grid-area: title;
+      margin-inline-end: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]
+      [data-tour='item-actions'] {
+      grid-area: acts;
+      width: auto;
+      min-width: 0;
+      margin: 0;
+      padding: 2px 0;
+      overflow: visible;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]
+      [data-glass='item-more'] {
+      grid-area: more;
+      display: inline-flex;
+      padding: 2px 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]
+      > :last-child {
+      grid-area: tabs;
+    }
+    /* The row of actions (.acts): 8 px apart, wrapping, at the right. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-tour='item-actions']
       > div {
+      width: auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    /* Each action is the board's secondary button (.btn.btn-secondary: 36 px,
+       14 px / 600, the field frost), whatever variant classic draws it in
+       (Adjust stock is classic's ink primary). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-tour='item-actions']
+      > div
+      > [data-glass='button'] {
+      height: 36px;
+      padding-inline: 14px;
+      gap: 8px;
+      border-color: var(--lg-field-line);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 1px 2px rgba(60, 44, 26, 0.08);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass-page='item-detail']
+      [data-tour='item-actions']
+      > div
+      > [data-glass='button'] {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-tour='item-actions']
+      > div
+      > [data-glass='button']:hover {
+      background-color: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass-page='item-detail']
+      [data-tour='item-actions']
+      > div
+      > [data-glass='button']:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+    /* More actions (.btn.btn-ghost.btn-icon, 36 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-more']
+      > [data-glass='button'] {
+      width: 36px;
+      height: 36px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-more']
+      > [data-glass='button'][aria-expanded='true'] {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+    /* Closed: only the actions that carry a keep hook show. When none of them
+       is allowed, nothing is held back and More is not drawn. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]:has([data-glass='item-more'] [aria-expanded='false'])
+      [data-tour='item-actions']
+      > div:has(> [data-glass-action])
+      > :not([data-glass-action]) {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]:not(:has([data-tour='item-actions'] [data-glass-action]))
+      [data-glass='item-more'] {
+      display: none;
+    }
+    /* Open: the actions take the row under the title, More at its end. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-item-detail-header]:has([data-glass='item-more'] [aria-expanded='true']) {
+      grid-template-areas:
+        'back back back'
+        'title title title'
+        'acts acts more';
+      row-gap: 12px;
+    }
+
+    /* ── The Overview (.cols-side): the summary card over the panels, the
+       side column beside both. ──────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      > [role='tabpanel']:has(> [data-glass='item-summary']) {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+      grid-template-rows: auto 1fr;
+      grid-template-areas:
+        'summary aside'
+        'main aside';
+      align-items: start;
+      gap: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      > [role='tabpanel']
+      > [data-glass='item-summary'] {
+      grid-area: summary;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      > [role='tabpanel']
+      > [data-glass='item-aside'] {
+      grid-area: aside;
+    }
+    /* The panels, one column in their DOM order (the board's .col.g16). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      > [role='tabpanel']:has(> [data-glass='item-summary'])
+      > div:last-child {
+      grid-area: main;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    /* ── The summary card (.card.p20.row.as.g24.wrap; the book's p24 g28) ─ */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary'] {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 24px;
+      min-width: 0;
+      padding: 20px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary'][data-glass-variant='book'] {
+      gap: 28px;
+      padding: 24px;
+    }
+    /* The photo (.thumb.thumb-2xl): 160 px, radius 20, on surface 3. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='photo'] {
+      position: relative;
+      flex: none;
+      width: 160px;
+      height: 160px;
+      overflow: hidden;
+      border-radius: 20px;
+      background-color: var(--lg-surface-3);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    }
+    /* The book's cover (.cover, --thumb 228 px): two thirds as wide, the
+       spine's 3 px corners and the paper shadow. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary'][data-glass-variant='book']
+      [data-glass-part='photo'] {
+      width: 152px;
+      height: 228px;
+      border-radius: 3px 5px 5px 3px;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='photo']
+      > img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='facts'] {
+      display: flex;
+      flex: 1 1 280px;
+      flex-direction: column;
+      gap: 14px;
+      min-width: min(280px, 100%);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary'][data-glass-variant='book']
+      [data-glass-part='facts'] {
+      flex-basis: 300px;
+      min-width: min(300px, 100%);
+    }
+    /* The book's facts (.kv): label and value columns, 14 px. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='kv'] {
+      display: grid;
+      grid-template-columns: minmax(110px, auto) 1fr;
+      gap: 8px 16px;
+      margin: 0;
+      font-size: 14px;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='kv']
+      > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='kv']
+      > dd {
+      min-width: 0;
+      margin: 0;
+      color: var(--lg-ink);
+      font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='kv']
+      > dd[data-glass-part='mono'] {
+      font-family: var(--font-mono);
+      font-size: 13px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='kv']
+      > dd[data-glass-part='muted'] {
+      color: var(--lg-ink-3);
+      font-weight: 400;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='crate'] {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0 6px;
+    }
+    /* .crate: the 12 px swatch, radius 3, a hairline inside. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='crate-dot'] {
+      flex: none;
+      width: 12px;
+      height: 12px;
+      border-radius: 3px;
+      background-color: var(--lg-surface-3);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='note'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 16px;
+    }
+    /* The wells (.well.p12.stat in an auto-fit grid of 120 px, 10 apart): the
+       figure (28 / 34, 650) above its label (13 / 18, ink 3); the label comes
+       first in the DOM, so a screen reader reads "On hand, 6 each". */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='wells'] {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       gap: 10px;
       margin: 0;
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
-      [data-glass='stat-strip'][data-variant='detail']
-      [data-slot='stat-strip-item'] {
+      [data-glass='item-summary']
+      [data-glass-part='well'] {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      min-width: 0;
       padding: 12px;
-      border: 1px solid var(--lg-card-line);
+      border: var(--lg-b-w) solid var(--lg-card-line);
       border-radius: var(--lg-r-md);
       background-color: var(--lg-card-fill-2);
     }
+    /* Value spans two wells: the facts column is at least 280 px, so the
+       grid always has two columns for it. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
-      [data-slot='stat-strip-item']
-      > div:first-child {
+      [data-glass='item-summary']
+      [data-glass-part='well'][data-glass-span='2'] {
+      grid-column: span 2;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='well']
+      > dt {
       color: var(--lg-ink-3);
       font-size: 13px;
       font-weight: 500;
@@ -140,13 +509,271 @@
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='item-detail']
-      [data-slot='stat-strip-item']
-      > div:nth-child(2) {
+      [data-glass='item-summary']
+      [data-glass-part='well']
+      > dd {
       order: -1;
+      margin: 0;
+      color: var(--lg-ink);
+      font-family: var(--font-display);
       font-size: 28px;
+      font-variant-numeric: tabular-nums;
       font-weight: 650;
-      line-height: 34px;
       letter-spacing: -0.02em;
+      line-height: 34px;
+      overflow-wrap: anywhere;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='well']
+      > dd[data-glass-part='well-sub'] {
+      display: inline-flex;
+      order: 1;
+      align-items: center;
+      gap: 4px;
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='well-sub']
+      > svg {
+      flex: none;
+      width: 12px;
+      height: 12px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='unit'] {
+      color: var(--lg-ink-3);
+      font-family: var(--font-sans);
+      font-size: 13px;
+      font-weight: 400;
+      letter-spacing: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='well'][data-glass-tone='warn']
+      > dd {
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='well'][data-glass-tone='danger']
+      > dd {
+      color: var(--lg-danger);
+    }
+    /* The reorder alert (.alert.a-warn, which glass draws on the well fill
+       with the warning icon; sp.css:355-359, 1011). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='alert'] {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      margin: 0;
+      padding: 10px 12px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 12px;
+      background-color: var(--lg-card-fill-2);
+      color: var(--lg-ink);
+      font-size: 13.5px;
+      line-height: 1.45;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='alert']
+      > svg {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      margin-top: 1px;
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-summary']
+      [data-glass-part='alert'][data-glass-tone='danger']
+      > svg {
+      color: var(--lg-danger);
+    }
+
+    /* ── The side column (aside.col.g16) and its cards (.card.p16.col.g10:
+       an h4 title, 13 px words in ink 2, 12 px notes in ink 3) ─────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside'] {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card'] {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      min-width: 0;
+      padding: 16px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      > [data-glass-part='head'] {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      h2 {
+      margin: 0;
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      p {
+      margin: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='note'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='danger'] {
+      color: var(--lg-danger);
+      font-weight: 500;
+    }
+    /* .badge (22 px, 12 / 600, radius 6): Shown on the accent wash, Hidden on
+       the neutral wash. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='badge'] {
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 6px;
+      background-color: var(--lg-neutral-wash);
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='badge'][data-glass-tone='accent'] {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    /* Open the report (.btn.btn-secondary.btn-sm): 30 px, 13 / 600. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='link-button'] {
+      display: inline-flex;
+      align-self: flex-start;
+      align-items: center;
+      height: 30px;
+      padding: 0 10px;
+      border: var(--lg-b-w) solid var(--lg-field-line);
+      border-radius: var(--lg-r-sm);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='link-button']:hover {
+      background-color: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='link-button']:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+    /* The Reorder copy (.kv at 13 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='kv'] {
+      display: grid;
+      grid-template-columns: minmax(96px, auto) 1fr;
+      gap: 8px 16px;
+      margin: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='kv']
+      > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='item-detail']
+      [data-glass='item-aside-card']
+      [data-glass-part='kv']
+      > dd {
+      margin: 0;
+      color: var(--lg-ink);
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+      text-align: right;
+    }
+
+    /* ── One column at 1100 px and narrower (sp.css:292): the summary, the
+       side column and the panels, in their DOM order. ──────────────────── */
+    @media (max-width: 1100px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        > [role='tabpanel']:has(> [data-glass='item-summary']) {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: none;
+        grid-template-areas:
+          'summary'
+          'aside'
+          'main';
+      }
     }
 
     /* ── Cards (.card, .card-h, .h3): radius 20; a 52 px header with
@@ -207,6 +834,50 @@
         font-size: 24px;
         line-height: 30px;
       }
+      /* The head stacks: the title, then the actions and More on one row
+         (closed or open), from the left. */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header] {
+        grid-template-columns: minmax(0, 1fr) auto;
+        grid-template-areas:
+          'back back'
+          'title title'
+          'acts more';
+        row-gap: 12px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header]:has([data-glass='item-more'] [aria-expanded='true']) {
+        grid-template-areas:
+          'back back'
+          'title title'
+          'acts more';
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-item-detail-header]
+        [data-glass='page-header'] {
+        margin-inline-end: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-tour='item-actions']
+        > div {
+        justify-content: flex-start;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-glass='item-more'] {
+        align-self: start;
+      }
+      /* The summary card: 16 px in, as the phone's cards. */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        [data-glass='item-summary'] {
+        gap: 16px;
+        padding: 16px;
+      }
     }
 
     /* Reduce Transparency, Increase Contrast and the low-power material: the
@@ -232,6 +903,22 @@
         background: Canvas;
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
+      }
+      /* The glass-only cards, wells and alert keep an edge (materials.css
+         does this for the shared cards). */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='item-detail']
+        :is(
+          [data-glass='item-summary'],
+          [data-glass='item-aside-card'],
+          [data-glass-part='well'],
+          [data-glass-part='alert'],
+          [data-glass-part='link-button'],
+          [data-glass-part='badge']
+        ) {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
       }
     }
   }

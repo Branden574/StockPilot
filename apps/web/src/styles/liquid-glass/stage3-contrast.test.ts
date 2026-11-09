@@ -213,6 +213,82 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['figure (ink) in its well', '--lg-ink', ['--lg-pane', '--lg-card-fill-2'], 4.5],
   ['figure label (ink 3) in its well', '--lg-ink-3', ['--lg-pane', '--lg-card-fill-2'], 4.5],
   ['card title (ink) on the card', '--lg-ink', ['--lg-pane', '--lg-card-fill'], 4.5],
+  // Fidelity lane detail: the item page's summary card and side column
+  // (pages/item-detail.css), each layer as the page stacks it.
+  [
+    'summary figure (ink) in its well on the card',
+    '--lg-ink',
+    ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'summary label (ink 3) in its well on the card',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'low-stock figure (warn) in its well on the card',
+    '--lg-warn',
+    ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'out-of-stock figure (danger) in its well on the card',
+    '--lg-danger',
+    ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'reorder alert words (ink) on the alert',
+    '--lg-ink',
+    ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'reorder alert icon (warn) on the alert',
+    '--lg-warn',
+    ['--lg-pane', '--lg-card-fill', '--lg-card-fill-2'],
+    3,
+  ],
+  [
+    'book facts label (ink 3) on the summary card',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-card-fill'],
+    4.5,
+  ],
+  ['side card words (ink 2) on the card', '--lg-ink-2', ['--lg-pane', '--lg-card-fill'], 4.5],
+  ['side card note (ink 3) on the card', '--lg-ink-3', ['--lg-pane', '--lg-card-fill'], 4.5],
+  [
+    'Shown in Orders (accent text) on its wash',
+    '--lg-accent-text',
+    ['--lg-pane', '--lg-card-fill', '--lg-accent-wash'],
+    4.5,
+  ],
+  [
+    'Hidden from Orders (ink 2) on the neutral wash',
+    '--lg-ink-2',
+    ['--lg-pane', '--lg-card-fill', '--lg-neutral-wash'],
+    4.5,
+  ],
+  [
+    'Open the report (ink) on the field frost',
+    '--lg-ink',
+    ['--lg-pane', '--lg-card-fill', '--lg-field-fill'],
+    4.5,
+  ],
+  [
+    'head action (ink) on the field frost over the header',
+    '--lg-ink',
+    ['--lg-pane', '--lg-glass-strong', '--lg-field-fill'],
+    4.5,
+  ],
+  [
+    'More actions icon (ink 2) on the item header',
+    '--lg-ink-2',
+    ['--lg-pane', '--lg-glass-strong'],
+    3,
+  ],
   // Focus ring (R11)
   ['focus ring on the pane', '--lg-focus', ['--lg-pane'], 3],
   ['focus ring on the sidebar', '--lg-focus', ['--lg-glass'], 3],
