@@ -217,6 +217,54 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['focus ring on the pane', '--lg-focus', ['--lg-pane'], 3],
   ['focus ring on the sidebar', '--lg-focus', ['--lg-glass'], 3],
   ['focus ring on a card', '--lg-focus', ['--lg-pane', '--lg-card-fill'], 3],
+  // Stage 3 fidelity, small lane: the phone bar's title, the Books cover card
+  // and Settings > Appearance (a settings card on the pane).
+  ['phone bar title (ink) on the pane', '--lg-ink', ['--lg-pane'], 4.5],
+  ['cover card grade (ink 3) on the card', '--lg-ink-3', ['--lg-pane', '--lg-card-fill'], 4.5],
+  ['cover card figure (ink) on the card', '--lg-ink', ['--lg-pane', '--lg-card-fill'], 4.5],
+  [
+    'Appearance option words (ink) on the field frost',
+    '--lg-ink',
+    ['--lg-pane', '--lg-card-fill', '--lg-field-fill'],
+    4.5,
+  ],
+  [
+    'Appearance chosen option words (ink) on the selection wash',
+    '--lg-ink',
+    ['--lg-pane', '--lg-card-fill', '--lg-sel-fill'],
+    4.5,
+  ],
+  [
+    'Appearance chosen option description (ink 3) on the selection wash',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-card-fill', '--lg-sel-fill'],
+    4.5,
+  ],
+  [
+    'Appearance chosen edge and radio (accent) on the selection wash',
+    '--lg-accent',
+    ['--lg-pane', '--lg-card-fill', '--lg-sel-fill'],
+    3,
+  ],
+  [
+    'Appearance chosen edge (accent) against the card',
+    '--lg-accent',
+    ['--lg-pane', '--lg-card-fill'],
+    3,
+  ],
+  ['Appearance chosen radio dot (on-accent) on the accent', '--lg-on-accent', ['--lg-accent'], 3],
+  [
+    'Appearance empty radio edge (ink 4) on the option',
+    '--lg-ink-4',
+    ['--lg-pane', '--lg-card-fill', '--lg-field-fill'],
+    3,
+  ],
+  [
+    'Appearance Theme segment (ink 2) on the track',
+    '--lg-ink-2',
+    ['--lg-pane', '--lg-card-fill', '--lg-surface-3'],
+    4.5,
+  ],
 ];
 
 const VARIANTS = variants();

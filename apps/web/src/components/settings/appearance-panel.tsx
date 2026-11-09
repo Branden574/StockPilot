@@ -31,6 +31,14 @@ import { cn } from '@/lib/utils';
  * The line below says where the choice is saved, and never claims the account
  * holds it unless the server said so; a failed save offers Try again (plan 3.4
  * rule 2). The profile page renders this only when the build has Liquid Glass.
+ *
+ * Under Liquid Glass (Routes-Gallery-2's Appearance panel, sp.css .choice,
+ * .rb and .seg) the chosen Design takes the accent border, the selection wash
+ * and the accent radio, and Theme is a three-part segmented control. That is
+ * glass CSS on the inert hooks below (data-glass appearance-choice,
+ * appearance-seg, appearance-seg-item, radio-dot, with data-glass-state
+ * on/off; styles/liquid-glass/primitives.css): Classic draws exactly what it
+ * drew before.
  */
 
 /** Decorative miniatures of each Design (aria-hidden): plain colours, no image request. */
@@ -92,6 +100,8 @@ function RadioDot({ checked }: { checked: boolean }) {
   return (
     <span
       aria-hidden="true"
+      data-glass="radio-dot"
+      data-glass-state={checked ? 'on' : 'off'}
       className={cn(
         'flex size-4 shrink-0 items-center justify-center rounded-full border',
         checked ? 'border-foreground' : 'border-[var(--ed-line-strong)]',
@@ -123,6 +133,8 @@ export function AppearancePanel() {
             return (
               <label
                 key={option.value}
+                data-glass="appearance-choice"
+                data-glass-state={checked ? 'on' : 'off'}
                 className={cn(
                   OPTION,
                   'flex-col gap-2 p-2',
@@ -162,12 +174,14 @@ export function AppearancePanel() {
       </fieldset>
       <fieldset>
         <legend className={LEGEND}>Theme</legend>
-        <div className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-3">
+        <div className="grid grid-cols-1 gap-2 min-[480px]:grid-cols-3" data-glass="appearance-seg">
           {THEME_OPTIONS.map((option) => {
             const checked = theme === option.value;
             return (
               <label
                 key={option.value}
+                data-glass="appearance-seg-item"
+                data-glass-state={checked ? 'on' : 'off'}
                 className={cn(
                   OPTION,
                   'items-center gap-2 px-3 py-2',
