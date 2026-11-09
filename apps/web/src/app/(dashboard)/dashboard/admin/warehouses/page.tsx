@@ -44,7 +44,11 @@ export default async function WarehousesAdminPage({
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="warehouses"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <WarehousesManager
         view={isArchivedView ? 'archived' : 'active'}
         initial={warehouses}

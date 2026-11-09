@@ -51,7 +51,11 @@ export default async function ReconciliationPage({
   ]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="reconciliation"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         title={title}
         subline="What was ordered vs received vs open, by PO, vendor, and warehouse."

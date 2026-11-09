@@ -25,7 +25,11 @@ export default async function ChartersAdminPage({
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="charters"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <ChartersManager
         view={isArchivedView ? 'archived' : 'active'}
         initial={charters}

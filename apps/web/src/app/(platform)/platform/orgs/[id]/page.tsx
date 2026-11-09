@@ -201,6 +201,7 @@ export default async function PlatformOrgDetailPage({
 
       {/* ── Danger zone ──────────────────────────────────────────────── */}
       <DetailSection
+        data-glass-role="danger-zone"
         className="border-destructive/40 mt-6"
         title={<span className="text-destructive">Danger zone</span>}
       >

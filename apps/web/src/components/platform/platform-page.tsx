@@ -17,6 +17,7 @@ export function PlatformPage({
   return (
     <div
       data-slot="platform-page"
+      data-glass-width={width}
       className={cn(
         'mx-auto flex w-full min-w-0 flex-col gap-4 px-4 pb-16 pt-7 sm:px-8',
         width === 'narrow' ? 'max-w-[736px]' : 'max-w-[1320px]',

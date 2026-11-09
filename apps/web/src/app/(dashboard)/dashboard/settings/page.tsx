@@ -32,7 +32,11 @@ export default async function SettingsPage() {
     uncheckedModules: maintenanceAccess.checkFailed ? ['maintenance_requests'] : [],
   };
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="settings"
+      data-glass-view="hub"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         title="Settings"
         subline="Manage your workspace and account."
