@@ -55,7 +55,7 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function run(opts: { flag?: string; envLocal?: string; extra?: Record<string, string> }): Run {
+function run(opts: { flag?: string; envLocal?: string }): Run {
   const root = mkdtempSync(path.join(os.tmpdir(), 'release-ota-flag-'));
   dirs.push(root);
   const app = path.join(root, 'apps', 'mobile');
@@ -83,12 +83,13 @@ function run(opts: { flag?: string; envLocal?: string; extra?: Record<string, st
   chmodSync(path.join(bin, 'pnpm'), 0o755);
 
   // A minimal environment: nothing of the runner's own shell reaches the script.
-  const env: Record<string, string> = { PATH: `${bin}:/usr/bin:/bin`, HOME: root, ...opts.extra };
+  const env: Record<string, string> = { PATH: `${bin}:/usr/bin:/bin`, HOME: root };
   if (opts.flag !== undefined) env.EXPO_PUBLIC_LIQUID_GLASS = opts.flag;
   const result = spawnSync(
     'bash',
     [path.join(app, 'scripts', 'release-ota.sh'), '-m', 'Fictional test update'],
-    { env, encoding: 'utf8' },
+    // Expo's types require NODE_ENV in ProcessEnv; the script never reads it.
+    { env: env as NodeJS.ProcessEnv, encoding: 'utf8' },
   );
 
   const lines = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
