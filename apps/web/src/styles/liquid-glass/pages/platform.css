@@ -361,7 +361,8 @@
       background-color: color-mix(in srgb, var(--lg-danger-wash) 82%, var(--lg-danger));
     }
 
-    /* ── Phones (sp.css 760 px: the page box 4 / 16 / 96; the bar keeps
+    /* ── Phones (sp.css 760 px: .plat-main's 20 px top, which has no phone
+       value, over the page box's 4 / 16 / 96, so 24 / 16 / 96; the bar keeps
        its sections: the board hides them there, the console has no other
        way between them) ───────────────────────────────────────────────── */
     @media (max-width: 760px) {
@@ -376,7 +377,7 @@
         [data-glass-page='platform']
         [data-slot='platform-page'] {
         gap: 16px;
-        padding: 20px 16px 96px;
+        padding: 24px 16px 96px;
       }
     }
 

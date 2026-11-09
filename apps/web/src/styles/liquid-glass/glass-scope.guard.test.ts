@@ -240,10 +240,13 @@ describe('styles/liquid-glass scope guard', () => {
       ]);
       for (const rel of consolePages) {
         expect(lane, rel).toContain(rel);
+        // The import statements themselves (a comment naming the files in
+        // the right order must not satisfy this).
         const text = readFileSync(join(APP, rel), 'utf8');
-        expect(text.indexOf('pages/admin.css'), rel).toBeLessThan(
-          text.indexOf('pages/platform.css'),
-        );
+        const order = [
+          ...text.matchAll(/import\s+'@\/styles\/liquid-glass\/(pages\/[\w.-]+\.css)';/g),
+        ].map((m) => m[1]);
+        expect(order, rel).toEqual(['pages/admin.css', 'pages/platform.css']);
       }
     });
 

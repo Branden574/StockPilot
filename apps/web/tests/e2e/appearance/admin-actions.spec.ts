@@ -42,6 +42,8 @@ const DASHBOARD_ROUTES = [
 ];
 
 const CONSOLE_ROUTES = ['/platform', '/platform/provision', '/platform/support', '/platform/audit'];
+// An organization's page, every tab, is walked on its own below (its id is
+// found at run time).
 
 interface Control {
   role: string;
@@ -152,6 +154,27 @@ test.describe('settings and admin pages: the same actions in every look', () => 
   }
 });
 
+/**
+ * Classic Dark, then Liquid Glass Night and Day, on the console page already
+ * open in `page` (the console has no appearance menu: the look is chosen in
+ * the second tab, `remote`).
+ */
+async function compareConsole(page: Page, remote: Page, label: string): Promise<void> {
+  await chooseLookElsewhere(remote, page, { design: 'classic', theme: 'dark' });
+  await settle(page);
+  const classic = await inventory(page);
+  const classicHidden = await hiddenControls(page);
+  for (const theme of ['dark', 'light'] as const) {
+    await chooseLookElsewhere(remote, page, { design: 'liquid-glass', theme });
+    await settle(page);
+    expect(await inventory(page), `${label} in Liquid Glass ${theme}`).toEqual(classic);
+    expect(await hiddenControls(page), `${label} hidden in Liquid Glass ${theme}`).toEqual(
+      classicHidden,
+    );
+  }
+  await chooseLookElsewhere(remote, page, { design: 'classic', theme: 'dark' });
+}
+
 test.describe('the platform console: the same actions in every look', () => {
   for (const route of CONSOLE_ROUTES) {
     test(route, async ({ page, context }) => {
@@ -161,20 +184,48 @@ test.describe('the platform console: the same actions in every look', () => {
         test.skip(true, 'This lab user is not a platform admin at the two-step level.');
       }
       if (!(await glassBuild(remote))) test.skip(true, 'This build does not offer Liquid Glass.');
-      await chooseLookElsewhere(remote, page, { design: 'classic', theme: 'dark' });
-      await settle(page);
-      const classic = await inventory(page);
-      const classicHidden = await hiddenControls(page);
-      for (const theme of ['dark', 'light'] as const) {
-        await chooseLookElsewhere(remote, page, { design: 'liquid-glass', theme });
-        await settle(page);
-        expect(await inventory(page), `${route} in Liquid Glass ${theme}`).toEqual(classic);
-        expect(await hiddenControls(page), `${route} hidden in Liquid Glass ${theme}`).toEqual(
-          classicHidden,
-        );
-      }
-      await chooseLookElsewhere(remote, page, { design: 'classic', theme: 'dark' });
+      await compareConsole(page, remote, route);
       await remote.close();
     });
+  }
+});
+
+/**
+ * An organization's page (/platform/orgs/[id]), every tab: the page
+ * platform.css restyles most (the members table's sticky Actions column, the
+ * User actions menus, the danger zone's Remove organization). The first
+ * organization in the directory, found at run time. The Users tab is walked
+ * again below 1024 px, where the Actions column turns opaque over the rows
+ * that scroll under it.
+ */
+const ORG_TABS = ['overview', 'inventory', 'users', 'orders', 'billing'] as const;
+
+test.describe('an organization in the console: the same actions in every look', () => {
+  for (const tab of ORG_TABS) {
+    const widths: (number | null)[] = tab === 'users' ? [null, 900] : [null];
+    for (const width of widths) {
+      const label = `/platform/orgs/[id]?tab=${tab}${width ? ` at ${width} px` : ''}`;
+      test(label, async ({ page, context }) => {
+        const remote = await openRemote(context);
+        const response = await page.goto('/platform');
+        if (!response || response.status() === 404) {
+          test.skip(true, 'This lab user is not a platform admin at the two-step level.');
+        }
+        if (!(await glassBuild(remote))) test.skip(true, 'This build does not offer Liquid Glass.');
+        const org = page
+          .getByRole('region', { name: 'Organizations' })
+          .locator('tbody a[href^="/platform/orgs/"]')
+          .first();
+        if (!(await org.isVisible().catch(() => false))) test.skip(true, 'No organizations.');
+        const href = await org.getAttribute('href');
+        if (width) await page.setViewportSize({ width, height: 900 });
+        const orgResponse = await page.goto(`${href!.split('?')[0]}?tab=${tab}`);
+        if (!orgResponse || orgResponse.status() >= 400) {
+          test.skip(true, `${label} is not open to this user.`);
+        }
+        await compareConsole(page, remote, label);
+        await remote.close();
+      });
+    }
   }
 });

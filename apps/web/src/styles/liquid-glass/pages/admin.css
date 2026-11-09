@@ -527,6 +527,15 @@
       padding: 24px 24px 0;
       border-bottom-width: 0;
     }
+    /* A panel with no body (SettingsPanel renders none without children:
+       Integrations' Migrate from Sage 50, the Request links notice, the Sage
+       50 wizard's first step) is all head: it keeps the card's 24 px bottom
+       inset that the body otherwise brings. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      [data-glass='settings-panel-head']:last-child {
+      padding-bottom: 24px;
+    }
     :root[data-appearance='liquid-glass']
       :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
       [data-glass='settings-panel-head']
@@ -841,7 +850,10 @@
     /* ── Radios and choice cards (.rb, .choice). The empty ring is ink 4,
        not the board's line 3 (line 3 reads under the 3:1 a control needs:
        the stage 3 checkbox made the same choice); chosen, the accent disc
-       with its 8 px on-accent centre. ─────────────────────────────────── */
+       with its 8 px on-accent centre. A card is the board's glass .choice
+       (sp.css: the field frost inside the field line; opaque surface and
+       line 2 in the reduced and contrast materials, through the tokens);
+       chosen, the selection tint inside the accent. ───────────────────── */
     :root[data-appearance='liquid-glass']
       :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
       [data-glass='radio'] {
@@ -865,7 +877,7 @@
       > label {
       gap: 10px;
       padding: 12px;
-      border-color: var(--lg-line-2);
+      border-color: var(--lg-field-line);
       border-radius: 12px;
       background-color: var(--lg-field-fill);
       box-shadow: none;
@@ -928,6 +940,11 @@
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
         [data-glass='settings-panel-head'] {
         padding: 18px 18px 0;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+        [data-glass='settings-panel-head']:last-child {
+        padding-bottom: 18px;
       }
       :root[data-appearance='liquid-glass']
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
@@ -1059,6 +1076,17 @@
       padding: 20px 48px 14px 24px;
       text-align: left;
     }
+    /* The head's 4 px gap is the only space between the title and the
+       description (the board's .col.g4): DialogHeader's Classic space-y-1.5
+       margins would add 6 px to it. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      :is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form'])
+      > [data-glass='dialog-header']
+      > * {
+      margin-block: 0;
+    }
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
       )
@@ -1132,8 +1160,10 @@
       padding: 14px 16px 16px 24px;
     }
     /* Order items access and the step-up (Platform-Console, exact): the
-       foot's own action is the board's primary (.btn-primary: the accent
-       with its glow); a destructive one keeps the danger fill. */
+       foot's own action is the board's primary as glass draws it (sp.css
+       .btn-primary under glass: the accent, the .28 top light and the
+       6 / 16 / -8 glow, the stage 2 primary's recipe in primitives.css;
+       darker while pressed); a destructive one keeps the danger fill. */
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
       )
@@ -1150,9 +1180,8 @@
       :is([data-glass='dialog-footer'], [data-glass='step-up-foot'])
       > [data-glass='button'][data-glass-variant='default']:not(:disabled) {
       box-shadow:
-        inset 0 1px 0 rgba(255, 255, 255, 0.2),
-        0 1px 2px rgba(0, 0, 0, 0.14),
-        0 4px 12px -6px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
     }
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
@@ -1161,6 +1190,24 @@
       :is([data-glass='dialog-footer'], [data-glass='step-up-foot'])
       > [data-glass='button'][data-glass-variant='default']:not(:disabled):hover {
       background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog']:is([data-glass-role='order-items-access'], [data-glass-role='step-up'])
+      :is([data-glass='dialog-footer'], [data-glass='step-up-foot'])
+      > [data-glass='button'][data-glass-variant='default']:not(:disabled):active {
+      background-color: var(--lg-accent-press);
+    }
+    /* Order items access: the reading area's parts 14 px apart (.dlg-b's
+       gap), in place of the Classic space-y-4's 16. */
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='order-items-access']
+      > [data-glass='dialog-body']
+      > :not(:last-child) {
+      margin-block: 0 14px;
     }
     /* Order items access: the "After saving" note as the board's line on
        surface 2 (radius 12, 10 x 12, no edge). */
@@ -1198,6 +1245,14 @@
       gap: 4px;
       padding: 20px 48px 14px 24px;
       text-align: left;
+    }
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
+      )
+      [data-glass='dialog'][data-glass-role='step-up']
+      > [data-glass='step-up-head']
+      > * {
+      margin-block: 0;
     }
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
@@ -1316,7 +1371,8 @@
       outline: none;
       box-shadow: 0 0 0 3px var(--lg-focus-halo);
     }
-    /* Radios and choice cards inside these dialogs (Order items access). */
+    /* Radios and choice cards inside these dialogs (Order items access),
+       the same glass .choice as on the pages. */
     :root[data-appearance='liquid-glass']:has(
         :is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])
       )
@@ -1346,9 +1402,9 @@
       > label {
       gap: 10px;
       padding: 12px;
-      border-color: var(--lg-line-2);
+      border-color: var(--lg-field-line);
       border-radius: 12px;
-      background-color: var(--lg-surface);
+      background-color: var(--lg-field-fill);
       box-shadow: none;
     }
     :root[data-appearance='liquid-glass']:has(

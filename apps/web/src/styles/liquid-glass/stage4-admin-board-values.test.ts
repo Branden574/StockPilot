@@ -124,12 +124,12 @@ describe('the platform console (Platform-Console.dc.html, exact)', () => {
     ).toBe('var(--lg-bg)');
   });
 
-  it('.plat-main over .page: 26 / 28 / 48, 20 between; a phone 20 / 16 / 96, 16 between', () => {
+  it('.plat-main over .page: 26 / 28 / 48, 20 between; a phone 24 / 16 / 96 (20 + 4), 16 between', () => {
     const page = at(PLATFORM, "[data-slot='platform-page']");
     expect(page.padding).toBe('26px 28px 48px');
     expect(page.gap).toBe('20px');
     const phone = at(PLATFORM, "[data-slot='platform-page']", ['(max-width: 760px)']);
-    expect(phone.padding).toBe('20px 16px 96px');
+    expect(phone.padding).toBe('24px 16px 96px');
     expect(phone.gap).toBe('16px');
   });
 
@@ -235,9 +235,75 @@ describe('dialogs (sp.css .dialog; Platform-Console step-up and Order items acce
     expect(chosen['background-color']).toBe('var(--lg-sel-fill)');
     expect(chosen['border-color']).toBe('var(--lg-accent)');
   });
+
+  it('Order items access: the reading area’s parts 14 px apart (.dlg-b gap), not space-y-4’s 16', () => {
+    const part = at(
+      ADMIN,
+      "[data-glass='dialog'][data-glass-role='order-items-access'] > [data-glass='dialog-body'] > :not(:last-child)",
+    );
+    expect(part['margin-block']).toBe('0 14px');
+  });
+
+  it('the head: 4 px between title and description (.col.g4), DialogHeader’s space-y-1.5 margins cleared', () => {
+    const head = at(
+      ADMIN,
+      ":is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form']) > [data-glass='dialog-header']",
+    );
+    expect(head.gap).toBe('4px');
+    expect(
+      at(
+        ADMIN,
+        ":is([data-glass='dialog'], [data-glass='dialog'] > [data-glass='dialog-form']) > [data-glass='dialog-header'] > *",
+      )['margin-block'],
+    ).toBe('0');
+    expect(at(ADMIN, "[data-glass='step-up-head']").gap).toBe('4px');
+    expect(at(ADMIN, "[data-glass='step-up-head'] > *")['margin-block']).toBe('0');
+  });
+
+  it('Save and Verify: the glass .btn-primary (inset .28, 0 6 16 -8 glow), the accent press while held', () => {
+    const foot =
+      "[data-glass='dialog']:is([data-glass-role='order-items-access'], [data-glass-role='step-up']) :is([data-glass='dialog-footer'], [data-glass='step-up-foot']) > [data-glass='button'][data-glass-variant='default']";
+    expect(at(ADMIN, `${foot}:not(:disabled)`)['box-shadow']?.replace(/\s+/g, ' ')).toBe(
+      'inset 0 1px 0 rgba(255, 255, 255, 0.28), 0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent)',
+    );
+    expect(at(ADMIN, `${foot}:not(:disabled):active`)['background-color']).toBe(
+      'var(--lg-accent-press)',
+    );
+    // The same recipe as the stage 2 primary.
+    const stage2 = cssRules('primitives.css').find((r) =>
+      r.selectors.some((s) =>
+        flat(s).endsWith("[data-glass='button'][data-glass-variant='gradient']"),
+      ),
+    );
+    expect(stage2?.decls['box-shadow']?.replace(/\s+/g, ' ')).toBe(
+      at(ADMIN, `${foot}:not(:disabled)`)['box-shadow']?.replace(/\s+/g, ' '),
+    );
+  });
+
+  it('radio cards: the glass .choice, field frost inside the field line, on pages and in dialogs', () => {
+    for (const tail of [
+      ":is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform']) [data-glass='radio-group'][data-glass-variant='card'] > label",
+      "[data-glass='dialog'] [data-glass='radio-group'][data-glass-variant='card'] > label",
+    ]) {
+      const card = at(ADMIN, tail);
+      expect(card['background-color'], tail).toBe('var(--lg-field-fill)');
+      expect(card['border-color'], tail).toBe('var(--lg-field-line)');
+      expect(card['border-radius'], tail).toBe('12px');
+    }
+  });
 });
 
 describe('settings and admin pages', () => {
+  it('a panel with no body keeps its bottom inset: 24 px, 18 px on a phone', () => {
+    const roots =
+      ":is([data-glass-page='settings'], [data-glass-page='admin'], [data-glass-page='platform'])";
+    const head = `${roots} [data-glass='settings-panel-head']`;
+    expect(at(ADMIN, head).padding).toBe('24px 24px 0');
+    expect(at(ADMIN, `${head}:last-child`)['padding-bottom']).toBe('24px');
+    expect(at(ADMIN, head, ['(max-width: 760px)']).padding).toBe('18px 18px 0');
+    expect(at(ADMIN, `${head}:last-child`, ['(max-width: 760px)'])['padding-bottom']).toBe('18px');
+  });
+
   it('the page head: the 26/32 title, 24/30 on a phone', () => {
     const h1 = at(ADMIN, "[data-glass='page-header'] h1");
     expect(h1['font-size']).toBe('26px');
