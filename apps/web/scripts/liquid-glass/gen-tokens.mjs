@@ -38,12 +38,18 @@
  *      signature pad, the label sheet) every token glass overrides is declared
  *      again with its classic value, read from app/globals.css, and the
  *      Tailwind colour formulas of its @theme are computed again from them.
- * The scene photo: the glass material's --lg-scene-img is
- * var(--lg-scene-photo, none). --lg-scene-photo is set only by the inline
- * style app/layout.tsx emits when the build found the installed photos
- * (styles/liquid-glass/scene-photo.ts); the photos are never in the
- * repository (FOLLOWUPS SC1), so this file is the same with or without them,
- * and without them the opaque --bg shows (the documented fallback).
+ * The scene illustration: styles/liquid-glass/scene.css names two pictures,
+ * --lg-scene-photo-day (the light files) and --lg-scene-photo-night (the dark
+ * files). The glass material's --lg-scene-img draws the scheme's picture (Day
+ * the day one, Night the night one) and --lg-scene-img-night the night one in
+ * both schemes, for the landing's Cycle counts band, which the board draws in
+ * the Night theme on every page. Each falls back to none where scene.css
+ * declares nothing (a browser that cannot parse type() inside image-set(), or
+ * before next-themes sets .light or .dark). The illustrations were made for
+ * StockPilot by Claude Design during the Liquid Glass design work (confirmed
+ * 2026-11-05) and are committed in apps/web/public/liquid-glass; this file
+ * never names one, and every opaque material (and forced colours) sets both
+ * to none, so they never draw or request it.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -223,19 +229,32 @@ function tripletOf(tokens, ref, scheme) {
 }
 
 /**
- * The glass material draws the photo when the page set --lg-scene-photo (the
- * installed photos, app/layout.tsx); the opaque materials never do.
+ * The picture each glass scheme draws (scene.css names both); the opaque
+ * materials never draw one. The none fallback leaves the opaque ground
+ * wherever the picture is not declared.
  */
-export const SCENE_IMAGE = 'var(--lg-scene-photo, none)';
+export const SCENE_IMAGE = {
+  light: 'var(--lg-scene-photo-day, none)',
+  dark: 'var(--lg-scene-photo-night, none)',
+};
+/**
+ * The night picture in either scheme: the landing's Cycle counts band draws it
+ * in Day too, as the board's Night island (Landing.dc.html:202). Opaque
+ * materials set it to none like --lg-scene-img, so the band never draws a
+ * picture there either.
+ */
+export const SCENE_IMAGE_NIGHT = 'var(--lg-scene-photo-night, none)';
 
 function declarationsFor(source, variant) {
   const tokens = applyOpaqueIntent(source.variants[variant.key], variant.material);
+  const glass = variant.material === 'glass';
   const lines = [];
   lines.push(`    /* ${variant.key}: artifact tokens */`);
   for (const [name, value] of Object.entries(tokens).sort(([a], [b]) => a.localeCompare(b))) {
     lines.push(`    --lg-${name.slice(2)}: ${value};`);
   }
-  lines.push(`    --lg-scene-img: ${variant.material === 'glass' ? SCENE_IMAGE : 'none'};`);
+  lines.push(`    --lg-scene-img: ${glass ? SCENE_IMAGE[variant.scheme] : 'none'};`);
+  lines.push(`    --lg-scene-img-night: ${glass ? SCENE_IMAGE_NIGHT : 'none'};`);
   lines.push('    /* semantic triplets: always opaque (no alpha inside a triplet) */');
   for (const [name, ref] of Object.entries(TRIPLETS)) {
     lines.push(`    ${name}: ${tripletOf(tokens, ref, variant.scheme)};`);
@@ -406,6 +425,7 @@ export function generateTokensCss(source, { globalsCss = readFileSync(GLOBALS, '
     '      --lg-glass-blur: 0px;',
     '      --lg-pane-blur: none;',
     '      --lg-scene-img: none;',
+    '      --lg-scene-img-night: none;',
     '      --lg-scene-veil: none;',
     '    }',
     '  }',

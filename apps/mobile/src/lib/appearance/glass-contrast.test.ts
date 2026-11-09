@@ -6,10 +6,11 @@ import { GLASS_TOKENS, type GlassTokens } from './glass-tokens.generated';
 /**
  * Every word Liquid Glass draws through the shared palette reads at WCAG AA
  * (4.5:1) on the surfaces it sits on, measured on the COMPOSED surface: a
- * translucent card or well over what is under it. Today that is the opaque
- * --bg (the scene images are not in the app yet, DECISIONS Q7), which is
- * exactly what draws now; the measurement over the scene photo itself waits
- * for the images (stage 5).
+ * translucent card or well over what is under it, here the opaque --bg (what
+ * shows under Reduce Transparency, on Android and while the scene loads).
+ * Over the scene illustration itself (committed, scene-assets.ts) the figure
+ * depends on the pixels behind each card, which no token fixes: that is the
+ * composed-pixel measurement of stage 5.
  */
 
 function rgbaOf(colour: string): [number, number, number, number] {

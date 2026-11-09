@@ -1,6 +1,4 @@
 import { createHash } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
 import type { NextConfig } from 'next';
 
@@ -9,20 +7,6 @@ import {
   liquidGlassRollout,
   marketingRewrites,
 } from './src/components/theme/appearance-flag';
-import { isScenePhotoInstalled } from './src/styles/liquid-glass/scene-photo';
-
-// ── Liquid Glass scene photo ─────────────────────────────────────────────────
-// The photos are never committed (the repository is public and their source
-// is not confirmed yet; FOLLOWUPS SC1). scripts/liquid-glass/install-scene.mjs
-// puts them in public/liquid-glass on a machine that has them. This build
-// turns the photo on only when every file is there; otherwise the glass
-// material shows its opaque ground and nothing requests a photo
-// (styles/liquid-glass/scene-photo.ts). `next build` runs in this folder.
-const LIQUID_GLASS_SCENE = isScenePhotoInstalled((name) =>
-  existsSync(join(process.cwd(), 'public', 'liquid-glass', name)),
-)
-  ? '1'
-  : '';
 
 // ── Build identity (update detection) ────────────────────────────────────────
 // "Which build is THIS bundle?" has to be answered at BUILD time and baked into
@@ -125,8 +109,6 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_SP_BUILD: SP_BUILD,
     NEXT_PUBLIC_SP_BUILT_AT: SP_BUILT_AT,
-    // See "Liquid Glass scene photo" at the top of this file.
-    NEXT_PUBLIC_LIQUID_GLASS_SCENE: LIQUID_GLASS_SCENE,
   },
   // PostHog reverse proxy. Analytics is routed through our OWN origin
   // (/ingest/*) instead of calling us.i.posthog.com directly. Two reasons:
@@ -376,6 +358,17 @@ const nextConfig: NextConfig = {
         // and BOTH rules would then emit a CORP header for that one path.
         source: '/email/:path+',
         headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }],
+      },
+      {
+        // The Liquid Glass scene illustrations (public/liquid-glass). The glass
+        // stylesheet (styles/liquid-glass/scene.css) names each one with
+        // ?v= and the start of the SHA-256 the scene manifest pins, and a test
+        // ties the two together, so a changed file is a new address. Without
+        // this rule a public file is served with `public, max-age=0`, and every
+        // hard load of a glass page waits a round trip to revalidate the scene
+        // before it can draw it.
+        source: '/liquid-glass/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
       },
     ];
   },

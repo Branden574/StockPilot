@@ -5,15 +5,17 @@
    with (.thumb, .badge, .chip, .size, .loc, .dt, .toast, .nav-item). Colours
    come from the generated --lg-* tokens; the one exception is the cycle-count
    band, which the board draws in the Night theme on every page
-   (data-theme="dark"), so in Day it carries the Night token values.
+   (data-theme="dark"), so in Day it carries the Night token values and the
+   night picture (--lg-scene-img-night): the one place Day fetches a dark file.
 
    Imported only by the landing twin, after pages/site.css (the ground, nav,
    footer, buttons and cards), and every selector is scoped to the landing's
    <main data-glass-page="landing">. The previews are decoration over demo
    data: no photo is loaded (tinted tiles stand in for the board's product
    photos), and the stage panels, the step vignettes, the band and the closing
-   call show the scene photo only when the build has one (var(--lg-scene-img)
-   is `none` otherwise: the panels fall back to their veils and fills).
+   call show the scene illustration through var(--lg-scene-img) (scene.css;
+   `none` in the opaque materials and in a browser that cannot parse type()
+   inside image-set(), where the panels fall back to their veils and fills).
    Reduce Transparency, Increase Contrast and the low-power material: opaque,
    unblurred, no scene; forced colours: system colours; reduced motion: the
    FAQ marker does not turn. */
@@ -1171,6 +1173,8 @@
       --lg-neutral-wash: #232825;
       --lg-ok: #5ed18c;
       --lg-on-accent: #03140d;
+      /* The night picture (sp.css:924, 1032), none in every opaque material. */
+      --lg-scene-img: var(--lg-scene-img-night);
       --lg-scene-veil: linear-gradient(180deg, rgba(6, 10, 9, 0.18), rgba(6, 10, 9, 0.3));
       --lg-surface: #171a19;
       --lg-surface-2: rgba(255, 255, 255, 0.05);
