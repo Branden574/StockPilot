@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -152,11 +152,20 @@ async function lookState(browser: Browser, baseURL: string, storage: string): Pr
     await settleIntroNotice(page);
     await chooseLook(page, LOOK);
   }
-  const path = join(tmpdir(), `stage5-perf-${process.pid}-${BUILD}.json`);
-  await context.storageState({ path });
+  // The state holds the lab session cookies: written only inside a fresh
+  // 0700 folder as a 0600 file, and removed when the file's tests end.
+  const dir = mkdtempSync(join(tmpdir(), 'stage5-perf-'));
+  stateDirs.push(dir);
+  const path = join(dir, `${BUILD}.json`);
+  writeFileSync(path, JSON.stringify(await context.storageState()), { mode: 0o600 });
   await context.close();
   return path;
 }
+
+const stateDirs: string[] = [];
+test.afterAll(() => {
+  for (const dir of stateDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 async function resolvePath(page: Page, route: RouteDef): Promise<string | null> {
   if (route.path) return route.path;
