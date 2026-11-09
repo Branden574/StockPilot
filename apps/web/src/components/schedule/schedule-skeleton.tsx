@@ -48,10 +48,12 @@ function CalendarSkeleton() {
       aria-busy="true"
       data-schedule-skeleton="calendar"
       className={cn(PAGE_BOX, 'max-w-[1320px]')}
+      data-glass="skeleton-page"
+      data-glass-width="wide"
     >
       <div className="min-w-0">
         <Skeleton className="h-3 w-40" />
-        <div className="mt-2 flex h-[42px] items-center">
+        <div className="mt-2 flex h-[42px] items-center" data-glass-role="skeleton-title">
           <Skeleton className="h-[26px] w-56" />
         </div>
         <Skeleton className="mt-1 h-3 w-full max-w-xl" />
@@ -65,10 +67,13 @@ function CalendarSkeleton() {
         <Skeleton className="h-5 w-36" />
         <Skeleton className="h-8 w-28" />
       </div>
-      <div className={CARD}>
+      <div className={CARD} data-glass="card">
         <div className="overflow-x-auto">
           <div className="min-w-[640px]">
-            <div className="border-border bg-sunk grid h-[37px] grid-cols-7 items-center border-b">
+            <div
+              className="border-border bg-sunk grid h-[37px] grid-cols-7 items-center border-b"
+              data-glass-role="skeleton-table-head"
+            >
               {Array.from({ length: 7 }).map((_, i) => (
                 <Skeleton key={i} className="mx-auto h-2 w-8" />
               ))}
@@ -98,8 +103,11 @@ function CalendarSkeleton() {
 /** A titled card (DetailSection): the 49 px header line, then the body. */
 function CardSkeleton({ children }: { children: ReactNode }) {
   return (
-    <div className={CARD}>
-      <div className="border-border flex min-h-[49px] items-center border-b px-[18px] py-2.5">
+    <div className={CARD} data-glass="card">
+      <div
+        className="border-border flex min-h-[49px] items-center border-b px-[18px] py-2.5"
+        data-glass-role="skeleton-card-head"
+      >
         <Skeleton className="h-3 w-24" />
       </div>
       <div className="p-[18px]">{children}</div>
@@ -114,7 +122,7 @@ function BackAndTitle({ titleWidth, badge = false }: { titleWidth: string; badge
       <div className="mb-2 flex h-5 items-center">
         <Skeleton className="h-3 w-28" />
       </div>
-      <div className="flex h-[42px] items-center gap-3">
+      <div className="flex h-[42px] items-center gap-3" data-glass-role="skeleton-title">
         <Skeleton className={cn('h-[26px] max-w-full', titleWidth)} />
         {badge ? <Skeleton className="h-5 w-20 rounded-full" /> : null}
       </div>
@@ -125,11 +133,16 @@ function BackAndTitle({ titleWidth, badge = false }: { titleWidth: string; badge
 /** An event's page: title with its status and date line, its actions, then its cards. */
 function EventSkeleton() {
   return (
-    <div aria-busy="true" data-schedule-skeleton="event" className={cn(PAGE_BOX, 'max-w-3xl')}>
+    <div
+      aria-busy="true"
+      data-schedule-skeleton="event"
+      className={cn(PAGE_BOX, 'max-w-3xl')}
+      data-glass="skeleton-page"
+    >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
           <BackAndTitle titleWidth="w-56" badge />
-          <div className="mt-0.5 flex h-5 items-center">
+          <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
             <Skeleton className="h-3 w-64 max-w-full" />
           </div>
         </div>
@@ -171,7 +184,12 @@ function Field({ tall = false }: { tall?: boolean }) {
 /** New event and Edit event: the title, then the form card with its save bar. */
 function FormSkeleton() {
   return (
-    <div aria-busy="true" data-schedule-skeleton="form" className={cn(PAGE_BOX, 'max-w-3xl')}>
+    <div
+      aria-busy="true"
+      data-schedule-skeleton="form"
+      className={cn(PAGE_BOX, 'max-w-3xl')}
+      data-glass="skeleton-page"
+    >
       <BackAndTitle titleWidth="w-40" />
       <CardSkeleton>
         <div className="space-y-5">

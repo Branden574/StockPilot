@@ -1,0 +1,461 @@
+/* Liquid Glass, the states a route shows instead of its page (stage 4, lane
+   L2a): the loading skeletons, the error boundaries and the 404 page. Every
+   one is an INFERRED extension (COVERAGE: "DS-Components.dc.html skeletons on
+   glass, laid out like the glass page", "DS-Components.dc.html error state in
+   the glass pane", "Auth-States.dc.html card over the scene").
+
+   Global, not a page composition (plan 4.1): a loading skeleton paints
+   before its route's page and the page's own stylesheet arrive, and an error
+   boundary or the 404 page may paint without them, so these rules must be
+   loaded already, as the shell's are. They are small, and each names a hook
+   only these states carry, so nothing here reaches a page:
+
+     data-glass="skeleton-page"   a skeleton's page box (with
+                                  data-glass-width="wide" for a page the
+                                  glass draws 1480 px wide, "reading" for a
+                                  768 px reading page), and inside it the
+                                  data-glass-role hooks of its head, figures
+                                  and table head; its cards carry stage 2's
+                                  data-glass="card" (materials.css) and its
+                                  bars data-glass="skeleton" (the shine,
+                                  primitives.css)
+     data-glass="state-screen"    a full-screen state on the scene (the 404
+                                  page, the root error boundary)
+     data-glass="error-frame"     the dashboard's error card in the pane
+     data-glass="state-page"      a report's failed read in its page box
+
+   Same DOM as Classic (plan M1): only inert hook attributes were added
+   (app/states.classic-dom.test.tsx pins the Classic DOM). Every rule is
+   scoped to :root[data-appearance="liquid-glass"] inside @media screen
+   (glass-scope.guard.test.ts), so Classic never matches one and printing
+   never gets one. */
+@layer lg {
+  @media screen {
+    /* ══ Loading: DS-Components skeletons, laid out like the glass page ══
+       The page box of the glass pages (sp.css .page: 6 / 28 / 48, 20
+       between), at the width the glass page takes. */
+    :root[data-appearance='liquid-glass'] [data-glass='skeleton-page'] {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='skeleton-page'][data-glass-width='wide'] {
+      max-width: 1480px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='skeleton-page'][data-glass-width='reading'] {
+      max-width: 768px;
+    }
+    /* The head (.page-h): the title's 32 px line (.h1 26/32), the subline's
+       18 px line 2 px under it (.sm). */
+    :root[data-appearance='liquid-glass']
+      [data-glass='skeleton-page']
+      [data-glass-role='skeleton-title'] {
+      height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='skeleton-page']
+      [data-glass-role='skeleton-subline'] {
+      height: 18px;
+    }
+    /* The figures (.kpis): one content-glass card per figure, 12 px apart,
+       20 px inside, in place of Classic's one divided strip. */
+    :root[data-appearance='liquid-glass'] [data-glass='skeleton-strip'] {
+      overflow: visible;
+      border-width: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='skeleton-strip']
+      > [data-glass-role='skeleton-strip-grid'] {
+      gap: 12px;
+      background: transparent;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='skeleton-strip']
+      [data-glass-role='skeleton-strip-cell'] {
+      padding: 20px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    /* A card's head (.card-h: 52 px, 12 x 16, the hairline). */
+    :root[data-appearance='liquid-glass'] [data-glass-role='skeleton-card-head'] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    /* A table card's header band (.dt .hd: 38 px on the second card fill)
+       and its rows' hairlines. */
+    :root[data-appearance='liquid-glass'] [data-glass-role='skeleton-table-head'] {
+      height: 38px;
+      border-color: var(--lg-line);
+      background-color: var(--lg-card-fill-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-role='skeleton-table-row'] {
+      border-color: var(--lg-line);
+    }
+    /* A table card drawn flush inside another card (Team: the members card
+       holds the table) is part of it: no second fill, edge or radius. */
+    :root[data-appearance='liquid-glass']
+      [data-glass='skeleton-page']
+      [data-glass='card']
+      > [data-glass='card'] {
+      border-width: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+
+    /* ══ The states on the scene: the 404 page and the root error ══════
+       Auth-States.dc.html's centred status card ("Already accepted",
+       "This account is disabled": .card.col.g14.ac.tc, 32 x 26, radius 24,
+       the .h2 title, the .sm line in ink 2, a block .btn-lg) floating on the
+       scene. Classic draws no card (its words sit on the page colour), so
+       the card is drawn behind them by the frame itself: the frame becomes a
+       one-column grid and its ::before (the fill) and ::after (the masked
+       edge) span every row, 32 x 26 past the words. No element is added. */
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] {
+      isolation: isolate;
+      display: grid;
+      grid-template-columns: minmax(0, 400px);
+      grid-template-rows: repeat(4, auto);
+      place-content: center;
+      justify-items: stretch;
+      gap: 0;
+      padding: 64px 42px;
+      background-color: transparent;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen']::before,
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen']::after {
+      content: '';
+      z-index: -1;
+      grid-column: 1;
+      grid-row: 1 / -1;
+      margin: -32px -26px;
+      border-radius: 24px;
+      pointer-events: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen']::before {
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    /* Content glass's edge (sp.css:977, .card::after): the masked 1 px
+       gradient ring; none in the reduced and contrast token sets. */
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen']::after {
+      padding: 1px;
+      background: var(--lg-card-edge);
+      -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > * {
+      grid-column: 1;
+      justify-self: center;
+      margin: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > :nth-child(1) {
+      grid-row: 1;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > :nth-child(2) {
+      grid-row: 2;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > :nth-child(3) {
+      grid-row: 3;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > :nth-child(4) {
+      grid-row: 4;
+    }
+    /* .col.g14: 14 px between the parts. */
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > * + * {
+      margin-top: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] h1 {
+      margin-top: 6px;
+      color: var(--lg-ink);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] h1:first-child {
+      margin-top: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] p:not(:first-child) {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] h1 + p {
+      margin-top: 8px;
+    }
+    /* The 404's code as the board's eyebrow (.eyebrow: 12/16 at 600,
+       +0.06em, capitals, ink 3), in the body face. */
+    :root[data-appearance='liquid-glass']
+      [data-glass='state-screen']
+      [data-glass-role='state-eyebrow'] {
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+    }
+    /* The block buttons (.btn-lg.btn-block: 44 px, radius 12, 15 px). */
+    :root[data-appearance='liquid-glass'] [data-glass='state-screen'] > [data-glass='button'] {
+      justify-self: stretch;
+      height: 44px;
+      padding: 0 18px;
+      border-radius: 12px;
+      font-size: 15px;
+      font-weight: 600;
+    }
+
+    /* ══ The dashboard's error card, in the pane ═══════════════════════
+       Auth-States.dc.html's in-workspace card ("Access denied · inside the
+       workspace": .card.col.g14, 26 px, radius 24) with DS-Components' error
+       state: the 56 px tile in the danger wash, the .h2 title, the .sm line
+       in ink 2, the error id and the error's words (a well), then the
+       actions in a row 8 px apart at the board's 36 px. Content glass: no
+       blur inside the pane. */
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass-role='error-card'] {
+      padding: 26px;
+      border-color: var(--lg-card-line);
+      border-radius: 24px;
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass-role='error-card']
+      > div:first-child {
+      flex-direction: column;
+      gap: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass-role='error-card']
+      > div:first-child
+      > svg {
+      box-sizing: border-box;
+      width: 56px;
+      height: 56px;
+      margin: 0;
+      padding: 15px;
+      border-radius: 18px;
+      background-color: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='error-frame'] h1 {
+      color: var(--lg-ink);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='error-frame'] h1 + p {
+      margin-top: 6px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass-role='error-digest'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass-role='error-message'] {
+      padding: 10px 12px;
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-card-fill-2);
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass-role='error-card']
+      > div:last-child {
+      margin-top: 20px;
+      gap: 8px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='error-frame']
+      [data-glass='button'][data-glass-size='default'] {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ══ A report's failed read, in its page box (Book Order Totals) ═══
+       The report's own box and head (the wide glass page: 1480, 6 / 28 /
+       48, the .h1 26/32, the back link 13/18 in ink 3) over DS-Components'
+       error state (.card.empty: 44 x 24, 10 between, the 56 px tile in the
+       danger wash, the .h4 line, the .sm reason in ink 3, Try again). */
+    :root[data-appearance='liquid-glass'] [data-glass='state-page'] {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-page'][data-glass-width='wide'] {
+      max-width: 1480px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-page'] [data-glass='page-header'] h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='state-page']
+      [data-glass='page-header']
+      > div:first-child:not(:last-child)
+      > a {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='state-page']
+      [data-glass='page-header']
+      > div:first-child:not(:last-child)
+      > a:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-page'] [data-glass='state-panel'] {
+      gap: 10px;
+      padding: 44px 24px;
+      border-color: var(--lg-card-line);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='state-page'] [data-slot='state-panel-icon'] {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background-color: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='state-page']
+      [data-slot='state-panel-icon']
+      svg {
+      width: 26px;
+      height: 26px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='state-page']
+      [data-glass='state-panel']
+      > [data-slot='state-panel-icon']
+      + * {
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='state-page']
+      [data-glass='state-panel']
+      > [data-slot='state-panel-icon']
+      + *
+      + div {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* ── Focus: the outline ring in --lg-focus on the links these states
+       draw without a stage 2 hook (sp.css :focus-visible). ─────────────── */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='state-screen'], [data-glass='error-frame'], [data-glass='state-page'])
+      a:not([data-glass]):focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+
+    /* ── Phones (sp.css 760 px: 4 / 16 / 96, 16 between; the status card
+       28 x 20) ──────────────────────────────────────────────────────────── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        :is([data-glass='skeleton-page'], [data-glass='state-page']) {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='state-screen'] {
+        padding: 48px 36px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='state-screen']::before,
+      :root[data-appearance='liquid-glass'] [data-glass='state-screen']::after {
+        margin: -28px -20px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='error-frame']
+        [data-glass-role='error-card'] {
+        padding: 20px;
+      }
+    }
+
+    /* Reduce Transparency and Increase Contrast: nothing is blurred (the
+       tokens are opaque there). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass='state-screen']::before {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"; R7),
+       declaration for declaration (glass-material-twins.guard.test.ts). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass='state-screen']::before {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    /* Forced colours: system colours, no fills, blur or edge of their own. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass='state-screen']::before {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='state-screen']::after {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass']
+        :is(
+          [data-glass='skeleton-strip'] [data-glass-role='skeleton-strip-cell'],
+          [data-glass='error-frame'] [data-glass-role='error-card'],
+          [data-glass='state-page'] [data-glass='state-panel']
+        ) {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        :is([data-glass='error-frame'], [data-glass='state-page'])
+        :is(
+          [data-slot='state-panel-icon'],
+          [data-glass-role='error-card'] > div:first-child > svg
+        ) {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        color: CanvasText;
+      }
+    }
+  }
+}

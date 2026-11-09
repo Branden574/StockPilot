@@ -4,7 +4,10 @@ import { Skeleton } from '@/components/ui/skeleton';
  *  left, `width` its Tailwind width class. */
 function CardHeader({ width }: { width: string }) {
   return (
-    <div className="border-border flex min-h-[49px] items-center border-b px-[18px]">
+    <div
+      className="border-border flex min-h-[49px] items-center border-b px-[18px]"
+      data-glass-role="skeleton-card-head"
+    >
       <Skeleton className={`h-3.5 ${width}`} />
     </div>
   );
@@ -23,6 +26,8 @@ export function WarehousePageSkeleton() {
   return (
     <div
       className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass="skeleton-page"
+      data-glass-width="wide"
       aria-busy="true"
       data-testid="warehouse-page-skeleton"
     >
@@ -33,12 +38,12 @@ export function WarehousePageSkeleton() {
         </div>
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div className="min-w-0">
-            <div className="flex h-[42px] items-center gap-3">
+            <div className="flex h-[42px] items-center gap-3" data-glass-role="skeleton-title">
               <Skeleton className="h-[26px] w-48 max-w-[50vw]" />
               <Skeleton className="h-5 w-12" />
               <Skeleton className="h-5 w-14 rounded-full" />
             </div>
-            <div className="mt-0.5 flex h-5 items-center">
+            <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
               <Skeleton className="h-3 w-32" />
             </div>
           </div>
@@ -48,7 +53,7 @@ export function WarehousePageSkeleton() {
           </div>
         </div>
       </div>
-      <div className="border-border bg-card overflow-hidden rounded-lg border">
+      <div className="border-border bg-card overflow-hidden rounded-lg border" data-glass="card">
         <div className="[&>*]:border-border -mb-px -mr-px grid grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))] [&>*:last-child]:border-r-0 [&>*]:border-b [&>*]:border-r">
           {Array.from({ length: 4 }).map((_, i) => (
             <div
@@ -68,6 +73,7 @@ export function WarehousePageSkeleton() {
           <div
             data-testid="warehouse-skeleton-card"
             className="border-border bg-card rounded-lg border"
+            data-glass="card"
           >
             <CardHeader width="w-32" />
             <div className="space-y-2 p-[18px]">
@@ -84,6 +90,7 @@ export function WarehousePageSkeleton() {
           <div
             data-testid="warehouse-skeleton-card"
             className="border-border bg-card rounded-lg border"
+            data-glass="card"
           >
             <CardHeader width="w-20" />
             <div className="flex items-start gap-3 p-[18px]">
@@ -99,6 +106,7 @@ export function WarehousePageSkeleton() {
       <div
         data-testid="warehouse-skeleton-card"
         className="border-border bg-card rounded-lg border"
+        data-glass="card"
       >
         <CardHeader width="w-36" />
         <div className="divide-border divide-y">

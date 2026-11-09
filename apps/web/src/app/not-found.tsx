@@ -11,10 +11,19 @@ import { IconMark } from '@/components/ui/icon-mark';
  */
 export default function NotFound() {
   return (
-    <div className="bg-background flex min-h-screen flex-col items-center justify-center gap-6 px-6 text-center">
+    // data-glass and data-glass-role: inert hooks for Liquid Glass
+    // (styles/liquid-glass/states.css: the board's status card on the
+    // scene); Classic renders exactly as before.
+    <div
+      className="bg-background flex min-h-screen flex-col items-center justify-center gap-6 px-6 text-center"
+      data-glass="state-screen"
+    >
       <IconMark />
       <div>
-        <p className="text-muted-foreground font-mono text-[12px] font-medium uppercase tracking-[0.1em]">
+        <p
+          className="text-muted-foreground font-mono text-[12px] font-medium uppercase tracking-[0.1em]"
+          data-glass-role="state-eyebrow"
+        >
           404
         </p>
         <h1 className="mt-2 font-display text-[28px] font-medium leading-tight tracking-[-0.025em] sm:text-[32px]">

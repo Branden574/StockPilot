@@ -13,10 +13,10 @@ export default function ProductGroupsLoading() {
     <div className={PAGE} aria-busy="true">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex h-[42px] items-center">
+          <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
             <Skeleton className="h-[26px] w-[220px] max-w-full" />
           </div>
-          <div className="mt-0.5 flex h-5 items-center">
+          <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
             <Skeleton className="h-3 w-[360px] max-w-full" />
           </div>
         </div>
@@ -25,7 +25,10 @@ export default function ProductGroupsLoading() {
           <Skeleton className="h-8 w-[184px]" />
         </div>
       </div>
-      <div className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border">
+      <div
+        className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border"
+        data-glass="card"
+      >
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="flex items-center gap-3 px-4 py-3">
             <Skeleton className="h-6 w-6 shrink-0" />
