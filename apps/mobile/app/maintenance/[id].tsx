@@ -48,6 +48,16 @@ import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import {
+  GLASS_OPS,
+  GLASS_RECORD_BODY,
+  glassCopyBox,
+  glassGrayCapsule,
+  glassTextArea,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -290,6 +300,8 @@ function PhotoSourceButton({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS gray capsule.
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -299,6 +311,7 @@ function PhotoSourceButton({
         styles.addPhotoBtn,
         // A control: the stronger border and the card fill (the outline button's recipe).
         { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
+        lg && glassGrayCapsule(lg),
       ]}
     >
       <Icon size={16} color={c.ink} strokeWidth={1.5} />
@@ -385,6 +398,12 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
 
 export default function MaintenanceRequestDetailScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html's cards with
+  // Order-Detail.dc.html's timeline): the scene, Back in the glass nav, the
+  // subject under it, the cards on the grouped glass surface, the text boxes
+  // as glass fields. The Outlook draft stays "prepared, not sent"; every
+  // action, gate and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -1009,9 +1028,10 @@ export default function MaintenanceRequestDetailScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.root, { backgroundColor: c.paper }]}>
-        <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-          <View style={styles.topbar}>
+      <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+        {lg ? <SceneBackground /> : null}
+        <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+          <View style={lg ? GLASS_LIST.nav : styles.topbar}>
             <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           </View>
         </SafeAreaView>
@@ -1088,12 +1108,13 @@ export default function MaintenanceRequestDetailScreen() {
   const formCommitShowing = resolveFormShowing || notesFormShowing;
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
-        <View style={styles.head}>
+        <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
             <Eyebrow>{handle}</Eyebrow>
@@ -1112,7 +1133,10 @@ export default function MaintenanceRequestDetailScreen() {
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
+        keyboardShouldPersistTaps="handled"
+      >
         <Card padding={16}>
           <Eyebrow>DESCRIPTION</Eyebrow>
           <Body size={14} color={c.ink} style={{ marginTop: 8 }}>
@@ -1395,7 +1419,11 @@ export default function MaintenanceRequestDetailScreen() {
                 editable={false}
                 selectTextOnFocus
                 value={generatedShareUrl}
-                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2, minHeight: 44, marginTop: 6 }]}
+                style={[
+                  styles.copyBox,
+                  { color: c.ink, borderColor: c.hair2, minHeight: 44, marginTop: 6 },
+                  lg && glassCopyBox(lg),
+                ]}
                 accessibilityLabel="Photo share link to copy manually"
               />
               <Body size={11.5} muted style={{ marginTop: 6 }}>
@@ -1439,7 +1467,7 @@ export default function MaintenanceRequestDetailScreen() {
                 editable={false}
                 selectTextOnFocus
                 value={prepared.clipboardText}
-                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2 }]}
+                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2 }, lg && glassCopyBox(lg)]}
                 accessibilityLabel="Maintenance request text to copy manually"
               />
               <Body size={11.5} muted style={{ marginTop: 6 }}>
@@ -1478,7 +1506,11 @@ export default function MaintenanceRequestDetailScreen() {
                       placeholder={RESOLVE_NOTE_PLACEHOLDER}
                       placeholderTextColor={c.ink3}
                       editable={!resolvePending}
-                      style={[styles.textarea, { color: c.ink, borderColor: c.hair2 }]}
+                      style={[
+                        styles.textarea,
+                        { color: c.ink, borderColor: c.hair2 },
+                        lg && glassTextArea(lg),
+                      ]}
                     />
                     <Body size={11} muted>
                       {resolveNoteHelperText()}
@@ -1663,7 +1695,11 @@ export default function MaintenanceRequestDetailScreen() {
                       placeholder={NOTES_PLACEHOLDER}
                       placeholderTextColor={c.ink3}
                       editable={!notePending}
-                      style={[styles.textarea, { color: c.ink, borderColor: c.hair2 }]}
+                      style={[
+                        styles.textarea,
+                        { color: c.ink, borderColor: c.hair2 },
+                        lg && glassTextArea(lg),
+                      ]}
                     />
                     <Button
                       block
@@ -1697,14 +1733,16 @@ function GateScreen({
   onBack: () => void;
   children: React.ReactNode;
 }) {
+  const lg = useGlass();
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={onBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
-      <View style={{ paddingHorizontal: 20, marginTop: 21 }}>
+      <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 21 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
         </Card>

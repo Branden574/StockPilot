@@ -469,7 +469,7 @@ export default function BundleDetail() {
                           backgroundColor: active ? c.ink : c.sunk,
                           opacity: pressed ? 0.85 : 1,
                         },
-                        // Liquid Glass: the iOS capsule (the chosen one in the accent).
+                        // Liquid Glass: the iOS capsule (the chosen one in ink).
                         lg && glassChip(lg, active),
                       ]}
                     >

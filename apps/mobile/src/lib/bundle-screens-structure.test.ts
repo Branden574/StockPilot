@@ -450,7 +450,7 @@ describe('a bundle', () => {
         '<Text style={[styles.whLabel, { color: active ? c.paper : c.ink }]}> {w.name} </Text>',
       ),
     );
-    // Liquid Glass: the iOS capsule, the chosen one in the accent.
+    // Liquid Glass: the iOS capsule, the chosen one in ink.
     expect(code).toContain('lg && glassChip(lg, active),');
     expect(code).toContain('lg && glassChipLabel(lg, active),');
   });

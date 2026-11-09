@@ -384,7 +384,7 @@ function StatusChip({
   onPress: () => void;
 }) {
   const { c } = useTheme();
-  // Liquid Glass: the iOS capsule (the chosen one in the accent).
+  // Liquid Glass: the iOS capsule (the chosen one in ink).
   const lg = useGlass();
   return (
     <Pressable

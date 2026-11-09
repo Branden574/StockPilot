@@ -5,7 +5,7 @@ import { StyleSheet, View, type TextStyle, type ViewStyle } from 'react-native';
 import { useTheme } from '../../../../lib/use-theme';
 import { GlassBackdrop } from '../glass-backdrop';
 import { GLASS_METRICS } from '../metrics';
-import { GLASS_CIRCLE, glassGroupRow } from '../primitive-styles';
+import { GLASS_CIRCLE, glassFieldBox, glassFieldInput, glassGroupRow } from '../primitive-styles';
 import type { GlassLook } from '../use-glass';
 
 /**
@@ -266,3 +266,56 @@ export const GLASS_WORKBENCH = StyleSheet.create({
 
 /** A record screen's scroll content in glass: 16 from the sides, 10 under the nav. */
 export const GLASS_RECORD_BODY: ViewStyle = { paddingHorizontal: OPS_SIDE, paddingTop: 10 };
+
+/** A record screen's single card under the nav (a failed read, a missing workspace): 16 from the sides. */
+export const GLASS_RECORD_PAD: ViewStyle = { paddingHorizontal: OPS_SIDE };
+
+/** A multi-line text box Classic draws by hand: the glass field (field fill, the 3:1 input line, radius 12) in the system face. */
+export const glassTextArea = cached(
+  (lg): TextStyle => ({ ...glassFieldBox(lg, false), ...glassFieldInput(lg) }),
+);
+/** A read-only copy box keeps its mono words; only its frame is the glass field. */
+export const glassCopyBox = cached((lg): ViewStyle => glassFieldBox(lg, false));
+
+/** A typed box Classic draws by hand with its own colours: the glass field, the system face, ink words. */
+export const glassTypedBox = cached(
+  (lg): TextStyle => ({ ...glassFieldBox(lg, false), ...glassFieldInput(lg), color: lg.c.ink }),
+);
+
+/**
+ * A footer Classic pins to the screen's foot on the page colour behind a
+ * rule: the boards' floating action bar (.item-actions [768]): 16 from the
+ * sides, 22 up, 7 round its contents, radius 32, its material a
+ * GlassFootBackdrop drawn first inside it. Its own button is 50 tall, so the
+ * bar is the board's 64.
+ */
+export const GLASS_ACTION_BAR: ViewStyle = {
+  backgroundColor: 'transparent',
+  borderTopWidth: 0,
+  left: GLASS_METRICS.actionBar.left,
+  right: GLASS_METRICS.actionBar.right,
+  bottom: GLASS_METRICS.actionBar.bottom,
+  paddingHorizontal: GLASS_METRICS.actionBar.paddingHorizontal,
+  paddingTop: 7,
+  paddingBottom: 7,
+  borderRadius: GLASS_METRICS.actionBar.radius,
+  overflow: 'hidden',
+};
+
+/** How far the floating bar sits off the foot: added to the room a list leaves under its rows. */
+export const GLASS_ACTION_BAR_LIFT = GLASS_METRICS.actionBar.bottom;
+
+/** A commit Classic draws as its own ink block: the iOS primary button (.ios-btn.primary [716-717]). */
+export const glassAccentButton = cached(
+  (lg): ViewStyle => ({
+    backgroundColor: lg.g.accent,
+    borderRadius: GLASS_METRICS.button.radius,
+    minHeight: GLASS_METRICS.button.minHeight,
+    paddingVertical: GLASS_METRICS.button.paddingVertical,
+    justifyContent: 'center',
+  }),
+);
+/** Its words: 17/600 on the accent (--on-accent). */
+export const glassAccentLabel = cached(
+  (lg): TextStyle => ({ ...lg.font.displaySemi, fontSize: 17, letterSpacing: 0, color: lg.g.onAccent }),
+);

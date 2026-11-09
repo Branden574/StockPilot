@@ -261,7 +261,7 @@ export default function ReturnsListScreen() {
                       filter === f.id
                         ? { backgroundColor: c.ink, borderColor: c.ink }
                         : { backgroundColor: 'transparent', borderColor: c.hair2 },
-                      // Liquid Glass: the iOS capsule (the chosen one in the accent).
+                      // Liquid Glass: the iOS capsule (the chosen one in ink).
                       lg && glassChip(lg, filter === f.id),
                     ]}
                   >

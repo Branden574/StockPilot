@@ -31,6 +31,11 @@ import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_RECORD_BODY, GLASS_RECORD_PAD } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { FONT } from '@/lib/theme';
@@ -92,6 +97,11 @@ export default function LocationScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html's "Where it is"
+  // with an iOS grouped list): the scene, Back in the glass nav, the place's
+  // name under it, the cards on the grouped glass surface under iOS headings.
+  // Every control, state and word stays.
+  const lg = useGlass();
   const { orgId, loading: workspaceLoading } = useOrg();
   const offline = isOfflineState(useNetworkState());
   const [page, setPage] = React.useState(1);
@@ -169,9 +179,10 @@ export default function LocationScreen() {
 
   if (!orgId && !workspaceLoading) {
     return (
-      <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+        {lg ? <SceneBackground /> : null}
         <TopBar onBack={goBack} />
-        <View style={styles.pad}>
+        <View style={lg ? [styles.pad, GLASS_RECORD_PAD] : styles.pad}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {LOCATION_WORKSPACE_UNAVAILABLE}
@@ -192,7 +203,8 @@ export default function LocationScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
       <TopBar onBack={goBack} />
 
       {view.kind === 'loading' ? (
@@ -202,7 +214,7 @@ export default function LocationScreen() {
           accessibilityLabel="Loading this location"
         />
       ) : view.kind === 'error' ? (
-        <View style={styles.pad}>
+        <View style={lg ? [styles.pad, GLASS_RECORD_PAD] : styles.pad}>
           <Card padding={16}>
             <Body size={15} accessibilityRole="alert" style={{ fontFamily: FONT.display }}>
               {VERIFICATION_UNAVAILABLE_COPY}
@@ -286,6 +298,7 @@ function LocationBody({
   onNavigate: (href: string) => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const loc = data.location;
   const recount = locationRecountState(data, !offline);
   const rangeStart = (data.page - 1) * data.pageSize + 1;
@@ -298,7 +311,7 @@ function LocationBody({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.body}
+      contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
       }
@@ -334,7 +347,7 @@ function LocationBody({
           the first one, that it has not run: never an all-clear), and only
           when nothing here is hidden from the reader. */}
       <View style={{ gap: 8 }}>
-        <Eyebrow>OPEN ISSUES HERE</Eyebrow>
+        {lg ? <GlassHeading>Open issues here</GlassHeading> : <Eyebrow>OPEN ISSUES HERE</Eyebrow>}
         {data.openIssues.length > 0 ? (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {data.openIssues.map((issue) => (
@@ -529,9 +542,11 @@ function LocationRow({
 
 function TopBar({ onBack }: { onBack: () => void }) {
   const { c } = useTheme();
+  // Liquid Glass: Back as the 44pt glass circle in the glass nav, on the scene.
+  const lg = useGlass();
   return (
-    <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-      <View style={styles.topbar}>
+    <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+      <View style={lg ? GLASS_LIST.nav : styles.topbar}>
         <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" minTap />
       </View>
     </SafeAreaView>

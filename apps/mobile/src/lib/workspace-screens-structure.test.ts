@@ -17,7 +17,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
-import { printClassic } from './__fixtures__/classic-projection';
+import { classicFlat, flatNorm, printClassic } from './__fixtures__/classic-projection';
 import { syncBadgeState } from './sync-badge';
 import { palette, type Palette } from './theme';
 
@@ -1225,13 +1225,17 @@ describe('Maintenance request (M-WS-10)', () => {
     expect(code.match(/placeholderTextColor=\{c\.ink3\}/g)).toHaveLength(2);
     expect(styleBlock(REQUEST, 'textarea')).toMatch(/fontFamily: FONT\.displayRegular,/);
     // The two typed boxes and the two copy boxes are controls: hair2, never
-    // the hairline alone.
+    // the hairline alone. Classic is read through the classic projection.
+    const classic = classicFlat(sourceOf(REQUEST), REQUEST);
     expect(
-      code.match(/styles\.textarea, \{ color: c\.ink, borderColor: c\.hair2 \}/g),
+      classic.match(/styles\.textarea,\{color: c\.ink,borderColor: c\.hair2\}/g),
     ).toHaveLength(2);
-    expect(code.match(/styles\.copyBox, \{ color: c\.ink, borderColor: c\.hair2\b/g)).toHaveLength(
+    expect(classic.match(/styles\.copyBox,\{color: c\.ink,borderColor: c\.hair2\b/g)).toHaveLength(
       2,
     );
+    // Liquid Glass: each typed box a glass field, each copy box on the field fill.
+    expect(code.match(/lg && glassTextArea\(lg\)/g)).toHaveLength(2);
+    expect(code.match(/lg && glassCopyBox\(lg\)/g)).toHaveLength(2);
   });
 
   it('keeps every word', () => {
@@ -1281,10 +1285,13 @@ describe('New maintenance request (M-WS-11)', () => {
     // Dynamic Type: a site or category name is content, uncapped before the
     // restyle; capped at the 22pt control ceiling it stopped growing at AX2
     // and read smaller than its own field label.
+    // Classic 13; Liquid Glass draws the capsule's words at 15.
     const labels = elements(
       NEW_REQUEST,
       (el, s) =>
-        tagOf(el, s) === 'Body' && attrText(el, 'size', s) === '13' && textOf(el, s) === '',
+        tagOf(el, s) === 'Body' &&
+        attrText(el, 'size', s) === 'lg ? 15 : 13' &&
+        textOf(el, s) === '',
     );
     const chipLabel = labels.els.filter(({ ancestors }) =>
       ancestors.some((a) => attrText(a, 'style', labels.sf)?.includes('styles.chip,')),
@@ -1318,9 +1325,11 @@ describe('New maintenance request (M-WS-11)', () => {
       expect(attrText(el, 'style', sf)).toMatch(/box\]$/);
       expect(attrText(el, 'maxFontSizeMultiplier', sf)).toBeUndefined();
     }
-    expect(code).toContain(
-      'const box = { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };',
+    expect(classicFlat(sourceOf(NEW_REQUEST), NEW_REQUEST)).toContain(
+      flatNorm('const box = { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };'),
     );
+    // Liquid Glass: every box a glass field.
+    expect(code).toContain('const box = lg ? glassTypedBox(lg) :');
   });
 
   it('the photo step: named source buttons, a named Retry in a 44pt frame, a Done button', () => {
