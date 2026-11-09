@@ -8,6 +8,11 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { getPublicItem } from '@/server/services/public-items';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root on the external frame (ExternalShell glassPage="links") and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 import { isUuid } from '@stockpilot/core';
 
@@ -26,11 +31,7 @@ export const dynamic = 'force-dynamic';
  * adding tests in public-items.test.ts.
  */
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   // A malformed id (a mistyped or cut-off link) is "Item not found" with no
   // read, so no null is cached under it either (B63).
@@ -61,11 +62,7 @@ export async function generateMetadata({
   };
 }
 
-export default async function PublicItemPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function PublicItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   // A malformed id (a mistyped or cut-off link) is Page not found before
   // anything is read with it (B63).
@@ -85,7 +82,7 @@ export default async function PublicItemPage({
     (item.bookAuthor || item.bookPublisher || item.bookPublishedDate || item.bookGrade);
 
   return (
-    <ExternalShell width="md">
+    <ExternalShell glassPage="links" width="md">
       {/* Header */}
       <ExternalEyebrow className="mb-6 flex items-center gap-2">
         <Sparkles className="h-3 w-3" aria-hidden />
@@ -112,7 +109,7 @@ export default async function PublicItemPage({
       ) : null}
 
       {/* Title + type */}
-      <h1 className="font-display text-foreground text-[26px] font-medium leading-[1.2] tracking-[-0.025em] [overflow-wrap:anywhere]">
+      <h1 className="text-foreground font-display text-[26px] font-medium leading-[1.2] tracking-[-0.025em] [overflow-wrap:anywhere]">
         {item.name}
       </h1>
 
@@ -153,7 +150,7 @@ export default async function PublicItemPage({
       >
         <div>
           <div className="text-[11px] font-medium uppercase tracking-[0.1em]">On hand</div>
-          <div className="font-display mt-0.5 text-[32px] font-medium tabular-nums leading-none tracking-[-0.02em]">
+          <div className="mt-0.5 font-display text-[32px] font-medium tabular-nums leading-none tracking-[-0.02em]">
             {item.quantityOnHand}
           </div>
         </div>
@@ -184,8 +181,8 @@ export default async function PublicItemPage({
 
       {/* Footer note */}
       <p className="text-muted-foreground mt-8 text-[12.5px] leading-relaxed">
-        This is a public preview. Prices, suppliers, locations, and
-        internal notes aren&apos;t shown. If you&apos;re part of the team,{' '}
+        This is a public preview. Prices, suppliers, locations, and internal notes aren&apos;t
+        shown. If you&apos;re part of the team,{' '}
         <a className="text-foreground underline underline-offset-2" href="/signin">
           sign in
         </a>{' '}

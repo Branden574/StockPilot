@@ -11,6 +11,11 @@ import {
   portalReturnsEnabled,
   resolvePortalContext,
 } from '@/server/services/portal';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root on the external frame (ExternalShell glassPage="links") and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +43,7 @@ export default async function PortalPage() {
     // The not-a-portal-user prompt on the shared external frame (P5.1): one
     // status card with its own words and its one way in.
     return (
-      <ExternalShell width="md">
+      <ExternalShell glassPage="links" width="md">
         <ExternalStatusCard
           title="Supplier ordering portal"
           body={
@@ -64,7 +69,7 @@ export default async function PortalPage() {
   ]);
 
   return (
-    <ExternalShell className="max-w-4xl">
+    <ExternalShell glassPage="links" className="max-w-4xl">
       <AppearanceAccountSync userId={ctx.userId} />
       <header className="border-border mb-8 flex items-center gap-3 border-b pb-4">
         {ctx.orgLogoUrl ? (

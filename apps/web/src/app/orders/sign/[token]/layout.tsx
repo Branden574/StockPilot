@@ -15,7 +15,7 @@ import { ExternalShell } from '@/components/auth/external-shell';
  */
 export default function OrderSignLayout({ children }: { children: ReactNode }) {
   return (
-    <ExternalShell width="md" poweredBy>
+    <ExternalShell glassPage="links" width="md" poweredBy>
       {children}
     </ExternalShell>
   );

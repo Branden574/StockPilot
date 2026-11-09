@@ -13,6 +13,11 @@ import {
   isLinkOpen,
   resolvePublicRequestToken,
 } from '@/server/services/public-catalog';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root that app/r/layout.tsx draws and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 /**
  * F9: org.logo_url is editable by org admins and could in theory hold
