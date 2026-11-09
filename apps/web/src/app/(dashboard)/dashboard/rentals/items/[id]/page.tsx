@@ -3,6 +3,11 @@ import { safeReturnPath } from '@/lib/safe-return-path';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { InventoryService } from '@/server/services/inventory';
 
+// The Liquid Glass item composition (Item-Detail.dc.html): ItemDetail draws
+// its [data-glass-page] root, and every rule is scoped to it and to glass, so
+// Classic never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/item-detail.css';
+
 const DEFAULT_BACK = '/dashboard/rentals/items';
 
 export default async function RentalItemDetailPage({

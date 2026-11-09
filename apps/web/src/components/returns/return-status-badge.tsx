@@ -6,19 +6,47 @@ import type { ReturnStatus } from '@/server/services/returns';
 export function ReturnStatusBadge({ status }: { status: ReturnStatus }) {
   switch (status) {
     case 'requested':
-      return <Badge variant="warning">Requested</Badge>;
+      return (
+        <Badge variant="warning" data-glass-role="status" data-glass-state={status}>
+          Requested
+        </Badge>
+      );
     case 'approved':
-      return <Badge variant="default">Approved</Badge>;
+      return (
+        <Badge variant="default" data-glass-role="status" data-glass-state={status}>
+          Approved
+        </Badge>
+      );
     case 'received':
-      return <Badge variant="secondary">Received</Badge>;
+      return (
+        <Badge variant="secondary" data-glass-role="status" data-glass-state={status}>
+          Received
+        </Badge>
+      );
     case 'closed':
-      return <Badge variant="success">Closed</Badge>;
+      return (
+        <Badge variant="success" data-glass-role="status" data-glass-state={status}>
+          Closed
+        </Badge>
+      );
     case 'denied':
-      return <Badge variant="destructive">Denied</Badge>;
+      return (
+        <Badge variant="destructive" data-glass-role="status" data-glass-state={status}>
+          Denied
+        </Badge>
+      );
     case 'cancelled':
-      return <Badge variant="outline">Cancelled</Badge>;
+      return (
+        <Badge variant="outline" data-glass-role="status" data-glass-state={status}>
+          Cancelled
+        </Badge>
+      );
     default:
-      return <Badge variant="outline">{status}</Badge>;
+      return (
+        <Badge variant="outline" data-glass-role="status" data-glass-state={status}>
+          {status}
+        </Badge>
+      );
   }
 }
 

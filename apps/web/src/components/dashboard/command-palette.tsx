@@ -223,6 +223,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-glass-variant="command"
+        data-glass-role="shell-dialog"
         className="gap-0 overflow-hidden p-0 sm:max-w-[640px] sm:p-0"
         aria-describedby={undefined}
       >

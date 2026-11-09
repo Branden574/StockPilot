@@ -21,5 +21,9 @@ const TONES: Record<PoImportStatus, NonNullable<BadgeProps['variant']>> = {
 
 /** The words are the status itself, underscores read as spaces ("needs review"). */
 export function PoImportStatusBadge({ status }: { status: PoImportStatus }) {
-  return <Badge variant={TONES[status] ?? 'outline'}>{status.replace(/_/g, ' ')}</Badge>;
+  return (
+    <Badge variant={TONES[status] ?? 'outline'} data-glass-role="status" data-glass-state={status}>
+      {status.replace(/_/g, ' ')}
+    </Badge>
+  );
 }

@@ -1,0 +1,15 @@
+<div>
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+    "Draft"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]">
+    "Expected"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]">
+    "Ordered"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning">
+    "Partial"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success">
+    "Received"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-destructive-wash text-destructive">
+    "Cancelled"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+    "Draft"

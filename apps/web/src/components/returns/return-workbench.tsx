@@ -27,6 +27,7 @@ import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PatternPhoto } from '@/components/patterns/photo';
 import { Timeline } from '@/components/patterns/timeline';
+import { ReturnProgressRail } from '@/components/returns/return-progress-rail';
 import { ReturnStatusBadge } from '@/components/returns/return-status-badge';
 import { RestockDestinationPicker } from '@/components/returns/restock-destination-picker';
 import { cardClass, eyebrowClass } from '@/components/returns/returns-ui';
@@ -931,6 +932,10 @@ export function ReturnWorkbench({
           </p>
         }
       />
+
+      {/* Liquid Glass only: the board's progress rail under the head
+          (return-progress-rail.tsx), between two Classic blocks. */}
+      <ReturnProgressRail status={r.status} />
 
       {/* Next-step bar: the one card that commits the work in front of you
           (the Cycle counts "post" footer is its cue). Its controls on one

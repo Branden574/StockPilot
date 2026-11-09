@@ -212,14 +212,59 @@ describe('styles/liquid-glass scope guard', () => {
     });
 
     it('the Items and item pages import exactly their own compositions', () => {
+      // The rental items list and a rental item draw the same InventoryTable
+      // and ItemDetail, so they take the same compositions (stage 4).
       expect(importers.get('pages/items.css')?.sort()).toEqual([
         '(dashboard)/dashboard/books/page.tsx',
         '(dashboard)/dashboard/inventory/page.tsx',
+        '(dashboard)/dashboard/rentals/items/page.tsx',
       ]);
       expect(importers.get('pages/item-detail.css')?.sort()).toEqual([
         '(dashboard)/dashboard/books/[id]/page.tsx',
         '(dashboard)/dashboard/inventory/[id]/page.tsx',
+        '(dashboard)/dashboard/rentals/items/[id]/page.tsx',
       ]);
+    });
+
+    it('the operations pages import the shared frame, and each board file only its own pages', () => {
+      const OPS = join(APP, '(dashboard)', 'dashboard');
+      const lane = [
+        'bundles',
+        'categories',
+        'customers',
+        'cycle-counts',
+        'exceptions',
+        'locations',
+        'maintenance',
+        'movements',
+        'planning',
+        'procedures',
+        'purchase-orders',
+        'rentals',
+        'returns',
+        'schedule',
+        'suppliers',
+        'tags',
+        'warehouses',
+      ];
+      const pages = lane
+        .flatMap((d) => routeFiles(join(OPS, d)))
+        .map((f) => relative(APP, f))
+        .filter((f) => /(^|\/)page\.tsx$/.test(f))
+        .filter((f) => !f.includes('/rentals/items/') || f.endsWith('/rentals/items/new/page.tsx'))
+        .sort();
+      expect(importers.get('pages/ops.css')?.sort()).toEqual(pages);
+      // Each of them draws the root the shared frame is scoped to.
+      for (const page of pages) {
+        expect(readFileSync(join(APP, page), 'utf8'), page).toMatch(/data-glass-page="ops"/u);
+      }
+      const within = (file: string, dirs: string[]) =>
+        (importers.get(file) ?? []).every((f) =>
+          dirs.some((d) => f.startsWith(`(dashboard)/dashboard/${d}/`)),
+        );
+      expect(within('pages/counts.css', ['cycle-counts'])).toBe(true);
+      expect(within('pages/po.css', ['purchase-orders', 'planning', 'suppliers'])).toBe(true);
+      expect(within('pages/returns.css', ['returns'])).toBe(true);
     });
 
     for (const { file, text } of PAGES) {

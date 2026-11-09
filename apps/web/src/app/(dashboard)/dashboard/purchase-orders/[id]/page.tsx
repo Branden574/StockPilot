@@ -25,6 +25,11 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { PoAccessDenied } from '@/components/po/po-access-denied';
+import {
+  PoLineGlassCells,
+  PoLineGlassHeads,
+  PoReceivingProgress,
+} from '@/components/po/po-receiving-glass';
 import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
@@ -45,6 +50,13 @@ import {
   formatCalendarDate,
   isManagerOrAbove,
 } from '@stockpilot/core';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/po.css';
 
 /** The page area (DESIGN-SPEC 5.3 and 4): max 1320, 28 / 32 / 64, 16 px gutters on a phone. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -196,7 +208,7 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
       : receiveRefusal;
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="purchase-order">
       {/* The record's header (DESIGN-SPEC 6.1 and 6.18): the PO number is the
           page's h1 in mono, the rename pencil and the status label beside it,
           the supplier and when it was created under it, and the actions on
@@ -304,8 +316,17 @@ export default async function PoDetailPage({ params }: { params: Promise<{ id: s
                 </>
               }
             >
-              <LineItems rows={lineRows} />
+              <LineItems rows={lineRows} status={status} />
             </DetailSection>
+
+            {/* Liquid Glass only: the board's receiving summary
+                (po-receiving-glass.tsx), between two Classic cards; glass
+                draws it over the lines. */}
+            <PoReceivingProgress
+              status={status}
+              lines={lineRows}
+              expectedAt={(po.expected_at as string | null) ?? null}
+            />
 
             <DetailSection title="Receipts" bodyClassName="max-sm:px-3">
               <ReceiptHistory
@@ -389,7 +410,7 @@ function receivedPercent(received: number, ordered: number): number {
  * right (18 + 32 + 8), since 12 px made it 62 px and a 16-character automatic
  * SKU's line 2 px wider than the card at 360 px.
  */
-function LineItems({ rows }: { rows: LineRow[] }) {
+function LineItems({ rows, status }: { rows: LineRow[]; status: string }) {
   return (
     <Table scrollLabelledBy="po-line-items-heading">
       <TableHeader>
@@ -399,7 +420,13 @@ function LineItems({ rows }: { rows: LineRow[] }) {
             <span className="sr-only">Image</span>
           </TableHead>
           <TableHead className="pl-0">Item</TableHead>
-          <TableHead className="text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap">
+          {/* Liquid Glass only: the board's Ordered, Received, Outstanding
+              and Status columns, in place of the next one. */}
+          <PoLineGlassHeads />
+          <TableHead
+            data-classic-only=""
+            className="text-right last:pr-[18px] sm:w-[168px] sm:whitespace-nowrap"
+          >
             Received / ordered
           </TableHead>
         </TableRow>
@@ -438,7 +465,8 @@ function LineItems({ rows }: { rows: LineRow[] }) {
                   </span>
                 </p>
               </TableCell>
-              <TableCell className="py-2.5 last:pr-[18px]">
+              <PoLineGlassCells line={l} status={status} />
+              <TableCell data-classic-only="" className="py-2.5 last:pr-[18px]">
                 <div className="ml-auto w-24 max-w-full sm:w-[120px]">
                   <div className="flex items-baseline justify-between gap-2 font-mono text-[12px] tabular-nums">
                     <span className="text-foreground">

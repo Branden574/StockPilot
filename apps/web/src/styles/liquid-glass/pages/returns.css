@@ -1,0 +1,299 @@
+/* Liquid Glass, the returns pages (stage 4, operations lane): a return
+   (Return-Detail.dc.html) and the returns list (Routes-Gallery-1.dc.html
+   panel). The shared operations frame is pages/ops.css; this file adds what
+   these boards draw on top of it.
+
+   Same DOM as Classic (plan M1), found through the inert root hooks
+   (data-glass-page="ops" with data-glass-view="return" or "returns"), the
+   workbench's own landmarks (section[aria-label="Next step"]) and the
+   shared components' hooks. Every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen and names its
+   page root.
+
+   A return: the board's .cols-side (the record beside a 360 px column, 16
+   between, one column in a window 1100 px wide or narrower) is drawn here
+   by floating the workbench's Next step card to the right of the record:
+   Classic renders it second, right after the head, so it starts level with
+   the first card, and floating it (rather than placing it in a grid row)
+   keeps the record's cards at their own heights whatever the card holds.
+   In it the actions stack full width, the primary at the board's 44 px
+   (.btn-lg). The board's progress rail (.steps: Requested, Approved,
+   Received, Processed) is a glass-only element of the workbench
+   (components/returns/return-progress-rail.tsx), drawn across the page
+   under the head, above the side column. The workbench's radio
+   rows are drawn as the board's .choice cards and .rb dots. Deviations,
+   recorded (stage4/ops-rows.md): the rows keep Classic's words, padding
+   and layout (no icon or hint column as the board's destination cards
+   have); the record keeps Classic's cards and their order. Imported
+   only by the returns pages. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── A return (Return-Detail.dc.html) ─────────────────────────────── */
+    /* The record takes the page's width (Classic caps it at 1040 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      > .max-w-\[1040px\] {
+      max-width: none;
+    }
+    @media (min-width: 1101px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col {
+        display: flow-root;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col
+        > *
+        + * {
+        margin-top: 20px;
+        margin-right: 376px;
+      }
+      /* The progress rail spans the page above the side column. */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col
+        > [data-glass='return-rail'] {
+        margin-right: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        > .max-w-\[1040px\]
+        > .flex-col
+        > section[aria-label='Next step'] {
+        float: right;
+        width: 360px;
+        margin-right: 0;
+        margin-left: 16px;
+      }
+      /* In the side column the actions stack, full width (.card-b col g10),
+         the primary at 44 px (.btn-lg), the "item is here" switch under
+         them. */
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+        padding: 16px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child
+        > [data-glass='button'] {
+        width: 100%;
+        height: 36px;
+        font-size: 14px;
+        font-weight: 600;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child
+        > [data-glass='button'][data-glass-variant='default'] {
+        height: 44px;
+        border-radius: 12px;
+        font-size: 15px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='return']
+        section[aria-label='Next step']
+        > .flex-wrap:first-child
+        > div {
+        margin-left: 0;
+        padding-top: 4px;
+      }
+    }
+    /* The progress rail (.steps.card: 12 x 16, radius 16; .step 13 px at
+       500 in ink 3 with its 20 px numbered mark, the current step in ink at
+       650 on the accent mark with its 4 px wash ring, a done step's check on
+       the accent wash inside the accent ring; .step-sep, the 1.5 px line 2
+       between two steps, growing to 120 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail'] {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding: 12px 16px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 16px;
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail']
+      > li[data-state] {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail']
+      > li[data-state='now'] {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail']
+      [data-glass='return-step-mark'] {
+      display: grid;
+      flex: none;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      box-shadow: inset 0 0 0 1.5px var(--lg-line-3);
+      color: var(--lg-ink-3);
+      font-size: 11px;
+      font-weight: 700;
+      line-height: 1;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail']
+      > li[data-state='done']
+      [data-glass='return-step-mark'] {
+      background: var(--lg-accent-wash);
+      box-shadow: inset 0 0 0 1.5px var(--lg-accent);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail']
+      > li[data-state='now']
+      [data-glass='return-step-mark'] {
+      background: var(--lg-accent);
+      box-shadow: 0 0 0 4px var(--lg-accent-wash);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-glass='return-rail']
+      > [data-glass='return-step-sep'] {
+      flex: 1 1 0%;
+      min-width: 0;
+      max-width: 120px;
+      height: 1.5px;
+      background: var(--lg-line-2);
+    }
+
+    /* The RETURNING eyebrow (.eyebrow: 12/16, 600, ink 3). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      section[aria-label]
+      > h2.uppercase:first-child {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+    }
+
+    /* The radio rows (the disposition, the destination, a replacement's
+       and an exchange's choices) as the board's .choice on glass (12 px,
+       radius 12; sp.css's "controls on glass" block, which overrides the
+       base .choice, puts the row on the field frost with the field edge, and
+       the chosen one on the selection fill, keeping the base's accent edge
+       and its inset 1 px accent ring in place of Classic's ink ring; with
+       reduced transparency or more contrast those tokens resolve to the
+       base's surface, line 2 and accent wash) and their dots as .rb (18 px,
+       a 1.5 px edge on the surface; chosen, the accent with an 8 px
+       on-accent dot). The dot's edge is ink 3, not the board's line 3,
+       which is under 3:1 on the surface with reduced transparency (R11).
+       Classic's padding, its row heights and its 60 % opacity for an
+       unavailable choice stay; a rack that cannot be chosen takes the
+       board's .is-blocked surface 2. The keyboard ring is the glass ring on
+       the row, as Classic draws its ring on the row. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      > :has(input[type='radio']) {
+      border-color: var(--lg-field-line);
+      border-radius: 12px;
+      background-color: var(--lg-field-fill);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      > :has(input[type='radio']):hover {
+      border-color: var(--lg-line-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      > :has(input[type='radio']:checked) {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-sel-fill);
+      box-shadow: inset 0 0 0 1px var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      > div:has(input[type='radio']:disabled) {
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      > :has(:focus-visible) {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      input[type='radio'] {
+      width: 18px;
+      height: 18px;
+      border: 1.5px solid var(--lg-ink-3);
+      background-color: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [role='radiogroup']
+      input[type='radio']:checked {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-on-accent);
+      box-shadow: inset 0 0 0 3.5px var(--lg-accent);
+    }
+
+    /* ── The list (Routes-Gallery-1.dc.html returns): the RMA number in
+       mono, strong, in the accent text; its order in ink 2 ─────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='returns']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:first-child
+      a {
+      color: var(--lg-accent-text);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='returns']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:nth-child(2)
+      a {
+      color: var(--lg-ink-2);
+    }
+  }
+}
