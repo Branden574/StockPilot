@@ -56,6 +56,12 @@ export const GLASS_PAGE = StyleSheet.create({
   section: { marginTop: 22 },
   /** A section's heading (.ios-h [706]), 8 over its group (.col.g8). */
   sectionHead: { paddingHorizontal: 0, paddingBottom: 8 },
+  /**
+   * A grouped card whose rows fill on press: the group clips its rows to its
+   * 24pt corners (.ios-group [708] overflow hidden), so a first or last row's
+   * pressed fill keeps the curve.
+   */
+  group: { overflow: 'hidden' },
   /** The settings row (.ios-row [709-711]): 56 min, 10/16 padding, 12 gap. */
   row: {
     minHeight: GLASS_METRICS.row.minHeight,
@@ -204,7 +210,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   syncHeadTitle: { flexShrink: 1 },
-  syncPill: { minHeight: 24, borderRadius: 12, paddingHorizontal: 9, justifyContent: 'center' },
+  syncPill: { minHeight: 24, borderRadius: 12, paddingHorizontal: 12, justifyContent: 'center' },
   syncCount: { fontSize: 13, lineHeight: 18, letterSpacing: 0, fontVariant: ['tabular-nums'] },
   record: { paddingVertical: 14, paddingHorizontal: 16, gap: 10 },
   recordHead: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -215,7 +221,7 @@ const styles = StyleSheet.create({
   recordButton: {
     minHeight: 44,
     borderRadius: 22,
-    paddingHorizontal: 18,
+    paddingHorizontal: 22,
     alignSelf: 'flex-start',
     alignItems: 'center',
     justifyContent: 'center',
@@ -278,12 +284,16 @@ export function GlassSyncSectionHead({
 }) {
   const { wash, ink } = glassSyncCountTone(lg, tone);
   return (
-    <View style={styles.syncHead}>
+    // One element for VoiceOver, the heading and its count read together as
+    // Classic's eyebrow reads them ("NOT CONFIRMED · 2").
+    <View
+      style={styles.syncHead}
+      accessible
+      accessibilityRole="header"
+      accessibilityLabel={`${title}, ${count}`}
+    >
       <GlassHeading style={styles.syncHeadTitle}>{title}</GlassHeading>
-      <View
-        style={wash ? [styles.syncPill, { backgroundColor: wash }] : undefined}
-        accessibilityLabel={`${count}`}
-      >
+      <View style={wash ? [styles.syncPill, { backgroundColor: wash }] : undefined}>
         <Text
           maxFontSizeMultiplier={capTo(13, TYPE_CEILING.chrome)}
           style={[
@@ -305,7 +315,9 @@ export function GlassSyncSectionHead({
  * tile (warn-fill for a change that may have been applied, danger-fill for a
  * refusal, the accent for work held for another account), the 600 title over
  * its 13pt sub-line, the message at 14/20 in ink-2, and the record's one
- * action, Discard, as the board's gray .ios-btn (44pt) in the refusal red.
+ * action, Discard, as the board's gray .ios-btn (44pt, 22 at the sides) in
+ * ink, as the board draws its gray Dismiss and Remove; the confirmation
+ * that follows carries the destructive style.
  */
 export function GlassSyncRecord({
   lg,
@@ -355,7 +367,7 @@ export function GlassSyncRecord({
         >
           <Text
             maxFontSizeMultiplier={capTo(15, TYPE_CEILING.control)}
-            style={[lg.font.displaySemi, styles.recordButtonText, { color: lg.c.critText }]}
+            style={[lg.font.displaySemi, styles.recordButtonText, { color: lg.c.ink }]}
           >
             {action.label}
           </Text>

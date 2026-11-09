@@ -105,7 +105,7 @@ export default function AppearanceScreen() {
             <View style={lg ? GLASS_APPEARANCE_HEAD : styles.section}>
               {lg ? <GlassHeading>Design</GlassHeading> : <Eyebrow>DESIGN</Eyebrow>}
             </View>
-            <Card padding={0} style={{ marginTop: lg ? 8 : 10 }}>
+            <Card padding={0} style={lg ? [GLASS_PAGE.group, { marginTop: 8 }] : { marginTop: 10 }}>
               <View accessibilityRole="radiogroup" accessibilityLabel="Design">
                 {DESIGN_OPTIONS.map((option, idx) => (
                   <React.Fragment key={option.style}>
@@ -125,7 +125,7 @@ export default function AppearanceScreen() {
             <View style={lg ? GLASS_APPEARANCE_HEAD : styles.section}>
               {lg ? <GlassHeading>Theme</GlassHeading> : <Eyebrow>THEME</Eyebrow>}
             </View>
-            <Card padding={0} style={{ marginTop: lg ? 8 : 10 }}>
+            <Card padding={0} style={lg ? [GLASS_PAGE.group, { marginTop: 8 }] : { marginTop: 10 }}>
               <View accessibilityRole="radiogroup" accessibilityLabel="Theme">
                 {THEME_OPTIONS.map((option, idx) => (
                   <React.Fragment key={option.theme}>

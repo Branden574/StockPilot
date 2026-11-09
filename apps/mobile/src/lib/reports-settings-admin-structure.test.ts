@@ -1125,7 +1125,7 @@ describe('Settings: Unsent work', () => {
         '{`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}',
       ),
     );
-    // Liquid Glass says the same line in sentence case, in the same muted ink.
+    // Liquid Glass says the same line in sentence case, as the board’s .ios-sub (ink-2).
     expect(unsent).toContain('These records are kept for ${REJECTED_RETENTION_DAYS} days');
   });
 

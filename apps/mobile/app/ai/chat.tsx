@@ -37,7 +37,7 @@ import { CONNECTION_FAILURE_COPY } from '@/lib/connection-copy';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface Turn {
@@ -309,6 +309,7 @@ export default function AIChat() {
               color={c.ink3}
               style={lg ? [lg.font.displaySemi, GLASS_CHAT_TITLE, { color: c.ink }] : undefined}
               accessibilityRole={lg ? 'header' : undefined}
+              maxFontSizeMultiplier={lg ? capTo(17, TYPE_CEILING.chrome) : undefined}
             >
               {lg ? 'AI · Beta' : 'AI · BETA'}
             </Mono>

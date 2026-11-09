@@ -395,7 +395,8 @@ function DetailRow({ label, value }: { label: string; value: string }) {
         upper
         color={c.ink3}
         // The label is a fixed micro-marker; the value it names is not capped.
-        maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
+        // The cap's base is the size drawn: 12 in Liquid Glass (glassEyebrow).
+        maxFontSizeMultiplier={capTo(lg ? 12 : 9.5, TYPE_CEILING.chrome)}
         style={lg ? [glassEyebrow(lg), { flexShrink: 1 }] : { flexShrink: 1 }}
       >
         {label}

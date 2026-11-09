@@ -63,41 +63,162 @@ const printed = (code: string, file: string) =>
   );
 const flat = (s: string) => s.replace(/\s+/g, ' ');
 
-/** Every `onPress={...}`, `onAccessibilityTap`, `onLongPress` handler, as written. */
-function handlers(code: string): Set<string> {
-  const out = new Set<string>();
-  const text = flat(code);
-  const re = /\b(onPress|onLongPress|onAccessibilityTap|onAccessibilityAction)=\{/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) {
-    let depth = 1;
-    let i = m.index + m[0].length;
-    const start = i;
-    while (i < text.length && depth > 0) {
-      if (text[i] === '{') depth += 1;
-      else if (text[i] === '}') depth -= 1;
-      i += 1;
+const HANDLER_PROPS = new Set([
+  'onPress',
+  'onLongPress',
+  'onAccessibilityTap',
+  'onAccessibilityAction',
+]);
+const ROUTE_PROPS = new Set(['pathname', 'href']);
+
+/** Whitespace and trailing commas are layout, not code. */
+const squash = (s: string) => s.replace(/\s+/g, '').replace(/,([}\])])/g, '$1');
+
+/**
+ * Every touch handler, VoiceOver name and route in a file, wherever it is
+ * written: a JSX attribute (`onPress={...}`, `accessibilityLabel="..."` or
+ * `accessibilityLabel={`...`}`), an object property handed to a part
+ * (`action={{ onPress: ..., accessibilityLabel: ... }}`) or a shorthand one
+ * (`{ onPress }`), and `router.push` / `router.replace` / `pathname` /
+ * `href`. A literal name is keyed by its words, anything else by its code,
+ * so a JSX attribute and an object property with the same value are the
+ * same entry.
+ */
+function inventory(code: string, file: string): { handlers: Set<string>; names: Set<string> } {
+  const sf = ts.createSourceFile(file, code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const handlerSet = new Set<string>();
+  const nameSet = new Set<string>();
+  const valueOf = (e: ts.Expression): string => {
+    let x = e;
+    while (ts.isParenthesizedExpression(x)) x = x.expression;
+    if (ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x)) return x.text;
+    return squash(x.getText(sf));
+  };
+  const record = (prop: string, value: string) => {
+    if (HANDLER_PROPS.has(prop)) handlerSet.add(`${prop}=${value}`);
+    else if (prop === 'accessibilityLabel') nameSet.add(`label:${value}`);
+    else if (ROUTE_PROPS.has(prop)) nameSet.add(`route:${value}`);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxAttribute(node)) {
+      const init = node.initializer;
+      const value = !init
+        ? 'true'
+        : ts.isStringLiteral(init)
+          ? init.text
+          : ts.isJsxExpression(init) && init.expression
+            ? valueOf(init.expression)
+            : '';
+      record(node.name.getText(sf), value);
+    } else if (ts.isPropertyAssignment(node)) {
+      if (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))
+        record(node.name.text, valueOf(node.initializer));
+    } else if (ts.isShorthandPropertyAssignment(node)) {
+      record(node.name.text, node.name.text);
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ['push', 'replace', 'navigate'].includes(node.expression.name.text) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'router' &&
+      node.arguments[0] &&
+      !ts.isObjectLiteralExpression(node.arguments[0])
+    ) {
+      nameSet.add(`route:${valueOf(node.arguments[0])}`);
     }
-    // Whitespace and trailing commas are layout, not code.
-    const body = text
-      .slice(start, i - 1)
-      .replace(/\s+/g, '')
-      .replace(/,([}\])])/g, '$1');
-    out.add(`${m[1]}=${body}`);
-  }
-  return out;
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return { handlers: handlerSet, names: nameSet };
 }
 
-/** Every literal VoiceOver name and every pushed route. */
-function names(code: string): Set<string> {
-  const text = flat(code);
-  const out = new Set<string>();
-  for (const m of text.matchAll(/accessibilityLabel="([^"]+)"/g)) out.add(`label:${m[1]}`);
-  for (const m of text.matchAll(/router\.(?:push|replace)\(\s*'([^']+)'/g))
-    out.add(`route:${m[1]}`);
-  for (const m of text.matchAll(/pathname: '([^']+)'/g)) out.add(`route:${m[1]}`);
-  return out;
+/** Every touch handler, as written, in any position. */
+const handlers = (code: string, file = 'x.tsx') => inventory(code, file).handlers;
+
+/** Every VoiceOver name (literal or computed) and every pushed route, in any position. */
+const names = (code: string, file = 'x.tsx') => inventory(code, file).names;
+
+/** What the file adds over its Classic projection: handlers and names glass alone has. */
+function glassOnly(raw: string, file: string): { handlers: string[]; names: string[] } {
+  const src = printed(raw, file);
+  const classic = printed(printClassic(raw, file), file);
+  const ch = handlers(classic, file);
+  const cn = names(classic, file);
+  return {
+    handlers: [...handlers(src, file)].filter((h) => !ch.has(h)),
+    names: [...names(src, file)].filter((n) => !cn.has(n)),
+  };
 }
+
+describe('the parity inventory sees an action in every form it can be written in', () => {
+  const FILE = 'sample.tsx';
+  const sample = (glass: string, classic = '<View />') => `
+import { useGlass } from '@/components/ui/glass/use-glass';
+export function Sample({ row }: { row: { id: string } }) {
+  const lg = useGlass();
+  return lg ? ${glass} : ${classic};
+}`;
+
+  it('an action handed to a lane part as object properties (GlassSyncRecord action)', () => {
+    const out = glassOnly(
+      sample(
+        "<GlassSyncRecord action={{ label: 'Retry', accessibilityLabel: 'Retry', onPress: () => retryRow(row) }} />",
+      ),
+      FILE,
+    );
+    expect(out.handlers).toEqual(['onPress=()=>retryRow(row)']);
+    expect(out.names).toEqual(['label:Retry']);
+  });
+
+  it('a shorthand handler and a templated name', () => {
+    const out = glassOnly(
+      sample('<Pressable onPress={onRetry} accessibilityLabel={`Retry ${row.id}`} />'),
+      FILE,
+    );
+    expect(out.handlers).toEqual(['onPress=onRetry']);
+    expect(out.names).toEqual(['label:`Retry${row.id}`']);
+    expect(glassOnly(sample('<Part action={{ onPress }} />'), FILE).handlers).toEqual([
+      'onPress=onPress',
+    ]);
+  });
+
+  it('a route pushed by a template or written as href', () => {
+    const out = glassOnly(
+      sample('<Link href="/settings/x" onPress={() => router.push(`/a/${row.id}`)} />'),
+      FILE,
+    );
+    expect(out.names.sort()).toEqual(['route:/settings/x', 'route:`/a/${row.id}`']);
+  });
+
+  it('the same handler and name written as a JSX attribute in Classic and as a property in glass are one entry', () => {
+    const out = glassOnly(
+      sample(
+        '<Part action={{ accessibilityLabel: `Discard ${row.id}`, onPress: () => confirmDiscard(row) }} />',
+        '<Pressable onPress={() => confirmDiscard(row)} accessibilityLabel={`Discard ${row.id}`} />',
+      ),
+      FILE,
+    );
+    expect(out).toEqual({ handlers: [], names: [] });
+  });
+});
+
+describe('the lane’s glass parts only forward the handlers and names their callers hand them', () => {
+  // admin.tsx is drawn only in Liquid Glass, so it has no Classic projection
+  // to compare with; its handlers and names are pinned instead, and the
+  // values its callers pass are compared on each screen above.
+  const file = 'src/components/ui/glass/screens/admin.tsx';
+  const code = printed(read(file), file);
+
+  it('the one handler is the record action’s own', () => {
+    expect([...handlers(code, file)]).toEqual(['onPress=action.onPress']);
+  });
+
+  it('the names are the record action’s own and the section head’s title with its count', () => {
+    expect([...names(code, file)].sort()).toEqual(
+      ['label:`${title},${count}`', 'label:action.accessibilityLabel'].sort(),
+    );
+  });
+});
 
 describe.each(SCREENS)('%s in Liquid Glass', (file) => {
   const raw = read(file);
@@ -204,6 +325,107 @@ describe('Unsent work follows iOS-Sync for the parts that exist', () => {
   it('keeps Clear this list and the retention line', () => {
     expect(code).toContain('Clear this list');
     expect(code).toContain('These records are kept for ${REJECTED_RETENTION_DAYS} days');
+  });
+});
+
+describe('the Unsent work parts match iOS-Sync’s values (sp.css:707, 715, 716, 719, 1049)', () => {
+  const admin = flat(read('src/components/ui/glass/screens/admin.tsx'));
+  const unsent = flat(read('app/(drawer)/settings/rejected-work.tsx'));
+
+  it('the tinted count pill has the .ios-pill’s 12 at the sides, at the board’s 24 height', () => {
+    expect(admin).toContain(
+      "syncPill: { minHeight: 24, borderRadius: 12, paddingHorizontal: 12, justifyContent: 'center' },",
+    );
+  });
+
+  it('Discard is the gray .ios-btn: 22 at the sides, its words in ink', () => {
+    expect(admin).toMatch(
+      /recordButton: \{ minHeight: 44, borderRadius: 22, paddingHorizontal: 22,/,
+    );
+    expect(admin).toContain(
+      'style={[lg.font.displaySemi, styles.recordButtonText, { color: lg.c.ink }]}',
+    );
+    expect(admin).not.toContain('recordButtonText, { color: lg.c.critText }');
+  });
+
+  it('the retention line is the board’s centred .ios-sub (GlassSubline: 13/18, ink-2)', () => {
+    expect(unsent).toContain(
+      '<GlassSubline style={GLASS_RETENTION_LINE}> {`These records are kept for ${REJECTED_RETENTION_DAYS} days, then removed automatically.`} </GlassSubline>',
+    );
+    expect(unsent).toContain(
+      "const GLASS_RETENTION_LINE = { marginTop: 18, marginHorizontal: 4, textAlign: 'center' } as const;",
+    );
+    expect(unsent).not.toContain('glassRowSub');
+  });
+
+  it('a section head is one VoiceOver element, the heading with its count, as Classic’s eyebrow reads', () => {
+    expect(admin).toContain(
+      '<View style={styles.syncHead} accessible accessibilityRole="header" accessibilityLabel={`${title}, ${count}`} >',
+    );
+  });
+});
+
+describe('a grouped card whose rows fill on press clips them to its corners', () => {
+  it('GLASS_PAGE.group is the .ios-group’s overflow hidden', () => {
+    expect(flat(read('src/components/ui/glass/screens/admin.tsx'))).toContain(
+      "group: { overflow: 'hidden' },",
+    );
+  });
+
+  it.each([
+    ['app/(drawer)/settings.tsx', 1],
+    ['app/(drawer)/settings/customize-tabs.tsx', 1],
+  ] as const)('%s: the section card clips its rows in glass', (file, n) => {
+    const code = flat(read(file));
+    expect(
+      code.match(
+        /<Card padding=\{0\} style=\{lg \? GLASS_PAGE\.group : undefined\}> \{children\} <\/Card>/g,
+      )?.length,
+    ).toBe(n);
+    expect(code).toContain("? { backgroundColor: pressed ? lg.ios.fill : 'transparent' }");
+  });
+
+  it('app/(drawer)/settings/appearance.tsx: the Design and Theme cards clip their choices in glass', () => {
+    const code = flat(read('app/(drawer)/settings/appearance.tsx'));
+    expect(
+      code.match(
+        /<Card padding=\{0\} style=\{lg \? \[GLASS_PAGE\.group, \{ marginTop: 8 \}\] : \{ marginTop: 10 \}\}>/g,
+      )?.length,
+    ).toBe(2);
+  });
+});
+
+describe('Dynamic Type caps take the glass size as their base (theme.ts GLASS_TYPE note)', () => {
+  const primitives = flat(read('src/components/ui/glass/primitive-styles.ts'));
+
+  it('integrations: the detail label is capped from glassEyebrow’s 12', () => {
+    expect(primitives).toMatch(
+      /export const glassEyebrow = cached\(\(lg\): TextStyle => \(\{ \.\.\.lg\.font\.displaySemi, fontSize: 12,/,
+    );
+    const code = flat(read('app/(drawer)/settings/integrations.tsx'));
+    expect(code).toContain('maxFontSizeMultiplier={capTo(lg ? 12 : 9.5, TYPE_CEILING.chrome)}');
+    expect(code).toContain(
+      'style={lg ? [glassEyebrow(lg), { flexShrink: 1 }] : { flexShrink: 1 }}',
+    );
+  });
+
+  it('support: the category chips are capped from glassChipLabel’s 15', () => {
+    expect(primitives).toMatch(
+      /export function glassChipLabel\(lg: GlassLook, active: boolean\): TextStyle \{ return \{ \.\.\.lg\.font\.displaySemi, fontSize: 15,/,
+    );
+    const code = flat(read('app/(drawer)/support.tsx'));
+    expect(code).toContain('const GLASS_CHIP_CAP = capTo(15, TYPE_CEILING.control);');
+    expect(code).toContain(
+      'lg && glassChipLabel(lg, selected), ]} maxFontSizeMultiplier={lg ? GLASS_CHIP_CAP : CHIP_CAP}',
+    );
+  });
+
+  it('AI chat: the 17pt glass nav title is capped as GlassNavTitle is', () => {
+    const code = flat(read('app/ai/chat.tsx'));
+    expect(code).toContain('const GLASS_CHAT_TITLE = { fontSize: 17,');
+    expect(code).toContain(
+      "accessibilityRole={lg ? 'header' : undefined} maxFontSizeMultiplier={lg ? capTo(17, TYPE_CEILING.chrome) : undefined}",
+    );
   });
 });
 

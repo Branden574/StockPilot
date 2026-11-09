@@ -147,9 +147,13 @@ describe.each(LOOKS)('Unsent work, Notifications and the stacked rows in %s', (_
     expect(glassSyncCountTone(lg, undefined).wash).toBeNull();
   });
 
-  it('Discard reads at AA: the refusal red on the gray iOS button over the card', () => {
+  it('a plain section count is the board’s glass .ios-sub: ink-2 (sp.css:1049), not ink-3', () => {
+    expect(glassSyncCountTone(lg, undefined).ink).toBe(lg.c.ink2);
+  });
+
+  it('Discard reads at AA: ink on the gray iOS button over the card (.ios-btn.gray)', () => {
     const button = over(lg.ios.fill, card);
-    expect(contrast(over(lg.c.critText, button), button)).toBeGreaterThanOrEqual(AA_TEXT);
+    expect(contrast(over(lg.c.ink, button), button)).toBeGreaterThanOrEqual(AA_TEXT);
   });
 
   it('a record’s title, sub-line and message read at AA on the card', () => {

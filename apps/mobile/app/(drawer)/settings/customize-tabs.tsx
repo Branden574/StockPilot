@@ -556,7 +556,9 @@ function Section({ label, children }: { label: string; children: React.ReactNode
       <View style={lg ? GLASS_PAGE.sectionHead : { paddingHorizontal: 4, paddingBottom: 10 }}>
         {lg ? <GlassHeading>{sentenceCase(label)}</GlassHeading> : <Eyebrow>{label}</Eyebrow>}
       </View>
-      <Card padding={0}>{children}</Card>
+      <Card padding={0} style={lg ? GLASS_PAGE.group : undefined}>
+        {children}
+      </Card>
     </View>
   );
 }

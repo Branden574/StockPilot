@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { useGlass } from '@/components/ui/glass/use-glass';
-import { glassRowSub } from '@/components/ui/glass/primitive-styles';
+import { GlassSubline } from '@/components/ui/glass/parts';
 import {
   GLASS_PAGE,
   GLASS_SYNC_LIST,
@@ -436,19 +436,20 @@ export default function RejectedWorkScreen() {
           </View>
         )}
 
-        <Mono
-          size={10}
-          tracking={0.1}
-          color={c.ink3}
-          style={lg ? [glassRowSub(lg), { marginTop: 18, textAlign: 'center' }] : { marginTop: 18 }}
-        >
-          {/* Retention applies to this account's record only (never sent and
-              not confirmed): work held for another account is never removed
-              except by Discard. */}
-          {lg
-            ? `These records are kept for ${REJECTED_RETENTION_DAYS} days, then removed automatically.`
-            : `THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
-        </Mono>
+        {lg ? (
+          // The board's centred .ios-sub line (iOS-Sync.dc.html): 13/18 in
+          // ink-2 on glass (sp.css:707, 1049), in sentence case.
+          <GlassSubline style={GLASS_RETENTION_LINE}>
+            {`These records are kept for ${REJECTED_RETENTION_DAYS} days, then removed automatically.`}
+          </GlassSubline>
+        ) : (
+          <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 18 }}>
+            {/* Retention applies to this account's record only (never sent and
+                not confirmed): work held for another account is never removed
+                except by Discard. */}
+            {`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
+          </Mono>
+        )}
       </ScrollView>
     </View>
   );
@@ -456,6 +457,9 @@ export default function RejectedWorkScreen() {
 
 /** The iOS minimum tap target, in points. */
 const MIN_TAP = 44;
+
+/** Liquid Glass: the retention line, centred 18 under the list (.ios-sub, margin 0 4). */
+const GLASS_RETENTION_LINE = { marginTop: 18, marginHorizontal: 4, textAlign: 'center' } as const;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

@@ -269,7 +269,7 @@ export default function SupportScreen() {
                             { color: selected ? c.paper : c.ink2 },
                             lg && glassChipLabel(lg, selected),
                           ]}
-                          maxFontSizeMultiplier={CHIP_CAP}
+                          maxFontSizeMultiplier={lg ? GLASS_CHIP_CAP : CHIP_CAP}
                         >
                           {cat.label}
                         </Text>
@@ -360,6 +360,8 @@ export default function SupportScreen() {
 
 /** A choice chip's label is a control's: the control ceiling. */
 const CHIP_CAP = capTo(13, TYPE_CEILING.control);
+/** Liquid Glass: the same ceiling from the chip label's glass size (glassChipLabel, 15). */
+const GLASS_CHIP_CAP = capTo(15, TYPE_CEILING.control);
 
 const styles = StyleSheet.create({
   // The other screens' bar: the chips' 44pt frames are 3pt wider than the

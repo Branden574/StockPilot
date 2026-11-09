@@ -95,7 +95,8 @@ export function glassStackRow(lg: GlassLook, first: boolean, last: boolean): Vie
  * The count beside an Unsent work section's heading (iOS-Sync.dc.html): the
  * board's tinted .ios-pill for work that needs checking (the warning wash
  * and words) or was refused (the refusal wash and words), the plain .ios-sub
- * figure in ink-3 for work that is only waiting.
+ * figure for work that is only waiting, in ink-2 at 13/18 as the board's
+ * glass .ios-sub draws it (sp.css:707, 1049).
  */
 export function glassSyncCountTone(
   lg: GlassLook,
@@ -103,5 +104,5 @@ export function glassSyncCountTone(
 ): { wash: string | null; ink: string } {
   if (tone === 'warn') return { wash: lg.c.warnWash, ink: lg.c.warnText };
   if (tone === 'danger') return { wash: lg.c.critWash, ink: lg.c.critText };
-  return { wash: null, ink: lg.c.ink3 };
+  return { wash: null, ink: lg.c.ink2 };
 }
