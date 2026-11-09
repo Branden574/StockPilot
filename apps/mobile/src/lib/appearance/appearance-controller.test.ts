@@ -368,6 +368,18 @@ describe('the first start of the new JS (round 2, finding 10; item 31)', () => {
     expect(racing.account.calls).toHaveLength(1);
   });
 
+  it('under off, the first paint never waits for storage: ready before the read, and a read that never answers changes nothing (audit F2)', () => {
+    const { controller, snap, storage } = setup({}, { rollout: 'off' });
+    storage.getItem = () => new Promise<string | null>(() => undefined);
+    expect(snap()).toMatchObject({ ready: true, style: 'classic', theme: null });
+    void controller.hydrate();
+    controller.giveUpWaiting();
+    expect(snap()).toMatchObject({ ready: true, style: 'classic', theme: null });
+    // Under default and opt-in the first paint waits for the read (R9).
+    expect(setup({}, { rollout: 'default' }).snap().ready).toBe(false);
+    expect(setup({}, { rollout: 'opt-in' }).snap().ready).toBe(false);
+  });
+
   it('a stored record, a signed-out phone, or the off rollout never waits for the account', async () => {
     const stored = setup({ [KEYS.device]: device({ theme: 'dark' }) }, { peek: A });
     await stored.controller.hydrate();
