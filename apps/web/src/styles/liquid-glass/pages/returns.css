@@ -206,22 +206,27 @@
     }
 
     /* The radio rows (the disposition, the destination, a replacement's
-       and an exchange's choices) as the board's .choice (12 px, radius 12,
-       the line 2 edge on the surface; the chosen one in the accent edge and
-       wash, an inset 1 px accent ring, as Classic's ink ring) and their dots
-       as .rb (18 px, a 1.5 px edge; chosen, the accent with an 8 px
+       and an exchange's choices) as the board's .choice on glass (12 px,
+       radius 12; sp.css's "controls on glass" block, which overrides the
+       base .choice, puts the row on the field frost with the field edge, and
+       the chosen one on the selection fill, keeping the base's accent edge
+       and its inset 1 px accent ring in place of Classic's ink ring; with
+       reduced transparency or more contrast those tokens resolve to the
+       base's surface, line 2 and accent wash) and their dots as .rb (18 px,
+       a 1.5 px edge on the surface; chosen, the accent with an 8 px
        on-accent dot). The dot's edge is ink 3, not the board's line 3,
-       which is under 3:1 on the surface with reduced transparency (R11). Classic's padding, its row heights and its 60 %
-       opacity for an unavailable choice stay; a rack that cannot be chosen
-       takes the board's .is-blocked surface 2. The keyboard ring is the
-       glass ring on the row, as Classic draws its ring on the row. */
+       which is under 3:1 on the surface with reduced transparency (R11).
+       Classic's padding, its row heights and its 60 % opacity for an
+       unavailable choice stay; a rack that cannot be chosen takes the
+       board's .is-blocked surface 2. The keyboard ring is the glass ring on
+       the row, as Classic draws its ring on the row. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='return']
       [role='radiogroup']
       > :has(input[type='radio']) {
-      border-color: var(--lg-line-2);
+      border-color: var(--lg-field-line);
       border-radius: 12px;
-      background-color: var(--lg-surface);
+      background-color: var(--lg-field-fill);
       box-shadow: none;
     }
     :root[data-appearance='liquid-glass']
@@ -235,7 +240,7 @@
       [role='radiogroup']
       > :has(input[type='radio']:checked) {
       border-color: var(--lg-accent);
-      background-color: var(--lg-accent-wash);
+      background-color: var(--lg-sel-fill);
       box-shadow: inset 0 0 0 1px var(--lg-accent);
     }
     :root[data-appearance='liquid-glass']

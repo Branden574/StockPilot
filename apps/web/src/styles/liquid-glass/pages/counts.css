@@ -279,6 +279,15 @@
       > div:nth-child(2) {
       color: var(--lg-ok);
     }
+    /* Uncounted in ink, as the board draws it (.stat-v, no tone class),
+       where Classic draws it in the warning ink while lines are left. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-testid='count-stat-uncounted']
+      > div:nth-child(2) {
+      color: var(--lg-ink);
+    }
     /* Classic's small bar under Counted: the wide bar stands for it. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='ops'][data-glass-view='cycle-count']
@@ -489,6 +498,42 @@
       > tr
       > td:nth-child(5) {
       font-weight: 600;
+    }
+    /* A line whose count differs from what was expected is the board's
+       .var-row (sp.css: the warning wash at 45 % on the row; trCls adds it
+       for any variance but nothing). Found by the Variance cell's tone,
+       which Classic gives only a variance above or below nothing; a line
+       that matches or is not counted yet is muted, so stays plain. One rule
+       per tone (no :has() list, see the board-values guard). Hovered, the
+       row takes the card hover, as the board's .tb .tr:hover outranks
+       .var-row. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-destructive) {
+      background-color: color-mix(in srgb, var(--lg-warn-wash) 45%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-success) {
+      background-color: color-mix(in srgb, var(--lg-warn-wash) 45%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-destructive):hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-success):hover {
+      background-color: var(--lg-card-hover);
     }
     /* The lines' pager (.pager: 13 px ink 3, 10 / 12 / 10 / 16). */
     :root[data-appearance='liquid-glass']

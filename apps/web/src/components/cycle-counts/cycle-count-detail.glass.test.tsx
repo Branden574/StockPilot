@@ -258,3 +258,75 @@ describe('A cycle count in Liquid Glass: its post and cancel dialogs', () => {
     expect(cascaded(confirm, 'background-color', FILES)?.value).not.toBe('var(--lg-accent)');
   });
 });
+
+/**
+ * The count's lines and figures as Cycle-Count-Detail.dc.html draws them,
+ * asked of the cascade of the page's glass files: a line whose count differs
+ * from what was expected is the board's .var-row (the warning wash at 45 %
+ * on the row; trCls adds it when the variance is anything but nothing), a
+ * line that matches or is not counted yet is plain; and every figure is ink
+ * except Net variance (the board's Uncounted .stat-v has no tone, where
+ * Classic draws it in the warning ink while lines are left).
+ */
+describe('A cycle count in Liquid Glass: the lines that differ and the figures’ tones', () => {
+  const FILES = ['pages/ops.css', 'pages/counts.css'];
+  const ROWS = [
+    { id: 'line-under', counted_quantity: 72, expected_quantity: 75, name: 'Example under' },
+    { id: 'line-over', counted_quantity: 9, expected_quantity: 8, name: 'Example over' },
+    { id: 'line-match', counted_quantity: 75, expected_quantity: 75, name: 'Example match' },
+    { id: 'line-open', counted_quantity: null, expected_quantity: 4, name: 'Example open' },
+  ].map((l) => ({ ...l, item: { name: l.name, sku: `SKU-${l.id}`, barcode: null } }));
+
+  function page(summary: CycleCountSummary = SUMMARY) {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+    return render(
+      <div data-glass-page="ops" data-glass-view="cycle-count">
+        <CycleCountDetail
+          header={header}
+          lines={ROWS as unknown as CycleCountLineWithItem[]}
+          summary={summary}
+          page={1}
+          pageSize={50}
+          total={ROWS.length}
+          search=""
+          filter="all"
+          canAdjust
+          canAssign
+          role="manager"
+        />
+      </div>,
+    );
+  }
+
+  afterEach(() => {
+    document.documentElement.removeAttribute('data-appearance');
+  });
+
+  const row = (name: string) => screen.getByText(name).closest('tr')!;
+
+  it('tints a line counted under or over what was expected with the board’s variance wash', () => {
+    page();
+    for (const name of ['Example under', 'Example over']) {
+      expect(cascaded(row(name), 'background-color', FILES)?.value, name).toBe(
+        'color-mix(in srgb, var(--lg-warn-wash) 45%, transparent)',
+      );
+    }
+  });
+
+  it('leaves a line that matches, and one not counted yet, untinted', () => {
+    page();
+    for (const name of ['Example match', 'Example open']) {
+      expect(cascaded(row(name), 'background-color', FILES), name).toBeUndefined();
+    }
+  });
+
+  it('draws Uncounted in ink while lines are left, as the board does (Classic: the warning ink)', () => {
+    const { container } = page();
+    const value = container.querySelector(
+      '[data-testid="count-stat-uncounted"] > div:nth-child(2)',
+    )!;
+    expect(value.className).toContain('text-warning');
+    expect(cascaded(value, 'color', FILES)?.value).toBe('var(--lg-ink)');
+  });
+});

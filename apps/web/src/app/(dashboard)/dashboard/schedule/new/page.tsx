@@ -34,7 +34,8 @@ export default async function NewScheduleEventPage({
   // Pre-fill the date when the user clicked a day cell on the
   // calendar (?date=YYYY-MM-DD). Validation happens in the schema —
   // bad input falls through to "today" inside the form.
-  const initialDate = params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : null;
+  const initialDate =
+    params.date && /^\d{4}-\d{2}-\d{2}$/.test(params.date) ? params.date : null;
 
   // The form's date and time are a wall clock in the ORGANIZATION's zone, as
   // the calendar and the event's page draw them (small fixes slice 8 review):
@@ -90,9 +91,7 @@ export default async function NewScheduleEventPage({
       data-glass-width="form"
     >
       <PageHeader
-        back={
-          <PageHeaderBackLink href="/dashboard/schedule">← Back to calendar</PageHeaderBackLink>
-        }
+        back={<PageHeaderBackLink href="/dashboard/schedule">← Back to calendar</PageHeaderBackLink>}
         title="New event"
       />
       <DetailSection title="Event details">

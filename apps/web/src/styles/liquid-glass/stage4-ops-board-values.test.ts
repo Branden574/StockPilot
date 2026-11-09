@@ -592,6 +592,47 @@ const ENTRIES: Entry[] = [
     'color',
     'var(--lg-ok)',
   ],
+  [
+    'Uncounted in ink (.stat-v, no tone)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='stat-strip'] [data-testid='count-stat-uncounted'] > div:nth-child(2)`,
+    ),
+    'color',
+    'var(--lg-ink)',
+  ],
+  // A count's lines that differ (sp.css .dt .tr.var-row).
+  [
+    'line counted under expected (.var-row)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='table'] > tbody > tr:has(> td:nth-child(5).text-destructive)`,
+    ),
+    'background-color',
+    'color-mix(in srgb, var(--lg-warn-wash) 45%, transparent)',
+  ],
+  [
+    'line counted over expected (.var-row)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='table'] > tbody > tr:has(> td:nth-child(5).text-success)`,
+    ),
+    'background-color',
+    'color-mix(in srgb, var(--lg-warn-wash) 45%, transparent)',
+  ],
+  [
+    'hovered line that differs (.tb .tr:hover outranks .var-row)',
+    COUNTS,
+    '',
+    S(
+      `${VIEW('cycle-count')} [data-glass='table'] > tbody > tr:has(> td:nth-child(5).text-destructive):hover`,
+    ),
+    'background-color',
+    'var(--lg-card-hover)',
+  ],
   // A count (Cycle-Count-Detail.dc.html: the 96 x 34 count field).
   [
     'count field width',
@@ -612,10 +653,10 @@ const ENTRIES: Entry[] = [
   // The dialogs opened from these pages (.dialog .h2 in ink) and a count's
   // Post adjustments (.btn-primary, the accent).
   [
-    'dialog title in ink',
+    "dialog title in ink (the shell's dialogs left out)",
     OPS,
     '',
-    `${ROOT}:has(${PAGE}) [data-glass='dialog'] h2:first-child`,
+    `${ROOT}:has(${PAGE}) [data-glass='dialog']:not([data-glass-role='shell-dialog']) h2:first-child`,
     'color',
     'var(--lg-ink)',
   ],
@@ -799,20 +840,20 @@ const ENTRIES: Entry[] = [
     '12px',
   ],
   [
-    'radio row edge (.choice)',
+    'radio row edge (.choice on glass, sp.css "controls on glass")',
     RETURNS,
     '',
     S(`${VIEW('return')} [role='radiogroup'] > :has(input[type='radio'])`),
     'border-color',
-    'var(--lg-line-2)',
+    'var(--lg-field-line)',
   ],
   [
-    'radio row fill (.choice)',
+    'radio row fill (.choice on glass, sp.css "controls on glass")',
     RETURNS,
     '',
     S(`${VIEW('return')} [role='radiogroup'] > :has(input[type='radio'])`),
     'background-color',
-    'var(--lg-surface)',
+    'var(--lg-field-fill)',
   ],
   [
     'chosen radio row edge (.choice.on)',
@@ -823,12 +864,12 @@ const ENTRIES: Entry[] = [
     'var(--lg-accent)',
   ],
   [
-    'chosen radio row wash (.choice.on)',
+    'chosen radio row fill (.choice.on on glass: the selection fill)',
     RETURNS,
     '',
     S(`${VIEW('return')} [role='radiogroup'] > :has(input[type='radio']:checked)`),
     'background-color',
-    'var(--lg-accent-wash)',
+    'var(--lg-sel-fill)',
   ],
   [
     'chosen radio row ring (.choice.on)',

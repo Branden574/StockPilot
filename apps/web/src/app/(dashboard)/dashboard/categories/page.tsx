@@ -77,7 +77,10 @@ async function CategoriesSection({
   isArchivedView: boolean;
   title: string;
 }) {
-  const [ctx, svc] = await Promise.all([requireOrgContext(), CategoriesService.forCurrentUser()]);
+  const [ctx, svc] = await Promise.all([
+    requireOrgContext(),
+    CategoriesService.forCurrentUser(),
+  ]);
   const canManage = can(ctx, 'categories:manage');
   // Public-catalog visibility (P3): the per-category Public / Internal-only
   // toggle is gated on public_links:manage (the server action re-asserts).

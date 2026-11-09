@@ -83,7 +83,7 @@ export default async function ProcedureDetailPage({ params }: { params: Promise<
               this title column by it (prettier would sort it in). */}
           <div className="min-w-0 flex-1 basis-72">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-              <h1 className="text-foreground min-w-0 max-w-full truncate font-display text-[20px] font-medium leading-[1.3] tracking-[-0.02em] sm:text-[22px]">
+              <h1 className="truncate text-foreground min-w-0 max-w-full font-display text-[20px] font-medium leading-[1.3] tracking-[-0.02em] sm:text-[22px]">
                 {procedure.title}
               </h1>
               {procedure.category_name && (

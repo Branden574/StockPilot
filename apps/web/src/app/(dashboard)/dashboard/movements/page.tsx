@@ -191,9 +191,12 @@ export default async function MovementsPage({
   // renders one round trip sooner.
   const [totalAll, speculativeAll] = await Promise.all([
     movementsSvc.count({ warehouseId }).catch(() => null),
-    movementsSvc.list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId }).catch(() => null),
+    movementsSvc
+      .list({ limit: MOVEMENTS_INSTANT_CAP, offset: 0, warehouseId })
+      .catch(() => null),
   ]);
-  const instant = totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP && speculativeAll != null;
+  const instant =
+    totalAll != null && totalAll <= MOVEMENTS_INSTANT_CAP && speculativeAll != null;
 
   let instantRows: MovementDisplayRow[] = [];
   let visible: Awaited<ReturnType<typeof movementsSvc.list>> = [];
@@ -247,9 +250,7 @@ export default async function MovementsPage({
   );
 
   const exportQs = buildMovementsQueryString(activeFilters);
-  const exportHref = exportQs
-    ? `/api/movements/export.csv?${exportQs}`
-    : '/api/movements/export.csv';
+  const exportHref = exportQs ? `/api/movements/export.csv?${exportQs}` : '/api/movements/export.csv';
 
   // The instant ledger draws its own controls; an empty ledger has none.
   const instantLedger = instant && total !== 0;

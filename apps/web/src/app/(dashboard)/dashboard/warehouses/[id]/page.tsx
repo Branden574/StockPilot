@@ -6,7 +6,10 @@ import { notFound } from 'next/navigation';
 import { plainAddressMailtoUrl } from '@stockpilot/core';
 
 import { newOrderFromWarehouseHref, warehouseTelUrl } from '@/components/locations/warehouse-links';
-import { DetailSection, DetailSectionMeta } from '@/components/patterns/detail-section';
+import {
+  DetailSection,
+  DetailSectionMeta,
+} from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { StatStrip, StatStripItem } from '@/components/patterns/stat-strip';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -36,7 +39,8 @@ export const metadata: Metadata = { title: 'Warehouse' };
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the other pages use. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
 
-const CONTACT_LINK = 'text-foreground underline-offset-4 hover:underline [overflow-wrap:anywhere]';
+const CONTACT_LINK =
+  'text-foreground underline-offset-4 hover:underline [overflow-wrap:anywhere]';
 
 const STATUS_VARIANT: Record<
   'active' | 'inactive' | 'archived',
@@ -49,7 +53,9 @@ const STATUS_VARIANT: Record<
 
 /** Flattens a Postgres jsonb address into the line list rendered in
  *  the FROM block. Missing pieces drop out so we never print "null". */
-function formatAddressLines(address: Record<string, unknown> | null): string[] {
+function formatAddressLines(
+  address: Record<string, unknown> | null,
+): string[] {
   if (!address) return [];
   const line1 = (address.line1 as string | null) ?? '';
   const line2 = (address.line2 as string | null) ?? '';
@@ -69,7 +75,11 @@ function initials(input: string | null | undefined): string {
   return parts.map((p) => p[0]?.toUpperCase() ?? '').join('') || '?';
 }
 
-export default async function WarehouseDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function WarehouseDetailPage({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
   const { id } = await params;
   // A malformed id (a mistyped or cut-off link) is Page not found before
   // anything is read with it (B63).
@@ -232,14 +242,13 @@ export default async function WarehouseDetailPage({ params }: { params: Promise<
                     ))}
                   </div>
                 )}
-                {(warehouse.contact_name || warehouse.contact_email || warehouse.contact_phone) && (
+                {(warehouse.contact_name ||
+                  warehouse.contact_email ||
+                  warehouse.contact_phone) && (
                   <div className="border-border text-ink-2 space-y-1.5 border-t pt-3 text-[12.5px]">
                     {warehouse.contact_name && (
                       <p className="flex items-center gap-1.5">
-                        <UserIcon
-                          aria-hidden
-                          className="text-muted-foreground h-3.5 w-3.5 shrink-0"
-                        />
+                        <UserIcon aria-hidden className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
                         {warehouse.contact_name}
                       </p>
                     )}
@@ -253,9 +262,7 @@ export default async function WarehouseDetailPage({ params }: { params: Promise<
                             {warehouse.contact_email}
                           </a>
                         ) : (
-                          <span className="[overflow-wrap:anywhere]">
-                            {warehouse.contact_email}
-                          </span>
+                          <span className="[overflow-wrap:anywhere]">{warehouse.contact_email}</span>
                         )}
                       </p>
                     )}
@@ -270,9 +277,7 @@ export default async function WarehouseDetailPage({ params }: { params: Promise<
                             {warehouse.contact_phone}
                           </a>
                         ) : (
-                          <span className="[overflow-wrap:anywhere]">
-                            {warehouse.contact_phone}
-                          </span>
+                          <span className="[overflow-wrap:anywhere]">{warehouse.contact_phone}</span>
                         )}
                       </p>
                     )}
@@ -328,9 +333,7 @@ export default async function WarehouseDetailPage({ params }: { params: Promise<
 
       <DetailSection
         title="Charters serviced"
-        aside={
-          <DetailSectionMeta className="tabular-nums">{chartersServiced.length}</DetailSectionMeta>
-        }
+        aside={<DetailSectionMeta className="tabular-nums">{chartersServiced.length}</DetailSectionMeta>}
         flush
       >
         {chartersServiced.length === 0 ? (

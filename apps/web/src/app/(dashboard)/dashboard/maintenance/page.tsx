@@ -12,26 +12,14 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { StatStrip, StatStripLink } from '@/components/patterns/stat-strip';
 import { Button } from '@/components/ui/button';
 import { Pagination } from '@/components/ui/pagination';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { MAINTENANCE_REQUESTS_TOUR } from '@/lib/onboarding/tours';
 import { formatRelative } from '@/lib/utils';
 import { withContext } from '@/server/services/context';
 import { MaintenanceRequestsService } from '@/server/services/maintenance-requests';
 
-import {
-  can,
-  formatMaintenanceRequestNumber,
-  MAINTENANCE_STATUS_LABELS,
-  type MaintenanceStatus,
-} from '@stockpilot/core';
+import { can, formatMaintenanceRequestNumber, MAINTENANCE_STATUS_LABELS, type MaintenanceStatus } from '@stockpilot/core';
 
 // The Liquid Glass operations composition (stage 4: pages/ops.css, the
 // shared frame, and the board's own file where there is one): every rule is
@@ -123,8 +111,7 @@ export default async function MaintenancePage({
   // customers, product-groups).
   const ctx = await withContext();
   const canSubmit = can(ctx, 'maintenance_requests:submit');
-  const canReadAll =
-    can(ctx, 'maintenance_requests:read_all') || can(ctx, 'maintenance_requests:manage');
+  const canReadAll = can(ctx, 'maintenance_requests:read_all') || can(ctx, 'maintenance_requests:manage');
   if (!canSubmit && !canReadAll) {
     redirect('/dashboard');
   }
@@ -145,7 +132,7 @@ export default async function MaintenancePage({
   // (read_all/manage holders only — brief section 22).
   const rows = await svc.list({
     scope,
-    q: canReadAll ? q || undefined : undefined,
+    q: canReadAll ? (q || undefined) : undefined,
     status,
     limit: PAGE_SIZE + 1,
     offset,
@@ -171,8 +158,7 @@ export default async function MaintenancePage({
           // sentence and JSX text spanning multiple lines is a needless risk
           // against that pin.
           <span className="block max-w-2xl">
-            Ticket updates and replies are handled through the Outlook/Zendesk email conversation
-            and are not synchronized into StockPilot.
+            Ticket updates and replies are handled through the Outlook/Zendesk email conversation and are not synchronized into StockPilot.
           </span>
         }
         tour={<PageTour tour={MAINTENANCE_REQUESTS_TOUR} />}
@@ -242,12 +228,7 @@ export default async function MaintenancePage({
           site/SKU/order-number matching the service does not implement. */}
       {scope === 'all' && (
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <MaintenanceSearch
-            key={`${scope}:${status ?? ''}:${q}`}
-            scope={scope}
-            status={status}
-            initialQuery={q}
-          />
+          <MaintenanceSearch key={`${scope}:${status ?? ''}:${q}`} scope={scope} status={status} initialQuery={q} />
         </div>
       )}
 

@@ -112,15 +112,23 @@ const contrast = (a: Rgba, b: Rgba) => {
  *  night), the one plain colour these pages stack. */
 const SEG_ON = { day: 'rgba(255, 255, 255, 0.9)', night: 'rgba(255, 255, 255, 0.16)' };
 
-/** A token, the selected segment's lift ('seg-on') or a plain colour. */
-const colour = (t: Tokens, name: string, night = false): Rgba =>
-  parse(
+/** A token, the selected segment's lift ('seg-on') or a plain colour. A
+ *  trailing ` 45%` mixes it with transparent at that share, as
+ *  color-mix(in srgb, <colour> 45%, transparent) does (its alpha scaled). */
+const colour = (t: Tokens, name: string, night = false): Rgba => {
+  const share = / (\d+(?:\.\d+)?)%$/u.exec(name);
+  if (share) {
+    const c = colour(t, name.slice(0, share.index), night);
+    return [c[0], c[1], c[2], c[3] * (Number(share[1]) / 100)];
+  }
+  return parse(
     name === 'seg-on'
       ? SEG_ON[night ? 'night' : 'day']
       : name.startsWith('--')
         ? (t[name] ?? `missing ${name}`)
         : name,
   );
+};
 
 /** The ground (--lg-bg) with each layer composited on it, bottom first. */
 const stack = (t: Tokens, layers: string[], night = false) =>
@@ -215,6 +223,18 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['net variance below nothing (danger) on the card', '--lg-danger', CARD, 4.5],
   ['net variance above nothing (ok) on the card', '--lg-ok', CARD, 4.5],
   ['note on Expected (ink 3) on the card', '--lg-ink-3', CARD, 4.5],
+  // A line that differs (.var-row: the warning wash at 45 % on the row).
+  ['line that differs (ink) on its wash', '--lg-ink', [...CARD, '--lg-warn-wash 45%'], 4.5],
+  ['its SKU (ink 3) on the wash', '--lg-ink-3', [...CARD, '--lg-warn-wash 45%'], 4.5],
+  ['its variance under (danger) on the wash', '--lg-danger', [...CARD, '--lg-warn-wash 45%'], 4.5],
+  ['its variance over (ok) on the wash', '--lg-ok', [...CARD, '--lg-warn-wash 45%'], 4.5],
+  [
+    'its count (ink) in its field on the wash',
+    '--lg-ink',
+    [...CARD, '--lg-warn-wash 45%', '--lg-field-fill'],
+    4.5,
+  ],
+  ['Uncounted figure (ink) on the card', '--lg-ink', CARD, 4.5],
   [
     'Post adjustments (on accent) on the accent',
     '--lg-on-accent',
@@ -253,16 +273,39 @@ const PAIRS: Array<[string, string, string[], number]> = [
     [...CARD, '--lg-accent'],
     4.5,
   ],
-  ['radio row words (ink) on the surface', '--lg-ink', [...CARD, '--lg-surface'], 4.5],
+  ['radio row words (ink) on the field frost', '--lg-ink', [...CARD, '--lg-field-fill'], 4.5],
   [
-    'chosen radio row words (ink) on the accent wash',
+    'radio row detail (muted: ink 3) on the field frost',
+    '--lg-ink-3',
+    [...CARD, '--lg-field-fill'],
+    4.5,
+  ],
+  [
+    'chosen radio row words (ink) on the selection fill',
     '--lg-ink',
-    [...CARD, '--lg-accent-wash'],
+    [...CARD, '--lg-sel-fill'],
+    4.5,
+  ],
+  [
+    'chosen radio row detail (muted: ink 3) on the selection fill',
+    '--lg-ink-3',
+    [...CARD, '--lg-sel-fill'],
     4.5,
   ],
   ['chosen radio row edge (accent) on the card', '--lg-accent', CARD, 3],
-  ['radio dot edge (ink 3) on the surface', '--lg-ink-3', [...CARD, '--lg-surface'], 3],
-  ['chosen radio dot (accent) on the accent wash', '--lg-accent', [...CARD, '--lg-accent-wash'], 3],
+  [
+    'chosen radio row edge (accent) on the selection fill',
+    '--lg-accent',
+    [...CARD, '--lg-sel-fill'],
+    3,
+  ],
+  [
+    'radio dot edge (ink 3) on its surface, in the field frost',
+    '--lg-ink-3',
+    [...CARD, '--lg-field-fill', '--lg-surface'],
+    3,
+  ],
+  ['chosen radio dot (accent) on the selection fill', '--lg-accent', [...CARD, '--lg-sel-fill'], 3],
   // The procedures list (pages/ops.css): the video count on the panel's dark
   // chip, at its weakest over a white poster frame.
   [
@@ -299,6 +342,7 @@ describe('stage 4 operations contrast, from the tokens (R11)', () => {
     expect(contrast(parse('#000000'), parse('#FFFFFF'))).toBeCloseTo(21, 5);
     expect(over(parse('rgba(0,0,0,.5)'), parse('#FFFFFF'))).toEqual([127.5, 127.5, 127.5, 1]);
     expect(parse('transparent')[3]).toBe(0);
+    expect(colour({ '--x': 'rgba(10, 20, 30, 0.5)' }, '--x 45%')).toEqual([10, 20, 30, 0.225]);
   });
 
   it('reads all six token sets', () => {

@@ -1,10 +1,26 @@
 // @vitest-environment happy-dom
-import { cleanup, render } from '@testing-library/react';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { act, cleanup, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CommandPalette } from '@/components/dashboard/command-palette';
+import {
+  KeyboardShortcutsProvider,
+  openKeyboardShortcutsOverlay,
+} from '@/components/dashboard/keyboard-shortcuts';
 import { PoReceivingProgress } from '@/components/po/po-receiving-glass';
 import { RestockDestinationPicker } from '@/components/returns/restock-destination-picker';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
+import { GLASS_DIR } from './glass-css';
 import { cascaded, matches, specificity, withoutTopLevelNot } from './stage4-ops-cascade';
 
 /**
@@ -19,6 +35,12 @@ import { cascaded, matches, specificity, withoutTopLevelNot } from './stage4-ops
  * page-level checks (a cycle count's head and lines toolbar) are in that
  * page's page.glass.test.tsx, on the page itself.
  */
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn(), prefetch: vi.fn() }),
+  usePathname: () => '/dashboard/cycle-counts',
+  useSearchParams: () => new URLSearchParams(),
+}));
 
 beforeEach(() => {
   document.documentElement.setAttribute('data-appearance', 'liquid-glass');
@@ -156,12 +178,16 @@ describe("a return's radio rows (Return-Detail.dc.html .choice and .rb)", () => 
     return { disposition: groups[0]!, destination: groups[1]! };
   }
 
-  it('draws each row as .choice: 12 px radius, the line 2 edge, the surface, no ink ring', () => {
+  // sp.css draws .choice twice: the base rule (the line 2 edge on the
+  // surface) and the later "controls on glass" block, which wins on glass
+  // (the field frost and its edge). The surface and line 2 are what the field
+  // tokens resolve to only with reduced transparency or more contrast.
+  it('draws each row as .choice on glass: 12 px radius, the field edge, the field frost, no ink ring', () => {
     const { disposition, destination } = picker();
     for (const row of [...disposition.children, ...destination.children]) {
       expect(at(row, 'border-radius')).toBe('12px');
-      expect(at(row, 'border-color')).toBe('var(--lg-line-2)');
-      expect(at(row, 'background-color')).toBe('var(--lg-surface)');
+      expect(at(row, 'border-color')).toBe('var(--lg-field-line)');
+      expect(at(row, 'background-color')).toBe('var(--lg-field-fill)');
       expect(at(row, 'box-shadow')).toBe('none');
     }
   });
@@ -192,6 +218,104 @@ describe("a return's radio rows (Return-Detail.dc.html .choice and .rb)", () => 
     );
     const row = view.container.querySelector("[role='radiogroup'] > label")!;
     expect(at(row, 'border-radius')).toBeUndefined();
+  });
+});
+
+/**
+ * The operations dialogs' title and description (ops.css: the 20 / 26 title
+ * in ink, the description in ink 2 at 13 / 18) are scoped to an operations
+ * page being on screen, through :root:has(), as the dialogs are portalled.
+ * The shell's own dialogs (Keyboard shortcuts and the command palette, open
+ * on every page) carry data-glass-role="shell-dialog" and keep the look they
+ * have on every other page.
+ */
+describe("the operations dialogs' title and description", () => {
+  const FILES = ['pages/ops.css'];
+  const opsPage = () => <div data-glass-page="ops" data-glass-view="cycle-counts" />;
+
+  it('draws a dialog opened on an operations page with the 20 px ink title and the ink 2 words', () => {
+    const view = render(
+      <>
+        {opsPage()}
+        <Dialog open>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Example title</DialogTitle>
+              <DialogDescription>Example words.</DialogDescription>
+            </DialogHeader>
+          </DialogContent>
+        </Dialog>
+      </>,
+    );
+    const title = view.getByRole('heading', { name: 'Example title' });
+    expect(cascaded(title, 'font-size', FILES)?.value).toBe('20px');
+    expect(cascaded(title, 'color', FILES)?.value).toBe('var(--lg-ink)');
+    expect(cascaded(view.getByText('Example words.'), 'color', FILES)?.value).toBe(
+      'var(--lg-ink-2)',
+    );
+  });
+
+  it('leaves the Keyboard shortcuts dialog as it is on every other page', () => {
+    const view = render(
+      <>
+        {opsPage()}
+        <KeyboardShortcutsProvider />
+      </>,
+    );
+    act(() => {
+      openKeyboardShortcutsOverlay();
+    });
+    const title = view.getByRole('heading', { name: 'Keyboard shortcuts' });
+    const words = title.nextElementSibling!;
+    for (const [el, prop] of [
+      [title, 'font-size'],
+      [title, 'font-weight'],
+      [title, 'color'],
+      [words, 'font-size'],
+      [words, 'color'],
+    ] as const) {
+      expect(cascaded(el, prop, FILES)?.file, `${el.tagName} ${prop}`).not.toBe('pages/ops.css');
+    }
+  });
+
+  it("marks every dialog the shell opens (components/dashboard) as the shell's", () => {
+    const dir = join(GLASS_DIR, '..', '..', 'components', 'dashboard');
+    const opened = readdirSync(dir)
+      .filter((f) => f.endsWith('.tsx') && !f.includes('.test.'))
+      .flatMap((f) =>
+        [...readFileSync(join(dir, f), 'utf8').matchAll(/<DialogContent\b[^>]*>/gu)].map((m) => ({
+          file: f,
+          tag: m[0],
+        })),
+      );
+    expect(opened.map((o) => o.file).sort()).toEqual([
+      'command-palette.tsx',
+      'keyboard-shortcuts.tsx',
+    ]);
+    for (const o of opened) {
+      expect(o.tag, o.file).toContain('data-glass-role="shell-dialog"');
+    }
+  });
+
+  it('leaves the command palette as it is on every other page', () => {
+    const view = render(
+      <>
+        {opsPage()}
+        <CommandPalette open onOpenChange={() => {}} />
+      </>,
+    );
+    const dialog = view.getByRole('dialog');
+    const title = dialog.querySelector('h2')!;
+    const after = title.nextElementSibling!;
+    for (const [el, prop] of [
+      [title, 'font-size'],
+      [title, 'color'],
+      [after, 'font-size'],
+      [after, 'color'],
+      [after, 'line-height'],
+    ] as const) {
+      expect(cascaded(el, prop, FILES)?.file, `${el.tagName} ${prop}`).not.toBe('pages/ops.css');
+    }
   });
 });
 

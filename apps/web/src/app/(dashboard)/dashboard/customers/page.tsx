@@ -13,12 +13,7 @@ import { withContext } from '@/server/services/context';
 import { CustomersService } from '@/server/services/customers';
 import { InventoryService } from '@/server/services/inventory';
 
-import {
-  can,
-  planAllowsB2bPortal,
-  resolvePortalPricingMode,
-  type OrgBillingState,
-} from '@stockpilot/core';
+import { can, planAllowsB2bPortal, resolvePortalPricingMode, type OrgBillingState } from '@stockpilot/core';
 
 // The Liquid Glass operations composition (stage 4: pages/ops.css, the
 // shared frame, and the board's own file where there is one): every rule is

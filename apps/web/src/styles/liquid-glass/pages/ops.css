@@ -483,9 +483,11 @@
        buttons). The dialog material and radius are stage 2's. ─────────── */
     /* The title is ink, as the boards draw every alert dialog's .h2 (a
        destructive confirmation keeps its danger button: Classic also inks
-       the title red). */
+       the title red). The shell's own dialogs, open on every page
+       (Keyboard shortcuts and the command palette, data-glass-role
+       "shell-dialog"), are left as every other page draws them. */
     :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
-      [data-glass='dialog']
+      [data-glass='dialog']:not([data-glass-role='shell-dialog'])
       h2:first-child {
       color: var(--lg-ink);
       font-size: 20px;
@@ -494,7 +496,7 @@
       letter-spacing: -0.016em;
     }
     :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
-      [data-glass='dialog']
+      [data-glass='dialog']:not([data-glass-role='shell-dialog'])
       h2:first-child
       + :is(p, div) {
       color: var(--lg-ink-2);
@@ -502,7 +504,7 @@
       line-height: 18px;
     }
     :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
-      [data-glass='dialog']
+      [data-glass='dialog']:not([data-glass-role='shell-dialog'])
       [data-glass='button'][data-glass-size='default']:not([data-glass-variant='ghost']):not(
         [data-glass-variant='link']
       ) {
