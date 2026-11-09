@@ -1283,6 +1283,15 @@ function offList(
     .flatMap(([file, hits]) => hits.map((hit) => `${file}:${hit.line}: ${hit.text}`));
 }
 
+/**
+ * The censuses parse every module under src with the TypeScript compiler.
+ * Alone each takes about a second; on a CI runner, beside the other test
+ * files, the services census took 7 to 12 s on main and 15.4 s on a larger
+ * tree (feat/liquid-glass, run 42564288929), past the 15 s default. They get
+ * a minute: a slow runner is not a finding.
+ */
+const CENSUS_TIMEOUT_MS = 60_000;
+
 /** `body` as the catch of a route, one statement per line from line 2. */
 function inCatch(body: string[]): string {
   return ['export async function POST() { try { await work(); } catch (e) {', ...body, '} }'].join(
@@ -1291,13 +1300,17 @@ function inCatch(body: string[]): string {
 }
 
 describe("API routes never answer an error's own text", () => {
-  it("no API route answers an error's own text: every remaining line is listed, as often as listed", () => {
-    const found = census();
-    expect(offList(found, ALLOWED)).toEqual([]);
-    expect(Object.fromEntries([...found].map(([file, hits]) => [file, hits.length]))).toEqual(
-      Object.fromEntries(Object.entries(ALLOWED).map(([file, { lines }]) => [file, lines])),
-    );
-  });
+  it(
+    "no API route answers an error's own text: every remaining line is listed, as often as listed",
+    () => {
+      const found = census();
+      expect(offList(found, ALLOWED)).toEqual([]);
+      expect(Object.fromEntries([...found].map(([file, hits]) => [file, hits.length]))).toEqual(
+        Object.fromEntries(Object.entries(ALLOWED).map(([file, { lines }]) => [file, lines])),
+      );
+    },
+    CENSUS_TIMEOUT_MS,
+  );
 
   it('every allowed file gives its reason', () => {
     for (const [file, { lines, why }] of Object.entries(ALLOWED)) {
@@ -1420,23 +1433,33 @@ function inActionCatch(body: string[]): string {
 }
 
 describe("Server Actions and services never answer an error's own text (S31)", () => {
-  it("no Server Action answers an error's own text: every remaining line is listed, as often as listed", () => {
-    const found = census('actions');
-    expect(offList(found, ALLOWED_ACTIONS)).toEqual([]);
-    expect(Object.fromEntries([...found].map(([file, hits]) => [file, hits.length]))).toEqual(
-      Object.fromEntries(Object.entries(ALLOWED_ACTIONS).map(([file, { lines }]) => [file, lines])),
-    );
-  });
+  it(
+    "no Server Action answers an error's own text: every remaining line is listed, as often as listed",
+    () => {
+      const found = census('actions');
+      expect(offList(found, ALLOWED_ACTIONS)).toEqual([]);
+      expect(Object.fromEntries([...found].map(([file, hits]) => [file, hits.length]))).toEqual(
+        Object.fromEntries(
+          Object.entries(ALLOWED_ACTIONS).map(([file, { lines }]) => [file, lines]),
+        ),
+      );
+    },
+    CENSUS_TIMEOUT_MS,
+  );
 
-  it("no service builds an error's own text into an answer: every remaining line is listed, as often as listed", () => {
-    const found = census('services');
-    expect(offList(found, ALLOWED_SERVICES)).toEqual([]);
-    expect(Object.fromEntries([...found].map(([file, hits]) => [file, hits.length]))).toEqual(
-      Object.fromEntries(
-        Object.entries(ALLOWED_SERVICES).map(([file, { lines }]) => [file, lines]),
-      ),
-    );
-  });
+  it(
+    "no service builds an error's own text into an answer: every remaining line is listed, as often as listed",
+    () => {
+      const found = census('services');
+      expect(offList(found, ALLOWED_SERVICES)).toEqual([]);
+      expect(Object.fromEntries([...found].map(([file, hits]) => [file, hits.length]))).toEqual(
+        Object.fromEntries(
+          Object.entries(ALLOWED_SERVICES).map(([file, { lines }]) => [file, lines]),
+        ),
+      );
+    },
+    CENSUS_TIMEOUT_MS,
+  );
 
   it('every allowed file gives its reason', () => {
     for (const [file, { lines, why }] of [
