@@ -25,13 +25,19 @@ import {
  *    root, the scrolling pane, the sidebar's nav, the breadcrumb, the top
  *    bar, the h1 and the page's first card or row is still on the same node
  *    after every switch (a remount would give a fresh node without it);
+ *  - EVERY ROW AND CARD (and list item) under the page root, up to 60 of
+ *    each, is tagged too and must still be the same node;
  *  - MOUNT-ONLY EFFECTS RUN ONCE: no performance mark is added (Overview
- *    mounts PerfUseful, whose mount stamps stockpilot:navigation-useful; any
- *    other mark a mount stamps counts too), no realtime channel is joined
- *    again (phx_join frames) and no data request is made (switch-
- *    requests.ts), so no effect that loads on mount ran again;
- *  - the URL stays. Added and removed element counts under the page root are
- *    recorded as an annotation for the reviewer.
+ *    mounts PerfUseful, whose mount stamps stockpilot:navigation-useful, and
+ *    the walk first requires that mark there; the other five routes mount no
+ *    PerfUseful, so for them the mark count is a side check and the rows,
+ *    cards and churn are the proof), no realtime channel is joined again
+ *    (phx_join frames) and no data request is made (switch-requests.ts), so
+ *    no effect that loads on mount ran again;
+ *  - NO ELEMENT IS REMOVED under the page root by a switch (one slot-frame
+ *    tree per page, CSS-only composition: plan 4.6, R1); the elements added
+ *    are recorded as an annotation;
+ *  - the URL stays.
  *
  * Lab command (opt-in or default; skips in `off`):
  *   cd apps/web && PLAYWRIGHT_BASE_URL=http://127.0.0.1:<port> STAGE5_ROLE=<role> \
@@ -91,34 +97,83 @@ async function markCount(page: Page): Promise<number> {
 }
 
 /** Counts elements added and removed under the page root from now on. */
-async function watchChurn(page: Page): Promise<() => Promise<string>> {
-  await page.evaluate(() => {
+async function watchChurn(page: Page): Promise<() => Promise<{ added: number; removed: number }>> {
+  const rooted = await page.evaluate(() => {
     const w = window as unknown as { __lgChurn?: { added: number; removed: number } };
     w.__lgChurn = { added: 0, removed: 0 };
-    const root = document.querySelector('main') ?? document.body;
+    const root = document.querySelector('main#main-content') ?? document.querySelector('main');
+    if (!root) return false;
     new MutationObserver((records) => {
       for (const r of records) {
         w.__lgChurn!.added += [...r.addedNodes].filter((n) => n.nodeType === 1).length;
         w.__lgChurn!.removed += [...r.removedNodes].filter((n) => n.nodeType === 1).length;
       }
     }).observe(root, { childList: true, subtree: true });
+    return true;
   });
+  expect(rooted, 'a page root (main) to watch for element churn').toBe(true);
   return async () =>
     page.evaluate(() => {
       const c = (window as unknown as { __lgChurn?: { added: number; removed: number } }).__lgChurn;
-      return `added ${c?.added ?? 0}, removed ${c?.removed ?? 0}`;
+      return { added: c?.added ?? 0, removed: c?.removed ?? 0 };
     });
 }
 
 /**
+ * Every row and card under the page root (at most `limit` of each), tagged
+ * with its own token and kept in a list, so a remount of any one of them is
+ * seen, not only of the first. Returns how many were tagged.
+ */
+const EVERY_NODE = ['tbody tr', '[data-slot="card"]', 'li'];
+async function tagEvery(page: Page, limit = 60): Promise<number> {
+  return page.evaluate(
+    ({ selectors, probe, limit }) => {
+      const root = document.querySelector('main#main-content') ?? document.querySelector('main');
+      const w = window as unknown as { __lgEvery?: Array<{ node: Element; token: string }> };
+      w.__lgEvery = [];
+      if (!root) return 0;
+      for (const selector of selectors) {
+        [...root.querySelectorAll(selector)].slice(0, limit).forEach((node, i) => {
+          const token = `${selector}#${i}`;
+          (node as unknown as Record<string, unknown>)[`${probe}Every`] = token;
+          w.__lgEvery!.push({ node, token });
+        });
+      }
+      return w.__lgEvery.length;
+    },
+    { selectors: EVERY_NODE, probe: PROBE, limit },
+  );
+}
+
+async function lostEvery(page: Page): Promise<string[]> {
+  return page.evaluate((probe) => {
+    const w = window as unknown as { __lgEvery?: Array<{ node: Element; token: string }> };
+    return (w.__lgEvery ?? [])
+      .filter(
+        ({ node, token }) =>
+          !node.isConnected ||
+          (node as unknown as Record<string, unknown>)[`${probe}Every`] !== token,
+      )
+      .map(({ token }) => token);
+  }, PROBE);
+}
+
+/**
  * Walks the sequence on `page`; `switchTo` makes each switch (the header menu,
- * or a second tab on the console, which has no menu).
+ * or a second tab on the console, which has no menu). `mountsPerfUseful`: the
+ * route mounts PerfUseful (only Overview among these), so its mount mark must
+ * be there before the walk, or the mark count could not move by construction.
+ * On every route a switch removes no element under the page root (one
+ * slot-frame tree per page, CSS-only composition, plan 4.6 and R1), and every
+ * row and card is still the same node: on the routes without PerfUseful those
+ * are what proves no subtree remounted.
  */
 async function walk(
   page: Page,
   candidates: readonly string[],
   joins: { count(): number },
   switchTo: (look: (typeof SEQUENCE)[number]) => Promise<void>,
+  mountsPerfUseful = false,
 ): Promise<void> {
   await settle(page);
   const url = page.url();
@@ -126,7 +181,10 @@ async function walk(
   expect(probed, 'the pane (or the console root) and the h1 are probed').toEqual(
     expect.arrayContaining([candidates[0]!, 'h1']),
   );
+  const every = await tagEvery(page);
   const marks = await markCount(page);
+  if (mountsPerfUseful)
+    expect(marks, 'the page’s PerfUseful mount mark is there before the walk').toBeGreaterThan(0);
   const joined = joins.count();
   const requests = await watchDataRequests(page);
   const churn = await watchChurn(page);
@@ -135,22 +193,30 @@ async function walk(
     await settle(page);
     const where = `after ${look.design} ${look.theme}`;
     expect(await lostNodes(page, probed), `nodes ${where}`).toEqual([]);
+    expect(await lostEvery(page), `rows and cards (${every} probed) ${where}`).toEqual([]);
     expect(await markCount(page), `performance marks (mount-only effects) ${where}`).toBe(marks);
     expect(joins.count(), `realtime joins ${where}`).toBe(joined);
     expect(requests.list(), `data requests ${where}`).toEqual([]);
+    expect((await churn()).removed, `elements removed under the page root ${where}`).toBe(0);
     expect(page.url(), where).toBe(url);
   }
-  test
-    .info()
-    .annotations.push({ type: 'element churn under the page root', description: await churn() });
+  const { added, removed } = await churn();
+  test.info().annotations.push({
+    type: 'element churn under the page root',
+    description: `added ${added}, removed ${removed}; ${every} rows and cards probed`,
+  });
 }
 
-async function dashboardWalk(page: Page, joins: { count(): number }): Promise<void> {
+async function dashboardWalk(
+  page: Page,
+  joins: { count(): number },
+  mountsPerfUseful = false,
+): Promise<void> {
   if (!(await glassBuild(page))) test.skip(true, 'This build does not offer Liquid Glass.');
   await settleIntroNotice(page);
   await chooseLook(page, START);
   await waitForLook(page, START);
-  await walk(page, DASHBOARD_NODES, joins, (look) => chooseLook(page, look));
+  await walk(page, DASHBOARD_NODES, joins, (look) => chooseLook(page, look), mountsPerfUseful);
 }
 
 /** The first record `list` links to, matching `pattern`, or null. */
@@ -177,7 +243,8 @@ test.describe('dashboard pages', () => {
     const joins = watchRealtimeJoins(page);
     await page.goto('/dashboard');
     await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
-    await dashboardWalk(page, joins);
+    // Overview mounts PerfUseful (app/(dashboard)/dashboard/page.tsx).
+    await dashboardWalk(page, joins, true);
   });
 
   const RECORDS = [
