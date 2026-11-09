@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   allPass,
+  EXPECTED_ROUTES,
   judge,
   median,
   noiseAllowance,
@@ -47,15 +48,18 @@ function passing(): Record<'B' | 'B-repeat' | 'branch-classic' | 'branch-glass',
     lcp: [900, 950, 920],
     useful: [1000, 1040, 1020],
   };
-  const B = { ...empty(), loads: loads('B', { overview: timing }) };
-  const BR = { ...empty(), loads: loads('B-repeat', { overview: timing }) };
+  // Every route the perf spec measures, on every build (the judge fails a route that is missing).
+  const every = (t: Record<string, number[]>) =>
+    Object.fromEntries(EXPECTED_ROUTES.map((route) => [route, t]));
+  const B = { ...empty(), loads: loads('B', every(timing)) };
+  const BR = { ...empty(), loads: loads('B-repeat', every(timing)) };
   const BC = {
     ...empty(),
-    loads: loads('branch-classic', { overview: { ...timing, lcp: [910, 940, 925] } }),
+    loads: loads('branch-classic', every({ ...timing, lcp: [910, 940, 925] })),
   };
   const BG: BuildSamples = {
     loads: [
-      ...loads('branch-glass', { overview: { ...timing, lcp: [980, 990, 1000] } }),
+      ...loads('branch-glass', every({ ...timing, lcp: [980, 990, 1000] })),
       ...loads(
         'branch-glass',
         { landing: { lcp: [2000, 2100, 2050], cls: [0.01, 0.02, 0.01] } },
@@ -80,6 +84,7 @@ function passing(): Record<'B' | 'B-repeat' | 'branch-classic' | 'branch-glass',
         over50: 0,
         over100: 0,
         loafCount: 0,
+        scrollMax: 1800,
       })),
     ),
     interactions: ['row-select', 'open-dialog', 'add-to-cart'].map((interaction) => ({
@@ -157,7 +162,9 @@ describe('the verdicts', () => {
   it('FAILS the R12 landing budget, a long frame, a slow interaction and a refetching switch', () => {
     const b = passing();
     b['branch-glass'].loads = b['branch-glass'].loads.map((l) =>
-      l.route === 'landing' ? { ...l, metrics: { ...l.metrics, lcp: 2600 } } : l,
+      l.route === 'landing' && l.profile === 'low-end'
+        ? { ...l, metrics: { ...l.metrics, lcp: 2600 } }
+        : l,
     );
     b['branch-glass'].scrolls[0]!.maxFrameMs = 51;
     b['branch-glass'].interactions[1]!.inpMs = 201;
@@ -179,6 +186,50 @@ describe('the verdicts', () => {
     expect(judge(b).verdicts.some((v) => v.check === 'R12 scroll 6x reduced' && !v.pass)).toBe(
       true,
     );
+  });
+  it('FAILS a route that is missing from a build (no route may go without a verdict)', () => {
+    const b = passing();
+    // Only the landing measured on every build, as when every dashboard route lacked its records.
+    for (const k of ['B', 'B-repeat', 'branch-classic', 'branch-glass'] as const)
+      b[k].loads = b[k].loads.filter((l) => l.route === 'landing');
+    const failed = judge(b).verdicts.filter((v) => !v.pass);
+    expect(allPass(judge(b).verdicts)).toBe(false);
+    const unmeasured = new Set(
+      failed.filter((v) => v.check.startsWith('measured ')).map((v) => v.route),
+    );
+    expect([...unmeasured].sort()).toEqual(EXPECTED_ROUTES.filter((r) => r !== 'landing').sort());
+    expect(failed.find((v) => v.route === 'books' && v.check === 'measured cold')?.detail).toBe(
+      'not measured on B, B-repeat, branch-classic, branch-glass',
+    );
+  });
+  it('FAILS a route missing from one build only, naming that build', () => {
+    const b = passing();
+    b['branch-glass'].loads = b['branch-glass'].loads.filter((l) => l.route !== 'order-detail');
+    const failed = judge(b).verdicts.filter((v) => !v.pass);
+    expect(failed.map((v) => `${v.check} ${v.route}: ${v.detail}`)).toEqual(
+      expect.arrayContaining([
+        'measured cold order-detail: not measured on branch-glass',
+        'measured warm order-detail: not measured on branch-glass',
+      ]),
+    );
+  });
+  it('FAILS a scroll whose pane never moved (scrollMax 0 or not recorded)', () => {
+    const b = passing();
+    for (const s of b['branch-glass'].scrolls) if (s.route === 'items') s.scrollMax = 0;
+    const failed = judge(b)
+      .verdicts.filter((v) => !v.pass)
+      .map((v) => `${v.check} ${v.route}`);
+    expect(failed).toEqual([
+      'R12 scroll 4x normal items',
+      'R12 scroll 6x normal items',
+      'R12 scroll 6x reduced items',
+    ]);
+    const c = passing();
+    delete c['branch-glass'].scrolls[0]!.scrollMax;
+    expect(
+      judge(c).verdicts.find((v) => v.check === 'R12 scroll 4x normal' && v.route === 'overview')
+        ?.pass,
+    ).toBe(false);
   });
   it('FAILS what was not measured', () => {
     const b = passing();

@@ -20,6 +20,7 @@ import {
   visit,
   type NamedLook,
 } from './stage5-pages';
+import { coverageProblems, requiredLooks } from './stage5-visit';
 
 /**
  * PLAN 8.3-3 AND R11: CONTRAST OVER COMPOSED GLASS, A RELEASE BLOCKER.
@@ -38,6 +39,8 @@ import {
  *    every pane the darkest and lightest 10% crops behind it are reported.
  * Disabled, aria-hidden and inert text is exempt (WCAG 1.4.3 inactive UI and
  * incidental text). A miss is fixed in glass tokens, never in Classic.
+ * A look in which no text run was measured FAILS (nothing judged is not a
+ * pass), and so does a route where a glass look was not measured at all.
  *
  * Projects: chrome runs every signed-in route plus the R11 set; webkit runs
  * the R11 set (7 marketing pages, /signin, Overview, Items, Place an Order),
@@ -64,10 +67,14 @@ async function setMaterial(page: Page, material: Material): Promise<void> {
   );
 }
 
-/** Every contrast miss on the viewport now. */
-async function missesNow(context: BrowserContext, page: Page, where: string): Promise<string[]> {
+/** Every contrast miss on the viewport now, and how many text runs were measured. */
+async function missesNow(
+  context: BrowserContext,
+  page: Page,
+  where: string,
+): Promise<{ misses: string[]; runs: number }> {
   const runs = await textRuns(page);
-  if (runs.length === 0) return [];
+  if (runs.length === 0) return { misses: [], runs: 0 };
   const png = await backdropShot(page);
   const dpr = await page.evaluate(() => devicePixelRatio);
   const samples = await sampleBoxes(
@@ -109,7 +116,7 @@ async function missesNow(context: BrowserContext, page: Page, where: string): Pr
   await test
     .info()
     .attach(`crops ${where}`, { body: JSON.stringify(crops), contentType: 'application/json' });
-  return misses;
+  return { misses, runs: runs.length };
 }
 
 /** The pane positions a fixed scene is checked at: top, half way, end. */
@@ -141,10 +148,14 @@ async function checkRoute(
   const misses: string[] = [];
   for (const material of MATERIALS) {
     await setMaterial(page, material);
+    let measured = 0;
     for (const y of await scrollPositions(page)) {
       await scrollTo(page, y);
-      misses.push(...(await missesNow(context, page, `${route} ${look.label} ${material} @${y}`)));
+      const now = await missesNow(context, page, `${route} ${look.label} ${material} @${y}`);
+      misses.push(...now.misses);
+      measured += now.runs;
     }
+    if (measured === 0) misses.push(`${route} ${look.label} ${material}: no text run was measured`);
     await scrollTo(page, 0);
   }
   await setMaterial(page, 'normal');
@@ -185,11 +196,14 @@ test.describe('signed in', () => {
         test.skip(true, `${route} does not open for this role.`);
       await requireGlass(page);
       const misses: string[] = [];
+      const measured: string[] = [];
       for (const look of GLASS_LOOKS) {
         await chooseLook(page, look);
         await settle(page);
         misses.push(...(await checkRoute(context, page, route, look)));
+        measured.push(look.label);
       }
+      misses.push(...coverageProblems(route, measured, requiredLooks(true, false)));
       expect(misses).toEqual([]);
     });
   }
@@ -210,18 +224,22 @@ test.describe('signed out', () => {
       baseURL,
     }) => {
       const misses: string[] = [];
+      const measured: string[] = [];
       for (const look of GLASS_LOOKS) {
         const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
         try {
           await arriveSignedOut(context, baseURL!, look);
           const page = await context.newPage();
+          // A signed-out page opens for everyone: visit() fails the test on any error status.
           if (!(await visit(page, route, null))) continue;
           await requireGlass(page);
           misses.push(...(await checkRoute(context, page, route, look)));
+          measured.push(look.label);
         } finally {
           await context.close();
         }
       }
+      misses.push(...coverageProblems(route, measured, requiredLooks(true, false)));
       expect(misses).toEqual([]);
     });
   }

@@ -13,11 +13,12 @@ import {
   type Look,
 } from '../e2e/appearance/look';
 import { assertLocal } from '../e2e/appearance/stage5-env';
-import type {
-  InteractionSample,
-  LoadSample,
-  ScrollSample,
-  SwitchSample,
+import {
+  EXPECTED_ROUTES,
+  type InteractionSample,
+  type LoadSample,
+  type ScrollSample,
+  type SwitchSample,
 } from './appearance-compare.mjs';
 import {
   armSwitchLatency,
@@ -109,6 +110,11 @@ const ROUTES: RouteDef[] = [
   { key: 'landing', path: '/', signedOut: true },
 ];
 const SCROLL_ROUTES = ['overview', 'items', 'place-order'];
+// The judge expects exactly these routes on every build (a missing one fails there): keep the lists equal.
+if (ROUTES.map((r) => r.key).join() !== EXPECTED_ROUTES.join())
+  throw new Error(
+    `appearance.perf.ts ROUTES (${ROUTES.map((r) => r.key).join()}) differ from appearance-compare.mjs EXPECTED_ROUTES (${EXPECTED_ROUTES.join()})`,
+  );
 
 const DESIGN: Record<Build, Look['design'] | null> = {
   B: null,
@@ -319,6 +325,7 @@ test('scripted 5 s scroll at CPU 1x, 4x and 6x (and the reduced material at 6x)'
             material: step.material,
             run,
             ...f,
+            scrollMax: scroll.max,
           });
         } finally {
           await context.close();

@@ -250,13 +250,67 @@ export const FOCUS_RING: Record<RingVariant, ExpectedRing> = {
   'contrast-night': { color: [0xff, 0xff, 0xff], widthPx: 3, offsetPx: 2 },
 };
 
-/** What getComputedStyle reports for a focused element. */
+/** What getComputedStyle reports for a focused (or the same element unfocused). */
 export interface ComputedRing {
   outlineStyle: string;
   outlineColor: string;
   outlineWidth: string;
   outlineOffset: string;
   boxShadow: string;
+  /** The top border colour (a field in the contrast material marks focus by its border). */
+  borderColor?: string;
+}
+
+/**
+ * What the keyboard walk knows beside the focused style: the same element's
+ * style once focus has left it (null: not read), and the opaque colour of the
+ * surface around it (null: none found).
+ */
+export interface RingContext {
+  unfocused?: ComputedRing | null;
+  surface?: string | null;
+}
+
+/** Every colour a computed box-shadow value names (rgb(), rgba(), color(srgb ...), #hex). */
+export function shadowColors(boxShadow: string): Rgba[] {
+  if (boxShadow.trim() === 'none') return [];
+  const tokens = boxShadow.match(/rgba?\([^)]*\)|color\(srgb [^)]*\)|#[0-9a-f]{3,8}\b/giu) ?? [];
+  return tokens.map(parseCssColor).filter((c): c is Rgba => c !== null);
+}
+
+/** True when the box-shadow paints something (a colour with alpha above 0). */
+export const paintsShadow = (boxShadow: string): boolean =>
+  shadowColors(boxShadow).some((c) => c.a > 0.01);
+
+const sameColour = (a: Rgba, b: Rgba) =>
+  Math.abs(a.a - b.a) < 0.01 && deltaE00Rgb([a.r, a.g, a.b], [b.r, b.g, b.b]) < 1;
+
+/**
+ * WCAG 2.4.7 for one focused element: is any focus indicator VISIBLE? An
+ * outline counts when it has a style, a width and a colour that is not
+ * transparent; a box-shadow when it paints a colour and (when the unfocused
+ * style is known) differs from the unfocused one, so an always-on material
+ * shadow is not mistaken for focus; a border when its colour changes on focus.
+ */
+export function focusIndicatorProblems(
+  focused: ComputedRing,
+  unfocused: ComputedRing | null = null,
+): string[] {
+  const outlineColour = parseCssColor(focused.outlineColor);
+  const outline =
+    focused.outlineStyle !== 'none' &&
+    parseFloat(focused.outlineWidth) > 0 &&
+    (outlineColour === null || outlineColour.a > 0.01);
+  const shadow =
+    paintsShadow(focused.boxShadow) &&
+    (unfocused === null || focused.boxShadow !== unfocused.boxShadow);
+  const before = unfocused?.borderColor ? parseCssColor(unfocused.borderColor) : null;
+  const now = focused.borderColor ? parseCssColor(focused.borderColor) : null;
+  const border = before !== null && now !== null && now.a > 0.01 && !sameColour(before, now);
+  if (outline || shadow || border) return [];
+  return [
+    `no visible focus indicator (outline ${focused.outlineStyle} ${focused.outlineWidth} ${focused.outlineColor}; box-shadow ${focused.boxShadow}${unfocused ? ', unfocused ' + unfocused.boxShadow : ''})`,
+  ];
 }
 
 /**
@@ -265,19 +319,56 @@ export interface ComputedRing {
  *    offset is 2 px, or minus the width for a control drawn inside a clipping
  *    track (a segment: `inset` true).
  *  - `halo`: a field (input or select) shows the 3 px halo box-shadow instead
- *    and no outline.
+ *    and no outline. The halo must PAINT (a colour with alpha above 0) and,
+ *    when the unfocused style is known, be new on focus. The contrast
+ *    material sets the halo transparent (tokens.generated.css
+ *    --lg-focus-halo: transparent) and marks focus by the field's border
+ *    instead (primitives.css :focus-visible border-color): there the border
+ *    must change on focus and hold 3:1 against the surface around the field.
  * Colours compare within delta E 1 (the browser may round a channel).
  */
 export function ringProblems(
   computed: ComputedRing,
   variant: RingVariant,
   kind: 'outline' | 'inset' | 'halo',
+  context: RingContext = {},
 ): string[] {
   const want = FOCUS_RING[variant];
   const problems: string[] = [];
   if (kind === 'halo') {
-    if (!/\b3px\b/u.test(computed.boxShadow) || computed.boxShadow === 'none')
-      problems.push(`a field shows no 3 px halo (box-shadow ${computed.boxShadow})`);
+    const unfocused = context.unfocused ?? null;
+    const halo =
+      /\b3px\b/u.test(computed.boxShadow) &&
+      paintsShadow(computed.boxShadow) &&
+      (unfocused === null || computed.boxShadow !== unfocused.boxShadow);
+    if (halo) return problems;
+    if (variant === 'contrast-day' || variant === 'contrast-night') {
+      const now = computed.borderColor ? parseCssColor(computed.borderColor) : null;
+      const before = unfocused?.borderColor ? parseCssColor(unfocused.borderColor) : null;
+      if (now === null || before === null) {
+        problems.push(
+          `a field shows no visible halo (box-shadow ${computed.boxShadow}) and its border change could not be read`,
+        );
+        return problems;
+      }
+      if (now.a <= 0.01 || sameColour(now, before)) {
+        problems.push(
+          `a field shows no visible focus: the halo is transparent (box-shadow ${computed.boxShadow}) and the border stays ${computed.borderColor}`,
+        );
+        return problems;
+      }
+      const surface = context.surface ? parseCssColor(context.surface) : null;
+      if (surface !== null && surface.a >= 0.99) {
+        const under: Rgb = [surface.r, surface.g, surface.b];
+        const ratio = contrastRatio(composite(now, under), under);
+        if (ratio < NON_TEXT_RATIO)
+          problems.push(
+            `a field's focused border ${computed.borderColor} is ${ratio.toFixed(2)}:1 against the surface ${context.surface} (< ${NON_TEXT_RATIO}:1)`,
+          );
+      }
+      return problems;
+    }
+    problems.push(`a field shows no visible 3 px halo (box-shadow ${computed.boxShadow})`);
     return problems;
   }
   if (computed.outlineStyle === 'none' || parseFloat(computed.outlineWidth) === 0) {

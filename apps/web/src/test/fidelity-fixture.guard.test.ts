@@ -10,8 +10,10 @@ import { dockerRefusal, urlRefusal } from '../../tests/e2e/appearance/fixtures/s
  * repository, so it must hold fictional data only. This guard fails on:
  *  - an email whose domain is not example.test or example.com (subdomains
  *    of those included);
- *  - a value shaped like a phone number (with separators, or the lab's
- *    555-0131 form);
+ *  - a value shaped like a phone number: with separators, the lab's 555-0131
+ *    form, E.164 (+ and 8 to 15 digits), spaced international groups
+ *    (+44 20 7946 0958) or a bare 10-digit number (UUIDs and 13-digit ISBNs
+ *    are set aside first);
  *  - a value shaped like a payment card (13 to 19 digits, spaces or dashes
  *    allowed, passing the Luhn check);
  *  - a value shaped like a token or key (a JWT, a known key prefix, 32+ hex
@@ -30,9 +32,17 @@ const read = (f: string) => readFileSync(join(DIR, f), 'utf8');
 const EMAIL = /[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})\b/gu;
 const ALLOWED_DOMAIN = /(^|\.)example\.(test|com)$/iu;
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu;
+/** ISBN-13 (978 / 979, with or without hyphens): set aside before the phone shapes, as UUIDs are. */
+const ISBN13 = /\b97[89](?:-?\d){10}\b/gu;
 const PHONE = [
   /(?:\+\d{1,3}[\s.-]?)?\(?\b\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}\b/u,
   /(?<![\d-])\b\d{3}-\d{4}\b(?![\d-])/u,
+  // E.164: + and 8 to 15 digits, no separators (+14155550199).
+  /(?<![\w+])\+\d{8,15}\b/u,
+  // Spaced or dotted international groups: + country code, then 2 to 5 groups (+44 20 7946 0958).
+  /(?<![\w+])\+\d{1,3}(?:[\s.-]\d{1,5}){2,5}\b/u,
+  // A bare 10-digit number (4155550199), not part of a longer run.
+  /(?<![\d-])\b\d{10}\b(?![\d-])/u,
 ];
 const TOKENS = [
   /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/u,
@@ -64,7 +74,7 @@ export function fixtureProblems(text: string): string[] {
   const out: string[] = [];
   for (const m of text.matchAll(EMAIL))
     if (!ALLOWED_DOMAIN.test(m[1]!)) out.push(`email at ${m[1]}: only example.test / example.com`);
-  const scrubbed = text.replace(UUID, ' ');
+  const scrubbed = text.replace(UUID, ' ').replace(ISBN13, ' ');
   for (const re of PHONE) {
     const m = re.exec(scrubbed);
     if (m) out.push(`phone-shaped value ${m[0]}`);
@@ -92,6 +102,14 @@ describe('the fidelity seed is fictional only', () => {
     expect(fixtureProblems("'office@lantern-hollow.example.test'")).toEqual([]);
     expect(fixtureProblems(`'(415) ${'555'}-0199'`)).not.toEqual([]);
     expect(fixtureProblems(`'${'555'}-0131'`)).not.toEqual([]);
+    // E.164, a bare 10-digit number and spaced international groups (stage 5 review, minor 9).
+    expect(fixtureProblems(`'+1415${'555'}0199'`)).not.toEqual([]);
+    expect(fixtureProblems(`'415${'555'}0199'`)).not.toEqual([]);
+    expect(fixtureProblems(`'+44 20 ${'7946'} 0958'`)).not.toEqual([]);
+    expect(fixtureProblems(`'+33 1 ${'23'} 45 67 89'`)).not.toEqual([]);
+    // Not phones: an ISBN-13 (with or without hyphens), a UUID, a price, a quantity, a year range.
+    expect(fixtureProblems("'979-8-9000-0141-8'")).toEqual([]);
+    expect(fixtureProblems("'61.25', 104, '2025-2026'")).toEqual([]);
     expect(fixtureProblems(`'${['4111', '1111', '1111', '1111'].join(' ')}'`)).not.toEqual([]);
     expect(fixtureProblems("'9798900001418'")).toEqual([]); // an invented ISBN: not Luhn-valid
     expect(

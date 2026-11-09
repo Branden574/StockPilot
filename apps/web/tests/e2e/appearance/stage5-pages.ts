@@ -2,6 +2,7 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import { chooseLook, glassBuild, settle, settleIntroNotice, waitForLook, type Look } from './look';
 import { MARKETING_PATHS, skipLandingIntro } from './site-look';
+import { visitOutcome } from './stage5-visit';
 
 /**
  * The routes and looks the stage 5 accessibility specs walk (plan 8.3:
@@ -47,7 +48,7 @@ export const SIGNED_IN_ROUTES = [
   '/dashboard/help',
   '/dashboard/whats-new',
   '/dashboard/settings',
-  '/dashboard/warehouses',
+  '/dashboard/admin/warehouses',
   '/dashboard/locations',
   '/dashboard/suppliers',
 ] as const;
@@ -132,11 +133,28 @@ export async function chooseSignedIn(page: Page, look: Look): Promise<void> {
   await settle(page);
 }
 
-/** Opens `path` and waits until it has drawn (a level-one heading or the main landmark). */
+/**
+ * Opens `path` and waits until it has drawn (a level-one heading or the main
+ * landmark). Returns false ONLY when this role may not open it (a signed-in
+ * route answering 401, 403 or 404, or sending the role elsewhere); a server
+ * error, a missing response, any 4xx on a signed-out route or a lost session
+ * FAILS the test (stage5-visit.ts visitOutcome). Callers skip on false.
+ */
 export async function visit(page: Page, path: string, look: Look | null): Promise<boolean> {
+  const signedOut = isSignedOutRoute(path) || path === '/portal' || path.startsWith('/portal/');
   if (isSignedOutRoute(path)) await skipLandingIntro(page);
   const response = await page.goto(path);
-  if (!response || response.status() >= 400) return false;
+  const outcome = visitOutcome(
+    path,
+    response ? response.status() : null,
+    new URL(page.url()).pathname,
+    signedOut,
+  );
+  if (outcome.kind === 'failure') throw new Error(outcome.reason);
+  if (outcome.kind === 'no-access') {
+    test.info().annotations.push({ type: 'no-access', description: outcome.reason });
+    return false;
+  }
   await page
     .locator('h1, main')
     .first()

@@ -23,7 +23,10 @@ import {
  *
  * Projects:
  *  - setup-<role> (admin, manager, staff, viewer, platform, portal): signs the
- *    role in (stage5.setup.ts) into tests/e2e/.auth/stage5-<role>.json;
+ *    role in (stage5.auth.ts) into tests/e2e/.auth/stage5-<role>.json. The
+ *    file is NOT named *.setup.ts: the default playwright.config.ts setup
+ *    project takes every such file under tests/e2e, and this one would fail
+ *    there and stop `pnpm test:e2e` (src/test/stage5-config-isolation.test.ts);
  *  - chrome: every appearance spec as STAGE5_ROLE (default manager), Google
  *    Chrome through channel 'chrome' (Chrome 156 is installed; Playwright
  *    1.64.1's own Chromium build 1248 may not be);
@@ -80,7 +83,7 @@ function installed(browser: 'webkit' | 'firefox'): boolean {
 
 const setupProjects: Project[] = ROLES.map((role) => ({
   name: `setup-${role}`,
-  testMatch: /stage5\.setup\.ts/u,
+  testMatch: /stage5\.auth\.ts/u,
   metadata: { role },
   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
 }));

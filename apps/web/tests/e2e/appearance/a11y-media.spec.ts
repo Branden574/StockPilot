@@ -9,6 +9,7 @@ import {
 
 import { chooseLook, settle } from './look';
 import { arriveSignedOut, requireGlass, visit, type NamedLook } from './stage5-pages';
+import { coverageProblems } from './stage5-visit';
 import { isAppearanceSaveBody } from './switch-requests';
 
 /**
@@ -279,12 +280,21 @@ test.describe('signed in', () => {
         test.skip(true, `${route} does not open for this role.`);
       await requireGlass(page);
       const problems: string[] = [];
+      const measured: string[] = [];
       for (const look of LOOKS) {
         await chooseLook(page, look);
         await settle(page);
         problems.push(...(await mediaChecks(page, context, info, `${route} ${look.label}`)));
         problems.push(...(await storeUnchanged(page, context, info, `${route} ${look.label}`)));
+        measured.push(look.label);
       }
+      problems.push(
+        ...coverageProblems(
+          route,
+          measured,
+          LOOKS.map((l) => l.label),
+        ),
+      );
       expect(problems).toEqual([]);
     });
   }
@@ -305,19 +315,29 @@ test.describe('signed out', () => {
       baseURL,
     }, info) => {
       const problems: string[] = [];
+      const measured: string[] = [];
       for (const look of LOOKS) {
         const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
         try {
           await arriveSignedOut(context, baseURL!, look);
           const page = await context.newPage();
+          // A signed-out page opens for everyone: visit() fails the test on any error status.
           if (!(await visit(page, route, null))) continue;
           await requireGlass(page);
           problems.push(...(await mediaChecks(page, context, info, `${route} ${look.label}`)));
           problems.push(...(await storeUnchanged(page, context, info, `${route} ${look.label}`)));
+          measured.push(look.label);
         } finally {
           await context.close();
         }
       }
+      problems.push(
+        ...coverageProblems(
+          route,
+          measured,
+          LOOKS.map((l) => l.label),
+        ),
+      );
       expect(problems).toEqual([]);
     });
   }

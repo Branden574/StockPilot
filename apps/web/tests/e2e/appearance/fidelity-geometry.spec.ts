@@ -6,6 +6,7 @@ import { expect, test, type Page } from '@playwright/test';
 import {
   BOARD_TARGETS,
   boxProblems,
+  comparableLandmarks,
   EXACT_VARIANTS,
   selectorDrift,
   STYLE_PROPS,
@@ -190,6 +191,12 @@ for (const target of BOARD_TARGETS) {
           body: gaps.join('\n') || '(none)',
           contentType: 'text/plain',
         });
+        // Nothing compared is not a pass: the board draws none of this target's landmarks.
+        if (comparableLandmarks(target, record!).length === 0)
+          test.skip(
+            true,
+            `${target.board} ${variant}${target.state ? ` (${target.state})` : ''}: the board draws none of ${target.landmarks.map((l) => l.name).join(', ')}, so nothing was compared (gap; the app shot is saved for review)`,
+          );
         expect(fail).toEqual([]);
       } finally {
         if (close) await close();

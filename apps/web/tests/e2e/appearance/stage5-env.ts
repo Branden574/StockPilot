@@ -5,7 +5,7 @@ import { createHmac } from 'node:crypto';
  * section 8, the cross-writer interface), pure so
  * src/test/stage5-env.test.ts proves them:
  *
- *  - the six roles, each signed in once by stage5.setup.ts into
+ *  - the six roles, each signed in once by stage5.auth.ts into
  *    tests/e2e/.auth/stage5-<role>.json (gitignored folder);
  *  - where each role's lab credentials come from: the environment only
  *    (STAGE5_<ROLE>_EMAIL, STAGE5_<ROLE>_PASSWORD, and for the platform

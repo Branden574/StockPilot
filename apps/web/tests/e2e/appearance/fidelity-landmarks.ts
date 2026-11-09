@@ -421,6 +421,16 @@ export function selectorDrift(target: BoardTarget, record: BoardRecord): string[
   return out;
 }
 
+/**
+ * The landmarks of `target` the board actually draws in `record` (the ones
+ * that can be compared). Empty: the board draws none of them (Items in the
+ * selection state: the board has no selection bar), so a comparison would be
+ * vacuous and the spec skips with the reason instead of passing.
+ */
+export function comparableLandmarks(target: BoardTarget, record: BoardRecord): LandmarkDef[] {
+  return target.landmarks.filter((def) => record.landmarks[def.name] !== undefined);
+}
+
 function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1);
 }

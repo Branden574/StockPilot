@@ -363,16 +363,18 @@ export async function throttle(
 /**
  * Scrolls `selector` (the app's main pane) down and back for `ms` with
  * requestAnimationFrame, recording each frame's delta. Returns the deltas and
- * the window in page time, for frameSummary with the long animation frames.
+ * the window in page time, for frameSummary with the long animation frames,
+ * and `max`, how far the pane could scroll (0: it never moved, so its frames
+ * prove nothing; appearance-compare.mjs does not count such a sample).
  */
 export async function scriptedScroll(
   page: Page,
   selector: string,
   ms = 5000,
-): Promise<{ deltas: number[]; start: number; end: number }> {
+): Promise<{ deltas: number[]; start: number; end: number; max: number }> {
   return page.evaluate(
     ({ sel, duration }) =>
-      new Promise<{ deltas: number[]; start: number; end: number }>((resolve) => {
+      new Promise<{ deltas: number[]; start: number; end: number; max: number }>((resolve) => {
         const el =
           (document.querySelector(sel) as HTMLElement | null) ?? document.scrollingElement!;
         const max = Math.max(0, el.scrollHeight - el.clientHeight);
@@ -387,7 +389,7 @@ export async function scriptedScroll(
           const pos = t < 0.5 ? t * 2 : (1 - t) * 2;
           el.scrollTop = Math.round(max * Math.min(1, Math.max(0, pos)));
           if (now - start < duration) requestAnimationFrame(step);
-          else resolve({ deltas: deltas.slice(1), start, end: now });
+          else resolve({ deltas: deltas.slice(1), start, end: now, max });
         };
         requestAnimationFrame(step);
       }),

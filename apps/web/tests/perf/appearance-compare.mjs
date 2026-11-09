@@ -50,6 +50,30 @@ export const SWITCH_BUDGET_MS = 100;
 export const MARGIN_FACTOR = 0.8;
 /** Routes R12 holds to the scroll budget. */
 export const SCROLL_ROUTES = ['overview', 'items', 'place-order'];
+/**
+ * Every route appearance.perf.ts measures (its ROUTES keys; the spec refuses
+ * to run when the two lists differ). judge() expects each of them on every
+ * build, in both modes: a route that is missing is a FAIL, never "no verdict".
+ */
+export const EXPECTED_ROUTES = [
+  'overview',
+  'items',
+  'items-grid',
+  'books',
+  'item-detail',
+  'orders',
+  'place-order',
+  'order-detail',
+  'book-order-totals',
+  'landing',
+];
+/** The builds whose desktop loads every expected route must have. */
+export const LOAD_BUILDS = /** @type {const} */ ([
+  'B',
+  'B-repeat',
+  'branch-classic',
+  'branch-glass',
+]);
 
 /**
  * @param {readonly number[]} values
@@ -61,7 +85,7 @@ export function median(values) {
   const mid = Math.floor(v.length / 2);
   return v.length % 2 === 1
     ? /** @type {number} */ (v[mid])
-    : /** @type {number} */ ((v[mid - 1]) + /** @type {number} */ (v[mid])) / 2;
+    : /** @type {number} */ (v[mid - 1] + /** @type {number} */ (v[mid])) / 2;
 }
 
 /**
@@ -84,7 +108,8 @@ export const sorted = (values) => values.filter((n) => Number.isFinite(n)).sort(
  * @typedef {{ build: string, profile: string, route: string, mode: 'cold' | 'warm', run: number,
  *   metrics: Record<string, number | null> }} LoadSample
  * @typedef {{ build: string, profile: string, route: string, cpu: number, material: 'normal' | 'reduced',
- *   run: number, maxFrameMs: number, over50: number, over100: number, loafCount: number }} ScrollSample
+ *   run: number, maxFrameMs: number, over50: number, over100: number, loafCount: number,
+ *   scrollMax?: number }} ScrollSample  (scrollMax: how far the pane could scroll, px; 0 = it never moved)
  * @typedef {{ build: string, profile: string, interaction: string, run: number, inpMs: number | null }} InteractionSample
  * @typedef {{ build: string, profile: string, route: string, run: number, latencyMs: number | null,
  *   dataRequests: number }} SwitchSample
@@ -127,11 +152,15 @@ export function noiseAllowance(b, bRepeat) {
 
 /**
  * Compares the builds and applies every rule. Missing data is a FAIL (a
- * budget that was not measured did not pass).
+ * budget that was not measured did not pass): every route of
+ * `expectedRoutes` must have desktop loads, cold and warm, on every build;
+ * a scroll sample whose pane could not scroll (scrollMax 0 or absent) does
+ * not count as a scroll.
  * @param {{ B: BuildSamples, 'B-repeat': BuildSamples, 'branch-classic': BuildSamples, 'branch-glass': BuildSamples }} builds
+ * @param {readonly string[]} [expectedRoutes]
  * @returns {{ verdicts: Verdict[], table: Array<Record<string, unknown>> }}
  */
-export function judge(builds) {
+export function judge(builds, expectedRoutes = EXPECTED_ROUTES) {
   /** @type {Verdict[]} */
   const verdicts = [];
   /** @type {Array<Record<string, unknown>>} */
@@ -141,15 +170,31 @@ export function judge(builds) {
   const BC = builds['branch-classic'];
   const BG = builds['branch-glass'];
   const routes = [
-    ...new Set(
-      [...B.loads, ...BC.loads, ...BG.loads]
+    ...new Set([
+      ...expectedRoutes,
+      ...[...B.loads, ...BC.loads, ...BG.loads]
         .filter((l) => l.profile === 'desktop')
         .map((l) => l.route),
-    ),
+    ]),
   ].sort();
 
   for (const route of routes) {
     for (const mode of /** @type {const} */ (['cold', 'warm'])) {
+      // Every build measured this route in this mode (a route with no record is not a pass).
+      const missing = LOAD_BUILDS.filter(
+        (b) =>
+          !builds[b].loads.some(
+            (l) => l.route === route && l.mode === mode && l.profile === 'desktop',
+          ),
+      );
+      verdicts.push({
+        check: `measured ${mode}`,
+        route,
+        pass: missing.length === 0,
+        detail: missing.length
+          ? `not measured on ${missing.join(', ')}`
+          : `on ${LOAD_BUILDS.join(', ')}`,
+      });
       for (const metric of [...TIMING_METRICS, ...BYTE_METRICS]) {
         const b = valuesOf(B, route, mode, metric);
         const bc = valuesOf(BC, route, mode, metric);
@@ -249,22 +294,38 @@ export function judge(builds) {
       [6, 'normal'],
       [6, 'reduced'],
     ])) {
-      const runs = BG.scrolls.filter(
+      const all = BG.scrolls.filter(
         (s) => s.route === route && s.cpu === cpu && s.material === material,
       );
+      // A pane that could not scroll was never scrolled: its frames prove nothing.
+      const runs = all.filter((s) => typeof s.scrollMax === 'number' && s.scrollMax > 0);
       const limit =
         /** @type {number} */ (FRAME_BUDGET_MS[String(cpu)]) *
         (material === 'reduced' ? MARGIN_FACTOR : 1);
       const worst = runs.length ? Math.max(...runs.map((r) => r.maxFrameMs)) : null;
       verdicts.push(
         worst === null
-          ? { check: `R12 scroll ${cpu}x ${material}`, route, pass: false, detail: 'not measured' }
-          : {
+          ? {
               check: `R12 scroll ${cpu}x ${material}`,
               route,
-              pass: worst <= limit,
-              detail: `worst frame ${worst.toFixed(0)} ms over ${runs.length} runs (limit ${limit.toFixed(0)})`,
-            },
+              pass: false,
+              detail: all.length
+                ? `not measured: the pane did not scroll in any of ${all.length} runs (scrollMax 0)`
+                : 'not measured',
+            }
+          : runs.length < all.length
+            ? {
+                check: `R12 scroll ${cpu}x ${material}`,
+                route,
+                pass: false,
+                detail: `the pane did not scroll in ${all.length - runs.length} of ${all.length} runs (scrollMax 0)`,
+              }
+            : {
+                check: `R12 scroll ${cpu}x ${material}`,
+                route,
+                pass: worst <= limit,
+                detail: `worst frame ${worst.toFixed(0)} ms over ${runs.length} runs (limit ${limit.toFixed(0)})`,
+              },
       );
     }
   }

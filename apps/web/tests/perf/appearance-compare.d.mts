@@ -18,6 +18,8 @@ export declare const INP_BUDGET_MS: number;
 export declare const SWITCH_BUDGET_MS: number;
 export declare const MARGIN_FACTOR: number;
 export declare const SCROLL_ROUTES: string[];
+export declare const EXPECTED_ROUTES: string[];
+export declare const LOAD_BUILDS: readonly ['B', 'B-repeat', 'branch-classic', 'branch-glass'];
 
 export interface LoadSample {
   build: string;
@@ -38,6 +40,8 @@ export interface ScrollSample {
   over50: number;
   over100: number;
   loafCount: number;
+  /** How far the pane could scroll (px); 0 or absent: it never moved, and the sample does not count. */
+  scrollMax?: number;
 }
 export interface InteractionSample {
   build: string;
@@ -78,10 +82,13 @@ export declare function valuesOf(
   profile?: string,
 ): number[];
 export declare function noiseAllowance(b: readonly number[], bRepeat: readonly number[]): number;
-export declare function judge(builds: {
-  B: BuildSamples;
-  'B-repeat': BuildSamples;
-  'branch-classic': BuildSamples;
-  'branch-glass': BuildSamples;
-}): { verdicts: Verdict[]; table: Array<Record<string, unknown>> };
+export declare function judge(
+  builds: {
+    B: BuildSamples;
+    'B-repeat': BuildSamples;
+    'branch-classic': BuildSamples;
+    'branch-glass': BuildSamples;
+  },
+  expectedRoutes?: readonly string[],
+): { verdicts: Verdict[]; table: Array<Record<string, unknown>> };
 export declare function allPass(verdicts: readonly Verdict[]): boolean;

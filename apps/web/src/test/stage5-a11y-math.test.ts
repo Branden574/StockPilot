@@ -6,6 +6,7 @@ import {
   deltaE00,
   deltaE00Rgb,
   extremeCrops,
+  focusIndicatorProblems,
   isLargeText,
   parseCssColor,
   relativeLuminance,
@@ -153,5 +154,87 @@ describe('the glass focus ring', () => {
       ringProblems(ring({ boxShadow: 'rgba(11, 122, 92, 0.24) 0px 0px 0px 3px' }), 'day', 'halo'),
     ).toEqual([]);
     expect(ringProblems(ring({ boxShadow: 'none' }), 'day', 'halo')).toHaveLength(1);
+  });
+  // Stage 5 review, minor 8: a transparent halo passed (tokens.generated.css sets
+  // --lg-focus-halo: transparent in the contrast material).
+  const field = (over: Partial<ComputedRing> = {}) =>
+    ring({ outlineStyle: 'none', outlineWidth: '0px', borderColor: 'rgb(111, 120, 114)', ...over });
+  it('FAILS a halo that paints nothing, or that was already there unfocused', () => {
+    const clear = 'rgba(0, 0, 0, 0) 0px 0px 0px 3px';
+    expect(ringProblems(field({ boxShadow: clear }), 'day', 'halo')).toHaveLength(1);
+    const halo = 'rgba(11, 122, 92, 0.24) 0px 0px 0px 3px';
+    expect(
+      ringProblems(field({ boxShadow: halo }), 'day', 'halo', {
+        unfocused: field({ boxShadow: halo }),
+      }),
+    ).toHaveLength(1);
+    expect(ringProblems(field({ boxShadow: halo }), 'day', 'halo', { unfocused: field() })).toEqual(
+      [],
+    );
+  });
+  it('the contrast material: a transparent halo passes only when the border changes, 3:1 on the surface', () => {
+    const clear = 'rgba(0, 0, 0, 0) 0px 0px 0px 3px';
+    const ctx = (border: string) => ({
+      unfocused: field({ boxShadow: 'none' }),
+      surface: 'rgb(255, 255, 255)',
+      focused: field({ boxShadow: clear, borderColor: border }),
+    });
+    // The finding's probe: transparent halo, border unchanged -> now a problem.
+    const same = ctx('rgb(111, 120, 114)');
+    expect(ringProblems(same.focused, 'contrast-day', 'halo', same)).toHaveLength(1);
+    // The border turns a dark accent: visible, and well over 3:1 on white.
+    const dark = ctx('rgb(16, 20, 18)');
+    expect(ringProblems(dark.focused, 'contrast-day', 'halo', dark)).toEqual([]);
+    // The border changes but to a pale colour: under 3:1 on white.
+    const pale = ctx('rgb(200, 230, 220)');
+    expect(ringProblems(pale.focused, 'contrast-day', 'halo', pale).join()).toMatch(/3:1/u);
+    // Unknown unfocused style: the change cannot be read, so it is not a pass.
+    expect(
+      ringProblems(dark.focused, 'contrast-day', 'halo', { surface: 'rgb(255, 255, 255)' }),
+    ).toHaveLength(1);
+  });
+});
+
+describe('a visible focus indicator (WCAG 2.4.7)', () => {
+  const style = (over: Partial<ComputedRing> = {}): ComputedRing => ({
+    outlineStyle: 'none',
+    outlineColor: 'rgb(0, 0, 0)',
+    outlineWidth: '0px',
+    outlineOffset: '0px',
+    boxShadow: 'none',
+    borderColor: 'rgb(200, 200, 200)',
+    ...over,
+  });
+  it('an outline with a colour counts; a transparent one does not', () => {
+    expect(
+      focusIndicatorProblems(style({ outlineStyle: 'solid', outlineWidth: '2px' }), style()),
+    ).toEqual([]);
+    expect(
+      focusIndicatorProblems(
+        style({ outlineStyle: 'solid', outlineWidth: '2px', outlineColor: 'rgba(0, 0, 0, 0)' }),
+        style(),
+      ),
+    ).toHaveLength(1);
+  });
+  it('a box-shadow counts only when it paints and is new on focus', () => {
+    const material = 'rgba(0, 0, 0, 0.12) 0px 8px 24px 0px';
+    // An always-on material shadow is not a focus indicator.
+    expect(
+      focusIndicatorProblems(style({ boxShadow: material }), style({ boxShadow: material })),
+    ).toHaveLength(1);
+    // A transparent shadow is not one either (the finding's probe value).
+    expect(
+      focusIndicatorProblems(style({ boxShadow: 'rgba(0, 0, 0, 0) 0px 0px 0px 3px' }), style()),
+    ).toHaveLength(1);
+    expect(
+      focusIndicatorProblems(
+        style({ boxShadow: `${material}, rgb(11, 122, 92) 0px 0px 0px 2px` }),
+        style({ boxShadow: material }),
+      ),
+    ).toEqual([]);
+  });
+  it('a border colour that changes on focus counts', () => {
+    expect(focusIndicatorProblems(style({ borderColor: 'rgb(11, 122, 92)' }), style())).toEqual([]);
+    expect(focusIndicatorProblems(style(), style())).toHaveLength(1);
   });
 });

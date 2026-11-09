@@ -13,6 +13,7 @@ import {
   visit,
   type NamedLook,
 } from './stage5-pages';
+import { coverageProblems, requiredLooks } from './stage5-visit';
 
 /**
  * PLAN 8.3-1: AXE-CORE ON EVERY ROUTE IN DARK, LIGHT, DAY GLASS AND NIGHT GLASS.
@@ -30,6 +31,10 @@ import {
  * Signed in, an `off` build skips (it is today's Classic; its Dark and
  * Light are measured in the glass builds, where the switch is offered);
  * signed out, it runs Dark and Light.
+ * Every look the build offers must have been measured (stage5-visit.ts
+ * coverageProblems): a route where axe ran in no look, or not in both glass
+ * looks on a glass build, FAILS; a page that answers a server error fails
+ * in visit() before any look.
  *
  * Lab command (from apps/web; the runner does this per role and per build):
  *   STAGE5_ROLE=manager PLAYWRIGHT_BASE_URL=http://127.0.0.1:3400 \
@@ -46,12 +51,14 @@ async function axeAll(
   route: string,
   looks: readonly NamedLook[],
   put: (look: NamedLook) => Promise<boolean>,
+  required: readonly string[],
 ): Promise<void> {
   const byLook = new Map<string, Finding[]>();
   for (const look of looks) {
     if (!(await put(look))) continue;
     byLook.set(look.label, findings(await runAxe(page)));
   }
+  expect(coverageProblems(route, byLook.keys(), required), `${route}: looks measured`).toEqual([]);
   const report: Record<string, Finding[]> = Object.fromEntries(byLook);
   await test.info().attach(`axe ${route}`, {
     body: JSON.stringify(report, null, 2),
@@ -100,11 +107,17 @@ test.describe('signed in', () => {
       if (!(await visit(page, route, null))) test.skip(true, `${route} does not open for ${role}.`);
       // An off build is today's Classic, untouched: its Dark and Light are measured in the glass builds.
       if (!(await glassBuild(page))) test.skip(true, 'This build does not offer Liquid Glass.');
-      await axeAll(page, route, FOUR_LOOKS, async (look) => {
-        await chooseLook(page, look);
-        await settle(page);
-        return true;
-      });
+      await axeAll(
+        page,
+        route,
+        FOUR_LOOKS,
+        async (look) => {
+          await chooseLook(page, look);
+          await settle(page);
+          return true;
+        },
+        requiredLooks(true),
+      );
     });
   }
 
@@ -113,13 +126,19 @@ test.describe('signed in', () => {
       test.skip(role === 'platform', "Records are an organisation member's.");
       const path = await firstRecordPath(page, detail);
       if (!path) test.skip(true, `No ${detail.what} for ${role}.`);
-      await visit(page, path!, null);
+      if (!(await visit(page, path!, null))) test.skip(true, `${path} does not open for ${role}.`);
       if (!(await glassBuild(page))) test.skip(true, 'This build does not offer Liquid Glass.');
-      await axeAll(page, path!, FOUR_LOOKS, async (look) => {
-        await chooseLook(page, look);
-        await settle(page);
-        return true;
-      });
+      await axeAll(
+        page,
+        path!,
+        FOUR_LOOKS,
+        async (look) => {
+          await chooseLook(page, look);
+          await settle(page);
+          return true;
+        },
+        requiredLooks(true),
+      );
     });
   }
 });
@@ -134,14 +153,20 @@ test.describe('customer portal', () => {
     baseURL,
   }) => {
     test.skip(role !== 'portal', 'Only the portal principal opens /portal.');
-    await visit(page, '/portal', null);
+    expect(await visit(page, '/portal', null), '/portal opens for the portal principal').toBe(true);
     const glass = await glassBuild(page);
     const looks = FOUR_LOOKS.filter((l) => glass || l.design === 'classic');
-    await axeAll(page, '/portal', looks, async (look) => {
-      // The portal has no dashboard header menu: the look arrives as a visitor's does.
-      await arriveSignedOut(page.context(), baseURL!, look);
-      return visit(page, '/portal', look);
-    });
+    await axeAll(
+      page,
+      '/portal',
+      looks,
+      async (look) => {
+        // The portal has no dashboard header menu: the look arrives as a visitor's does.
+        await arriveSignedOut(page.context(), baseURL!, look);
+        return visit(page, '/portal', look);
+      },
+      requiredLooks(glass),
+    );
   });
 });
 
@@ -156,18 +181,26 @@ test.describe('signed out', () => {
   for (const route of SIGNED_OUT_ROUTES) {
     test(`axe on ${route} in the four looks`, async ({ browser, baseURL }) => {
       const byLook = new Map<string, Finding[]>();
+      let glass = false;
       for (const look of FOUR_LOOKS) {
         const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
         try {
           await arriveSignedOut(context, baseURL!, look);
           const page = await context.newPage();
+          // A signed-out page opens for everyone: visit() fails the test on any error status.
           if (!(await visit(page, route, null))) continue;
-          if (look.design === 'liquid-glass' && !(await glassBuild(page))) continue;
+          const offered = await glassBuild(page);
+          glass ||= offered;
+          if (look.design === 'liquid-glass' && !offered) continue;
           byLook.set(look.label, findings(await runAxe(page)));
         } finally {
           await context.close();
         }
       }
+      expect(
+        coverageProblems(route, byLook.keys(), requiredLooks(glass)),
+        `${route}: looks measured`,
+      ).toEqual([]);
       await test.info().attach(`axe ${route}`, {
         body: JSON.stringify(Object.fromEntries(byLook), null, 2),
         contentType: 'application/json',

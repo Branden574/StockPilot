@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BOARD_TARGETS,
   boxProblems,
+  comparableLandmarks,
   exportTargets,
   selectorDrift,
   styleProblems,
@@ -109,6 +110,18 @@ describe('the exporter contract', () => {
     expect(selectorDrift(t, record)).toEqual([]);
     record.selectors.sidebar = 'nav';
     expect(selectorDrift(t, record)).toHaveLength(1);
+  });
+  it('names a target the board draws none of (the spec then skips instead of passing on nothing)', () => {
+    const selection = BOARD_TARGETS.find((t) => t.board === 'Items' && t.state === 'selection')!;
+    const items = BOARD_TARGETS.find((t) => t.board === 'Items' && !t.state)!;
+    for (const variant of ['contrast', 'reduced']) {
+      const record = file.boards.find((b) => b.board === 'Items' && b.variant === variant)!;
+      expect(record.missing).toContain('selection-bar');
+      // The selection target's only landmark is not on the board: nothing to compare.
+      expect(comparableLandmarks(selection, record)).toEqual([]);
+      // The default Items target still compares its drawn landmarks.
+      expect(comparableLandmarks(items, record).length).toBeGreaterThan(0);
+    }
   });
   it('holds boxes and styles only: no board text reaches the public repo', () => {
     for (const record of file.boards)
