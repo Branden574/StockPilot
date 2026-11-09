@@ -30,7 +30,11 @@ import { cn } from '@/lib/utils';
  *
  * The line below says where the choice is saved, and never claims the account
  * holds it unless the server said so; a failed save offers Try again (plan 3.4
- * rule 2). The profile page renders this only when the build has Liquid Glass.
+ * rule 2). It says nothing until the session is known (the provider's status
+ * is null on the server and while the page loads; L4 triage BF2), so a
+ * signed-in person is never told "Saved on this device.", the line for a
+ * person with no account. The profile page renders this only when the build
+ * has Liquid Glass.
  *
  * Under Liquid Glass (Routes-Gallery-2's Appearance panel, sp.css .choice,
  * .rb and .seg) the chosen Design takes the accent border, the selection wash

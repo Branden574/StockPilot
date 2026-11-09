@@ -85,8 +85,8 @@ export interface AppearanceFacts {
   shownStyle: AppearanceStyle;
   /** <html> carries data-appearance="liquid-glass", as the provider last wrote it after hydrate. */
   glassApplied: boolean;
-  /** Account sync, for the selector's status line. */
-  status: AppearanceSyncStatus;
+  /** Account sync, for the selector's status line; null until the session is known. */
+  status: AppearanceSyncStatus | null;
 }
 
 /** What only the provider's own pieces read (the variant guard, the intro notice). */

@@ -121,7 +121,7 @@ describe('the facts of the server render and of the first client render', () => 
       theme: undefined,
       shownStyle: 'liquid-glass',
       glassApplied: false,
-      status: 'signed-out',
+      status: null,
     });
   });
 
@@ -132,7 +132,7 @@ describe('the facts of the server render and of the first client render', () => 
       theme: undefined,
       shownStyle: 'classic',
       glassApplied: false,
-      status: 'signed-out',
+      status: null,
     });
   });
 
@@ -143,7 +143,7 @@ describe('the facts of the server render and of the first client render', () => 
       theme: undefined,
       shownStyle: 'classic',
       glassApplied: false,
-      status: 'signed-out',
+      status: null,
     });
   });
 });

@@ -116,6 +116,18 @@ import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-pai
  * where a page names its signed-in person (<AppearanceAccountSync>: the
  * dashboard shell and the portal).
  *
+ * SESSION KNOWN (L4 triage BF2). The reducer starts as 'signed-out', and a
+ * page names its signed-in person in an effect, so in the browser only and
+ * only after this device was read. Given out as it is, that first status put
+ * the no-account line ("Saved on this device.") into the server's HTML of
+ * Settings > Profile for every signed-in person. So the status the readers
+ * get is null (the line says nothing) until the session is known: a page
+ * named its person, or this provider's own mount effect ran, which React runs
+ * after the effects of everything below it in the same commit, the shell's
+ * naming included (the dashboard shell is in the layout, outside every
+ * Suspense boundary of the page). From then on a status of 'signed-out' is
+ * true: nobody was named.
+ *
  * KILL SWITCH (R5). Under `off` the provider is inert: no hydrate writes, no
  * account read or save, no cookie, and both attributes removed. Every stored
  * value is kept for when the flag comes back.
@@ -152,8 +164,12 @@ export interface AppearanceContextValue {
   chooseTheme: (theme: ThemeSetting) => void;
   /** The intro notice's "Keep Liquid Glass": the default becomes the person's choice. */
   keepGlass: () => void;
-  /** Account sync, for the selector's status line. */
-  status: AppearanceSyncStatus;
+  /**
+   * Account sync, for the selector's status line. Null until the session is
+   * known (SESSION KNOWN above): on the server, in the first client render
+   * and until the page had its chance to name its signed-in person.
+   */
+  status: AppearanceSyncStatus | null;
   /** Try the account save again. */
   retry: () => void;
   /**
@@ -304,7 +320,8 @@ export function initialAppearanceFacts(rollout: GlassRollout): AppearanceFacts {
     theme: undefined,
     shownStyle: inert ? 'classic' : defaultStyle(rollout),
     glassApplied: false,
-    status: inert ? 'signed-out' : INITIAL_APPEARANCE_STATE.status,
+    // The server never knows the session; under `off` nothing is ever saved.
+    status: null,
   };
 }
 
@@ -337,6 +354,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
   const appliedThemeRef = React.useRef<ThemeSetting | null>(null);
   /** The signed-in person's row was read (for the intro notice). */
   const accountReadRef = React.useRef<string | null>(null);
+  /** The session is known (SESSION KNOWN above): until then the status given out is null. */
+  const sessionKnownRef = React.useRef(false);
   // No React state here, on purpose: whatever this layer learns goes into the
   // two stores, never into a context value (ONE CONTEXT VALUE above).
   const [facts] = React.useState(() => createFactStore(initialAppearanceFacts(rollout)));
@@ -351,7 +370,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     facts.set({
       hydrated: isHydrated,
       style: stateRef.current.style,
-      status: stateRef.current.status,
+      status: sessionKnownRef.current ? stateRef.current.status : null,
       // next-themes' setting, known once this device was read.
       theme: isHydrated ? (parseThemeSetting(themeRef.current) ?? 'system') : undefined,
       shownStyle: isHydrated
@@ -592,6 +611,8 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       authenticate: (userId) => {
         if (inert || userIdRef.current === userId) return;
         userIdRef.current = userId;
+        // A page named its person: the session is known.
+        sessionKnownRef.current = true;
         setAccountRead(null);
         dispatch({ type: 'authenticated', userId, now: Date.now() });
       },
@@ -601,6 +622,14 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
   React.useEffect(() => {
     if (inert) return;
+
+    // Every effect below this provider in the mount commit has run, the
+    // shell's naming of its person included: if nobody was named, nobody is
+    // signed in as far as this page knows, and the status may say so.
+    if (!sessionKnownRef.current) {
+      sessionKnownRef.current = true;
+      publish();
+    }
 
     // The one-time notice after a glass crash (plan 5.6). The stored choice
     // is untouched unless the person picks Use classic design.
