@@ -759,6 +759,73 @@
         height: 36px;
       }
     }
+    /* ── The phone bar (Overview-Mobile; AppTopbar's .mob pieces), 760 px
+       and under: the menu button, the page title taking the room left, the
+       round search, then the round controls. The title (tb-title, a
+       glass-only line of words, components/dashboard/topbar.tsx) is the
+       current page's name in .h3 (16 / 22, 600, -0.01em), on one line with
+       an ellipsis. It is not drawn from 761 px, where the trail names the
+       page, nor where the trail itself is on screen on the phone: a bar of
+       520 px or more inside (the trail's own container query) holding the
+       trail (topbar-trail-fit.ts leaves it out when even the current name
+       does not fit). The trail's crumbs are links, so where they fit they
+       stay, and the title shows only where they do not. The search is the
+       round glass icon (the same Open command palette button classic shows
+       from a 400 px bar), shown at every phone width. The board's phone bar
+       draws no warehouse picker, no What's New and no account menu (it
+       keeps the account in the navigation sheet's foot, which here is not a
+       control); classic has them only in this bar, so they stay, and the
+       picker yields its words: a round glass button with the warehouse icon
+       alone, its full name still its accessible name and title
+       (warehouse-filter-picker.tsx), so the title has the room. ────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='tb-title'] {
+      display: none;
+    }
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass='tb-title'] {
+        display: block;
+        flex: 1 1 0;
+        min-width: 0;
+        overflow: hidden;
+        color: var(--lg-ink);
+        font-size: 16px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+        line-height: 22px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      @container (min-width: 520px) {
+        :root[data-appearance='liquid-glass']
+          [data-glass='topbar']:has(> [data-slot='topbar-trail'])
+          > [data-glass='tb-title'] {
+          display: none;
+        }
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-icon'][data-glass-variant='search'] {
+        display: grid;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='tb-btn'][data-glass-variant='warehouse'] {
+        justify-content: center;
+        width: 36px;
+        min-width: 36px;
+        height: 36px;
+        padding: 0;
+        gap: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='tb-btn'][data-glass-variant='warehouse']
+        > :not(svg:first-child) {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass='tb-btn'][data-glass-variant='warehouse']
+        > svg:first-child {
+        display: block;
+        width: 16px;
+        height: 16px;
+      }
+    }
     @media (pointer: coarse) {
       :root[data-appearance='liquid-glass'] [data-glass='tb-cap'] :is(a, button),
       :root[data-appearance='liquid-glass'] [data-glass='tb-icon'],

@@ -9,6 +9,7 @@ import { openKeyboardShortcutsOverlay } from '@/components/dashboard/keyboard-sh
 import { NotificationBell } from '@/components/dashboard/notification-bell';
 import { SidebarToggleButton } from '@/components/dashboard/sidebar-toggle-button';
 import type { Density } from '@/components/dashboard/sidebar-pref';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { WhatsNewButton } from '@/components/updates/whats-new-button';
@@ -94,6 +95,9 @@ export function Topbar({
   const measureRef = React.useRef<HTMLDivElement>(null);
   const fit = useTrailFit(headerRef, measureRef, crumbs.map((c) => c.label).join('\u0000'));
   const firstShown = fit === 'current' ? crumbs.length - 1 : 0;
+  // The glass phone bar's title (see tb-title below): the current page's name.
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const currentLabel = crumbs[crumbs.length - 1]?.label ?? null;
 
   // NO LINK IN THE BAR PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6). The bar is on
   // every dashboard page, so a default <Link> here costs a prefetch (two
@@ -223,6 +227,18 @@ export function Topbar({
           </ol>
         </nav>
       )}
+
+      {/* LIQUID GLASS ONLY: the phone bar's page title (Overview-Mobile,
+          AppTopbar .mob.h3): the current page's name, where the trail is not
+          on screen. Rendered only in a build that offers glass, and hidden
+          in Classic (styles/liquid-glass/visibility.css) and from 761 px
+          (shell.css), so Classic's bar is today's. Words only: the same name
+          the trail's last crumb carries, never a control. */}
+      {glassBuild && currentLabel ? (
+        <div data-glass-only="" data-glass="tb-title">
+          {currentLabel}
+        </div>
+      ) : null}
 
       {/* The whole trail's natural width, whichever step is drawn: a copy
           with the trail's type and spacing, out of the flow, invisible,

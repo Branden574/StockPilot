@@ -216,6 +216,8 @@ const CASES: Case[] = [
   ],
   ['items-grid', async () => render(itemsTable({ initialView: 'grid' })).container],
   ['books-table', async () => render(booksTable()).container],
+  // Stage 3 fidelity, small lane: the cover view's inert grid-card hooks.
+  ['books-grid', async () => render(booksTable({ initialView: 'grid' })).container],
   [
     'books-table-selected',
     async () => {

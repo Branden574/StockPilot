@@ -8,7 +8,8 @@
     "replaced below a width": "A glass-only element that glass shows only in windows maxWidth px wide or narrower, where it hides the classic elements listed in replaces; each goes to the same target (href) behind the same permission gate. At those widths the 8.5 check counts a replaced classic action as present in glass when a glass element of the same role goes to the same target, and at wider sizes it expects the classic elements as they are (the glass-only one is hidden there).",
     "hidden in a width band (target on screen)": "A classic control (not glass-only) that glass does not draw in windows from minWidth to maxWidth px wide, because what it reaches is already on screen there and the board draws no such control at those widths. The 8.5 check skips it in glass in that band only and expects it at every other width.",
     "moved block (no action)": "A stateless block (words only: no link, button or field) that glass draws in another place on the page (plan 4.6): this glass-only copy, while the classic block carries data-classic-only and is hidden in glass, so exactly one of the two is shown in either design and the page holds the block, and its heading, once. The 8.5 check has no action to pair; the classic proof drops the copy under default and it is not rendered under off.",
-    "public page link (no data action)": "A plain link, drawn by the board's frame, to one of the 7 public marketing pages (/contact, /security, ...), which every visitor may open: no data, no form, no permission gate, nothing the viewer could not reach in classic from the same route through the shell's StockPilot home link and the marketing pages' own navigation. classicTwin names that classic path; the 8.5 check counts the entry as navigation, never as a missing or extra action."
+    "public page link (no data action)": "A plain link, drawn by the board's frame, to one of the 7 public marketing pages (/contact, /security, ...), which every visitor may open: no data, no form, no permission gate, nothing the viewer could not reach in classic from the same route through the shell's StockPilot home link and the marketing pages' own navigation. classicTwin names that classic path; the 8.5 check counts the entry as navigation, never as a missing or extra action.",
+    "presentation control (no data action)": "A glass-only control that changes only how this viewer's glass page draws what it already loaded (which classic columns a glass table shows), kept in this browser; it reads and writes no data and has no permission gate. Classic always draws everything it chooses between, so it has no classic twin; the 8.5 check counts it as no data action. The elements it brings back are classic's own, in their classic place."
   },
   "entries": [
     {
@@ -71,6 +72,28 @@
       "$comment": "AppSidebar.dc.html's tinted .sb-cta (IMPLEMENTATION-PLAN.md 8.5 names it). A link to /dashboard/orders/new, the page the Orders list's own primary action opens (\"+ Place order\", app/(dashboard)/dashboard/orders/page.tsx); in classic the same page is reached from every dashboard route through the sidebar's Orders entry and that action. Shown, in the desktop sidebar and the phone navigation sheet alike, only when the viewer's nav shows the registry's Orders entry (the Orders module on and orders:request, packages/core/src/modules/registry.ts orders placement; /dashboard/orders/new redirects anyone else, orders/new/page.tsx:32-37) and the org's nav overrides have not hidden it; a custom link to the list never stands in for the permission (sidebar.place-order.test.tsx). Not rendered under the off rollout. The 8.5 check pairs it with classicTwin on /dashboard/orders and with the sidebar's Orders link on every other dashboard route, for the same role.",
       "classicTwin": "+ Place order (/dashboard/orders page header), reached through the sidebar's Orders link",
       "gate": "orders module on + orders:request (the sidebar's Orders entry)"
+    },
+    {
+      "id": "topbar-phone-title",
+      "source": "apps/web/src/components/dashboard/topbar.tsx",
+      "selector": "[data-glass=\"tb-title\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard", "/dashboard/**"],
+      "$comment": "Overview-Mobile / AppTopbar's phone title (.mob.h3): the current page's name, the same words as the trail's last crumb (topbar-crumbs.ts with the org's nav labels), drawn in the dashboard top bar in glass at 760 px and under where the trail is not on screen (shell.css). Words only, inside the bar Classic already has: no link, button or field. Not rendered under off; hidden in Classic by visibility.css.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "books-columns-chooser",
+      "source": "apps/web/src/components/books/books-glass-columns.tsx",
+      "selector": "[data-glass=\"books-columns\"]",
+      "role": "button",
+      "name": "Choose more columns",
+      "kind": "presentation control (no data action)",
+      "routes": ["/dashboard/books"],
+      "$comment": "Books.dc.html draws seven columns (Title, ISBN, Grade, Crate · rack, On hand, Available, Status); glass draws classic's Item, Grade, Rack, Crate, On hand and Status and leaves out Category, Charter, Location, Coverage, 14-day (with its qty / moves toggle) and Updated. This chooser, in the Books toolbar in the Table view only, brings any of the six back in its classic place (styles/liquid-glass/pages/items.css reads the table's inert data-glass-cols hook). The choice is kept in localStorage (sp-books-glass-columns). Not rendered under off; hidden in Classic by visibility.css.",
+      "classicTwin": null,
+      "gate": null
     },
     {
       "id": "orders-phone-cards",

@@ -21,6 +21,11 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import {
+  BooksGlassColumnsMenu,
+  booksGlassColumnsHook,
+  useBooksGlassColumns,
+} from '@/components/books/books-glass-columns';
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { CategoryLabel } from '@/components/inventory/category-label';
 import {
@@ -48,6 +53,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Thumb } from '@/components/patterns/thumb';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { usePerfUseful } from '@/components/perf/perf-useful';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import {
@@ -924,6 +930,12 @@ export function InventoryTable({
   // (the grid draws the same `styledRenderItems`); the cookie is written for
   // the next visit. It never reaches the URL.
   const [listView, setListView] = React.useState<InventoryView>(initialView);
+  // LIQUID GLASS ONLY: the Books table's column chooser (books-glass-columns.tsx).
+  // Glass draws the board's seven Books columns; the viewer can tick classic's
+  // other six back on. Read only by the glass CSS through the table's inert
+  // data-glass-cols hook; never rendered under the `off` rollout.
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const [booksGlassColumns, setBooksGlassColumns] = useBooksGlassColumns();
   const viewCookieName = inventoryViewCookieFor(basePath);
   const selectListView = React.useCallback(
     (next: InventoryView) => {
@@ -3112,6 +3124,10 @@ export function InventoryTable({
               itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
             />
           ) : null}
+
+          {glassBuild && showBookFields && listView !== 'grid' ? (
+            <BooksGlassColumnsMenu shown={booksGlassColumns} onChange={setBooksGlassColumns} />
+          ) : null}
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -3392,7 +3408,13 @@ export function InventoryTable({
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-[13.5px]" data-glass="items-table">
+            <table
+              className="w-full min-w-[900px] text-[13.5px]"
+              data-glass="items-table"
+              data-glass-cols={
+                glassBuild && showBookFields ? booksGlassColumnsHook(booksGlassColumns) : undefined
+              }
+            >
               <thead>
                 <tr className="border-border border-b">
                   <th className="w-10 py-2.5 pl-4 pr-0 text-left">

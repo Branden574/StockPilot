@@ -62,6 +62,32 @@
       [data-glass='items-list'] {
       gap: 14px;
     }
+    /* Books' header actions sit to the right of the title (.page-h: the
+       titles grow from a floor, the actions keep their row on the right,
+       both aligned to the foot). Classic's long subline made the title block
+       as wide as the row, which put the actions on a row of their own, at
+       the left. The floor is 240 px, not .page-h's 320: Books keeps six
+       classic controls where the board draws three, and with a 320 px floor
+       they would still take a row of their own at 1440; when they cannot
+       fit beside the title they wrap under it, on the right. From 761 px;
+       a phone keeps classic's stack (the board's phone .page-h starts its
+       rows at the left). */
+    @media (min-width: 761px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='books']
+        [data-glass='page-header']
+        > div:has(> [data-slot='page-header-actions'])
+        > :first-child {
+        flex: 1 1 240px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='books']
+        [data-glass='page-header']
+        [data-slot='page-header-actions'] {
+        justify-content: flex-end;
+        margin-left: auto;
+      }
+    }
 
     /* ── Views and toolbar (.toolbar): 8 px between controls ────────── */
     :root[data-appearance='liquid-glass']
@@ -228,6 +254,182 @@
       border-color: transparent;
       background-color: transparent;
       box-shadow: none;
+    }
+
+    /* ── Books cover view (Books.dc.html 64-72): the board's cover card,
+       not the Items grid card. The grid is auto-fill columns of at least
+       170 px with 16 px between them (about six to a row at 1440; a phone
+       keeps classic's two columns, 12 px apart). Each card is padding 12,
+       radius 18, 8 px between its parts: the cover across the card's full
+       width at 2:3 (the .cover look: spine corners 3 / 5, a paper shadow,
+       the photo cropped to fill: the inline object-fit: contain of the row
+       photo is overridden, hence !important), then the title on two lines,
+       the ISBN line (the record's SKU, mono, one line), and one row with
+       the grade on the left and the on-hand figure on the right. The
+       figure's "on hand" words stay for a screen reader (visually hidden),
+       as does the grade's "Grade" (the value is classic's "Gr 9").
+       What the board's card does not draw (the category and charter line,
+       the location, the placed / awaiting line, the rack, the crate and the
+       coverage bar) is not drawn here; every one of them is in the Table
+       view of the same page (Rack, Crate and the On hand notes always, the
+       others through its Columns chooser) and on the book's page. The
+       status pill, the size badge and the checkbox stay on the cover, and a
+       group card keeps its actions and its drill-down below. DOM order is
+       unchanged: the grade's row is placed beside the figure by the grid,
+       and neither is focusable. ───────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-slot='card-grid'] {
+      gap: 12px;
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='books']
+        [data-slot='inventory-grid']
+        [data-slot='card-grid'] {
+        grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+        gap: 16px;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-glass='grid-card'] {
+      gap: 8px;
+      padding: 12px;
+      border-radius: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-slot='grid-card-media'] {
+      aspect-ratio: 2 / 3;
+      border-bottom-width: 0;
+      border-radius: 3px 5px 5px 3px;
+      background-color: var(--lg-surface-3);
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-slot='grid-card-media']
+      img {
+      object-fit: cover !important;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-glass='grid-card-body'] {
+      gap: 8px;
+      padding: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-slot='grid-card-name'] {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-slot='grid-card-sku'] {
+      margin-top: 8px;
+      color: var(--lg-ink-3);
+      font-size: 11px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      :is(
+        [data-slot='grid-card-meta'],
+        [data-slot='grid-card-placement'],
+        [data-glass='grid-card-notes'],
+        [data-glass='grid-card-coverage'],
+        [data-glass-fact='Rack'],
+        [data-glass-fact='Crate']
+      ) {
+      display: none;
+    }
+    /* A record card: the grade (left) and the figure (right) on one row. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-card-kind='record']
+      [data-glass='grid-card-body'] {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      column-gap: 8px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-card-kind='record']
+      [data-glass='grid-card-titles'] {
+      grid-column: 1 / -1;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-card-kind='record']
+      [data-glass='grid-card-foot'] {
+      grid-row: 2;
+      grid-column: 1;
+      margin-top: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-card-kind='record']
+      [data-glass='grid-card-figures'] {
+      grid-row: 2;
+      grid-column: 2;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-slot='grid-card-quantity']
+      > span:first-child {
+      color: var(--lg-ink);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      :is([data-slot='grid-card-quantity'] > span:last-child, [data-glass-fact='Grade'] > dt) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-glass-fact='Grade']
+      > dd {
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-slot='inventory-grid']
+      [data-glass-fact='Grade']
+      > dd
+      .font-mono {
+      font-family: inherit;
     }
 
     /* ── The table (.dt): 14 px, a quiet 38 px header, 52 px rows ────── */
@@ -434,6 +636,104 @@
         [data-slot='thumb'] {
         width: calc(28px * 0.667);
       }
+    }
+    /* ── The Books table (Books.dc.html 36-52): the board's columns, one
+       line a row. Classic's Books table has 12 columns (inventory-table.tsx
+       TABLE_COLUMNS with showBookFields; every Books row kind draws them in
+       this order, after the select box: 1 the box, 2 Item, 3 Category,
+       4 Charter, 5 Location, 6 Grade, 7 Rack, 8 Crate, 9 On hand,
+       10 Coverage, 11 14-day, 12 Status, 13 Updated; pinned by
+       components/books/books-glass-columns.test.tsx). Glass draws the
+       board's Title (Item), Grade, the crate and rack (classic's Rack and
+       Crate, two cells), On hand and Status, and leaves out Category,
+       Charter, Location, Coverage, 14-day and Updated until the viewer ticks
+       them in the glass-only Columns chooser (books-glass-columns.tsx), which
+       writes them into the table's inert data-glass-cols hook; a ticked
+       column comes back in its classic place. The board's ISBN and
+       Available columns are not drawn: the list loads neither (the SKU line
+       under the title stays). ──────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']:not([data-glass-cols~='category'])
+      > *
+      > tr
+      > :nth-child(3),
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']:not([data-glass-cols~='charter'])
+      > *
+      > tr
+      > :nth-child(4),
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']:not([data-glass-cols~='location'])
+      > *
+      > tr
+      > :nth-child(5),
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']:not([data-glass-cols~='coverage'])
+      > *
+      > tr
+      > :nth-child(10),
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']:not([data-glass-cols~='trend'])
+      > *
+      > tr
+      > :nth-child(11),
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']:not([data-glass-cols~='updated'])
+      > *
+      > tr
+      > :nth-child(13) {
+      display: none;
+    }
+    /* One line a row: the title and the SKU end in an ellipsis (the whole
+       title stays the link's text and the book page's heading), the other
+       cells do not wrap (the On hand notes sit on one line under the
+       figure). The title's text column is a one-track grid, so the cell's
+       narrowest width ignores the title's length and the Item column gives
+       way before the others; the 4 px around the name keeps the link's focus
+       ring inside the clip. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      [data-slot='item-cell']
+      > :last-child {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      :is([data-slot='item-cell-name'], [data-slot='item-cell-sku']) {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      [data-slot='item-cell-name'] {
+      margin: -4px;
+      padding: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      > tbody
+      > tr
+      > :is(:nth-child(6), :nth-child(7), :nth-child(8), :nth-child(9), :nth-child(12)),
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='books']
+      [data-glass='items-table']
+      > tbody
+      > tr
+      > :is(:nth-child(6), :nth-child(7), :nth-child(8), :nth-child(9), :nth-child(12))
+      * {
+      white-space: nowrap;
     }
     /* The rack (.loc): a 24 px chip on the third surface, 12.5 / 600; a
        row still in Staging takes the warn wash (.loc.stg), an unplaced one
