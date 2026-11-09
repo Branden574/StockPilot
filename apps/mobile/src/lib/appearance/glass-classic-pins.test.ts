@@ -109,6 +109,13 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'app/item/new.tsx': '1869d65fdc462f700a7ba369fbc1874a61728d230f32e1ba59584455dd2a7806',
   'app/order/manage-items.tsx': 'b3ce102b118248db26bd598f835ecc7532a00e46e7dcaf16a0812d0cbf427e45',
   'app/scan-po/index.tsx': '30b004eb8c64674aca62d0e528f9156d8175bd96b85a657a40abb3c7c973ee0c',
+  // What's New, the scanner tip and the signature pad's frame (native-core).
+  'src/components/onboarding/whats-new.tsx':
+    '27fa3281710afedf24745193c45f92a0aaf450a89583ad002c8a1e7b98451c8e',
+  'src/components/scanner-tip.tsx':
+    '0c4a16e89035e02cf49b5016452e5ae4f68ad3459af016025464f9ce6c60f560',
+  'src/components/signature-pad-modal.tsx':
+    '21f544d9257e4afb823fe7fb80376c32107a4f44c7763cce0ac211a023abdb61',
 };
 
 function walk(dir: string, out: string[] = []): string[] {

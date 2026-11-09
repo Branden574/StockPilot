@@ -1245,7 +1245,14 @@ describe("signature pad (M-OR-02b): the device's mode around a capture surface t
   // its light page (about 1.05:1). Now the page follows the mode and the
   // modal sets the bar to match, run here for both modes.
   it('the page and the status bar follow the mode, and the bar reads on the page', () => {
-    expect(code).toContain('style={[styles.container, { backgroundColor: c.paper }]}');
+    expect(classicFlat(src, FILES.signature)).toContain(
+      flatNorm('style={[styles.container, { backgroundColor: c.paper }]}'),
+    );
+    // Liquid Glass draws the scene behind the frame: Day is light and Night
+    // is dark, so the same bar reads on it.
+    expect(code).toContain(
+      "style={[styles.container, { backgroundColor: lg ? 'transparent' : c.paper }]}",
+    );
     const bars = all.filter((n) => tagOf(n.el, sf) === 'StatusBar');
     expect(bars).toHaveLength(1);
     const expr = attrText(bars[0]!.el, 'style', sf)!;

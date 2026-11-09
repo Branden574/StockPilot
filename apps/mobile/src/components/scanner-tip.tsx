@@ -12,6 +12,10 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { glassRecipe } from '@/components/ui/glass/merge-styles';
+import { GLASS_DIALOG_RADIUS, glassTipShape } from '@/components/ui/glass/screens/overlays';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Modal } from '@/components/ui/modal';
 import { FONT, SHADOW, palette, space, type Palette } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -55,7 +59,14 @@ export function ScannerTip({
   onRequestClose: () => void;
 }) {
   const { mode } = useTheme();
-  const styles = TIP_STYLES[mode];
+  // Liquid Glass (inferred: an iOS card over the scanner): the glass scrim,
+  // the card on the overlay glass with the glass-strong fill at the dialog
+  // radius, its words and the demo in the glass palette and faces (the same
+  // recipe run on the glass palette); the same demo, words and button.
+  const lg = useGlass();
+  const styles = lg
+    ? glassRecipe(lg, makeStyles as (c: Palette) => ReturnType<typeof makeStyles>, glassTipShape)
+    : TIP_STYLES[mode];
   // Clear of the status bar and the home indicator when the card is taller
   // than the screen, and the same at both ends, so it is centred when it fits.
   const insets = useSafeAreaInsets();
@@ -176,6 +187,7 @@ export function ScannerTip({
             },
           ]}
         >
+          {lg ? <GlassSheetBackdrop radius={GLASS_DIALOG_RADIUS} /> : null}
           <Text style={styles.title}>Scans snap automatically</Text>
           <Text style={styles.body}>
             When the scanner sees a page it captures instantly. Want more control?

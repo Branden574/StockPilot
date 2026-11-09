@@ -42,6 +42,7 @@ const SHEETS: [string, number, number][] = [
   ['src/components/item-history-sheet.tsx', 1, 0],
   ['src/components/biometric-optin-sheet.tsx', 1, 0],
   ['src/components/workspace-switcher.tsx', 1, 0],
+  ['src/components/onboarding/whats-new.tsx', 1, 0],
 ];
 
 /** Source with comments stripped, one space per whitespace run. */
