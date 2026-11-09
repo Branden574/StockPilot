@@ -116,6 +116,8 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '0c4a16e89035e02cf49b5016452e5ae4f68ad3459af016025464f9ce6c60f560',
   'src/components/signature-pad-modal.tsx':
     '21f544d9257e4afb823fe7fb80376c32107a4f44c7763cce0ac211a023abdb61',
+  'src/components/count-select-bar.tsx':
+    '87b37fbb15959b696b5f3eac89e2d0ff1d56d0dd49d0802b9849a984c6777feb',
 };
 
 function walk(dir: string, out: string[] = []): string[] {
