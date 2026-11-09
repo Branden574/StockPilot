@@ -62,7 +62,9 @@ function variants(): Record<string, Tokens> {
     }
     const selectors = rule.selector.split(',').map((s) => s.trim());
     const decls: Tokens = {};
-    rule.walkDecls(/^--lg-/u, (d) => {
+    // The --lg- tokens, and the one classic semantic token this lane stacks
+    // text on (the history's unread wash, bg-success-wash/60).
+    rule.walkDecls(/^--(lg-|success-wash$)/u, (d) => {
       decls[d.prop] = d.value;
     });
     const put = (day: string, night: string) => {
@@ -125,6 +127,19 @@ const SEG_ON = { day: 'rgba(255, 255, 255, 0.9)', night: 'rgba(255, 255, 255, 0.
  *  ('accent-12': the menus' and the Status rows' hover, a color-mix with
  *  transparent) or a plain colour. */
 const colour = (t: Tokens, name: string, night = false): Rgba => {
+  if (name === 'success-wash-60') {
+    // An HSL triplet ("141.2 43.6% 92.4%"), drawn at 60% (bg-success-wash/60).
+    const [hue, sat, light] = (t['--success-wash'] ?? 'missing --success-wash')
+      .split(/\s+/u)
+      .map((x) => Number.parseFloat(x));
+    const sN = sat! / 100;
+    const lN = light! / 100;
+    const k = (n: number) => (n + hue! / 30) % 12;
+    const a = sN * Math.min(lN, 1 - lN);
+    const f = (n: number) =>
+      255 * (lN - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1))));
+    return [f(0), f(8), f(4), 0.6];
+  }
   if (name === 'accent-12') {
     const a = parse(t['--lg-accent'] ?? 'missing --lg-accent');
     return [a[0], a[1], a[2], a[3] * 0.12];
@@ -198,6 +213,19 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['alert tone dot (danger) on its wash', '--lg-danger', [...CARD, '--lg-danger-wash'], 3],
   ['alert tone dot (ok) on its wash', '--lg-ok', [...CARD, '--lg-ok-wash'], 3],
   ['member initials (white) on the slate disc', '#FFFFFF', [...CARD, '#4E6A8C'], 4.5],
+  ['member initials (white) on hue c1', '#FFFFFF', [...CARD, '#2F7A68'], 4.5],
+  ['member initials (white) on hue c2', '#FFFFFF', [...CARD, '#6A4FA0'], 4.5],
+  ['member initials (white) on hue c3', '#FFFFFF', [...CARD, '#A0543A'], 4.5],
+  ['member initials (white) on hue c4', '#FFFFFF', [...CARD, '#3D63A8'], 4.5],
+  ['member initials (white) on hue c5', '#FFFFFF', [...CARD, '#7A6A2E'], 4.5],
+  ['member initials (white) on hue c6', '#FFFFFF', [...CARD, '#8C3F6B'], 4.5],
+  ['history eyebrow (ink 3) on the pane', '--lg-ink-3', ['--lg-pane'], 4.5],
+  ['history title (ink) on the pane', '--lg-ink', ['--lg-pane'], 4.5],
+  ['history line (ink 2) on the pane', '--lg-ink-2', ['--lg-pane'], 4.5],
+  ['history time (ink 3) on the pane', '--lg-ink-3', ['--lg-pane'], 4.5],
+  ['unread title (ink) on the unread wash', '--lg-ink', ['--lg-pane', 'success-wash-60'], 4.5],
+  ['unread line (ink 2) on the unread wash', '--lg-ink-2', ['--lg-pane', 'success-wash-60'], 4.5],
+  ['unread time (ink 3) on the unread wash', '--lg-ink-3', ['--lg-pane', 'success-wash-60'], 4.5],
   // The reports hub (pages/reports.css, Reports.dc.html)
   ['feature eyebrow (accent text) on the card', '--lg-accent-text', CARD, 4.5],
   ['feature title (ink) on the card', '--lg-ink', CARD, 4.5],
@@ -264,15 +292,16 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['drawer close hovered (ink) on surface 3', '--lg-ink', [...OVERLAY, '--lg-surface-3'], 3],
   ['drawer terms (ink 3) in the reading well', '--lg-ink-3', READING, 4.5],
   ['drawer values (ink) in the reading well', '--lg-ink', READING, 4.5],
-  ['drawer table band (ink 3) on surface 2', '--lg-ink-3', [...READING, '--lg-surface-2'], 4.5],
+  ['drawer table band (ink 3) on card fill 2', '--lg-ink-3', [...READING, '--lg-card-fill-2'], 4.5],
   ['drawer order number (accent text) in the well', '--lg-accent-text', READING, 4.5],
   [
     'drawer order number (accent text) on a hovered row',
     '--lg-accent-text',
-    [...READING, '--lg-surface-2'],
+    [...READING, '--lg-card-hover'],
     4.5,
   ],
-  ['drawer row (ink) on a hovered row', '--lg-ink', [...READING, '--lg-surface-2'], 4.5],
+  ['drawer row (ink) on a hovered row', '--lg-ink', [...READING, '--lg-card-hover'], 4.5],
+  ['range day focus ring on the popover', '--lg-focus', MENU, 3],
   // The pages people open from a link (pages/links.css): cards on the scene
   ['link card title (ink) on the card', '--lg-ink', SCENE_CARD, 4.5],
   ['link card words (ink 2) on the card', '--lg-ink-2', SCENE_CARD, 4.5],
@@ -308,6 +337,11 @@ describe('stage 4 insights contrast, from the tokens (R11)', () => {
     expect(over(parse('rgba(0,0,0,.5)'), parse('#FFFFFF'))).toEqual([127.5, 127.5, 127.5, 1]);
     expect(parse('transparent')[3]).toBe(0);
     expect(colour({ '--lg-accent': '#0B7A5C' }, 'accent-12')[3]).toBeCloseTo(0.12, 5);
+    expect(colour({ '--success-wash': '0 0% 100%' }, 'success-wash-60')).toEqual([
+      255, 255, 255, 0.6,
+    ]);
+    const green = colour({ '--success-wash': '120 100% 25%' }, 'success-wash-60');
+    expect(green.map((c) => Math.round(c * 10) / 10)).toEqual([0, 127.5, 0, 0.6]);
   });
 
   it('reads all six token sets', () => {

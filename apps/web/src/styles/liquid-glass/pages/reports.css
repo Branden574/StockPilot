@@ -388,17 +388,27 @@
       line-height: 16px;
     }
     /* The fields (.input.select.fb-btn and .ctrl.search: 36 px, radius 10,
-       14 px, on the field frost, the board's input line). */
+       14 px, on the field frost, the board's input line). Below 640 px the
+       fields keep Classic's 44 px and 16 px (FILTER_CONTROL's max-sm:h-11
+       max-sm:text-base: a thumb-sized target, 44 px under coarse pointers
+       per Handoff-Specs 2.5.8, and no iOS zoom on focus). */
     :root[data-appearance='liquid-glass']
       [data-glass-page='insights'][data-glass-view='book-order-totals']
       [data-glass-role='bot-filters']
       :is(select, input:not([type='checkbox']):not([type='radio']), button[aria-haspopup]) {
-      height: 36px;
       border-color: var(--lg-input-line);
       border-radius: var(--lg-r-md);
       background-color: var(--lg-field-fill);
       color: var(--lg-ink);
-      font-size: 14px;
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+        [data-glass-role='bot-filters']
+        :is(select, input:not([type='checkbox']):not([type='radio']), button[aria-haspopup]) {
+        height: 36px;
+        font-size: 14px;
+      }
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='insights'][data-glass-view='book-order-totals']
@@ -626,8 +636,8 @@
       border-color: transparent;
       border-radius: 3px 5px 5px 3px;
       box-shadow:
-        0 1px 2px rgba(0, 0, 0, 0.16),
-        0 6px 14px -8px rgba(0, 0, 0, 0.4);
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
     }
     :root[data-appearance='liquid-glass']
       [data-glass-page='insights'][data-glass-view='book-order-totals']
@@ -783,14 +793,25 @@
       [data-glass-role='bot-date-range']
       [data-typed-date]
       > input {
-      height: 36px;
       padding: 0 12px;
       border-color: var(--lg-input-line);
       border-radius: var(--lg-r-md);
       background-color: var(--lg-field-fill);
       color: var(--lg-ink);
-      font-size: 14px;
       font-variant-numeric: tabular-nums;
+    }
+    /* Below 640 px the typed dates keep Classic's 44 px and 16 px (no iOS
+       zoom on focus). */
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']:has(
+          [data-glass-page='insights'][data-glass-view='book-order-totals']
+        )
+        [data-glass-role='bot-date-range']
+        [data-typed-date]
+        > input {
+        height: 36px;
+        font-size: 14px;
+      }
     }
     :root[data-appearance='liquid-glass']:has(
         [data-glass-page='insights'][data-glass-view='book-order-totals']
@@ -872,9 +893,23 @@
       )
       [data-glass-role='bot-date-range']
       [data-glass='calendar']
-      button[data-day][aria-current='date']:not([data-state='selected']) {
+      button[data-day][aria-current='date']:not([data-state='selected']):not(:focus-visible) {
       --tw-ring-color: transparent;
       box-shadow: inset 0 0 0 1.5px var(--lg-line-3);
+    }
+    /* Focus (sp.css :focus-visible): the outline ring in --lg-focus, 2 px
+       outside the day or arrow, so a focused today and a focused range end
+       (the accent fill, where Classic's ring-2 in the accent would vanish)
+       both show it. The popover is portalled, out of the page's own focus
+       rule. */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-date-range']
+      [data-glass='calendar']
+      button:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
     }
     :root[data-appearance='liquid-glass']:has(
         [data-glass-page='insights'][data-glass-view='book-order-totals']
@@ -973,13 +1008,24 @@
       > label {
       align-items: center;
       gap: 10px;
-      min-height: 36px;
       margin-inline: 0;
       padding: 6px 10px;
       border-radius: 9px;
       color: var(--lg-ink);
       font-size: 14px;
       line-height: 20px;
+    }
+    /* The board's 36 px rows from 640 px; below it Classic's 44 px rows
+       (max-sm:min-h-11) stay the thumb-sized targets. */
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']:has(
+          [data-glass-page='insights'][data-glass-view='book-order-totals']
+        )
+        [data-glass-role='bot-status-menu']
+        fieldset
+        > label {
+        min-height: 36px;
+      }
     }
     :root[data-appearance='liquid-glass']:has(
         [data-glass-page='insights'][data-glass-view='book-order-totals']
@@ -1042,12 +1088,16 @@
 
     /* The orders behind a total (Book-Order-Totals.dc.html .scrim.to-end
        and .drawer: 10 px from the window's right, top and bottom, 600 px
-       wide, every corner 24, the strong glass; the .dlg-h head 20 / 48 /
-       14 / 24 with the 20/26 title; the .dlg-b reading well 8 px in from
+       wide, every corner 24, the strong glass; the .dlg-h head 20 / 20 /
+       14 / 24 with the 20/26 title and the close (.btn-ghost.btn-icon.btn-sm:
+       30 px, radius 8) 12 px after it (the close is Classic's, placed on
+       the sheet at 20 / 20, so the head keeps 20 + 30 + 12 = 62 px on the
+       right); the .dlg-b reading well 8 px in from
        the sides on the field frost with the card line at radius 16, 18 px
        inside; the .kv lines with no box, the terms in ink 3; the .dt table
-       with the 38 px band (12 / 600 in ink 3, sentence case), 44 px rows on
-       hairlines, the order numbers in accent text). */
+       with the 38 px band (12 / 600 in ink 3, sentence case, on card fill 2
+       frosted 14 px: sp.css:985), 44 px rows on hairlines with the card
+       hover (sp.css:986), the order numbers in accent text). */
     :root[data-appearance='liquid-glass']:has(
         [data-glass-page='insights'][data-glass-view='book-order-totals']
       )
@@ -1076,11 +1126,11 @@
       )
       [data-glass-role='bot-orders-drawer']
       > button:last-child {
-      top: 16px;
-      right: 16px;
-      width: 32px;
-      height: 32px;
-      border-radius: 10px;
+      top: 20px;
+      right: 20px;
+      width: 30px;
+      height: 30px;
+      border-radius: var(--lg-r-sm);
       color: var(--lg-ink-2);
     }
     :root[data-appearance='liquid-glass']:has(
@@ -1095,7 +1145,7 @@
         [data-glass-page='insights'][data-glass-view='book-order-totals']
       )
       [data-glass-role='bot-drawer-head'] {
-      padding: 20px 48px 14px 24px;
+      padding: 20px 62px 14px 24px;
       border-bottom-width: 0;
     }
     :root[data-appearance='liquid-glass']:has(
@@ -1167,7 +1217,9 @@
       [data-glass-role='bot-drawer-table']
       thead {
       border-color: var(--lg-line);
-      background-color: var(--lg-surface-2);
+      background-color: var(--lg-card-fill-2);
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
       color: var(--lg-ink-3);
       font-size: 12px;
       line-height: 16px;
@@ -1178,6 +1230,7 @@
         [data-glass-page='insights'][data-glass-view='book-order-totals']
       )
       [data-glass-role='bot-drawer-table']
+      thead
       th {
       height: 38px;
       padding-block: 0;
@@ -1198,7 +1251,7 @@
       [data-glass-role='bot-drawer-table']
       tbody
       > tr:hover {
-      background-color: var(--lg-surface-2);
+      background-color: var(--lg-card-hover);
     }
     :root[data-appearance='liquid-glass']:has(
         [data-glass-page='insights'][data-glass-view='book-order-totals']
@@ -1208,6 +1261,28 @@
       a {
       color: var(--lg-accent-text);
       font-weight: 600;
+    }
+
+    /* Reduce Transparency and Increase Contrast: no frost on the drawer
+       table's band (sp.css:1017; the tokens are already opaque there). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']:has(
+          [data-glass-page='insights'][data-glass-view='book-order-totals']
+        )
+        [data-glass-role='bot-drawer-table']
+        thead {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']:has(
+        [data-glass-page='insights'][data-glass-view='book-order-totals']
+      )
+      [data-glass-role='bot-drawer-table']
+      thead {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
     }
 
     /* Phones (sp.css 760 px): the fields take the whole width. */
