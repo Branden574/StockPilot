@@ -7,6 +7,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_PAGE } from '@/components/ui/glass/screens/admin';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import {
@@ -47,6 +52,10 @@ import { useTheme } from '@/lib/use-theme';
  */
 export default function AppearanceScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: Routes-Gallery-2's Appearance panel as an iOS
+  // grouped list): the scene, the glass nav and large title, DESIGN and THEME
+  // as iOS headings over their grouped radio rows. Every choice stays.
+  const lg = useGlass();
   const router = useRouter();
   const appearance = useAppearance();
   const sync = syncLine(appearance.status);
@@ -58,9 +67,10 @@ export default function AppearanceScreen() {
   const checkedTheme = appearance.chosenTheme ?? 'system';
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -71,24 +81,31 @@ export default function AppearanceScreen() {
             minTap
           />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SETTINGS · APPEARANCE</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Appearance<Em>.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {lg ? null : <Eyebrow>SETTINGS · APPEARANCE</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Appearance{lg ? null : <Em>.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Settings</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
+        contentContainerStyle={
+          lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
+        }
         showsVerticalScrollIndicator={false}
       >
         {appearance.glassEnabled ? (
           <>
-            <View style={styles.section}>
-              <Eyebrow>DESIGN</Eyebrow>
+            <View style={lg ? GLASS_APPEARANCE_HEAD : styles.section}>
+              {lg ? <GlassHeading>Design</GlassHeading> : <Eyebrow>DESIGN</Eyebrow>}
             </View>
-            <Card padding={0} style={{ marginTop: 10 }}>
+            <Card padding={0} style={lg ? [GLASS_PAGE.group, { marginTop: 8 }] : { marginTop: 10 }}>
               <View accessibilityRole="radiogroup" accessibilityLabel="Design">
                 {DESIGN_OPTIONS.map((option, idx) => (
                   <React.Fragment key={option.style}>
@@ -105,14 +122,14 @@ export default function AppearanceScreen() {
               </View>
             </Card>
 
-            <View style={styles.section}>
-              <Eyebrow>THEME</Eyebrow>
+            <View style={lg ? GLASS_APPEARANCE_HEAD : styles.section}>
+              {lg ? <GlassHeading>Theme</GlassHeading> : <Eyebrow>THEME</Eyebrow>}
             </View>
-            <Card padding={0} style={{ marginTop: 10 }}>
+            <Card padding={0} style={lg ? [GLASS_PAGE.group, { marginTop: 8 }] : { marginTop: 10 }}>
               <View accessibilityRole="radiogroup" accessibilityLabel="Theme">
                 {THEME_OPTIONS.map((option, idx) => (
                   <React.Fragment key={option.theme}>
-                    {idx > 0 ? <Hair inset={14} /> : null}
+                    {idx > 0 ? <Hair inset={lg ? 16 : 14} /> : null}
                     <ChoiceRow
                       label={option.label}
                       detail={option.detail}
@@ -174,6 +191,7 @@ function ChoiceRow({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   const stacked = shouldStackRow(fontScale);
   return (
@@ -183,11 +201,15 @@ function ChoiceRow({
       accessibilityLabel={label}
       accessibilityHint={detail}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, { opacity: pressed ? 0.7 : 1 }]}
+      style={({ pressed }) =>
+        lg
+          ? [styles.row, GLASS_PAGE.row, { backgroundColor: pressed ? lg.ios.fill : 'transparent' }]
+          : [styles.row, { opacity: pressed ? 0.7 : 1 }]
+      }
     >
       {tile ?? null}
       <View style={styles.label}>
-        <Body size={15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
+        <Body size={lg ? 16 : 15.5} color={c.ink} style={{ fontFamily: FONT.display }}>
           {label}
         </Body>
         <Body size={13} color={c.ink3} style={{ marginTop: stacked ? 4 : 2 }}>
@@ -263,6 +285,9 @@ function TileFace({
     </View>
   );
 }
+
+/** Liquid Glass: a section's heading 22 under the part above it (.ios-scroll gap). */
+const GLASS_APPEARANCE_HEAD = { paddingTop: 22 } as const;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

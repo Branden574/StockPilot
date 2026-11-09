@@ -6,6 +6,13 @@ import { plainAddressMailtoUrl } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { glassRowSub } from '@/components/ui/glass/primitive-styles';
+import {
+  GLASS_BARE_CARD,
+  GlassJoinedRow,
+  GlassMonogram,
+} from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
@@ -37,6 +44,9 @@ const ROLE_PILL: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' 
 
 export default function TeamScreen() {
   const { orgId } = useOrg();
+  // Liquid Glass (inferred from Routes-Gallery-2's team rows): the members as
+  // one grouped surface, each a monogram, the name, the e-mail and the role.
+  const lg = useGlass();
   const [rows, setRows] = React.useState<MemberRow[]>([]);
   // The member list did not load: an error, not "No team yet.". Set by every
   // load that completes.
@@ -104,9 +114,13 @@ export default function TeamScreen() {
   return (
     <DataListScreen
       eyebrow={
-        loadFailed
-          ? 'TEAM'
-          : `TEAM · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
+        lg
+          ? loadFailed
+            ? 'Team'
+            : `${accepted} ${accepted === 1 ? 'member' : 'members'}${pending > 0 ? ` · ${pending} pending` : ''}`
+          : loadFailed
+            ? 'TEAM'
+            : `TEAM · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
       }
       title="Team"
       italic="& roles."
@@ -128,13 +142,22 @@ export default function TeamScreen() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(m, i) => m.user_id || `pending-${i}`}
-      renderItem={(m) => <MemberCard member={m} />}
+      renderItem={
+        lg
+          ? (m, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <MemberCard member={m} />
+              </GlassJoinedRow>
+            )
+          : (m) => <MemberCard member={m} />
+      }
     />
   );
 }
 
 function MemberCard({ member }: { member: MemberRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const pending = !member.accepted_at;
   const name = member.profile?.full_name ?? member.profile?.email ?? member.invited_email ?? 'Unnamed';
   const email = member.profile?.email ?? member.invited_email;
@@ -155,10 +178,19 @@ function MemberCard({ member }: { member: MemberRow }) {
     ROLE_PILL[member.role] ?? { label: member.role.toUpperCase(), status: 'default' as const };
 
   return (
-    <Card padding={14}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+    <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: lg ? 12 : 14 }}>
         {avatar ? (
-          <Image source={{ uri: avatar }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+          <Image
+            source={{ uri: avatar }}
+            style={
+              lg
+                ? { width: 36, height: 36, borderRadius: 18 }
+                : { width: 40, height: 40, borderRadius: 20 }
+            }
+          />
+        ) : lg ? (
+          <GlassMonogram initials={initials || '··'} name={name} />
         ) : (
           <View
             style={{
@@ -202,8 +234,13 @@ function MemberCard({ member }: { member: MemberRow }) {
                 opacity: pressed ? 0.7 : 1,
               })}
             >
-              <Mail size={11} color={c.ink3} strokeWidth={1.5} />
-              <Mono size={11.5} tracking={0.04} color={c.ink3}>
+              <Mail size={lg ? 13 : 11} color={c.ink3} strokeWidth={lg ? 1.8 : 1.5} />
+              <Mono
+                size={11.5}
+                tracking={0.04}
+                color={c.ink3}
+                style={lg ? glassRowSub(lg) : undefined}
+              >
                 {email}
               </Mono>
             </Pressable>
@@ -211,7 +248,12 @@ function MemberCard({ member }: { member: MemberRow }) {
             // Not one plain address: the same words in the same place, with
             // no touchable and no Mail glyph, so nothing offers to open Mail.
             <View style={{ marginTop: 3 }}>
-              <Mono size={11.5} tracking={0.04} color={c.ink3}>
+              <Mono
+                size={11.5}
+                tracking={0.04}
+                color={c.ink3}
+                style={lg ? glassRowSub(lg) : undefined}
+              >
                 {email}
               </Mono>
             </View>

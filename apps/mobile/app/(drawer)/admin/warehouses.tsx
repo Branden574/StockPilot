@@ -4,6 +4,8 @@ import { View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
@@ -34,6 +36,9 @@ const NO_ROWS: WarehouseRow[] = [];
  * charter only because that read failed).
  */
 export default function WarehousesAdmin() {
+  // Liquid Glass (inferred: the iOS grouped list): the rows as one grouped
+  // surface of iOS rows; every row, state and message Classic has stays.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   // The rows on screen and the workspace they were read for: a failed read
@@ -156,7 +161,7 @@ export default function WarehousesAdmin() {
   if (!roleLoading && !isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · WAREHOUSES"
+        eyebrow={lg ? 'Admin · Warehouses' : 'ADMIN · WAREHOUSES'}
         title="Restricted"
         italic="access."
         emptyIcon={Warehouse}
@@ -173,9 +178,13 @@ export default function WarehousesAdmin() {
   return (
     <DataListScreen
       eyebrow={
-        failed === 'list' && rows.length === 0
-          ? 'ADMIN · WAREHOUSES'
-          : `ADMIN · ${rows.length} WAREHOUSES`
+        lg
+          ? failed === 'list' && rows.length === 0
+            ? 'Admin · Warehouses'
+            : `Admin · ${rows.length} ${rows.length === 1 ? 'warehouse' : 'warehouses'}`
+          : failed === 'list' && rows.length === 0
+            ? 'ADMIN · WAREHOUSES'
+            : `ADMIN · ${rows.length} WAREHOUSES`
       }
       title="Warehouses"
       italic="."
@@ -199,15 +208,24 @@ export default function WarehousesAdmin() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(w) => w.id}
-      renderItem={(w) => <WarehouseCard wh={w} />}
+      renderItem={
+        lg
+          ? (w, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <WarehouseCard wh={w} />
+              </GlassJoinedRow>
+            )
+          : (w) => <WarehouseCard wh={w} />
+      }
     />
   );
 }
 
 function WarehouseCard({ wh }: { wh: WarehouseRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
-    <Card padding={14}>
+    <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono size={9.5} tracking={0.18} upper color={c.ink3}>

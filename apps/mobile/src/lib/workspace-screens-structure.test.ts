@@ -698,8 +698,20 @@ describe('AI chat: one session per chat, a sentence for every failure, New chat'
     expect(attrText(chip, 'onPress', sf)).toBe('startNewChat');
     expect(attrText(chip, 'accessibilityLabel', sf)).toBe('New chat');
     expect(attrText(chip, 'minTap', sf)).toBe('true');
-    // In the top bar, opposite Back, where the 44pt spacer was.
-    expect(els[0]!.ancestors.map((a) => attrText(a, 'style', sf))).toContain('styles.topbar');
+    // In the top bar, opposite Back, where the 44pt spacer was: Classic's
+    // projection (lib/__fixtures__/classic-projection.ts) keeps it in
+    // styles.topbar; Liquid Glass draws that same bar as the glass nav.
+    const classicSf = parseTsx(printClassic(sourceOf(CHAT), CHAT), CHAT);
+    const classicChips: JsxNode[][] = [];
+    walkJsx(classicSf, (el, ancestors) => {
+      if (tagOf(el, classicSf) === 'IconChip' && attrText(el, 'icon', classicSf) === 'Plus')
+        classicChips.push([...ancestors]);
+    });
+    expect(classicChips).toHaveLength(1);
+    expect(classicChips[0]!.map((a) => attrText(a, 'style', classicSf))).toContain('styles.topbar');
+    expect(els[0]!.ancestors.map((a) => attrText(a, 'style', sf))).toContain(
+      'lg ? GLASS_LIST.nav : styles.topbar',
+    );
     let node: ts.Node | undefined = chip;
     while (node && !ts.isConditionalExpression(node)) node = node.parent;
     expect(node, 'the chip is shown under a condition').toBeDefined();
@@ -935,8 +947,15 @@ describe('Notifications (M-WS-06)', () => {
   });
 
   it('unread is the accent wash with an accent edge, per mode', () => {
-    expect(code).toContain(
-      'style={unread ? { backgroundColor: c.accentWash, borderColor: c.accent } : undefined}',
+    // Classic's text, read from its projection (lib/__fixtures__/classic-projection.ts).
+    expect(classicFlat(sourceOf(NOTIFICATIONS), NOTIFICATIONS)).toContain(
+      flatNorm(
+        'style={unread ? { backgroundColor: c.accentWash, borderColor: c.accent } : undefined}',
+      ),
+    );
+    // Liquid Glass: unread on the selection fill of the grouped surface.
+    expect(code.replace(/\s+/g, ' ')).toContain(
+      'lg ? unread ? [GLASS_BARE_CARD, { backgroundColor: lg.g.selFill }] : GLASS_BARE_CARD',
     );
     expect(code).toContain("backgroundColor: unread ? c.accent : 'transparent',");
   });
@@ -1010,8 +1029,14 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     expect(code).toContain('const mailto = plainAddressMailtoUrl(email);');
     expect(code).not.toMatch(/`mailto:\$\{/);
     expect(code).toMatch(/\{email && mailto \? \( <Pressable onPress=\{\(\) => Linking\.openURL\(mailto\)/);
+    expect(classicFlat(sourceOf(TEAM), TEAM)).toContain(
+      flatNorm(
+        ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}',
+      ),
+    );
+    // Liquid Glass: the same words in the same frame, still no touchable.
     expect(code).toContain(
-      ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}',
+      ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined} > {email} </Mono> </View> ) : null}',
     );
   });
 

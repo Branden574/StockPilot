@@ -55,6 +55,8 @@ const SHEETS: [string, number, number][] = [
   ['src/components/book-order-filters-sheet.tsx', 1, 0],
   ['src/components/book-order-export-sheet.tsx', 1, 0],
   // ---- end native-ops lane ----
+  // Stage 4, native-admin lane: the role picker on Users.
+  ['app/(drawer)/admin/users.tsx', 1, 0],
 ];
 
 /** Source with comments stripped, one space per whitespace run. */
