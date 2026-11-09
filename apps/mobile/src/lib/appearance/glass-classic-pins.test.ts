@@ -88,6 +88,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     'd422de3d6bfdeb7990290349cfde176b8f17228707476a98686197816b95bcc1',
   'src/components/mfa-challenge-screen.tsx':
     '636e013c36904f03910de06311115558d58471d4d4e77acb75cc07ecce34b49c',
+  // The Books and Counts tabs (native-core).
+  'app/(drawer)/(tabs)/books.tsx':
+    '19ccb3b83458d0c9fcbc9400c13050eb870f595888a6a07f7525438ac712c46c',
+  'app/(drawer)/(tabs)/cycle-counts.tsx':
+    '1c00180e509cd5ea6b3d6584451599ad9f3efb178bd4805a6a8d10f1b887c412',
 };
 
 function walk(dir: string, out: string[] = []): string[] {

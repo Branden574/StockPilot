@@ -41,6 +41,11 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { glassSearchBox, glassSearchInput } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { StockBar } from '@/components/ui/stock-bar';
@@ -170,6 +175,12 @@ export default function CycleCounts() {
   const router = useRouter();
   const navigation = useNavigation();
   const { c } = useTheme();
+  // Liquid Glass (inferred: the Cycle-Counts board's content as an iOS
+  // grouped list, in the shared list frame's shapes): the scene, the glass
+  // nav, the large title with the status line under it, the iOS search, and
+  // the count cards on the grouped glass surface; every figure, filter, state
+  // and the Start a count choices stay.
+  const lg = useGlass();
   const tabBarHeight = useBottomTabBarHeight();
   const sync = useSyncStatus();
   // Live scale (re-renders when the user changes Larger Text mid-session);
@@ -463,8 +474,14 @@ export default function CycleCounts() {
       <View style={styles.searchWrap}>
         {/* The shared input look: the card fill and the stronger border, the
             muted-ink icon and placeholder (ink4 held the placeholder under AA). */}
-        <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
-          <Search size={16} color={c.ink3} strokeWidth={1.4} />
+        <View
+          style={[
+            styles.searchBox,
+            { backgroundColor: c.card, borderColor: c.hair2 },
+            lg && glassSearchBox(lg),
+          ]}
+        >
+          <Search size={lg ? 20 : 16} color={c.ink3} strokeWidth={lg ? 1.8 : 1.4} />
           <TextInput
             value={draftQ}
             onChangeText={setDraftQ}
@@ -476,7 +493,11 @@ export default function CycleCounts() {
             autoCorrect={false}
             returnKeyType="search"
             maxLength={CYCLE_COUNT_SEARCH_MAX_LENGTH}
-            style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
+            style={[
+              styles.searchInput,
+              { color: c.ink, fontFamily: FONT.displayRegular },
+              lg && glassSearchInput(lg),
+            ]}
           />
           {busy && !refreshing ? <ActivityIndicator size="small" color={c.ink3} /> : null}
           {draftQ ? (
@@ -600,10 +621,15 @@ export default function CycleCounts() {
     ) : null;
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
+          <View
+            style={
+              lg ? GLASS_LIST.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
@@ -632,17 +658,33 @@ export default function CycleCounts() {
             />
           ) : null}
         </View>
-        <View style={styles.head}>
-          <Eyebrow>
-            {offline
-              ? downloaded
-                ? `OFFLINE · ${downloaded.length} DOWNLOADED`
-                : 'OFFLINE'
-              : `${inProgressText} IN PROGRESS`}
-          </Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Cycle <Em>counts.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : (
+            <Eyebrow>
+              {offline
+                ? downloaded
+                  ? `OFFLINE · ${downloaded.length} DOWNLOADED`
+                  : 'OFFLINE'
+                : `${inProgressText} IN PROGRESS`}
+            </Eyebrow>
+          )}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Cycle {lg ? 'counts' : <Em>counts.</Em>}
           </Display>
+          {lg ? (
+            <GlassSubline style={GLASS_LIST.sub}>
+              {offline
+                ? downloaded
+                  ? `OFFLINE · ${downloaded.length} DOWNLOADED`
+                  : 'OFFLINE'
+                : `${inProgressText} IN PROGRESS`}
+            </GlassSubline>
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -655,8 +697,12 @@ export default function CycleCounts() {
           keyExtractor={(r) => r.id}
           keyboardShouldPersistTaps="handled"
           ListHeaderComponent={header}
-          ListHeaderComponentStyle={{ marginHorizontal: -20 }}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: tabBarHeight + 24, gap: 10 }}
+          ListHeaderComponentStyle={{ marginHorizontal: lg ? -16 : -20 }}
+          contentContainerStyle={{
+            paddingHorizontal: lg ? 16 : 20,
+            paddingBottom: tabBarHeight + 24,
+            gap: 10,
+          }}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
           ListEmptyComponent={empty}
           ListFooterComponent={footer}
