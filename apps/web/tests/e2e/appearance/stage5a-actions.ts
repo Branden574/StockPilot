@@ -14,8 +14,9 @@
  *    action", a "public page link", a "presentation control", a "disclosure"
  *    button, an "appearance control") is allowed on the entry's routes and
  *    widths; for a "duplicate action" and a "public page link" its classic
- *    twin must be there in Classic for this same user (TWIN_RULES), else the
- *    glass action is reported: the twin missing for this role;
+ *    twin must be there in Classic for this same user and the glass action
+ *    must go where that twin goes (TWIN_RULES), else the glass action is
+ *    reported: the twin missing for this role, or a wrong target;
  *  - a classic action glass lacks is allowed only where an entry says glass
  *    replaces it: "replaced below a width" (a glass action of the same role
  *    goes to the same target), "moved into a menu below a width" (the menu,
@@ -129,31 +130,61 @@ export const REPLACED_NAME_PATTERNS: Record<string, RegExp> = {
 /**
  * The classic twin of a glass-only duplicate, as something the Classic
  * inventory of the same user on the same route must hold (plan 8.5: "an
- * allowlisted one whose classic twin is missing for that role" fails).
+ * allowlisted one whose classic twin is missing for that role" fails), and
+ * `target`, the path the glass action itself must go to: the page its twin
+ * opens (plan 8.5: a duplicate "goes where the existing New order entry
+ * goes", a link "links where the existing public contact link goes"). The
+ * allowlist names these targets in its comments and selectors, not in an
+ * href field, so they are written here; a unit test holds each one to the
+ * href its entry's selector names, where the selector names one.
  */
 export const TWIN_RULES: Record<
   string,
-  { needs: string; holds(classic: ParsedAction[]): boolean }
+  { needs: string; target: string; holds(classic: ParsedAction[]): boolean }
 > = {
   'sidebar-place-an-order': {
     needs: 'the sidebar’s Orders link (/dashboard/orders), behind the same gate',
+    // The Orders list's own "+ Place order" (orders/page.tsx).
+    target: '/dashboard/orders/new',
     holds: (classic) =>
       classic.some((a) => a.role === 'link' && targetPath(a.target) === '/dashboard/orders'),
   },
   'auth-contact-the-team': {
     needs: 'the StockPilot home link (/)',
+    target: '/contact',
     holds: (classic) => classic.some((a) => a.role === 'link' && targetPath(a.target) === '/'),
   },
   'auth-help-security': {
     needs: 'the StockPilot home link (/)',
+    target: '/security',
     holds: (classic) => classic.some((a) => a.role === 'link' && targetPath(a.target) === '/'),
   },
   'item-book-order-totals': {
     needs: 'the sidebar’s Reports link (/dashboard/reports)',
+    // The Reports list's Book Order Totals card.
+    target: '/dashboard/reports/book-order-totals',
     holds: (classic) =>
       classic.some((a) => a.role === 'link' && targetPath(a.target) === '/dashboard/reports'),
   },
 };
+
+/**
+ * A target on this site: a relative path, or an absolute URL on the page's
+ * own origin (actionsOf keeps the href as written). Another origin is never
+ * a twin's target, whatever its path.
+ */
+function sameSitePath(target: string | null, origin: string | undefined): string | null {
+  if (target === null) return null;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(target) || target.startsWith('//')) {
+    try {
+      const url = new URL(target);
+      return origin && url.origin === origin ? url.pathname : null;
+    } catch {
+      return null;
+    }
+  }
+  return targetPath(target);
+}
 
 /** The kinds whose glass action needs its classic twin in Classic. */
 const TWIN_KINDS = new Set(['duplicate action', 'public page link (no data action)']);
@@ -170,6 +201,8 @@ const SELECTOR_ONLY_ACTIONS: Record<string, { role: string; name: RegExp }[]> = 
 export interface Situation {
   /** The concrete pathname of the page compared. */
   path: string;
+  /** The page's origin, so an absolute link to this same site reads as its path. */
+  origin?: string;
   /** The window's width in CSS px. */
   width: number;
 }
@@ -263,6 +296,13 @@ export function compareInventories(
       const rule = TWIN_RULES[entry.id];
       if (!rule) {
         extraInGlass.push(`${action.raw} (allowlist ${entry.id}: no twin rule to check)`);
+        continue;
+      }
+      const goesTo = sameSitePath(action.target, at.origin);
+      if (goesTo !== rule.target) {
+        extraInGlass.push(
+          `${action.raw} (allowlist ${entry.id}: goes to ${action.target ?? 'nowhere'}, not to ${rule.target}, where its classic twin goes)`,
+        );
         continue;
       }
       if (!rule.holds(classic)) {

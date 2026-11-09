@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 
 import allowlistJson from './glass-only-allowlist.json';
 import { chooseLook, glassBuild, settle, settleIntroNotice, START, type Look } from './look';
+import { openFirstOrder } from './orders-look';
 import { actionsOf } from './ops-aria-actions';
 import {
   arriveWith,
@@ -11,7 +12,7 @@ import {
   skipLandingIntro,
   waitForTwin,
 } from './site-look';
-import { stage5Role } from './stage5a-lib';
+import { labSql, labUser, stage5Role } from './stage5a-lib';
 import {
   compareInventories,
   disclosuresToPress,
@@ -26,10 +27,13 @@ import {
  * admin-actions.spec.ts: settings, admin and the platform console):
  * items and books (lists and record pages), the orders lane (Orders, Place
  * an order, an order, Manage order items), the insights lane (Reports, Book
- * Order Totals, a report, Team, Notifications, Help), the shell (Overview
- * with the sidebar, top bar and bell, and the account menu, the command
- * palette and the organisation switcher opened), the signed-out site and
- * auth pages, and the customer portal; per role: the run is repeated with
+ * Order Totals, a report, Team, Notifications, Help), the digital pick, the
+ * shell (Overview with the sidebar, top bar and bell, and the account menu,
+ * the command palette and the organisation switcher opened), the signed-out
+ * site and every auth page (/signin/mfa through the lab MFA user), the
+ * external pages (/m, /r, /r/track, /r/confirm, /orders/sign,
+ * /returns/request, /invite; the lab tokens below), /onboarding (a lab user
+ * in no organisation) and the customer portal with /p/items; per role: the run is repeated with
  * STAGE5_ROLE = admin, manager, staff, viewer, platform and portal (each
  * its storageState, .auth/stage5-<role>.json), and the signed-out run.
  *
@@ -48,7 +52,13 @@ import {
  *   cd apps/web && PLAYWRIGHT_BASE_URL=http://127.0.0.1:<port> STAGE5_ROLE=<role> \
  *     pnpm exec playwright test -c playwright.stage5.config.ts tests/e2e/appearance/action-inventory.spec.ts
  * (the 390 project of the config repeats it at phone width). A route the
- * role cannot open, or with no record, skips with its reason.
+ * role cannot open, or with no record, skips with its reason; an external
+ * page with no record to open skips as a named GAP (annotation type "gap").
+ * The signed-out run takes, where the runner has them (fictional lab
+ * values): STAGE5_MFA_EMAIL/PASSWORD (/signin/mfa), STAGE5_TOKEN_MAINTENANCE_SHARE,
+ * STAGE5_TOKEN_REQUEST_LINK, STAGE5_TOKEN_SIGNATURE, STAGE5_TOKEN_RETURN,
+ * STAGE5_TOKEN_INVITE or STAGE5_LAB_DB_URL (an open invite), and
+ * STAGE5_NOORG_EMAIL/PASSWORD (/onboarding).
  */
 
 const ALLOWLIST = allowlistJson as unknown as Allowlist;
@@ -121,7 +131,13 @@ async function comparePage(page: Page, choose: (look: Look) => Promise<void>): P
     const glass = await inventoryOf(page.locator('body'));
     const menus = await menuItems(page, path);
     report(
-      compareInventories(classic, glass, ALLOWLIST, { path, width: width(page) }, menus),
+      compareInventories(
+        classic,
+        glass,
+        ALLOWLIST,
+        { path, width: width(page), origin: new URL(page.url()).origin },
+        menus,
+      ),
       `${path} (${process.env.STAGE5_ROLE ?? 'signed out'}, ${width(page)} px, ${look.design} ${look.theme})`,
     );
   }
@@ -198,6 +214,20 @@ test.describe('signed in: the items, orders and insights lanes and the shell', (
     });
   }
 
+  test('The digital pick of the first order in picking: the same actions in Classic and in Liquid Glass', async ({
+    page,
+  }) => {
+    if (!(await openFirstOrder(page, 'picking')))
+      test.skip(true, 'No order in picking for this role.');
+    const open = page.getByRole('link', { name: 'Open digital pick' });
+    if (!(await open.isVisible().catch(() => false)))
+      test.skip(true, 'This role is not offered the digital pick on that order.');
+    await open.click();
+    await expect(page.locator('[data-glass-page="order-pick"]')).toBeVisible();
+    await dashboardReady(page);
+    await comparePage(page, (look) => chooseLook(page, look));
+  });
+
   const OVERLAYS: Array<{ name: string; open(page: Page): Promise<Locator | null> }> = [
     {
       name: 'the account menu',
@@ -258,6 +288,7 @@ test.describe('signed in: the items, orders and insights lanes and the shell', (
           compareInventories(classic!, glass ?? [], ALLOWLIST, {
             path: '/dashboard',
             width: width(page),
+            origin: new URL(page.url()).origin,
           }),
           `${overlay.name} (${process.env.STAGE5_ROLE}, ${look.design} ${look.theme})`,
         );
@@ -273,7 +304,16 @@ test.describe('signed out: the site and the auth pages', () => {
     test.skip(stage5Role() !== null, 'Runs in the signed-out run.');
   });
 
-  for (const path of [...MARKETING_PATHS, '/signin', '/signup', '/reset']) {
+  for (const path of [
+    ...MARKETING_PATHS,
+    '/signin',
+    '/signup',
+    '/reset',
+    // Both render without a session: the form that takes the recovery link's
+    // session, and the notice a disabled account is sent to.
+    '/reset/complete',
+    '/account-disabled',
+  ]) {
     test(`${path}: the same actions in Classic and in Liquid Glass`, async ({
       page,
       baseURL,
@@ -292,6 +332,205 @@ test.describe('signed out: the site and the auth pages', () => {
       });
     });
   }
+});
+
+/**
+ * A page this run cannot reach: named as a GAP (an annotation and the skip
+ * reason both say it), never left out of the list in silence.
+ */
+function gap(what: string): never {
+  test.info().annotations.push({ type: 'gap', description: what });
+  test.skip(true, `GAP: ${what}`);
+  throw new Error('unreachable');
+}
+
+/** Types an email and password into /signin and submits (no two-step answer). */
+async function typePassword(page: Page, email: string, password: string): Promise<void> {
+  await page.getByLabel(/email/iu).fill(email);
+  await page.getByLabel('Password', { exact: true }).fill(password);
+  await page.getByRole('button', { name: /sign in/iu }).click();
+}
+
+/**
+ * Compares a signed-out page as it is now. Looks are chosen with the page's
+ * own header menu where Classic shows one; an external page whose only
+ * menu is the glass-only corner (hidden in Classic) is switched from a
+ * second tab on /signin, and the page follows it (the device record is
+ * shared), as the portal case does.
+ */
+async function compareSignedOutPage(page: Page): Promise<void> {
+  const own = await page
+    .locator('#theme-toggle-trigger')
+    .first()
+    .isVisible()
+    .catch(() => false);
+  if (own) {
+    await comparePage(page, (look) => chooseSiteLook(page, look));
+    return;
+  }
+  const remote = await page.context().newPage();
+  await remote.goto('/signin');
+  await comparePage(page, async (look) => {
+    await chooseSiteLook(remote, look);
+    await page.waitForFunction(
+      ({ glass, dark }) =>
+        (document.documentElement.getAttribute('data-appearance') === 'liquid-glass') === glass &&
+        document.documentElement.classList.contains('dark') === dark,
+      { glass: look.design === 'liquid-glass', dark: look.theme === 'dark' },
+    );
+  });
+  await remote.close();
+}
+
+test.describe('signed out: two-step sign-in', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  test.beforeEach(() => {
+    test.skip(stage5Role() !== null, 'Runs in the signed-out run.');
+  });
+
+  test('/signin/mfa (the lab MFA user, password typed): the same actions in Classic and in Liquid Glass', async ({
+    page,
+    baseURL,
+    request,
+  }) => {
+    const rollout = await buildRollout(request);
+    test.skip(rollout === 'off', 'off: Liquid Glass is not offered.');
+    const user = labUser('MFA');
+    await arriveWith(page.context(), baseURL!, 'classic');
+    await page.goto('/signin');
+    await typePassword(page, user.email, user.password);
+    await page.waitForURL(/\/signin\/mfa/u, { timeout: 20_000 });
+    await expect(page.locator('#mfa-code')).toBeVisible();
+    await settle(page);
+    await compareSignedOutPage(page);
+  });
+});
+
+/**
+ * The external pages (allowlist entry external-appearance-menu): each with
+ * the record its link opens, taken from the environment (fictional lab
+ * tokens the runner minted: the database keeps most of them only as a hash)
+ * or, for the invite, read from the lab database; where a page draws its
+ * frame without a record (the track form, the confirm form, whose GET reads
+ * nothing, and the return link's not-active card) that state is compared
+ * too. A page with no record to open is a named GAP.
+ */
+const FICTIONAL_ID = '0d3c2b1a-0000-4000-8000-0000000000a1';
+const FICTIONAL_TOKEN = 'ab'.repeat(32);
+
+const EXTERNAL_PAGES: Array<{ name: string; path(): string | null; needs: string }> = [
+  {
+    name: '/m/[token] (a maintenance share link)',
+    path: () => tokenPath('/m/', 'STAGE5_TOKEN_MAINTENANCE_SHARE'),
+    needs: 'STAGE5_TOKEN_MAINTENANCE_SHARE, a live lab maintenance share token',
+  },
+  {
+    name: '/r/[token] (a public request link)',
+    path: () => tokenPath('/r/', 'STAGE5_TOKEN_REQUEST_LINK'),
+    needs: 'STAGE5_TOKEN_REQUEST_LINK, a live lab public request link token',
+  },
+  {
+    name: '/orders/sign/[token] (an order’s signature link)',
+    path: () => tokenPath('/orders/sign/', 'STAGE5_TOKEN_SIGNATURE'),
+    needs: 'STAGE5_TOKEN_SIGNATURE, a lab order’s live signature token',
+  },
+  {
+    name: '/returns/request/[token] (a return link)',
+    path: () => tokenPath('/returns/request/', 'STAGE5_TOKEN_RETURN'),
+    needs: 'STAGE5_TOKEN_RETURN, a lab order’s live return token',
+  },
+  {
+    name: '/returns/request/[token] (the not-active card)',
+    path: () => `/returns/request/${FICTIONAL_TOKEN}`,
+    needs: '',
+  },
+  {
+    name: '/invite/[token] (an open lab invite)',
+    path: () => {
+      if (!process.env.STAGE5_LAB_DB_URL) return tokenPath('/invite/', 'STAGE5_TOKEN_INVITE');
+      const token = labSql(
+        'select token from public.organization_invites where accepted_at is null and expires_at > now() order by created_at limit 1',
+      ).trim();
+      return token ? `/invite/${encodeURIComponent(token)}` : null;
+    },
+    needs: 'an open invite in the lab database (STAGE5_LAB_DB_URL) or STAGE5_TOKEN_INVITE',
+  },
+  { name: '/r/track (the track form)', path: () => '/r/track', needs: '' },
+  {
+    name: '/r/track (filled from a link)',
+    path: () =>
+      `/r/track?t=${FICTIONAL_TOKEN}&id=${FICTIONAL_ID}&email=lab.requester%40example.test`,
+    needs: '',
+  },
+  {
+    name: '/r/confirm (the confirm form)',
+    path: () => `/r/confirm?id=${FICTIONAL_ID}&t=${FICTIONAL_TOKEN}`,
+    needs: '',
+  },
+  { name: '/r/confirm (confirmed)', path: () => `/r/confirm?done=${FICTIONAL_ID}`, needs: '' },
+  { name: '/r/confirm (not valid)', path: () => '/r/confirm', needs: '' },
+];
+
+function tokenPath(prefix: string, variable: string): string | null {
+  const token = process.env[variable];
+  return token ? `${prefix}${encodeURIComponent(token)}` : null;
+}
+
+test.describe('signed out: the external pages', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  test.beforeEach(() => {
+    test.skip(stage5Role() !== null, 'Runs in the signed-out run.');
+  });
+
+  for (const external of EXTERNAL_PAGES) {
+    test(`${external.name}: the same actions in Classic and in Liquid Glass`, async ({
+      page,
+      baseURL,
+      request,
+    }) => {
+      const rollout = await buildRollout(request);
+      test.skip(rollout === 'off', 'off: Liquid Glass is not offered.');
+      const path = external.path();
+      if (path === null) gap(`${external.name}: no record to open; needs ${external.needs}`);
+      await arriveWith(page.context(), baseURL!, 'classic');
+      const response = await page.goto(path!);
+      if (!response || response.status() >= 400)
+        gap(`${external.name}: ${path} answered ${response?.status() ?? 'nothing'}`);
+      await settle(page);
+      await compareSignedOutPage(page);
+    });
+  }
+});
+
+test.describe('signed in without an organisation: /onboarding', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  test.beforeEach(() => {
+    test.skip(stage5Role() !== null, 'Runs in the signed-out run.');
+  });
+
+  test('/onboarding: the same actions in Classic and in Liquid Glass', async ({
+    page,
+    baseURL,
+    request,
+  }) => {
+    const rollout = await buildRollout(request);
+    test.skip(rollout === 'off', 'off: Liquid Glass is not offered.');
+    const email = process.env.STAGE5_NOORG_EMAIL;
+    const password = process.env.STAGE5_NOORG_PASSWORD;
+    if (!email || !password)
+      gap(
+        '/onboarding: needs STAGE5_NOORG_EMAIL and STAGE5_NOORG_PASSWORD, a lab user in no organisation',
+      );
+    await arriveWith(page.context(), baseURL!, 'classic');
+    await page.goto('/signin');
+    await typePassword(page, email!, password!);
+    await page.waitForURL((url) => url.pathname !== '/signin', { timeout: 20_000 });
+    await page.goto('/onboarding');
+    if (new URL(page.url()).pathname !== '/onboarding')
+      gap(`/onboarding: the lab user was sent to ${new URL(page.url()).pathname}`);
+    await settle(page);
+    await compareSignedOutPage(page);
+  });
 });
 
 test.describe('the customer portal', () => {

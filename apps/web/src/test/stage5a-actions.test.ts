@@ -105,6 +105,62 @@ describe('stage 5 action inventory rule', () => {
     expect(bad.extraInGlass[0]).toContain('classic twin');
   });
 
+  it('fails a listed duplicate or public page link that goes anywhere but its twin’s target', () => {
+    const cases: Array<{ path: string; classic: string[]; glass: string; right: string }> = [
+      {
+        path: '/dashboard',
+        classic: SHELL_CLASSIC,
+        glass: link('Place an order', '/dashboard/settings/roles'),
+        right: link('Place an order', '/dashboard/orders/new'),
+      },
+      {
+        path: '/signin',
+        classic: [link('StockPilot home', '/'), button('Sign in')].sort(),
+        glass: link('Contact the team', 'https://evil.example.com/collect'),
+        right: link('Contact the team', '/contact'),
+      },
+      {
+        path: '/signin',
+        classic: [link('StockPilot home', '/'), button('Sign in')].sort(),
+        glass: link('Security', '/dashboard/settings'),
+        right: link('Security', '/security'),
+      },
+      {
+        path: '/dashboard/books/abc',
+        classic: SHELL_CLASSIC,
+        glass: link('Open the report', '/dashboard/reports/stock-value'),
+        right: link('Open the report', '/dashboard/reports/book-order-totals'),
+      },
+      {
+        // A link without a target is never the twin's link.
+        path: '/dashboard',
+        classic: SHELL_CLASSIC,
+        glass: button('Place an order'),
+        right: link('Place an order', '/dashboard/orders/new'),
+      },
+    ];
+    for (const c of cases) {
+      const at = { path: c.path, width: WIDE };
+      const wrong = compareInventories(c.classic, [...c.classic, c.glass], ALLOWLIST, at);
+      expect(wrong.allowed, c.glass).toEqual([]);
+      expect(wrong.extraInGlass, c.glass).toHaveLength(1);
+      expect(wrong.extraInGlass[0], c.glass).toContain(c.glass);
+      const right = compareInventories(c.classic, [...c.classic, c.right], ALLOWLIST, at);
+      expect(right.extraInGlass, c.right).toEqual([]);
+      expect(right.allowed, c.right).toHaveLength(1);
+    }
+  });
+
+  it('every twin rule’s target is the href its allowlist entry’s selector names, where it names one', () => {
+    for (const entry of ALLOWLIST.entries) {
+      const rule = TWIN_RULES[entry.id];
+      if (!rule) continue;
+      expect(rule.target, entry.id).toMatch(/^\//u);
+      const named = /href="([^"]+)"/u.exec(entry.selector ?? '')?.[1] ?? entry.href;
+      if (named) expect(rule.target, entry.id).toBe(named);
+    }
+  });
+
   it('allows a listed action only on its routes', () => {
     const glass = [...SHELL_CLASSIC, button('Choose more columns')];
     expect(
