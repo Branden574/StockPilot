@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { cssRules, normaliseQuotes } from '@/styles/liquid-glass/glass-css';
 import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 import { ManagerActionsPanel } from './manager-actions-panel';
@@ -151,6 +152,97 @@ describe('Manager actions card, Classic DOM', () => {
       await expect(off.dom).toMatchFileSnapshot(
         `./__classic__/manager-actions-panel.${state.name}.txt`,
       );
+    });
+  }
+});
+
+/**
+ * THE PHONE'S NEXT-STEP BAR (Liquid Glass, fidelity lane phone;
+ * Order-Detail-Mobile.dc.html .cartbar "Next step"). At 760 px and under,
+ * pages/order-detail.css fixes the card's own step that moves the order on
+ * (the FIRST default-variant button of its button row) to the foot of the
+ * screen and draws the bar behind it with that row's ::after: no copy of the
+ * button, so its busy state and confirms are the panel's. This checks, in
+ * each state, which node that selector picks (happy-dom cannot match its
+ * ":not(… ~ *)", so the pick is computed the same way here and the rule's
+ * text is pinned), and that the bar is drawn only when there is a step.
+ * Fails on a stylesheet without the phone bar.
+ */
+describe('Liquid Glass phone next-step bar', () => {
+  const ROOT = ":root[data-appearance='liquid-glass']";
+  const ROW =
+    "[data-glass-page='order-detail'] [data-glass-role='order-manager-actions'] [data-testid='manager-actions-buttons']";
+  const STEP = `${ROOT} ${ROW} > [data-glass-variant='default']:not([data-glass-variant='default'] ~ *)`;
+  const rules = cssRules('pages/order-detail.css');
+  const phone = (media: string[]) => media.includes('(max-width: 760px)');
+  const ruleFor = (selector: string) =>
+    rules.find(
+      (r) =>
+        phone(r.media) &&
+        r.selectors.some((s) => normaliseQuotes(s.replace(/\s+/g, ' ')) === selector),
+    );
+
+  it('fixes the first default-variant button of the row to the foot, over the row’s ::after bar', () => {
+    expect(ruleFor(STEP)?.decls).toMatchObject({
+      position: 'fixed',
+      right: '20px',
+      'z-index': '41',
+      height: '44px',
+    });
+    const bar = ruleFor(`${ROOT} ${ROW}:has(> [data-glass-variant='default'])::after`)?.decls;
+    expect(bar).toMatchObject({
+      content: "'Next step' / ''",
+      position: 'fixed',
+      left: '12px',
+      right: '12px',
+      height: '60px',
+      'z-index': '40',
+      'pointer-events': 'none',
+    });
+  });
+
+  const EXPECTED: Record<string, string | null> = {
+    'pending-approval-deny-open': 'Approve',
+    approved: 'Generate pick slip',
+    'picking-unassigned-staff': 'Claim picking',
+    'picking-mine-staff': 'Open digital pick',
+    denied: null,
+  };
+
+  for (const state of STATES) {
+    it(`${state.name}: the bar carries ${EXPECTED[state.name] ?? 'nothing'}`, () => {
+      cleanup();
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+      document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+      try {
+        render(
+          <div data-glass-page="order-detail">
+            <ManagerActionsPanel {...state.props} />
+          </div>,
+        );
+        const row = document.querySelector(`${ROOT} ${ROW}`)!;
+        expect(row).not.toBeNull();
+        const defaults = [...row.children].filter(
+          (el) => el.getAttribute('data-glass-variant') === 'default',
+        );
+        // The rule's pick: a default-variant child with no default-variant
+        // sibling before it, i.e. the first one.
+        const picked = defaults.filter(
+          (el) =>
+            ![...row.children]
+              .slice(0, [...row.children].indexOf(el))
+              .some((prev) => prev.getAttribute('data-glass-variant') === 'default'),
+        );
+        expect(picked.map((el) => el.textContent?.trim())).toEqual(
+          EXPECTED[state.name] ? [EXPECTED[state.name]] : [],
+        );
+        // The bar (and the page's room for it) only with a step.
+        expect(row.matches(`${ROOT} ${ROW}:has(> [data-glass-variant='default'])`)).toBe(
+          picked.length > 0,
+        );
+      } finally {
+        document.documentElement.removeAttribute('data-appearance');
+      }
     });
   }
 });

@@ -240,6 +240,46 @@ const PAIRS: Array<[string, string, string[], number]> = [
   ['focus ring on a card', '--lg-focus', CARD, 3],
   ['focus ring on the overlay glass', '--lg-focus', OVERLAY, 3],
   ['focus ring in the reading area', '--lg-focus', [...OVERLAY, '--lg-field-fill'], 3],
+  // Fidelity lane phone (760 px and under): the order page's next-step bar
+  // and Place an order's cart bar (the bar glass over the pane), and the
+  // Items / Books phone cards (pages/items.css: a card on the card fill, a
+  // group on the second fill, a ticked card on the accent wash in its accent
+  // ring).
+  [
+    'next-step and cart bar words (ink) on the bar glass',
+    '--lg-ink',
+    ['--lg-pane', '--lg-glass'],
+    4.5,
+  ],
+  [
+    'cart bar tile icon (accent text) on its wash',
+    '--lg-accent-text',
+    ['--lg-pane', '--lg-glass', '--lg-accent-wash'],
+    3,
+  ],
+  ['focus ring on the bar glass', '--lg-focus', ['--lg-pane', '--lg-glass'], 3],
+  ['phone card name and figure (ink) on the card', '--lg-ink', CARD, 4.5],
+  ['phone card facts and "on hand" (ink 3) on the card', '--lg-ink-3', CARD, 4.5],
+  ['phone group card (ink) on the second fill', '--lg-ink', ['--lg-pane', '--lg-card-fill-2'], 4.5],
+  [
+    'phone group card facts (ink 3) on the second fill',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-card-fill-2'],
+    4.5,
+  ],
+  [
+    'ticked phone card (ink) on the accent wash',
+    '--lg-ink',
+    ['--lg-pane', '--lg-accent-wash'],
+    4.5,
+  ],
+  [
+    'ticked phone card facts (ink 3) on the accent wash',
+    '--lg-ink-3',
+    ['--lg-pane', '--lg-accent-wash'],
+    4.5,
+  ],
+  ['ticked phone card ring (accent) on the pane', '--lg-accent', ['--lg-pane'], 3],
 ];
 
 const VARIANTS = variants();

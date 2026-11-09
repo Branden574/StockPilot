@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import * as React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { cssRules, declaredFor } from '@/styles/liquid-glass/glass-css';
 import { classicDom, classicStructure, glassOnlyCount } from '@/test/classic-dom';
 
 import type { CatalogItem } from '../v2/types';
@@ -158,5 +159,101 @@ describe('Place an order storefront, Classic DOM', () => {
     await expect(off.browse).toMatchFileSnapshot('./__classic__/storefront.browse.txt');
     await expect(off.cart).toMatchFileSnapshot('./__classic__/storefront.cart.txt');
     await expect(off.review).toMatchFileSnapshot('./__classic__/storefront.review.txt');
+  });
+});
+
+/**
+ * THE PHONE (Liquid Glass, fidelity lane phone; Order-New-Mobile.dc.html).
+ * At 760 px and under, storefront.glass.css draws the steps on one line, the
+ * order setup as one line (its four cells kept, in Classic's order, each with
+ * its popover; the Pickup / Delivery segment as two icons whose words stay
+ * the buttons' names) and the cart bar at the foot: the floating cart button
+ * itself across the foot and the cart's own Review order button fixed at its
+ * right, both only while the cart holds something. This renders the real
+ * storefront and checks each rule lands on those nodes. Fails on a
+ * stylesheet without the phone rules.
+ */
+describe('Liquid Glass phone: one-line setup and steps, the cart bar', () => {
+  const rules = cssRules('storefront.glass.css');
+  const phone = (media: string[]) => media.includes('(max-width: 760px)');
+  const declared = (el: Element, prop: string) => declaredFor(el, rules, prop, phone);
+
+  it('lays the setup and the steps on one line and builds the bar from the cart button and Review order', async () => {
+    cleanup();
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+    try {
+      let view!: ReturnType<typeof render>;
+      await act(async () => {
+        view = render(
+          <OrdersStorefront
+            warehouses={[{ id: 'wh-1', name: 'Main Warehouse' }]}
+            warehouseId="wh-1"
+            catalogPromise={settled<StorefrontCatalogData>({ items: ITEMS, aisles: [] })}
+            frequentlyOrderedPromise={settled([])}
+            kitsPromise={settled({ status: 'ok' as const, kits: [] })}
+            kitsEnabled={false}
+            chartersForWarehouse={[]}
+            canActOnBehalf={false}
+            viewerName="Robin Example"
+            viewerEmail="robin@example.test"
+            orgTimezone="America/Los_Angeles"
+            deliveryRecipients={null}
+            viewerUserId="user-1"
+            organizationId="org-1"
+            canApproveOrders={false}
+          />,
+        );
+      });
+      const root = view.container;
+      // Steps on one line.
+      expect(declared(root.querySelector('.sf-flow')!, 'flex-wrap')).toBe('nowrap');
+      // The setup: one row of its four parts, in Classic's order.
+      const setup = root.querySelector('.sf-page > .sf-setup')!;
+      expect(declared(setup, 'display')).toBe('flex');
+      const parts = [...setup.children].map((c) => c.className);
+      expect(parts).toEqual([
+        'sf-setup-cell',
+        'sf-setup-cell',
+        'sf-seg-wrap',
+        'sf-setup-cell static',
+      ]);
+      for (const cell of setup.querySelectorAll(':scope > .sf-setup-cell')) {
+        expect(declared(cell, 'position')).toBe('static');
+        expect(declared(cell, 'flex')).toBe('1 1 0');
+      }
+      for (const hidden of setup.querySelectorAll('.sf-setup-ic, .hint')) {
+        expect(declared(hidden, 'display')).toBe('none');
+      }
+      const seg = [...setup.querySelectorAll('.sf-seg button')];
+      expect(seg.map((b) => b.textContent?.trim())).toEqual(['Pickup', 'Delivery']);
+      for (const b of seg) {
+        expect(declared(b, 'font-size')).toBe('0');
+        expect(declared(b, 'width')).toBe('40px');
+      }
+
+      // Empty cart: no bar, Review order stays in the cart.
+      const fab = () => root.querySelector('.sf-fab')!;
+      const review = () => root.querySelector('.sf-cart-foot .sf-submit')!;
+      expect(root.querySelectorAll('.sf-submit').length).toBe(1);
+      expect(fab().getAttribute('data-show')).toBe('false');
+      expect(declared(fab(), 'height')).toBeUndefined();
+      expect(declared(review(), 'position')).toBeUndefined();
+
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: /Add to cart/ })[0]!);
+      });
+      expect(fab().getAttribute('data-show')).toBe('true');
+      expect(declared(fab(), 'left')).toBe('12px');
+      expect(declared(fab(), 'right')).toBe('12px');
+      expect(declared(fab(), 'height')).toBe('60px');
+      expect(declared(fab(), 'display')).toBe('flex');
+      expect(declared(review(), 'position')).toBe('fixed');
+      expect(declared(review(), 'z-index')).toBe('41');
+      expect(declared(root.querySelector('.sf-page')!, 'padding-bottom')).toBe('108px');
+    } finally {
+      document.documentElement.removeAttribute('data-appearance');
+      cleanup();
+    }
   });
 });

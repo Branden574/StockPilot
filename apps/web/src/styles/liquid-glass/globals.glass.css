@@ -119,4 +119,15 @@
       bottom: calc(192px + var(--lg-dock-lift, 0px) + var(--sp-update-card-offset, 0px));
     }
   }
+  /* On a phone the bar floats 14 px up and is 58 px tall (pages/items.css,
+     lane phone): the dock sits 12 px above it. */
+  @media (max-width: 760px) {
+    :root[data-appearance='liquid-glass']:has(
+        :is([data-glass-page='items'], [data-glass-page='books'])
+          [data-glass='selbar-layer'][data-glass-state='open']
+      )
+      ol[data-sonner-toaster][data-y-position='bottom'] {
+      bottom: calc(84px + var(--sp-update-card-offset, 0px));
+    }
+  }
 }
