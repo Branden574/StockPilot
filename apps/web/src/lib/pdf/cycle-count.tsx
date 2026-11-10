@@ -2,6 +2,7 @@ import { Document, Page, Text, View } from '@react-pdf/renderer';
 
 import { BrandedHeader } from './branding';
 import { capCountSheetLines } from './count-sheet-cap';
+import { breakIdentifierLines, breakOverwideWords } from './identifier-lines';
 import { cycleCountScopeLabel, formatCycleCountNumber } from '@stockpilot/core';
 
 import { PDF_COLORS, formatDateForPdf, pdfStyles } from './styles';
@@ -179,6 +180,60 @@ const CC_COLS = {
   countQty: 11,
   notes: 12,
 } as const;
+const CC_SHARE_TOTAL = Object.values(CC_COLS).reduce((a, b) => a + b, 0);
+
+/**
+ * White space between one column's text and the next, in points per CC_COLS
+ * share: SKU 4.5pt, Description 7.75pt, Location 3.5pt (plus the room the
+ * centred System number leaves). The row cells were bare flex <Text>s and
+ * tCell has no side padding, so a long title filled each line up to the exact
+ * x where the Location text starts and printed as "...five Bright-door".
+ *
+ * Why per share: Yoga sizes a flex cell as its padding plus its share of the
+ * space left after every cell's padding. When EVERY cell in the row is padded
+ * in proportion to its share, that works out to the same width each column
+ * always had, so no column moves on any sheet; only the text inside each cell
+ * stops short of the next column. (A flat 6pt on three cells shifted every
+ * column by up to 5pt; wrapping each cell's text in its own View cost 30% more
+ * render time on a 1,000-line sheet.) So every cell in an item row takes
+ * ccCell().
+ */
+const CC_GUTTER_PER_SHARE = 0.25;
+export function ccCell(share: number, textAlign: 'left' | 'center' = 'left') {
+  const gutter = share * CC_GUTTER_PER_SHARE;
+  // A centred cell splits its gutter across both sides so its centre stays.
+  return textAlign === 'center'
+    ? { flex: share, textAlign, paddingHorizontal: gutter / 2 }
+    : { flex: share, paddingRight: gutter };
+}
+
+/** pdfStyles.tCell and pdfStyles.tCellMono (styles.ts). */
+export const CC_BODY_FONT_PT = 9;
+export const CC_SKU_FONT_PT = 8.5;
+
+/**
+ * The width a column's text wraps in, in points, so a word too wide for it can
+ * be broken before react-pdf paints it over the next column. A LETTER row is
+ * 612pt, less the page's 40pt and the row's 4pt padding a side: 524pt. On the
+ * count sheet the Counted and Notes write-in lines take 2pt margins a side
+ * (8pt) before the CC_COLS shares are split; the variance report's columns are
+ * a little wider, so this budgets both on the narrower count sheet.
+ */
+const CC_ROW_INNER_PT = 612 - 2 * 40 - 2 * 4;
+export function ccTextWidthPt(share: number): number {
+  return ((CC_ROW_INNER_PT - 2 * 2 * 2) * share) / CC_SHARE_TOTAL - share * CC_GUTTER_PER_SHARE;
+}
+
+/**
+ * A row moves to the next page whole rather than splitting, which left its
+ * write-in lines as a blank strip at the top of the next page, away from the
+ * item. A row taller than a page cannot move anywhere, and react-pdf would
+ * then print it past the page bottom, so a row with more text than this in
+ * its cells may still split. 400 characters of ordinary text is under 35
+ * lines even in the narrow Location column (about 12 characters a line),
+ * about half a page.
+ */
+const CC_KEEP_ROW_TOGETHER_MAX_CHARS = 400;
 
 export function CycleCountSheetPdf({
   cycle,
@@ -331,7 +386,14 @@ export function CycleCountSheetPdf({
                       wrap={false}
                     >
                       <Text style={[pdfStyles.tCell, pdfStyles.bold, { flex: 1 }]}>
-                        {block.name} · {block.lines.length}{' '}
+                        {breakOverwideWords(
+                          block.name,
+                          CC_ROW_INNER_PT,
+                          CC_BODY_FONT_PT,
+                          'Helvetica-Bold',
+                        )}
+                        {' · '}
+                        {block.lines.length}{' '}
                         {block.lines.length === 1 ? 'variant' : 'variants'}
                       </Text>
                     </View>
@@ -347,41 +409,62 @@ export function CycleCountSheetPdf({
                     const description = l.variantLabel
                       ? `${l.name} · ${l.variantLabel}`
                       : l.name;
+                    const sku = l.sku || '—';
+                    const location = l.location ?? '—';
                     return (
                       <View
                         key={`${block.key}-${l.sku}-${i}`}
                         style={[pdfStyles.tRow, { minHeight: 22 }]}
-                        // Allow row wrap so long descriptions don't truncate
-                        // — react-pdf will paginate the row if it overflows.
+                        // Kept whole across a page break (see
+                        // CC_KEEP_ROW_TOGETHER_MAX_CHARS); a long description
+                        // still wraps inside the row, never truncates.
+                        wrap={
+                          description.length + sku.length + location.length >
+                          CC_KEEP_ROW_TOGETHER_MAX_CHARS
+                        }
                       >
-                        <Text style={[pdfStyles.tCell, pdfStyles.muted, { flex: CC_COLS.num }]}>
+                        {/* Every cell takes ccCell(): its gutter keeps the
+                            text short of the next column without moving any
+                            column. A word too wide for its column is broken
+                            onto lines that fit instead of running over the
+                            next column; a SKU breaks after its own separators,
+                            with no hyphen it does not have. */}
+                        <Text style={[pdfStyles.tCell, pdfStyles.muted, ccCell(CC_COLS.num)]}>
                           {rowNumber}
                         </Text>
-                        <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, { flex: CC_COLS.sku }]}>
-                          {l.sku || '—'}
+                        <Text style={[pdfStyles.tCell, pdfStyles.tCellMono, ccCell(CC_COLS.sku)]}>
+                          {breakIdentifierLines(
+                            sku,
+                            ccTextWidthPt(CC_COLS.sku),
+                            CC_SKU_FONT_PT,
+                            'Courier',
+                          )}
                         </Text>
-                        <Text style={[pdfStyles.tCell, { flex: CC_COLS.name }]}>{description}</Text>
-                        <Text style={[pdfStyles.tCell, { flex: CC_COLS.loc }]}>
-                          {l.location ?? '—'}
+                        <Text style={[pdfStyles.tCell, ccCell(CC_COLS.name)]}>
+                          {breakOverwideWords(
+                            description,
+                            ccTextWidthPt(CC_COLS.name),
+                            CC_BODY_FONT_PT,
+                          )}
                         </Text>
-                        <Text
-                          style={[pdfStyles.tCell, { flex: CC_COLS.sysQty, textAlign: 'center' }]}
-                        >
+                        <Text style={[pdfStyles.tCell, ccCell(CC_COLS.loc)]}>
+                          {breakOverwideWords(
+                            location,
+                            ccTextWidthPt(CC_COLS.loc),
+                            CC_BODY_FONT_PT,
+                          )}
+                        </Text>
+                        <Text style={[pdfStyles.tCell, ccCell(CC_COLS.sysQty, 'center')]}>
                           {l.expectedQuantity}
                         </Text>
                         {isVarianceReport ? (
-                          <Text
-                            style={[
-                              pdfStyles.tCell,
-                              { flex: CC_COLS.countQty, textAlign: 'center' },
-                            ]}
-                          >
+                          <Text style={[pdfStyles.tCell, ccCell(CC_COLS.countQty, 'center')]}>
                             {counted == null ? '—' : counted}
                           </Text>
                         ) : (
                           <View
                             style={{
-                              flex: CC_COLS.countQty,
+                              ...ccCell(CC_COLS.countQty),
                               borderBottomWidth: 0.5,
                               borderBottomColor: PDF_COLORS.lineStrong,
                               borderBottomStyle: 'solid',
@@ -390,9 +473,7 @@ export function CycleCountSheetPdf({
                           />
                         )}
                         {isVarianceReport ? (
-                          <Text
-                            style={[pdfStyles.tCell, { flex: CC_COLS.notes, textAlign: 'center' }]}
-                          >
+                          <Text style={[pdfStyles.tCell, ccCell(CC_COLS.notes, 'center')]}>
                             {variance == null
                               ? '—'
                               : variance === 0
@@ -402,7 +483,7 @@ export function CycleCountSheetPdf({
                         ) : (
                           <View
                             style={{
-                              flex: CC_COLS.notes,
+                              ...ccCell(CC_COLS.notes),
                               borderBottomWidth: 0.5,
                               borderBottomColor: PDF_COLORS.lineStrong,
                               borderBottomStyle: 'solid',
