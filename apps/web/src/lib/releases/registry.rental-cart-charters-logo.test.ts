@@ -150,13 +150,15 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     }
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[5]?.id).toBe(WEB_FIXES_ID);
-    expect(RELEASES[6]?.id).toBe(CHARTERS_ID);
-    expect(RELEASES[7]?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[6]?.id).toBe(WEB_FIXES_ID);
+    expect(RELEASES[7]?.id).toBe(CHARTERS_ID);
+    expect(RELEASES[8]?.id).toBe(AUTH_CODE_ID);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: approver-controls-own-warehouses-2026-11): the count sheet release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'approver-controls-own-warehouses-2026-11',
+      'count-sheet-long-names-2026-11',
     );
   });
 
@@ -174,9 +176,10 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     expect(web).toBeGreaterThan(charters);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every release): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top, so it is the newest from position 4 on.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(web).toBe(Math.max(...RELEASES.slice(5).map((r) => Date.parse(r.publishedAt))));
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    expect(web).toBe(Math.max(...RELEASES.slice(6).map((r) => Date.parse(r.publishedAt))));
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    for (const r of RELEASES.slice(7)) {
+    for (const r of RELEASES.slice(8)) {
       expect(charters, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -236,6 +239,8 @@ describe('the web fixes release (B20a and S45)', () => {
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: with nothing read): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top, and reach an owner, so they are read first.
     const nightReads = [
       // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+      // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+      'count-sheet-long-names-2026-11',
       'approver-controls-own-warehouses-2026-11',
       'export-items-permission-2026-11',
       'mobile-app-fixes-2026-11-02',

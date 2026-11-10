@@ -81,6 +81,8 @@ const exporter: ReleaseViewer = {
 const NEWER_IDS = [
   // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without them): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
   // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+  // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'count-sheet-long-names-2026-11',
   'approver-controls-own-warehouses-2026-11',
   'export-items-permission-2026-11',
   'mobile-app-fixes-2026-11-02',
@@ -167,21 +169,24 @@ describe('the export fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0, ID at 4 and slice(5)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[7]?.id).toBe('authenticator-code-requests-2026-11');
-    expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe('integration-retries-2026-11');
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[8]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[9]?.id).toBe('integration-retries-2026-11');
     expect(RELEASES[9]?.status).toBe('published');
-    expect(Date.parse(RELEASES[9]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    expect(RELEASES[10]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[10]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
     expect(RELEASES[10]?.status).toBe('published');
     expect(Date.parse(RELEASES[10]!.publishedAt)).toBeGreaterThan(
       Date.parse(release().publishedAt),
     );
-    expect(RELEASES[11]?.id).toBe(ID);
-    expect(RELEASES[12]?.id).toBe('small-fixes-8-2026-10');
-    for (const r of RELEASES.slice(12)) {
+    expect(RELEASES[11]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[11]?.status).toBe('published');
+    expect(Date.parse(RELEASES[11]!.publishedAt)).toBeGreaterThan(
+      Date.parse(release().publishedAt),
+    );
+    expect(RELEASES[12]?.id).toBe(ID);
+    expect(RELEASES[13]?.id).toBe('small-fixes-8-2026-10');
+    for (const r of RELEASES.slice(13)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);

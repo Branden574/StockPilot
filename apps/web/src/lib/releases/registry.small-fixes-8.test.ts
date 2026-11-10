@@ -72,6 +72,8 @@ const member: ReleaseViewer = { role: 'viewer', permissions: [], enabledModules:
 const NEWER_IDS = [
   // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without them): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
   // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+  // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'count-sheet-long-names-2026-11',
   'approver-controls-own-warehouses-2026-11',
   'export-items-permission-2026-11',
   'mobile-app-fixes-2026-11-02',
@@ -154,13 +156,14 @@ describe('the small fixes slice 8 release', () => {
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the export fixes release at 4, ID at 5 and slice(6)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[11]?.id).toBe('export-fixes-2026-10');
-    expect(Date.parse(RELEASES[11]!.publishedAt)).toBeGreaterThan(
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[12]?.id).toBe('export-fixes-2026-10');
+    expect(Date.parse(RELEASES[12]!.publishedAt)).toBeGreaterThan(
       Date.parse(release().publishedAt),
     );
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[12]?.id).toBe(ID);
-    for (const r of RELEASES.slice(13)) {
+    expect(RELEASES[13]?.id).toBe(ID);
+    for (const r of RELEASES.slice(14)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
