@@ -94,7 +94,10 @@ export const RELEASES: Release[] = [
     summary:
       'StockPilot now opens in Liquid Glass, a new look on the web and, after the latest update, in the mobile app. Day glass goes with your Light theme and Night glass with Dark, and System follows your device. Every page and button is still there under the same name. To use the previous look, choose Design, Classic in your account menu on the web, or in Settings, Appearance in the mobile app. Your choice is saved to your account.',
     // RECHECK at publish: the instant (see the header). This placeholder keeps the registry newest-first.
-    publishedAt: '2026-11-09T12:00:00Z',
+    // Moved when main was merged in after #493 and #494 (2026-11-10; was: '2026-11-09T12:00:00Z'): the Add all
+    // release below is dated 2026-11-10T21:50:00Z, and dates must not increase going down, so the placeholder is
+    // that same minute. Move it again whenever a release is published below this draft.
+    publishedAt: '2026-11-10T21:50:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -170,6 +173,152 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'order-add-all-2026-11',
+    revision: 1,
+    // "Add all" on Place an order (owner request 2026-11-10). Published with
+    // the pull request that ships it: the release is announced by the
+    // deployment that holds it, so never before the button is live.
+    // Platform: the website. The phone's code is in the same pull request
+    // (the item details sheet and the quantity sheet) but reaches phones only
+    // with the next phone update, so the words say "on the website" and that
+    // the mobile app gets it with its next update. When that update is out,
+    // say so in a new release; do not bump this revision for it.
+    // Claims checked against the code:
+    // - "each item and book with 2 or more available": SfAddControl
+    //   (components/orders/storefront/storefront-cards.tsx) draws the button
+    //   unless core's addAllState is 'hidden', which is fewer than 2
+    //   (packages/core/src/orders/storefront/logic.ts); a book is the same
+    //   catalog row and card.
+    // - "on the cards, in Compact view and in Quick view": SfAddControl's
+    //   three call sites (ProductCard, CompactRow, QuickViewDrawer).
+    // - "the line becomes everything available; it does not add on top": a
+    //   press calls onSetQty(item.id, addAllTarget(available)), the cart's
+    //   set-qty.
+    // - "Available": on hand minus what open orders already hold
+    //   (availableOf), the number the card already shows.
+    // - "Add 10,000 ... the most one order can hold": addAllTarget stops at
+    //   ORDER_MAX_UNITS_PER_LINE (core orders/place-order.ts), and the words
+    //   are addAllButtonCopy's.
+    // - "dimmed once everything available is in your cart": the 'full' state,
+    //   aria-disabled.
+    // - "Each size is its own item": the catalog has one row per item and no
+    //   size picker.
+    // - "Stock is held when the order is approved, as before": nothing in
+    //   placing changed; the button asks for what the stepper already allows.
+    // Not said: any speed, and nothing about the public order link, the
+    // customer portal, kits or Frequently ordered, which do not have it.
+    // Who is told: who may place orders where Orders is on, the page's own
+    // gate (orders/new/page.tsx: can(ctx, 'orders:request') and
+    // checkModuleAccess('orders')).
+    status: 'published',
+    title: 'Place an order has an Add all button for each item and book',
+    summary:
+      'On the website, Place an order now has an Add all button beside Add to cart on each item and book with 2 or more available. One press puts everything available in your cart, so you no longer type the number. The mobile app gets the button with its next update.',
+    publishedAt: '2026-11-10T21:50:00Z',
+    entries: [
+      {
+        id: 'order-add-all',
+        category: 'new',
+        area: 'Orders',
+        title: 'Add all puts everything available of an item or book in your cart in one press',
+        whatChanged:
+          'On the website, in Place an order, each item and book with 2 or more available has an Add all button beside Add to cart: on the cards, in Compact view and in Quick view. One press sets that item in your cart to everything available, the number its card shows. If your cart already holds some of it, the line becomes everything available; it does not add on top. Each size is its own item, so each has its own button. An item with more than 10,000 available shows Add 10,000 in its place, the most one order can hold.',
+        whyItMatters:
+          'To order all of an item you had to add it and then type the number shown on its card.',
+        howItAffectsYou:
+          'Press Add all to take everything available of an item. The button is dimmed once everything available is in your cart. You can still type a number or use plus and minus to change it. Stock is held when the order is approved, as before. The mobile app does not have the button yet; it comes with the app’s next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'count-sheet-long-names-2026-11',
+    revision: 1,
+    // #492 (squash 80c3bf114; web only, no phone code, no migration), live on
+    // production since 2026-11-10 19:41Z; the owner confirmed the printed
+    // sheet. This release needs a web deploy only. From #492's draft, with
+    // the second fix added (below).
+    // Claims checked against the code at 80c3bf114 (lib/pdf/cycle-count.tsx):
+    // - "wraps ... with space before the Location column": every row cell
+    //   takes ccCell() (:202-208), a gutter of 0.25pt per CC_COLS share
+    //   (:201): Description 7.75pt, SKU 4.5pt, Location 3.5pt.
+    // - "broken onto lines that fit": breakOverwideWords on the Description
+    //   (:444), the Location (:451) and the group name (:389), and
+    //   breakIdentifierLines on the SKU (:436) (lib/pdf/identifier-lines.ts);
+    //   cycle-count.render.test.tsx reads the printed text back.
+    // - "kept on one page unless it is extremely long": wrap is false unless
+    //   the row's description, SKU and location hold more than 400 characters
+    //   (CC_KEEP_ROW_TOGETHER_MAX_CHARS :236, :421-424), so not "never".
+    // - "keep the same columns": cycle-count.render.test.tsx, "does not move
+    //   any column on a sheet of short titles".
+    // - The buttons: Print count sheet and Variance report PDF
+    //   (app/(dashboard)/dashboard/cycle-counts/[id]/page.tsx:193).
+    // The second fix, found by #492's review and reproduced for this release
+    // (2026-11-10) with the component as it was at 7dacbd7aa and the
+    // installed @react-pdf/renderer: with one-line rows only, every sheet and
+    // every variance report of 27 to 70 rows, and of 85, 100, 150, 250 and
+    // 400 rows, printed row 1 on page 1, placed rows 2 to 26 far below the
+    // page (so they were on no page) and printed the rest from page 2 on. A
+    // sheet of 1 to 26 such rows printed every row. A 40-row sheet with one
+    // two-line row among its first 26 printed every row; with the two-line
+    // row at 27 or 35 it lost rows 2 to 26. At 80c3bf114 each of these
+    // prints every row, 26 on page 1. Rows kept whole (wrap false) is what
+    // fixed it; cycle-count.rows-across-pages.render.test.tsx pins it and
+    // fails on the old component. The review of this release rendered the
+    // same old component three more ways: a count with a one-line note lost
+    // rows 2 to 25 from 25 rows on, one with a three-line note rows 2 to 24
+    // from 24 rows on, and sheets of 27, 30 and 41 one-line rows in product
+    // groups of 6 (size runs) lost no row; an organisation logo changed
+    // nothing. So the words give no row count: "longer than one page",
+    // "every item on the first page took a single line", "about 25", "could",
+    // and "not grouped by product". Not said: how long this lasted (not
+    // measured).
+    // "those items now print", "they now print" and "the first page no
+    // longer leaves items out" speak of the first page only, so they stay
+    // true for a count over 10,000 lines, which is cut at PDF_MAX_LINES with
+    // a banner on its first page saying so (lib/pdf/count-sheet-cap.ts:18);
+    // nothing here says every item of a count prints.
+    // Changed from the draft: the sentence on the missing rows in the
+    // summary and whatChanged, its reprint in whatToDo, "the first page no
+    // longer leaves items out" in howItAffectsYou, and "look exactly as
+    // before" is now "keep the same columns", since a long sheet of short
+    // names now prints rows it used to leave out.
+    // Who is told: whoever can open the PDF, where Cycle Counts is on: the
+    // route asks cycle_counts:read, else stock:adjust
+    // (app/api/cycle-counts/[id]/pdf/route.tsx:48-51), and the linked page
+    // asks the module and the same two (cycle-counts/page.tsx:74, :83).
+    status: 'published',
+    title:
+      'Printed cycle count sheets keep long item names in their column and no longer leave items off the first page',
+    summary:
+      'On a printed cycle count sheet or variance report, a long item name now wraps inside its own column instead of running into the location or the next column. A sheet or report longer than one page, not grouped by product, where every item on the first page took a single line, could print only the first item on page 1 and leave out the rest of that page’s items (about 25); those items now print.',
+    publishedAt: '2026-11-10T20:02:00Z',
+    entries: [
+      {
+        id: 'count-sheet-long-names',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title:
+          'Long item names no longer run into the next column on printed count sheets, and page 1 no longer leaves items out',
+        whatChanged:
+          'On the printed cycle count sheet and the variance report (Print count sheet and Variance report PDF on a cycle count), a long item name now wraps onto more lines inside the Description column, with space before the Location column. A name or SKU with a long run of letters and numbers and no spaces is broken onto lines that fit. A row is kept on one page unless it is extremely long. A sheet longer than one page, not grouped by product, where every item on the first page took one line, could print only the first item on page 1 and leave out the rest of that page (about 25 items); they now print.',
+        whyItMatters:
+          'A long name used to print right up against the location, or straight over it, so the sheet was hard to read on the warehouse floor. On a long sheet of short names, about 25 items could be missing from the paper to be counted.',
+        howItAffectsYou:
+          'Every name, SKU and location prints in full and stays in its own column, and the first page no longer leaves items out. Sheets of short names keep the same columns as before.',
+        whatToDo:
+          'No action needed. Print the sheet again if you printed one with a long name, or one whose first page showed a single item.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
       },
     ],
   },

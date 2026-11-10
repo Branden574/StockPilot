@@ -455,6 +455,8 @@ export default function Checkout() {
         <QuantitySheet
           item={quantityItem}
           quantity={cart.lines.find((l) => l.itemId === quantityItem.id)?.quantity ?? 0}
+          locked={locked}
+          notOrderable={snap.notOrderable.has(quantityItem.id)}
           onClose={() => setSheet(null)}
           onSave={(value) => {
             const refused = session.setQuantity(quantityItem.id, value);

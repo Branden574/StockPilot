@@ -45,6 +45,9 @@ import {
   STOREFRONT_SORT_AND_FILTER_COPY,
   STOREFRONT_TITLE_COPY,
   STOREFRONT_TRUNCATED_COPY,
+  addAllButtonCopy,
+  addAllState,
+  addAllTarget,
   availableOf,
   buildQtyMap,
   kitAvailability,
@@ -69,6 +72,7 @@ import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import {
   MISSING_VALUE,
+  addAllLabel,
   addBlockedHint,
   addItemLabel,
   addedAnnouncement,
@@ -752,6 +756,8 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         <QuantitySheet
           item={sheetItem}
           quantity={qtyMap.get(sheetItem.id) ?? 0}
+          locked={locked}
+          notOrderable={snap.notOrderable.has(sheetItem.id)}
           onClose={() => setSheet(null)}
           onSave={(value) => {
             const refused = session.setQuantity(sheetItem.id, value);
@@ -768,31 +774,48 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           onClose={() => setSheet(null)}
           onPhotoError={onPhotoError}
           control={
-            (qtyMap.get(sheetItem.id) ?? 0) > 0 ? (
-              <Stepper
-                quantity={qtyMap.get(sheetItem.id) ?? 0}
-                available={availableOf(sheetItem)}
-                atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem) || snap.notOrderable.has(sheetItem.id)}
-                disabled={locked}
-                decLabel={decreaseLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
-                incLabel={increaseLabel(sheetItem.name)}
-                countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
-                incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem), snap.notOrderable.has(sheetItem.id))}
-                lockHint={changeLockedHint(locked)}
-                onDec={() => onDec(sheetItem.id)}
-                onInc={() => onInc(sheetItem.id)}
-                onCount={() => setSheet({ kind: 'quantity', itemId: sheetItem.id })}
-              />
-            ) : (
-              <SmallAction
-                label={STOREFRONT_ADD_COPY}
-                accessibilityLabel={addItemLabel(sheetItem.name)}
-                variant="primary"
-                disabled={locked || availableOf(sheetItem) < 1 || snap.notOrderable.has(sheetItem.id)}
-                hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}
-                onPress={() => onAdd(sheetItem.id)}
-              />
-            )
+            <View style={{ gap: 8 }}>
+              {(qtyMap.get(sheetItem.id) ?? 0) > 0 ? (
+                <Stepper
+                  quantity={qtyMap.get(sheetItem.id) ?? 0}
+                  available={availableOf(sheetItem)}
+                  atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem) || snap.notOrderable.has(sheetItem.id)}
+                  disabled={locked}
+                  decLabel={decreaseLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
+                  incLabel={increaseLabel(sheetItem.name)}
+                  countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
+                  incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem), snap.notOrderable.has(sheetItem.id))}
+                  lockHint={changeLockedHint(locked)}
+                  onDec={() => onDec(sheetItem.id)}
+                  onInc={() => onInc(sheetItem.id)}
+                  onCount={() => setSheet({ kind: 'quantity', itemId: sheetItem.id })}
+                />
+              ) : (
+                <SmallAction
+                  label={STOREFRONT_ADD_COPY}
+                  accessibilityLabel={addItemLabel(sheetItem.name)}
+                  variant="primary"
+                  disabled={locked || availableOf(sheetItem) < 1 || snap.notOrderable.has(sheetItem.id)}
+                  hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}
+                  onPress={() => onAdd(sheetItem.id)}
+                />
+              )}
+              {/* Add all: one press sets the line to everything available
+                  (core's rule, the website's too). Not for a marked line,
+                  and not once everything is in the cart. */}
+              {addAllState(availableOf(sheetItem), qtyMap.get(sheetItem.id) ?? 0) === 'offer' && !snap.notOrderable.has(sheetItem.id) ? (
+                <SmallAction
+                  label={addAllButtonCopy(availableOf(sheetItem))}
+                  accessibilityLabel={addAllLabel(sheetItem.name, availableOf(sheetItem), qtyMap.get(sheetItem.id) ?? 0)}
+                  disabled={locked}
+                  hint={changeLockedHint(locked)}
+                  onPress={() => {
+                    const target = addAllTarget(availableOf(sheetItem));
+                    if (!session.setQuantity(sheetItem.id, target)) say(quantityAnnouncement(sheetItem.name, target));
+                  }}
+                />
+              ) : null}
+            </View>
           }
         />
       ) : null}
