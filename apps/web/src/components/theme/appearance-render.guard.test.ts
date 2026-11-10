@@ -307,12 +307,25 @@ describe('appearance render guard', () => {
   });
 
   it('appearance is never part of a data read, query key or channel name', () => {
+    // The What's New registry is words for readers: the Liquid Glass release
+    // (a draft until it is published) says "Appearance" where the app does. It
+    // is let through only as words: it imports nothing but a type and loads
+    // nothing at run time, so it cannot read data, name a query or a channel.
+    const WORDS_ONLY = 'lib/releases/registry.ts';
     const offenders = FILES.filter(
       ({ file, text }) =>
         (file.startsWith('lib/') || file.startsWith('server/')) &&
         file !== 'server/actions/appearance.ts' &&
+        file !== WORDS_ONLY &&
         /appearance/i.test(text),
     ).map((f) => f.file);
     expect(offenders).toEqual([]);
+
+    const registry = FILES.find((f) => f.file === WORDS_ONLY);
+    expect(registry, WORDS_ONLY).toBeDefined();
+    const imports = registry!.text.match(/^\s*import\b[^\n]*/gmu) ?? [];
+    expect(imports.length).toBeGreaterThan(0);
+    for (const line of imports) expect(line.trim(), line).toMatch(/^import type\b/u);
+    expect(registry!.text).not.toMatch(/\brequire\s*\(|\bimport\s*\(|\bfetch\s*\(/u);
   });
 });
