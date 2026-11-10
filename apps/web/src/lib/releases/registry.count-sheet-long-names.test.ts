@@ -39,6 +39,9 @@ import { RELEASES } from './registry';
 const ID = 'count-sheet-long-names-2026-11';
 const ENTRY_ID = 'count-sheet-long-names';
 const S2_ID = 'approver-controls-own-warehouses-2026-11';
+// Added by feat/order-add-all (2026-11-10): the Add all release, published later, at the top,
+// above this one. It reaches whoever may place orders where Orders is on.
+const ADD_ALL_ID = 'order-add-all-2026-11';
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = () => release().entries.find((e) => e.id === ENTRY_ID)!;
 
@@ -106,9 +109,12 @@ describe('the count sheet release: order, status and date', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(RELEASES[1]?.id).toBe(S2_ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES[2]?.id).toBe(S2_ID);
+    // Re-pinned by feat/order-add-all (2026-11-10; was: this release at 0, the newest published): the Add all release is published later, at the top.
+    expect(RELEASES[0]?.id).toBe(ADD_ALL_ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ADD_ALL_ID);
     expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
     // Permanent, unused anywhere else, and ends in the month it went out.
     expect(ID).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*-2026-11$/);
@@ -122,7 +128,8 @@ describe('the count sheet release: order, status and date', () => {
     expect(at).toBeLessThanOrEqual(Date.now());
     // #492 was live on production from 19:41Z on 2026-11-10.
     expect(at).toBeGreaterThan(Date.parse('2026-11-10T19:41:00Z'));
-    for (const r of RELEASES.slice(1)) {
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    for (const r of RELEASES.slice(2)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -214,9 +221,18 @@ describe('the count sheet release: who is told', () => {
   });
 
   it('is the first notice for whoever it reaches, and a member it does not reach keeps their notice', () => {
+    // Re-pinned by feat/order-add-all (2026-11-10; was: nothing read or seen): the Add all release is published later, at the top, and reaches an owner with every permission and module, so the owner is told it first and this one once it is read or seen. It reaches neither the count reader nor the stock adjuster here, who do not place orders, so its read changes nothing for them.
+    const addAllRead = {
+      release_id: ADD_ALL_ID,
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-10T22:00:00Z',
+      read_at: '2026-11-10T22:00:00Z',
+    };
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(ADD_ALL_ID);
     for (const v of [everyone, countReader, stockAdjuster]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(buildReleaseList(RELEASES, v, [addAllRead], null).latestUnread?.id, v.role).toBe(ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, { [ADD_ALL_ID]: true })[0], v.role).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,

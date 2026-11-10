@@ -56,6 +56,10 @@ const S2_ID = 'approver-controls-own-warehouses-2026-11';
 // owner with every permission and module among them), not a member with no
 // permission.
 const COUNT_SHEET_ID = 'count-sheet-long-names-2026-11';
+// Added by feat/order-add-all (2026-11-10): the Add all release, published at
+// the top, above the count sheet release. It reaches whoever may place orders
+// (orders:request) where Orders is on.
+const ADD_ALL_ID = 'order-add-all-2026-11';
 const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
 const entry = (releaseId: string, entryId: string) =>
   byId(releaseId).entries.find((e) => e.id === entryId)!;
@@ -198,10 +202,12 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     }
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-    expect(RELEASES.slice(2, 7).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    expect(RELEASES.slice(3, 8).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_SHEET_ID);
+    // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ADD_ALL_ID);
     expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
   });
 
@@ -223,7 +229,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     for (let i = 0; i < NEW_IDS.length; i += 1) {
       // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
       // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-      for (const r of RELEASES.slice(i + 3)) {
+      // Re-pinned by feat/order-add-all (2026-11-10; was: i + 3): the Add all release is published at the top, so every position below it moves down by one.
+      for (const r of RELEASES.slice(i + 4)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -251,15 +258,20 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
   it('is the notice in date order for an owner, and the three that reach every member come first for a member', () => {
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: each read set without it): the S2 release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: each read set without it): the count sheet release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: each read set without it): the Add all release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before. It does not reach a member with no permission, whose first notice is unchanged.
     expect(
-      buildReleaseList(RELEASES, everyone, [read(COUNT_SHEET_ID), read(S2_ID)], null).latestUnread
-        ?.id,
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID)],
+        null,
+      ).latestUnread?.id,
     ).toBe(EXPORT_ID);
     expect(
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID)],
+        [read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID)],
         null,
       ).latestUnread?.id,
     ).toBe(PHONE_ID);
@@ -267,7 +279,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID), read(PHONE_ID)],
+        [read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID), read(PHONE_ID)],
         null,
       ).latestUnread?.id,
     ).toBe(MESSAGES_ID);
@@ -275,13 +287,24 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID), read(PHONE_ID), read(MESSAGES_ID)],
+        [
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+          read(EXPORT_ID),
+          read(PHONE_ID),
+          read(MESSAGES_ID),
+        ],
         null,
       ).latestUnread?.id,
     ).toBe(QW1_ID);
     expect(
-      buildReleaseList(RELEASES, everyone, [COUNT_SHEET_ID, S2_ID, ...NEW_IDS].map(read), null)
-        .latestUnread?.id,
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [ADD_ALL_ID, COUNT_SHEET_ID, S2_ID, ...NEW_IDS].map(read),
+        null,
+      ).latestUnread?.id,
     ).toBe(WEB_FIXES_ID);
     expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(EXPORT_ID);
   });

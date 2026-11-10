@@ -50,10 +50,27 @@ vi.mock('./storefront-cards', async (importOriginal) => {
   const real = await importOriginal<typeof import('./storefront-cards')>();
   return {
     ...real,
-    ProductCard: ({ item, onAdd }: { item: CatalogItem; onAdd: (id: string) => void }) => (
-      <button type="button" onClick={() => onAdd(item.id)}>
-        Add {item.name}
-      </button>
+    // A plain Add button, and beside it the card's real control (the stepper
+    // and Add all), wired to the page's own handlers.
+    ProductCard: ({
+      item,
+      qty,
+      onAdd,
+      onDec,
+      onSetQty,
+    }: {
+      item: CatalogItem;
+      qty: number;
+      onAdd: (id: string) => void;
+      onDec: (id: string) => void;
+      onSetQty: (id: string, quantity: number) => void;
+    }) => (
+      <div>
+        <button type="button" onClick={() => onAdd(item.id)}>
+          Add {item.name}
+        </button>
+        <real.SfAddControl item={item} qty={qty} onAdd={onAdd} onDec={onDec} onSetQty={onSetQty} />
+      </div>
     ),
     CompactRow: () => null,
     CategorySection: ({ children }: { children: React.ReactNode }) => <section>{children}</section>,
@@ -254,6 +271,68 @@ describe('a line the server refused as hidden from Orders', () => {
     // The shown item is kept and can still be raised.
     fireEvent.click(screen.getByText('Add Chromebook'));
     expect(qtyOf(lineOf('Chromebook'))).toBe('2');
+  });
+});
+
+// "Add all" on a card goes through the page's own set-quantity path: the cart
+// fills to everything available, and a line the server refused is not raised.
+describe('Add all on a card', () => {
+  const addAllOf = (name: string) =>
+    screen.getByRole('button', { name: `Add all 20 available: ${name}` });
+
+  it('puts everything available in the cart in one press, and says so on the line', async () => {
+    await openPage();
+    fireEvent.click(addAllOf('Chromebook'));
+    const line = lineOf('Chromebook');
+    expect(qtyOf(line)).toBe('20');
+    expect(within(line).getByText('All 20 available are in your cart')).toBeInTheDocument();
+    expect(cart().querySelector('.cnt')?.textContent).toBe('20');
+    // The card's button now says why it is dimmed, and a second press changes nothing.
+    const full = screen.getByRole('button', {
+      name: 'All 20 available are in your cart: Chromebook',
+    });
+    expect(full).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(full);
+    expect(qtyOf(lineOf('Chromebook'))).toBe('20');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('from 5 in the cart it sets 20, never 25', async () => {
+    saveDraft([{ itemId: CHROME, quantity: 5 }]);
+    await openPage();
+    fireEvent.click(addAllOf('Chromebook'));
+    expect(qtyOf(lineOf('Chromebook'))).toBe('20');
+  });
+
+  it('does not raise a line the server refused, and says why', async () => {
+    await openPage();
+    fireEvent.click(screen.getByText('Add Chromebook'));
+    fireEvent.click(screen.getByText('Add HDMI Cable'));
+    createOrderRequestAction.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'x',
+        details: {
+          reason: 'item_not_orderable',
+          settled: true,
+          replay: false,
+          items: { [CABLE]: 'hidden_from_orders' },
+        },
+      },
+    });
+    review();
+    await act(async () => submit());
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Close review' }));
+    vi.mocked(toast.error).mockClear();
+
+    fireEvent.click(addAllOf('HDMI Cable'));
+    expect(qtyOf(lineOf('HDMI Cable'))).toBe('1');
+    expect(toast.error).toHaveBeenCalledWith(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+
+    // The line that is still orderable fills.
+    fireEvent.click(addAllOf('Chromebook'));
+    expect(qtyOf(lineOf('Chromebook'))).toBe('20');
   });
 });
 

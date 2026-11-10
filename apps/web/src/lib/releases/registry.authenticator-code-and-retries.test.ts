@@ -71,6 +71,8 @@ const integrator: ReleaseViewer = {
 const NIGHT_IDS = [
   // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
   // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by feat/order-add-all (2026-11-10; was: without it): the Add all release is published later, at the top, and reaches whoever may place orders where Orders is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'order-add-all-2026-11',
   'count-sheet-long-names-2026-11',
   'approver-controls-own-warehouses-2026-11',
   'export-items-permission-2026-11',
@@ -179,16 +181,18 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[8]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[10]?.id).toBe(LISTS_ID);
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[9]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[9]?.status).toBe('published');
+    expect(RELEASES[10]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[11]?.id).toBe(LISTS_ID);
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: AUTH_CODE_ID): the web fixes release is published later, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: approver-controls-own-warehouses-2026-11): the count sheet release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'count-sheet-long-names-2026-11',
+      // Re-pinned by feat/order-add-all (2026-11-10; was: the count sheet release): the Add all release is published after it, at the top, the newest published release.
+      'order-add-all-2026-11',
     );
   });
 
@@ -206,8 +210,9 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-    expect(at).toBe(Math.max(...RELEASES.slice(8).map((r) => Date.parse(r.publishedAt))));
-    for (const r of RELEASES.slice(9)) {
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    expect(at).toBe(Math.max(...RELEASES.slice(9).map((r) => Date.parse(r.publishedAt))));
+    for (const r of RELEASES.slice(10)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -372,9 +377,10 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[8]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[9]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[10]?.id).toBe(LISTS_ID);
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[9]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[10]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[11]?.id).toBe(LISTS_ID);
   });
 
   it('is dated in the past on a whole minute, a minute before the authenticator code release, after #454 merged, and after every release below it', () => {
@@ -387,7 +393,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-    for (const r of RELEASES.slice(10)) {
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    for (const r of RELEASES.slice(11)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

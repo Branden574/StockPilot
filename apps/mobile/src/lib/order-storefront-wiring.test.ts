@@ -1084,3 +1084,77 @@ describe('the storefront’s smaller words (PO-4 review)', () => {
     for (const src of [checkout, catalog]) expect(src).toContain("value={warehouse?.name || MISSING_VALUE}");
   });
 });
+
+// "Add all" (owner request 2026-11-10): one press sets a line to everything
+// available, in place of typing the number. The quantity, the three states
+// and the words are core's, the website's too (addAllTarget, addAllState,
+// addAllButtonCopy, addAllLabelCopy). It is in the item details sheet and the
+// quantity sheet; the catalog row waits for a simulator walk. Mutations
+// caught: a press that sends what is available without the order limit, a
+// button drawn for a marked line or with everything already in the cart, one
+// that is live while the cart is locked, the sheet not told about the lock or
+// the mark, the announcement saying a number the cart does not hold, the
+// button's words written here, and a button on the row.
+describe('Add all in the item details sheet and the quantity sheet', () => {
+  const quantitySheet = sheets.slice(sheets.indexOf('export function QuantitySheet('), sheets.indexOf('export function QuickViewSheet('));
+  const quick = flat(catalog.slice(catalog.indexOf("sheet?.kind === 'quick' && sheetItem"), catalog.indexOf("sheet?.kind === 'kit' && sheetKit")));
+  const quantityCall = flat(catalog.slice(catalog.indexOf("sheet?.kind === 'quantity' && sheetItem"), catalog.indexOf("sheet?.kind === 'quick' && sheetItem")));
+
+  it('the quantity sheet offers it only when core says so and the line is not marked', () => {
+    const fn = flat(quantitySheet);
+    expect(fn).toContain("{addAllState(available, quantity) === 'offer' && !notOrderable ? (");
+    expect(fn).toMatch(/<SmallAction label=\{addAllButtonCopy\(available\)\} accessibilityLabel=\{addAllLabel\(item\.name, available, quantity\)\} disabled=\{locked\} hint=\{changeLockedHint\(locked\)\} onPress=\{\(\) => onSave\(addAllTarget\(available\)\)\} \/>/);
+    // Never what is available without the order's limit.
+    expect(fn).not.toMatch(/onSave\(available\)/);
+    // Set quantity is still there, as it was.
+    expect(fn).toMatch(/label=\{STOREFRONT_QUANTITY_SAVE_COPY\} variant="primary" onPress=\{save\}/);
+  });
+
+  it('the catalog tells the quantity sheet about the lock and the mark, and says the number the cart now holds', () => {
+    expect(quantityCall).toContain('locked={locked}');
+    expect(quantityCall).toContain('notOrderable={snap.notOrderable.has(sheetItem.id)}');
+    expect(quantityCall).toContain('const refused = session.setQuantity(sheetItem.id, value);');
+    expect(quantityCall).toContain('if (!refused) say(quantityAnnouncement(sheetItem.name, value));');
+  });
+
+  it('checkout’s quantity sheet (the cart’s count) is told the same two things and says the number saved', () => {
+    const call = flat(checkout.slice(checkout.indexOf('<QuantitySheet'), checkout.indexOf("{sheet?.kind === 'for' ?")));
+    expect(call).toContain('locked={locked}');
+    expect(call).toContain('notOrderable={snap.notOrderable.has(quantityItem.id)}');
+    expect(call).toContain('const refused = session.setQuantity(quantityItem.id, value);');
+    expect(call).toContain('if (!refused) AccessibilityInfo.announceForAccessibility(quantityAnnouncement(quantityItem.name, value));');
+    // The sheet is opened from these two screens only.
+    const users = PRODUCT_FILES.filter((f) => /<QuantitySheet\b/.test(readFileSync(f, 'utf8'))).map((f) => path.relative(ROOT, f)).sort();
+    expect(users).toEqual(['app/order/new/checkout.tsx', CATALOG]);
+  });
+
+  it('the item details sheet offers it under the same rule, sets core’s target and says it', () => {
+    expect(quick).toContain("{addAllState(availableOf(sheetItem), qtyMap.get(sheetItem.id) ?? 0) === 'offer' && !snap.notOrderable.has(sheetItem.id) ? (");
+    expect(quick).toContain('label={addAllButtonCopy(availableOf(sheetItem))}');
+    expect(quick).toContain('accessibilityLabel={addAllLabel(sheetItem.name, availableOf(sheetItem), qtyMap.get(sheetItem.id) ?? 0)}');
+    expect(quick).toContain('disabled={locked}');
+    expect(quick).toContain('hint={changeLockedHint(locked)}');
+    expect(quick).toContain('const target = addAllTarget(availableOf(sheetItem));');
+    expect(quick).toContain('if (!session.setQuantity(sheetItem.id, target)) say(quantityAnnouncement(sheetItem.name, target));');
+    expect(quick).not.toMatch(/setQuantity\(sheetItem\.id, availableOf\(sheetItem\)\)/);
+    // The sheet's own control is still the row's: the stepper, or Add.
+    expect(quick).toContain('label={STOREFRONT_ADD_COPY}');
+    expect(quick).toContain('<Stepper');
+  });
+
+  it('the words are core’s, never written on the phone', () => {
+    for (const file of STOREFRONT_FILES) {
+      const src = codeOnly(readFileSync(file, 'utf8'));
+      expect(src, file).not.toMatch(/['"`>]Add all\b/);
+      expect(src, file).not.toMatch(/the most one order can hold/);
+    }
+    const a11ySrc = codeOnly(read('src/lib/order-storefront/a11y.ts'));
+    expect(a11ySrc).toMatch(/export function addAllLabel\(name: string, available: number, inCart: number\): string \{\s*return addAllLabelCopy\(name, available, inCart\);\s*\}/);
+  });
+
+  it('the catalog row, the cart panel and the kit row have none', () => {
+    for (const rel of [ITEM_ROW, `${COMPONENTS}/cart-panel.tsx`, `${COMPONENTS}/kit-row.tsx`, CONTROLS]) {
+      expect(codeOnly(read(rel)), rel).not.toMatch(/addAll(State|Target|ButtonCopy|Label)/);
+    }
+  });
+});

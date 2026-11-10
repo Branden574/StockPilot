@@ -28,6 +28,67 @@ import type { Release } from '@stockpilot/core';
  */
 export const RELEASES: Release[] = [
   {
+    id: 'order-add-all-2026-11',
+    revision: 1,
+    // "Add all" on Place an order (owner request 2026-11-10). Published with
+    // the pull request that ships it: the release is announced by the
+    // deployment that holds it, so never before the button is live.
+    // Platform: the website. The phone's code is in the same pull request
+    // (the item details sheet and the quantity sheet) but reaches phones only
+    // with the next phone update, so the words say "on the website" and that
+    // the mobile app gets it with its next update. When that update is out,
+    // say so in a new release; do not bump this revision for it.
+    // Claims checked against the code:
+    // - "each item and book with 2 or more available": SfAddControl
+    //   (components/orders/storefront/storefront-cards.tsx) draws the button
+    //   unless core's addAllState is 'hidden', which is fewer than 2
+    //   (packages/core/src/orders/storefront/logic.ts); a book is the same
+    //   catalog row and card.
+    // - "on the cards, in Compact view and in Quick view": SfAddControl's
+    //   three call sites (ProductCard, CompactRow, QuickViewDrawer).
+    // - "the line becomes everything available; it does not add on top": a
+    //   press calls onSetQty(item.id, addAllTarget(available)), the cart's
+    //   set-qty.
+    // - "Available": on hand minus what open orders already hold
+    //   (availableOf), the number the card already shows.
+    // - "Add 10,000 ... the most one order can hold": addAllTarget stops at
+    //   ORDER_MAX_UNITS_PER_LINE (core orders/place-order.ts), and the words
+    //   are addAllButtonCopy's.
+    // - "dimmed once everything available is in your cart": the 'full' state,
+    //   aria-disabled.
+    // - "Each size is its own item": the catalog has one row per item and no
+    //   size picker.
+    // - "Stock is held when the order is approved, as before": nothing in
+    //   placing changed; the button asks for what the stepper already allows.
+    // Not said: any speed, and nothing about the public order link, the
+    // customer portal, kits or Frequently ordered, which do not have it.
+    // Who is told: who may place orders where Orders is on, the page's own
+    // gate (orders/new/page.tsx: can(ctx, 'orders:request') and
+    // checkModuleAccess('orders')).
+    status: 'published',
+    title: 'Place an order has an Add all button for each item and book',
+    summary:
+      'On the website, Place an order now has an Add all button beside Add to cart on each item and book with 2 or more available. One press puts everything available in your cart, so you no longer type the number. The mobile app gets the button with its next update.',
+    publishedAt: '2026-11-10T21:50:00Z',
+    entries: [
+      {
+        id: 'order-add-all',
+        category: 'new',
+        area: 'Orders',
+        title: 'Add all puts everything available of an item or book in your cart in one press',
+        whatChanged:
+          'On the website, in Place an order, each item and book with 2 or more available has an Add all button beside Add to cart: on the cards, in Compact view and in Quick view. One press sets that item in your cart to everything available, the number its card shows. If your cart already holds some of it, the line becomes everything available; it does not add on top. Each size is its own item, so each has its own button. An item with more than 10,000 available shows Add 10,000 in its place, the most one order can hold.',
+        whyItMatters:
+          'To order all of an item you had to add it and then type the number shown on its card.',
+        howItAffectsYou:
+          'Press Add all to take everything available of an item. The button is dimmed once everything available is in your cart. You can still type a number or use plus and minus to change it. Stock is held when the order is approved, as before. The mobile app does not have the button yet; it comes with the app’s next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
     id: 'count-sheet-long-names-2026-11',
     revision: 1,
     // #492 (squash 80c3bf114; web only, no phone code, no migration), live on
