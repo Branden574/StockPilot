@@ -191,18 +191,21 @@
                 <span class="cat">
                   "Classroom supplies"
               <div class="sf-card-ctl">
-                <div class="sf-step">
-                  <button aria-label="Decrease" type="button">
-                    <svg aria-hidden="true" class="lucide lucide-minus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M5 12h14">
-                  <span class="q">
-                    <input aria-label="Quantity" class="qi" inputmode="numeric" pattern="[0-9]*" type="text" value="1">
-                    <span class="in-lbl">
-                      "IN CART"
-                  <button aria-label="Increase" title="Increase" type="button">
-                    <svg aria-hidden="true" class="lucide lucide-plus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M5 12h14">
-                      <path d="M12 5v14">
+                <div class="sf-ctl">
+                  <div class="sf-step">
+                    <button aria-label="Decrease" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-minus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 12h14">
+                    <span class="q">
+                      <input aria-label="Quantity" class="qi" inputmode="numeric" pattern="[0-9]*" type="text" value="1">
+                      <span class="in-lbl">
+                        "IN CART"
+                    <button aria-label="Increase" title="Increase" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-plus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 12h14">
+                        <path d="M12 5v14">
+                  <button aria-label="Add all 4 available: Composition Notebook" class="sf-add sf-add-all" type="button">
+                    "Add all"
           <div class="sf-card" data-in-cart="true" data-out="false">
             <div class="sf-ph-box">
               <div class="sf-ph">
@@ -226,18 +229,21 @@
                 <span class="cat">
                   "Furniture"
               <div class="sf-card-ctl">
-                <div class="sf-step">
-                  <button aria-label="Decrease" type="button">
-                    <svg aria-hidden="true" class="lucide lucide-minus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M5 12h14">
-                  <span class="q">
-                    <input aria-label="Quantity" class="qi" inputmode="numeric" pattern="[0-9]*" type="text" value="1">
-                    <span class="in-lbl">
-                      "IN CART"
-                  <button aria-label="Increase" title="Increase" type="button">
-                    <svg aria-hidden="true" class="lucide lucide-plus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M5 12h14">
-                      <path d="M12 5v14">
+                <div class="sf-ctl">
+                  <div class="sf-step">
+                    <button aria-label="Decrease" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-minus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 12h14">
+                    <span class="q">
+                      <input aria-label="Quantity" class="qi" inputmode="numeric" pattern="[0-9]*" type="text" value="1">
+                      <span class="in-lbl">
+                        "IN CART"
+                    <button aria-label="Increase" title="Increase" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-plus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 12h14">
+                        <path d="M12 5v14">
+                  <button aria-label="Add all 36 available: Folding Chair" class="sf-add sf-add-all" type="button">
+                    "Add all"
           <div class="sf-card" data-in-cart="false" data-out="true">
             <div class="sf-ph-box">
               <div class="sf-ph">
@@ -286,18 +292,21 @@
                 <span class="cat">
                   "Classroom supplies"
               <div class="sf-card-ctl">
-                <div class="sf-step">
-                  <button aria-label="Decrease" type="button">
-                    <svg aria-hidden="true" class="lucide lucide-minus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M5 12h14">
-                  <span class="q">
-                    <input aria-label="Quantity" class="qi" inputmode="numeric" pattern="[0-9]*" type="text" value="1">
-                    <span class="in-lbl">
-                      "IN CART"
-                  <button aria-label="Increase" title="Increase" type="button">
-                    <svg aria-hidden="true" class="lucide lucide-plus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
-                      <path d="M5 12h14">
-                      <path d="M12 5v14">
+                <div class="sf-ctl">
+                  <div class="sf-step">
+                    <button aria-label="Decrease" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-minus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 12h14">
+                    <span class="q">
+                      <input aria-label="Quantity" class="qi" inputmode="numeric" pattern="[0-9]*" type="text" value="1">
+                      <span class="in-lbl">
+                        "IN CART"
+                    <button aria-label="Increase" title="Increase" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-plus" fill="none" height="13" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="13" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M5 12h14">
+                        <path d="M12 5v14">
+                  <button aria-label="Add all 120 available: Whiteboard Markers, 4-pack" class="sf-add sf-add-all" type="button">
+                    "Add all"
       <div class="sf-rail">
         <div aria-label="Order cart" class="sf-cart">
           <div aria-atomic="true" aria-live="polite" class="sf-sr-only">

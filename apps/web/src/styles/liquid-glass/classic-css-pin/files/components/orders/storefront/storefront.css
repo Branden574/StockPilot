@@ -1165,6 +1165,37 @@
   border-style: dashed;
 }
 
+/* "Add all" beside the card's control (SfAddControl). The two sit side by
+   side where the main control keeps 128px (the list row, the quick view) and
+   wrap to two lines where it would not (a 220px grid card), so the stepper's
+   count is never squeezed. */
+.sp-storefront .sf-ctl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.sp-storefront .sf-ctl > .sf-add,
+.sp-storefront .sf-ctl > .sf-step {
+  width: auto;
+  min-width: 0;
+  flex: 3 1 128px;
+}
+.sp-storefront .sf-ctl > .sf-add-all {
+  flex: 1 0 auto;
+  padding: 0 10px;
+  white-space: nowrap;
+  color: var(--sf-ink-2);
+}
+/* Everything available is already in the cart: dimmed like a disabled Add,
+   but still focusable, so the keyboard does not lose its place. */
+.sp-storefront .sf-add-all[aria-disabled='true'] {
+  border-color: var(--sf-line);
+  color: var(--sf-ink-4);
+  background: transparent;
+  cursor: not-allowed;
+}
+
 .sp-storefront .sf-step {
   width: 100%;
   height: 32px;
@@ -1597,7 +1628,7 @@
 }
 .sp-storefront .sf-row {
   display: grid;
-  grid-template-columns: 46px minmax(0, 1fr) 150px 118px 128px;
+  grid-template-columns: 46px minmax(0, 1fr) 150px 118px 210px;
   gap: 12px;
   align-items: center;
   padding: 8px 16px;
@@ -1694,7 +1725,7 @@
 }
 @media (max-width: 1100px) {
   .sp-storefront .sf-row {
-    grid-template-columns: 46px minmax(0, 1fr) 118px 128px;
+    grid-template-columns: 46px minmax(0, 1fr) 118px 210px;
   }
   .sp-storefront .sf-row .cat {
     display: none;
@@ -2897,6 +2928,7 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   .sp-storefront .sf-pill,
   .sp-storefront .sf-chip,
   .sp-storefront .sf-add,
+  .sp-storefront .sf-add-all,
   .sp-storefront .sf-step,
   .sp-storefront .sf-btn-ghost,
   .sp-storefront .sf-btn-go,
@@ -2966,6 +2998,22 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   .sp-storefront .sf-row > :last-child {
     grid-column: 3;
     grid-row: 1 / span 2;
+  }
+  /* The row's control cell is as wide as its content here: "Add all" goes
+     under the main control, in a fixed width (the stepper's two 44px buttons
+     and a count of up to five digits), so the name keeps its room. The
+     stepper's IN CART label is dropped in that width; the count stays. */
+  .sp-storefront .sf-row .sf-ctl {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    width: 148px;
+  }
+  .sp-storefront .sf-row .sf-ctl .in-lbl {
+    display: none;
+  }
+  .sp-storefront .sf-row .sf-ctl > .sf-add,
+  .sp-storefront .sf-row .sf-ctl > .sf-step {
+    flex: none;
   }
   .sp-storefront .sf-modal-bk {
     padding: 12px;

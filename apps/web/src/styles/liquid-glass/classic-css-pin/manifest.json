@@ -1,5 +1,5 @@
 {
-  "mergeBase": "7dacbd7aa30961259708bd3dc756339e10f58b05",
+  "mergeBase": "778b42231f8430e1a4ca0e5c6a6c064d448b1b38",
   "files": [
     "app/(auth)/auth.css",
     "app/globals.css",
