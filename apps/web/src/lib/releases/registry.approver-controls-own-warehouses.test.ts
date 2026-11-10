@@ -46,6 +46,10 @@ import { RELEASES } from './registry';
 const ID = 'approver-controls-own-warehouses-2026-11';
 const ENTRY_ID = 'approver-controls-own-warehouses';
 const EXPORT_ID = 'export-items-permission-2026-11';
+// Added by docs/whats-new-count-sheet-long-names (2026-11-10): the count sheet
+// release (#492), published later, at the top, above this one. It reaches
+// whoever can open a cycle count's PDF where Cycle Counts is on.
+const COUNT_SHEET_ID = 'count-sheet-long-names-2026-11';
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = () => release().entries.find((e) => e.id === ENTRY_ID)!;
 
@@ -136,14 +140,16 @@ const LOAD_UPDATE =
   'tap Restart now when the app says Update ready, or close the app completely and open it again.';
 
 describe('the S2 release: order, status and date', () => {
-  it('is published once, as revision 1, at the top, above the Export items release, and no draft is left', () => {
+  it('is published once, as revision 1, directly below the count sheet release (published later, at the top) and above the Export items release, and no draft is left', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(RELEASES[1]?.id).toBe(EXPORT_ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: this release at 0, the newest published, and the Export items release at 1): the count sheet release is published later, at the top, the newest published release, so this one is at 1, directly above the Export items release at 2.
+    expect(RELEASES[0]?.id).toBe(COUNT_SHEET_ID);
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES[2]?.id).toBe(EXPORT_ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(COUNT_SHEET_ID);
     expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
     // Permanent, unused anywhere else, and ends in the month it went out.
     expect(ID).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*-2026-11$/);
@@ -159,7 +165,8 @@ describe('the S2 release: order, status and date', () => {
     // 2026-11-03; the phone update was published at 07:35Z on 2026-11-05.
     expect(at).toBeGreaterThan(Date.parse('2026-11-03T01:47:00Z'));
     expect(at).toBeGreaterThan(Date.parse('2026-11-05T07:35:00Z'));
-    for (const r of RELEASES.slice(1)) {
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: slice(1)): the count sheet release is published at the top, so the releases below this one start at 2, and the one above it is dated later.
+    for (const r of RELEASES.slice(2)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -249,10 +256,21 @@ describe('the S2 release: who is told', () => {
     expect(ROLE_PERMISSIONS.viewer).not.toContain('orders:approve');
   });
 
-  it('is the first notice for whoever it reaches, and a member it does not reach keeps their notice', () => {
+  it('is the first notice for whoever it reaches once the count sheet release is read, and a member it does not reach keeps their notice', () => {
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: nothing read or seen): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read and seen here first; for a reader it does not reach, the read and the stamp change nothing.
+    const countSheetRead = {
+      release_id: COUNT_SHEET_ID,
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-10T20:10:00Z',
+      read_at: '2026-11-10T20:10:00Z',
+    };
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(COUNT_SHEET_ID);
     for (const v of [everyone, staffApprover, staffPicker]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(buildReleaseList(RELEASES, v, [countSheetRead], null).latestUnread?.id, v.role).toBe(
+        ID,
+      );
+      expect(legacyAnnouncementsFor(RELEASES, v, { [COUNT_SHEET_ID]: true })[0], v.role).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,

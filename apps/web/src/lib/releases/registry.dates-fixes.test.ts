@@ -156,6 +156,8 @@ describe('the dates fixes release is published', () => {
     const newerReads = [
       // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without them): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
       // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+      // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+      'count-sheet-long-names-2026-11',
       'approver-controls-own-warehouses-2026-11',
       'export-items-permission-2026-11',
       'mobile-app-fixes-2026-11-02',
@@ -204,6 +206,8 @@ describe('the dates fixes release is published', () => {
     const redesignRead = [
       // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without them): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
       // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+      // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+      'count-sheet-long-names-2026-11',
       'approver-controls-own-warehouses-2026-11',
       'export-items-permission-2026-11',
       'mobile-app-fixes-2026-11-02',
@@ -236,13 +240,15 @@ describe('the dates fixes release is published', () => {
     // release and the member the small-fixes-8 release, the notices these two were told before it.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 6)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 10)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 11)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 11), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 12), null).latestUnread?.id,
     ).toBe('export-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 6)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 10)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 11)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 11), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 12), null).latestUnread?.id,
     ).toBe('small-fixes-8-2026-10');
     // Added by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31): once the release at the top
     // (its read sits first in redesignRead) is read, the owner is told the small-fixes-8 release.
@@ -254,8 +260,9 @@ describe('the dates fixes release is published', () => {
     // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all five are read.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 7)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 11)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 12)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 12), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 13), null).latestUnread?.id,
     ).toBe('small-fixes-8-2026-10');
     // Added by docs/whats-new-small-fixes-8 (2026-10-31): once the release at the top (its read sits first in
     // redesignRead) is read, both are told the manage-order-items-and-app-fixes release.
@@ -269,13 +276,15 @@ describe('the dates fixes release is published', () => {
     // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all six are read.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 8)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 12)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 13)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 13), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 14), null).latestUnread?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 8)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 12)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 13)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 13), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 14), null).latestUnread?.id,
     ).toBe('manage-order-items-and-app-fixes-2026-10');
     // Added by docs/whats-new-2026-10-30 (2026-10-30): once the release at the top (its read sits first in
     // redesignRead) is read, both are told the ended-session-group-page-fixes release.
@@ -291,13 +300,15 @@ describe('the dates fixes release is published', () => {
     // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all seven are read.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 9)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 13)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 14)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 14), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 15), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 9)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 13)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 14)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 14), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 15), null).latestUnread?.id,
     ).toBe('ended-session-group-page-fixes-2026-10');
     // Once the release at the top (its read sits first in redesignRead) is read, both are told
     // the unsubscribe-rack-question-fixes release.
@@ -315,13 +326,15 @@ describe('the dates fixes release is published', () => {
     // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all eight are read.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 10)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 14)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 15)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 15), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 16), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 10)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 14)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 15)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 15), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 16), null).latestUnread?.id,
     ).toBe('unsubscribe-rack-question-fixes-2026-10');
     // Once the newest release (its read sits first in redesignRead) is read, both are told
     // redesign-2026-10, as before.
@@ -341,13 +354,15 @@ describe('the dates fixes release is published', () => {
     // update-ready-and-fixes release now sits fourth in redesignRead, among them, and all nine are read.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 11)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 15)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 16)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 16), null).latestUnread?.id,
+      buildReleaseList(RELEASES, everyone, redesignRead.slice(0, 17), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: redesignRead.slice(0, 11)): the reads of the Export items, phone update, clearer web messages and QW1 releases sit first, so the slice takes four more.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: redesignRead.slice(0, 15)): the read of the S2 release sits first, so the slice takes one more.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: redesignRead.slice(0, 16)): the read of the count sheet release sits first, so the slice takes one more.
     expect(
-      buildReleaseList(RELEASES, member, redesignRead.slice(0, 16), null).latestUnread?.id,
+      buildReleaseList(RELEASES, member, redesignRead.slice(0, 17), null).latestUnread?.id,
     ).toBe('redesign-2026-10');
     expect(buildReleaseList(RELEASES, member, redesignRead, null).latestUnread?.id).toBe(
       'group-selected-2026-10',
@@ -581,7 +596,8 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: 22): the web fixes and archived charters releases are published after it, at the top, so it sits two places lower.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: 24): the Export items, phone update, clearer web messages and QW1 releases are published after it, at the top, so it sits four places lower.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(at).toBe(29);
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: 29): the count sheet release is published after it, at the top, so it sits one place lower.
+    expect(at).toBe(30);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: the pages-keep-groups-whole release at 0, the public link release at 8): the three redesign releases and the parked ai-search-finds-every-item release (#367) are published at the top, above the pages-keep-groups-whole release, so every position below them moves down by four.
@@ -593,26 +609,27 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: RELEASES[1] to [3], below the B44 phone update draft at 0): the draft is folded into the update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, so these three move up one place and it takes [3]; every position from [4] down stays.
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0 and the public link release at 21): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(RELEASES[7]?.id).toBe('authenticator-code-requests-2026-11');
-    expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe('integration-retries-2026-11');
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    expect(RELEASES[8]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[9]?.id).toBe('integration-retries-2026-11');
     expect(RELEASES[9]?.status).toBe('published');
-    expect(RELEASES[10]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[10]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
     expect(RELEASES[10]?.status).toBe('published');
-    expect(RELEASES[11]?.id).toBe('export-fixes-2026-10');
+    expect(RELEASES[11]?.id).toBe('update-ready-and-fixes-2026-11');
     expect(RELEASES[11]?.status).toBe('published');
-    // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
-    expect(RELEASES[12]?.id).toBe('small-fixes-8-2026-10');
+    expect(RELEASES[12]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES[12]?.status).toBe('published');
-    expect(RELEASES[13]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
+    // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
+    expect(RELEASES[13]?.id).toBe('small-fixes-8-2026-10');
     expect(RELEASES[13]?.status).toBe('published');
-    expect(RELEASES[14]?.id).toBe('ended-session-group-page-fixes-2026-10');
+    expect(RELEASES[14]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(RELEASES[14]?.status).toBe('published');
-    expect(RELEASES[15]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    expect(RELEASES[15]?.id).toBe('ended-session-group-page-fixes-2026-10');
     expect(RELEASES[15]?.status).toBe('published');
-    expect(RELEASES.slice(16, 20).map((r) => [r.id, r.status])).toEqual([
+    expect(RELEASES[16]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    expect(RELEASES[16]?.status).toBe('published');
+    expect(RELEASES.slice(17, 21).map((r) => [r.id, r.status])).toEqual([
       ['redesign-2026-10', 'published'],
       ['redesign-mobile-app-2026-10', 'published'],
       ['redesign-web-fixes-2026-10', 'published'],
@@ -620,25 +637,25 @@ describe('the dates fixes release is published', () => {
     ]);
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[20]?.id).toBe('pages-keep-groups-whole-2026-10');
-    expect(RELEASES[20]?.status).toBe('published');
-    expect(RELEASES[21]?.id).toBe('ungroup-follow-ups-2026-10');
+    expect(RELEASES[21]?.id).toBe('pages-keep-groups-whole-2026-10');
     expect(RELEASES[21]?.status).toBe('published');
-    expect(RELEASES[22]?.id).toBe('group-selected-2026-10');
+    expect(RELEASES[22]?.id).toBe('ungroup-follow-ups-2026-10');
     expect(RELEASES[22]?.status).toBe('published');
-    expect(RELEASES[23]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[23]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[23]?.status).toBe('published');
-    expect(RELEASES[24]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[24]?.id).toBe('ungroup-2026-10');
     expect(RELEASES[24]?.status).toBe('published');
-    expect(RELEASES[25]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[25]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[25]?.status).toBe('published');
-    expect(RELEASES[26]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[26]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[26]?.status).toBe('published');
-    expect(RELEASES[27]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[27]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[27]?.status).toBe('published');
-    expect(RELEASES[28]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[28]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[28]?.status).toBe('published');
-    expect(Date.parse(RELEASES[28]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[29]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[29]?.status).toBe('published');
+    expect(Date.parse(RELEASES[29]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
