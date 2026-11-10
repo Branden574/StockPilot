@@ -27,7 +27,9 @@ import { RELEASES } from './registry';
  * printed cycle count sheet and variance report a long item name wraps inside
  * its own column, and a row is kept whole across a page break. Keeping rows
  * whole also fixed a sheet of one-line rows that ran past its first page: it
- * printed row 1 on page 1 and left rows 2 to 26 out
+ * printed row 1 on page 1 and left the rest of that page's rows out, 25 of
+ * them with no note on the count, one or two fewer with a note, and none on
+ * a sheet grouped by product
  * (lib/pdf/cycle-count.rows-across-pages.render.test.tsx renders it).
  *
  * Its own file, so the release tests other open branches edit stay as they
@@ -154,20 +156,38 @@ describe('the count sheet release: what it says', () => {
     expect(summary).toMatch(
       /^On a printed cycle count sheet or variance report, a long item name /,
     );
-    expect(summary).toContain('every item now prints');
+    expect(summary).toContain('those items now print');
     // Web only: nothing to load in the mobile app.
     expect(readerText(release()).join(' ')).not.toMatch(/mobile app|Restart now|Update ready/);
   });
 
   it('says of the missing items only what the reproduction showed, and does not say never', () => {
     // On the component as it was before #492, a sheet or variance report of
-    // one-line rows printed every row up to 26 rows, and from 27 rows on
-    // printed row 1 on page 1 and left out rows 2 to 26 (25 rows).
+    // one-line rows that ran past its first page printed row 1 on page 1 and
+    // left out the rest of that page's rows: rows 2 to 26 (25 rows) with no
+    // note on the count, 2 to 25 with a one-line note, 2 to 24 with a
+    // three-line note. Sheets of 27, 30 and 41 one-line rows in product
+    // groups of 6 lost none. So the words give no exact row count.
     for (const text of [release().summary, entry().whatChanged]) {
-      expect(text).toContain('27 or more items');
-      expect(text).toMatch(/first 26 (each )?took (a single|one) line/);
-      expect(text).toMatch(/leave out the (next 25|25 after it)/);
+      expect(text).toContain('longer than one page, not grouped by product, where');
+      expect(text).toMatch(
+        /where every item on the first page took (a single|one) line, could print/,
+      );
+      expect(text).toMatch(
+        /only the first item on page 1 and leave out the rest of that page(’s items \(about 25\)| \(about 25 items\)); (those items|they) now print\.$/,
+      );
     }
+    expect(entry().whyItMatters).toContain('about 25 items could be missing from the paper');
+    expect(entry().whatChanged.length).toBeLessThanOrEqual(600);
+    const text = readerText(release()).join(' ');
+    expect(text.replaceAll('about 25', '')).not.toMatch(/\b2[3-7]\b/);
+    expect(text).not.toMatch(/27 or more|first 26|25 after it|next 25/);
+    // A count over 10,000 lines is cut at PDF_MAX_LINES with a banner, so
+    // nothing here says every item of a count prints.
+    expect(text).not.toMatch(
+      /every item (now )?prints|every item of the count|no item is left out|\ball items\b/i,
+    );
+    expect(source('lib/pdf/count-sheet-cap.ts')).toContain('export const PDF_MAX_LINES = 10_000;');
     expect(entry().whatToDo).toContain('or one whose first page showed a single item');
     // A row over 400 characters may still split, so the entry says "unless".
     expect(entry().whatChanged).toContain('kept on one page unless it is extremely long');

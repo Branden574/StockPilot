@@ -60,11 +60,23 @@ export const RELEASES: Release[] = [
     // row at 27 or 35 it lost rows 2 to 26. At 80c3bf114 each of these
     // prints every row, 26 on page 1. Rows kept whole (wrap false) is what
     // fixed it; cycle-count.rows-across-pages.render.test.tsx pins it and
-    // fails on the old component. Not said: how long this lasted (not
-    // measured), and sports group rows (not rendered in the reproduction).
+    // fails on the old component. The review of this release rendered the
+    // same old component three more ways: a count with a one-line note lost
+    // rows 2 to 25 from 25 rows on, one with a three-line note rows 2 to 24
+    // from 24 rows on, and sheets of 27, 30 and 41 one-line rows in product
+    // groups of 6 (size runs) lost no row; an organisation logo changed
+    // nothing. So the words give no row count: "longer than one page",
+    // "every item on the first page took a single line", "about 25", "could",
+    // and "not grouped by product". Not said: how long this lasted (not
+    // measured).
+    // "those items now print", "they now print" and "the first page no
+    // longer leaves items out" speak of the first page only, so they stay
+    // true for a count over 10,000 lines, which is cut at PDF_MAX_LINES with
+    // a banner on its first page saying so (lib/pdf/count-sheet-cap.ts:18);
+    // nothing here says every item of a count prints.
     // Changed from the draft: the sentence on the missing rows in the
-    // summary and whatChanged, its reprint in whatToDo, "every item of the
-    // count is on the sheet" in howItAffectsYou, and "look exactly as
+    // summary and whatChanged, its reprint in whatToDo, "the first page no
+    // longer leaves items out" in howItAffectsYou, and "look exactly as
     // before" is now "keep the same columns", since a long sheet of short
     // names now prints rows it used to leave out.
     // Who is told: whoever can open the PDF, where Cycle Counts is on: the
@@ -72,9 +84,10 @@ export const RELEASES: Release[] = [
     // (app/api/cycle-counts/[id]/pdf/route.tsx:48-51), and the linked page
     // asks the module and the same two (cycle-counts/page.tsx:74, :83).
     status: 'published',
-    title: 'Printed cycle count sheets keep long item names in their column and print every item',
+    title:
+      'Printed cycle count sheets keep long item names in their column and no longer leave items off the first page',
     summary:
-      'On a printed cycle count sheet or variance report, a long item name now wraps inside its own column instead of running into the location or the next column. A sheet or report of 27 or more items, where each of the first 26 took a single line, used to print only the first item on its first page and leave out the 25 after it; every item now prints.',
+      'On a printed cycle count sheet or variance report, a long item name now wraps inside its own column instead of running into the location or the next column. A sheet or report longer than one page, not grouped by product, where every item on the first page took a single line, could print only the first item on page 1 and leave out the rest of that page’s items (about 25); those items now print.',
     publishedAt: '2026-11-10T20:02:00Z',
     entries: [
       {
@@ -82,13 +95,13 @@ export const RELEASES: Release[] = [
         category: 'fixed',
         area: 'Cycle counts',
         title:
-          'Long item names no longer run into the next column on printed count sheets, and no item is left out',
+          'Long item names no longer run into the next column on printed count sheets, and page 1 no longer leaves items out',
         whatChanged:
-          'On the printed cycle count sheet and the variance report (Print count sheet and Variance report PDF on a cycle count), a long item name now wraps onto more lines inside the Description column, with space before the Location column. A name or SKU with a long run of letters and numbers and no spaces is broken onto lines that fit. A row is kept on one page unless it is extremely long. A sheet of 27 or more items whose first 26 each took one line used to print only the first of them on page 1 and leave out the next 25; every item now prints.',
+          'On the printed cycle count sheet and the variance report (Print count sheet and Variance report PDF on a cycle count), a long item name now wraps onto more lines inside the Description column, with space before the Location column. A name or SKU with a long run of letters and numbers and no spaces is broken onto lines that fit. A row is kept on one page unless it is extremely long. A sheet longer than one page, not grouped by product, where every item on the first page took one line, could print only the first item on page 1 and leave out the rest of that page (about 25 items); they now print.',
         whyItMatters:
-          'A long name used to print right up against the location, or straight over it, so the sheet was hard to read on the warehouse floor. On a long sheet of short names, 25 items were not on the paper to be counted.',
+          'A long name used to print right up against the location, or straight over it, so the sheet was hard to read on the warehouse floor. On a long sheet of short names, about 25 items could be missing from the paper to be counted.',
         howItAffectsYou:
-          'Every name, SKU and location prints in full and stays in its own column, and every item of the count is on the sheet. Sheets of short names keep the same columns as before.',
+          'Every name, SKU and location prints in full and stays in its own column, and the first page no longer leaves items out. Sheets of short names keep the same columns as before.',
         whatToDo:
           'No action needed. Print the sheet again if you printed one with a long name, or one whose first page showed a single item.',
         link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
