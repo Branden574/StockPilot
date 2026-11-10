@@ -544,6 +544,18 @@
     background: var(--lg-surface-2);
     color: var(--lg-ink-4);
   }
+  /* "Add all" (.sf-add.sf-add-all beside the card's control) draws as the
+     tinted Add above. With everything available already in the cart it is
+     aria-disabled, not disabled (it keeps keyboard focus), so the rule above
+     does not reach it: the same dimmed look. It follows the hover rule and
+     weighs the same, so the pointer does not tint it again. */
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-add-all[aria-disabled='true'] {
+    border-color: var(--lg-line-2);
+    background: var(--lg-surface-2);
+    color: var(--lg-ink-4);
+  }
   :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step {
     height: 34px;
     grid-template-columns: 34px 1fr 34px;
@@ -568,6 +580,13 @@
   :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step:focus-within {
     border-color: var(--lg-accent);
     box-shadow: 0 0 0 3px var(--lg-focus-halo);
+  }
+  /* A list row's stepper beside "Add all" (a 210 px cell): the 34 px buttons
+     and the 14 px figure leave the count about 13 px beside the IN CART
+     label, less than two digits need. The label goes, as Classic drops it
+     at 639.98 px and under; the count and the button's name stay. */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row .sf-ctl .in-lbl {
+    display: none;
   }
 
   /* ── The list view (the card, .li rows) ──────────────────────────────── */
