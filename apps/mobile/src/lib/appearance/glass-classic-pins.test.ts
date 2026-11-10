@@ -97,11 +97,13 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '19ccb3b83458d0c9fcbc9400c13050eb870f595888a6a07f7525438ac712c46c',
   'app/(drawer)/(tabs)/cycle-counts.tsx':
     '1c00180e509cd5ea6b3d6584451599ad9f3efb178bd4805a6a8d10f1b887c412',
-  // The order storefront (native-core).
-  'app/order/new/checkout.tsx': 'e2c3eb994cb95dd7590466b09958bd031941c40aba7c370818407c31151d29f1',
+  // The order storefront (native-core). checkout.tsx and catalog-screen.tsx
+  // are pinned to main's own files at 778b42231 (Add all, #494, merged in
+  // 2026-11-10): Classic changed on main, and the pin follows main's code.
+  'app/order/new/checkout.tsx': '46e51a5768f765dac95b1a8928fe6b19a74ed2bdd04d197036fc82995be47118',
   'app/order/new/placed.tsx': '38c0ca856081d4cd2035d7ed5c45a0eb1cc8783fb18cfdba8dd84e672130a959',
   'src/components/order-storefront/catalog-screen.tsx':
-    '1ae87bd45b790a7233ed96d7e93c3d7343dfda36fb0f902bf1db758f3f8e5da4',
+    'cdc151c4f22e468f461588518543bd45bcd564eb99abf6ddd75ce2cfb2ad0e23',
   'src/components/order-storefront/storefront-state.tsx':
     'f9bee75bc78955389e5f40c9ae4c48ee644748570b7fec73b6b4c4d49a50fd7d',
   // New item, the count flows, Scan PO and Manage items (native-core).
