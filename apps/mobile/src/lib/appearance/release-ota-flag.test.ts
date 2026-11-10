@@ -270,16 +270,24 @@ describe('pnpm release:ota publishes with the Liquid Glass rollout the command n
   it('a function .env.local defines cannot replace the one that exports the value', () => {
     // (A body that named EXPO_PUBLIC_LIQUID_GLASS would be refused by the line check.)
     const hijack = 'lg_rollout_export() { echo hijacked; }\n';
-    // Mid-file: bash refuses the definition and reads on; the original runs.
+    // Mid-file: bash refuses the definition. What it does next depends on its
+    // version, and both ways are safe. The Mac's /bin/bash (3.2, where
+    // releases run) reads on, and the original function runs; a newer bash
+    // (5, on the CI runner) stops the script there under set -e, and nothing
+    // is published. Never the hijack, and never another value.
     const mid = run({ flag: 'off', envLocal: `${hijack}${FAKE_ENV}` });
     expect(mid.stderr).toContain('lg_rollout_export: readonly function');
-    expect(mid.status).toBe(0);
-    expect(mid.calls).toHaveLength(2);
-    for (const call of mid.calls) expect(call.flag).toBe('off');
-    expect(mid.stdout).toContain(
-      'Liquid Glass rollout in this update: EXPO_PUBLIC_LIQUID_GLASS=off\n',
-    );
     expect(mid.stdout).not.toContain('hijacked');
+    if (mid.status === 0) {
+      expect(mid.calls).toHaveLength(2);
+      for (const call of mid.calls) expect(call.flag).toBe('off');
+      expect(mid.stdout).toContain(
+        'Liquid Glass rollout in this update: EXPO_PUBLIC_LIQUID_GLASS=off\n',
+      );
+    } else {
+      expect(mid.calls).toEqual([]);
+      expect(mid.stdout).not.toContain('Liquid Glass rollout in this update');
+    }
     // Last line: the load itself fails, and the script stops publishing nothing.
     const last = run({ flag: 'off', envLocal: `${FAKE_ENV}${hijack}` });
     expect(last.status).not.toBe(0);
