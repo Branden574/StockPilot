@@ -4,6 +4,7 @@ import allowlistJson from '../../tests/e2e/appearance/glass-only-allowlist.json'
 import {
   compareInventories,
   disclosuresToPress,
+  KIND_HANDLING,
   menusToOpen,
   parseAction,
   routeMatches,
@@ -240,6 +241,25 @@ describe('stage 5 action inventory rule', () => {
         e.name,
     )) {
       expect(TWIN_RULES[entry.id], `a twin rule for ${entry.id}`).toBeDefined();
+    }
+  });
+
+  it('knows every kind the allowlist uses, and a kind with no action names no role', () => {
+    const known: readonly string[] = [
+      ...KIND_HANDLING.ruled,
+      ...KIND_HANDLING.named,
+      ...KIND_HANDLING.noAction,
+    ];
+    expect(new Set(known).size, 'each kind is handled one way').toBe(known.length);
+    // The file's own list of kinds and this check's list are the same list.
+    const described = Object.keys((allowlistJson as { kinds: Record<string, string> }).kinds);
+    expect([...described].sort()).toEqual([...known].sort());
+    for (const entry of ALLOWLIST.entries) {
+      expect(known, `${entry.id}: kind "${entry.kind}"`).toContain(entry.kind);
+      // An entry with a role is matched against glass-only actions and allows one:
+      // a kind that says it holds no action must not.
+      if ((KIND_HANDLING.noAction as readonly string[]).includes(entry.kind))
+        expect(entry.role, `${entry.id} holds no action, so it names no role`).toBeUndefined();
     }
   });
 });

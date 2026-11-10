@@ -190,6 +190,37 @@ function sameSitePath(target: string | null, origin: string | undefined): string
 const TWIN_KINDS = new Set(['duplicate action', 'public page link (no data action)']);
 
 /**
+ * Every kind glass-only-allowlist.json may use, by what this check does with
+ * an entry of it. A kind missing here has no rule: the unit test fails on an
+ * entry that uses one, so a new kind is given its place (and its rule, when
+ * it holds an action) before the lab run reads it.
+ *  - ruled: compareInventories, menusToOpen or disclosuresToPress names the
+ *    kind and applies its own rule (rename, twin, width, menu, disclosure);
+ *  - named: a glass-only control with no classic twin, allowed by its role
+ *    and name (or, by selector only, through SELECTOR_ONLY_ACTIONS);
+ *  - noAction: words, figures and marks holding no link, button or field, so
+ *    the entry names no role and there is no action to pair.
+ */
+export const KIND_HANDLING = {
+  ruled: [
+    'renamed action',
+    'duplicate action',
+    'public page link (no data action)',
+    'replaced below a width',
+    'moved into a menu below a width',
+    'hidden in a width band (target on screen)',
+    'disclosure of classic actions (no action)',
+  ],
+  named: ['appearance control (no data action)', 'presentation control (no data action)'],
+  noAction: [
+    'decoration (no action)',
+    'moved block (no action)',
+    'summary block (no action)',
+    'summary (no action)',
+  ],
+} as const;
+
+/**
  * The role and name an entry's glass-only action has, when the entry says it
  * only by selector (the external pages' appearance corner is the header
  * menu's trigger, named for glass).
