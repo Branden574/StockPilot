@@ -150,9 +150,10 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     }
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[5]?.id).toBe(WEB_FIXES_ID);
-    expect(RELEASES[6]?.id).toBe(CHARTERS_ID);
-    expect(RELEASES[7]?.id).toBe(AUTH_CODE_ID);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[6]?.id).toBe(WEB_FIXES_ID);
+    expect(RELEASES[7]?.id).toBe(CHARTERS_ID);
+    expect(RELEASES[8]?.id).toBe(AUTH_CODE_ID);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
@@ -174,9 +175,10 @@ describe('the two releases of 2026-11-02 evening: order, status and dates', () =
     expect(web).toBeGreaterThan(charters);
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every release): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top, so it is the newest from position 4 on.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(web).toBe(Math.max(...RELEASES.slice(5).map((r) => Date.parse(r.publishedAt))));
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(web).toBe(Math.max(...RELEASES.slice(6).map((r) => Date.parse(r.publishedAt))));
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    for (const r of RELEASES.slice(7)) {
+    for (const r of RELEASES.slice(8)) {
       expect(charters, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

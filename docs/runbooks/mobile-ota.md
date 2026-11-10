@@ -22,18 +22,35 @@ git switch main && git pull --ff-only
 git status --short                 # must print nothing
 pnpm install --frozen-lockfile     # whenever a merged PR changed pnpm-lock.yaml or patches/
 cd apps/mobile
-pnpm release:ota -m "What changed, in one sentence"
+EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota -m "What changed, in one sentence"
 ```
 
 `pnpm release:ota` with no arguments uses the last commit's message instead.
 
+`EXPO_PUBLIC_LIQUID_GLASS` is the Liquid Glass rollout the update ships with,
+and every publish must name it: `off` (classic for everyone), `opt-in`
+(classic unless the person chose Liquid Glass) or `default` (Liquid Glass
+unless the person chose Classic). Give the rollout phones have now: the
+value the last production update printed ("Liquid Glass rollout in this
+update: ..." at the top of its release log), unless this update is the one
+meant to change it. It is inlined into the bundle, so an update without it
+would turn every phone it reaches back to classic, and a wrong one changes the
+look of every phone it reaches.
+
 What it does (`apps/mobile/scripts/release-ota.sh`):
 
-1. Stops unless `apps/mobile/.env.local` exists (a link to the real settings,
+1. Stops unless `EXPO_PUBLIC_LIQUID_GLASS` from the command is `off`, `opt-in`
+   or `default` (unset and empty are refused), and prints the value it
+   publishes with. It stops too when `apps/mobile/.env.local` names it (that
+   file would override the command), keeps the command's value read-only and
+   sets it again after loading the file, so no line in that file can change
+   what is published or printed (`scripts/liquid-glass-rollout.sh`). EAS server-side variables of the `production` environment
+   win over the shell, so none may set it.
+2. Stops unless `apps/mobile/.env.local` exists (a link to the real settings,
    kept outside the repository) and sets `EXPO_PUBLIC_SENTRY_DSN` and
    `SENTRY_AUTH_TOKEN`, then loads it into the shell, so its `EXPO_PUBLIC_*`
    values are bundled.
-2. Publishes:
+3. Publishes:
    `pnpm dlx eas-cli@20.3.0 update --channel production --environment production --non-interactive`
    with your `-m "..."`, or with `--auto` (the last commit's message) when you
    gave no arguments.
@@ -43,7 +60,7 @@ What it does (`apps/mobile/scripts/release-ota.sh`):
    - `--environment production` is required; see the next section.
    - No `--platform` flag: with this Expo SDK, eas-cli 20.3.0 exports iOS and
      Android (never web), so one update group carries both.
-3. Uploads that update's source maps from `dist/_expo/static/js` to Sentry
+4. Uploads that update's source maps from `dist/_expo/static/js` to Sentry
    (`@sentry/cli sourcemaps upload`). It needs `SENTRY_ORG` and
    `SENTRY_PROJECT` as well, and checks them only here, after the publish. The
    maps exist only in this checkout's `dist/`, right after the publish;
@@ -223,13 +240,18 @@ production:
 - Build with the `simulator-ota-test` profile: the `simulator` profile on the
   `ota-test` channel (and its `ota-test` branch). No store or TestFlight build.
 - Publish every test update with `scripts/release-ota-test.sh`, from
-  `apps/mobile` in the worktree under test:
+  `apps/mobile` in the worktree under test, naming the Liquid Glass rollout
+  as for `pnpm release:ota` (`default` proves what phones get at G3; the
+  `simulator-ota-test` build embeds `default`, and an update without the flag
+  would turn it to classic):
 
   ```bash
-  bash scripts/release-ota-test.sh ota-test --message 'Proof U1'
+  EXPO_PUBLIC_LIQUID_GLASS=default bash scripts/release-ota-test.sh ota-test --message 'Proof U1'
   ```
 
-  It refuses an empty channel, `production` and `preview`, loads
+  It refuses an empty channel, `production` and `preview`, refuses a missing
+  or unknown rollout and an `.env.local` that names it (the same checks as
+  `pnpm release:ota`, in `scripts/liquid-glass-rollout.sh`), loads
   `.env.local` into the shell without printing it (with
   `--environment production`, eas-cli turns off Expo's own `.env` loading),
   publishes iOS only, runs the host check from "Verify after publishing"
@@ -331,9 +353,10 @@ change** (e.g. `1.0.0 → 1.0.1`). The new binary then gets a fresh
 embedded bundle and only ever receives OTAs published from matching code.
 
 **Recovery if you already shipped the native build WITHOUT bumping** (as on
-2026-06-18): publish a fresh OTA from the post-change code (`pnpm release:ota`
-from an up-to-date, clean `main`) so the latest update for that runtime is
-compatible again; it supersedes the stale one. Already-installed copies that
+2026-06-18): publish a fresh OTA from the post-change code
+(`EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota` from an up-to-date,
+clean `main`, with the rollout phones have now: see "Publish") so the latest
+update for that runtime is compatible again; it supersedes the stale one. Already-installed copies that
 cached the bad bundle must **delete + reinstall** (a fast crash can kill the
 process before the corrected OTA finishes downloading in the background).
 

@@ -25,7 +25,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com",
-        "SENTRY_DISABLE_AUTO_UPLOAD": "true"
+        "SENTRY_DISABLE_AUTO_UPLOAD": "true",
+        "EXPO_PUBLIC_LIQUID_GLASS": "default"
       }
     },
     "simulator-ota-test": {
@@ -58,7 +59,8 @@
         "EXPO_PUBLIC_API_URL": "https://stockpilotusa.com",
         "EXPO_PUBLIC_SENTRY_DSN": "https://6e90ea1479f67a57f431e95244902ade@o4511264376881152.ingest.us.sentry.io/4511632721444864",
         "SENTRY_ORG": "branden-vincent-walker",
-        "SENTRY_PROJECT": "stockpilot-mobile"
+        "SENTRY_PROJECT": "stockpilot-mobile",
+        "EXPO_PUBLIC_LIQUID_GLASS": "default"
       }
     }
   },

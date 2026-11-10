@@ -167,21 +167,24 @@ describe('the export fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0, ID at 4 and slice(5)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[7]?.id).toBe('authenticator-code-requests-2026-11');
-    expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe('integration-retries-2026-11');
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[8]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[9]?.id).toBe('integration-retries-2026-11');
     expect(RELEASES[9]?.status).toBe('published');
-    expect(Date.parse(RELEASES[9]!.publishedAt)).toBeGreaterThan(Date.parse(release().publishedAt));
-    expect(RELEASES[10]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[10]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
     expect(RELEASES[10]?.status).toBe('published');
     expect(Date.parse(RELEASES[10]!.publishedAt)).toBeGreaterThan(
       Date.parse(release().publishedAt),
     );
-    expect(RELEASES[11]?.id).toBe(ID);
-    expect(RELEASES[12]?.id).toBe('small-fixes-8-2026-10');
-    for (const r of RELEASES.slice(12)) {
+    expect(RELEASES[11]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[11]?.status).toBe('published');
+    expect(Date.parse(RELEASES[11]!.publishedAt)).toBeGreaterThan(
+      Date.parse(release().publishedAt),
+    );
+    expect(RELEASES[12]?.id).toBe(ID);
+    expect(RELEASES[13]?.id).toBe('small-fixes-8-2026-10');
+    for (const r of RELEASES.slice(13)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
@@ -190,7 +193,8 @@ describe('the export fixes release', () => {
   // Published once #414 had merged (09:26Z), its web build answered on
   // production (09:27:52Z) and the Demo Co walk's check had closed
   // (10:10:32Z); the day it went live (UTC) is the ceiling.
-  it('is published as revision 1, not before its web build was live (09:27:52Z) and walked (to 10:10:32Z), on the day it went live, and no draft is left', () => {
+  // Renamed by lg/s5-flag-home (2026-11-09; was: "is published as revision 1, not before its web build was live (09:27:52Z) and walked (to 10:10:32Z), on the day it went live, and no draft is left"): the Liquid Glass release is held as a draft at the top until G5. Claim kept: no other draft is left.
+  it('is published as revision 1, not before its web build was live (09:27:52Z) and walked (to 10:10:32Z), on the day it went live, and no draft but the Liquid Glass release is left', () => {
     // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: no draft): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one, and it is the one draft.
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T09:26:00Z'));
@@ -199,7 +203,10 @@ describe('the export fixes release', () => {
     expect(at).toBeLessThanOrEqual(Date.parse('2026-11-01T00:00:00Z'));
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ['mobile-app-asks-before-restarting']): the B44 phone update draft is folded into the update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, so no draft is left.
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
   });
 
   // #414's draft had a fourth line, for the header of the branded PDFs; it is
