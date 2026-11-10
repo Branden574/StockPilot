@@ -19,6 +19,7 @@ import {
   signedOutContext,
   signIn,
   stage5Phase,
+  stage5Role,
   startScreencast,
   statePath,
   watchSaves,
@@ -227,8 +228,7 @@ test('3 sp_style=classic: no glass frame on a hard load (attribute history and a
   test.skip(isRehearsal(), 'The rehearsal phase runs only the rehearsal.');
   test.skip(rollout === 'off', 'off: no glass to keep out.');
   test.skip(
-    !process.env.STAGE5_ROLE ||
-      ['anonymous', 'platform', 'portal'].includes(process.env.STAGE5_ROLE),
+    ['platform', 'portal', null].includes(stage5Role()),
     'Needs an organisation member’s run.',
   );
   const context = await contextWithLook(browser, baseURL!, START, 'classic');

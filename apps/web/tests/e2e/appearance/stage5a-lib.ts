@@ -16,6 +16,7 @@ import {
   DEVICE_LOCAL_KEYS,
   DEVICE_SESSION_KEYS,
   INFO_LOCAL_KEYS,
+  runRole,
   STYLE_COOKIE,
   type DeviceSnapshot,
 } from './stage5a-records';
@@ -44,8 +45,11 @@ import {
  *   PLAYWRIGHT_BASE_URL       the branch server under test (next start)
  *   STAGE5_BASE_URL_B         the classic server at B (headers parity)
  *   STAGE5_ROLE               the signed-in role of this run (admin, manager,
- *                             staff, viewer, platform, portal; unset or
- *                             'anonymous' for the signed-out run)
+ *                             staff, viewer, platform, portal). The signed-out
+ *                             run is the stage 5 config's `anonymous` project,
+ *                             whatever STAGE5_ROLE says (the runner sets
+ *                             manager there, and the config refuses any other
+ *                             word), or a run with no STAGE5_ROLE at all
  *   STAGE5_ROLLOUT            off | opt-in | default (cross-checked against
  *                             the page's head script)
  *   STAGE5_PHASE, STAGE5_STATE_DIR   the phased cases (kill switch, rehearsal)
@@ -64,11 +68,13 @@ import {
 
 export type Stage5Role = 'admin' | 'manager' | 'staff' | 'viewer' | 'platform' | 'portal';
 
-/** The role this run is signed in as, or null for the signed-out run. */
+/**
+ * The role this run is signed in as, or null for the signed-out run:
+ * runRole in stage5a-records.ts over STAGE5_ROLE and this test's project.
+ * Call it inside a test or a hook (it reads the running test's project).
+ */
 export function stage5Role(): Stage5Role | null {
-  const role = process.env.STAGE5_ROLE;
-  if (!role || role === 'anonymous') return null;
-  return role as Stage5Role;
+  return runRole(process.env.STAGE5_ROLE, test.info().project.name) as Stage5Role | null;
 }
 
 /**

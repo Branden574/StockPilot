@@ -13,6 +13,7 @@ import {
   recordRequests,
   signedOutContext,
   signIn,
+  stage5Role,
 } from './stage5a-lib';
 import { neverClassicAfterGlass } from './stage5a-paint';
 import { compareLoads } from './stage5a-network';
@@ -129,7 +130,7 @@ async function bellToRecord(page: Page): Promise<string | null> {
 test('The bell: Notifications and the record it opens are in glass, with the data requests Classic makes', async ({
   page,
 }) => {
-  test.skip(!process.env.STAGE5_ROLE || process.env.STAGE5_ROLE === 'anonymous', 'Signed in only.');
+  test.skip(stage5Role() === null, 'Signed in only.');
   await page.goto('/dashboard');
   await expect(page.getByRole('heading', { level: 1 }).first()).toBeVisible();
   if (!(await glassBuild(page))) test.skip(true, 'This build does not offer Liquid Glass.');

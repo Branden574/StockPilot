@@ -7,6 +7,7 @@ import {
   killDoneFileName,
   phaseProblem,
   rehearsalFileNames,
+  runRole,
   sameBytes,
   snapshotDifferences,
   type DeviceSnapshot,
@@ -137,5 +138,20 @@ describe('stage 5 device records', () => {
     expect(checkKillSwitch(all.slice(0, 2))).toEqual([
       expect.stringContaining('missing kill-switch-kill-back-done.json'),
     ]);
+  });
+
+  it('the signed-out run is the anonymous project, whatever STAGE5_ROLE says', () => {
+    // run-stage5.sh starts the anonymous project with STAGE5_ROLE=manager (the
+    // config refuses a word that is not one of its six roles).
+    expect(runRole('manager', 'anonymous')).toBeNull();
+    expect(runRole('admin', 'anonymous')).toBeNull();
+    // A hand run with no role, and the older word, are signed out too.
+    expect(runRole(undefined, 'chrome')).toBeNull();
+    expect(runRole('', 'chrome')).toBeNull();
+    expect(runRole('anonymous', 'chrome')).toBeNull();
+    // Every other project runs as the role the runner names.
+    for (const project of ['chrome', 'webkit', 'firefox', 'phone-390'])
+      for (const role of ['admin', 'manager', 'staff', 'viewer', 'platform', 'portal'])
+        expect(runRole(role, project), `${role} in ${project}`).toBe(role);
   });
 });

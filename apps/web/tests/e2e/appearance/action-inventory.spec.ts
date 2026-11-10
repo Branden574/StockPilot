@@ -138,7 +138,7 @@ async function comparePage(page: Page, choose: (look: Look) => Promise<void>): P
         { path, width: width(page), origin: new URL(page.url()).origin },
         menus,
       ),
-      `${path} (${process.env.STAGE5_ROLE ?? 'signed out'}, ${width(page)} px, ${look.design} ${look.theme})`,
+      `${path} (${stage5Role() ?? 'signed out'}, ${width(page)} px, ${look.design} ${look.theme})`,
     );
   }
   await choose(START);
@@ -290,7 +290,7 @@ test.describe('signed in: the items, orders and insights lanes and the shell', (
             width: width(page),
             origin: new URL(page.url()).origin,
           }),
-          `${overlay.name} (${process.env.STAGE5_ROLE}, ${look.design} ${look.theme})`,
+          `${overlay.name} (${stage5Role()}, ${look.design} ${look.theme})`,
         );
       }
       await chooseLook(page, START);

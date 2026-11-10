@@ -19,7 +19,7 @@ import {
   twinOnScreen,
   waitForTwin,
 } from './site-look';
-import { deviceSnapshot, isChromium, throttleCpu } from './stage5a-lib';
+import { deviceSnapshot, isChromium, stage5Role, throttleCpu } from './stage5a-lib';
 import { comparedPart } from './stage5a-records';
 
 /**
@@ -91,10 +91,7 @@ function expectSameItems(after: ItemsState, before: ItemsState, where: string): 
 
 test.describe('signed in', () => {
   test.beforeEach(() => {
-    test.skip(
-      !process.env.STAGE5_ROLE || process.env.STAGE5_ROLE === 'anonymous',
-      'Needs a signed-in role.',
-    );
+    test.skip(stage5Role() === null, 'Needs a signed-in role.');
   });
 
   test('Items: the switch sequence keeps the ticked rows and the scroll, with no data request, in this browser', async ({
@@ -248,9 +245,12 @@ test.describe('signed out', () => {
     baseURL,
     request,
   }) => {
+    // The signed-out run is Chrome only (the config's anonymous project), and
+    // this test signs nobody in (the empty session above), so in WebKit and
+    // Firefox it runs in every role's run: otherwise no run would hold it there.
     test.skip(
-      Boolean(process.env.STAGE5_ROLE) && process.env.STAGE5_ROLE !== 'anonymous',
-      'Runs in the signed-out run.',
+      stage5Role() !== null && !['webkit', 'firefox'].includes(test.info().project.name),
+      'In Chrome, runs in the signed-out run.',
     );
     const rollout = await buildRollout(request);
     test.skip(rollout === 'off', 'off: Liquid Glass is not offered.');

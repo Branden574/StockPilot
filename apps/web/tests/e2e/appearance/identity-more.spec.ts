@@ -13,6 +13,7 @@ import {
   watchDataRequests,
   watchRealtimeJoins,
 } from './look';
+import { stage5Role } from './stage5a-lib';
 
 /**
  * PROVES plan 8.2 case 9 (identity, plan 4.6) on the M2 pages no earlier
@@ -234,7 +235,7 @@ const ID = '[0-9a-f-]{36}';
 test.describe('dashboard pages', () => {
   test.beforeEach(() => {
     test.skip(
-      ['platform', 'portal', 'anonymous', undefined].includes(process.env.STAGE5_ROLE),
+      ['platform', 'portal', null].includes(stage5Role()),
       'Needs an organisation member’s run.',
     );
   });
@@ -283,7 +284,7 @@ test.describe('dashboard pages', () => {
 
 test.describe('the platform console', () => {
   test.beforeEach(() => {
-    test.skip(process.env.STAGE5_ROLE !== 'platform', 'Needs the platform admin’s run.');
+    test.skip(stage5Role() !== 'platform', 'Needs the platform admin’s run.');
   });
 
   test('/platform (the directory): the same nodes, mount-only effects once', async ({

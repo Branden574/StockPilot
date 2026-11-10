@@ -126,7 +126,7 @@ async function compareRoute(
   ).toBe(true);
   expect(
     compareLoads(classic.requests, glass.requests, new URL(baseURL).origin, classic.links),
-    `${path} (${process.env.STAGE5_ROLE ?? 'signed out'}): the same data requests`,
+    `${path} (${stage5Role() ?? 'signed out'}): the same data requests`,
   ).toEqual({ onlyClassic: [], onlyGlass: [], strayPrefetches: [] });
 }
 

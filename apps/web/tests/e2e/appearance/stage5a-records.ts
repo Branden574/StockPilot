@@ -147,6 +147,25 @@ export function checkRehearsal(files: ReadonlyMap<string, string>): string[] {
   return out;
 }
 
+// ── the role of a run (STAGE5_ROLE and the Playwright project) ──────────────
+
+/** The stage 5 config's project with no session (playwright.stage5.config.ts). */
+export const SIGNED_OUT_PROJECT = 'anonymous';
+
+/**
+ * The role a test runs signed in as, or null when it runs signed out. The
+ * signed-out run is the config's `anonymous` project whatever STAGE5_ROLE
+ * says: run-stage5.sh starts it with STAGE5_ROLE=manager, and the config
+ * refuses any word that is not one of its six roles, so the variable alone
+ * cannot name it. A run with no STAGE5_ROLE (or the older word 'anonymous')
+ * is signed out too.
+ */
+export function runRole(role: string | undefined, project: string): string | null {
+  if (project === SIGNED_OUT_PROJECT) return null;
+  if (!role || role === 'anonymous') return null;
+  return role;
+}
+
 // ── the phases the runner names (STAGE5_PHASE) ──────────────────────────────
 
 /** The kill switch's phases, in the order the runner runs them (one build each). */

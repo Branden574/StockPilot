@@ -9,7 +9,7 @@ import {
   waitForLook,
   type Look,
 } from './look';
-import { deviceSnapshot } from './stage5a-lib';
+import { deviceSnapshot, stage5Role } from './stage5a-lib';
 import { canonicalJson } from './stage5a-records';
 
 /**
@@ -48,7 +48,7 @@ const NOTICE = 'Liquid Glass hit a problem, so StockPilot opened in the classic 
 
 test.beforeEach(() => {
   test.skip(
-    ['platform', 'portal', 'anonymous', undefined].includes(process.env.STAGE5_ROLE),
+    ['platform', 'portal', null].includes(stage5Role()),
     'Needs an organisation member’s run.',
   );
 });

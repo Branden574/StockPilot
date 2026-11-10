@@ -4,7 +4,14 @@ import { expect, test, type Browser, type Page } from '@playwright/test';
 
 import { chooseLook, settle, settleIntroNotice, waitForLook, type Look } from './look';
 import { buildRollout, twinOnScreen } from './site-look';
-import { deviceSnapshot, readState, stage5Phase, statePath, writeState } from './stage5a-lib';
+import {
+  deviceSnapshot,
+  readState,
+  stage5Phase,
+  stage5Role,
+  statePath,
+  writeState,
+} from './stage5a-lib';
 import {
   comparedPart,
   DEVICE_LOCAL_KEYS,
@@ -115,8 +122,7 @@ test.beforeEach(() => {
     'Phased across builds: the runner sets STAGE5_PHASE (kill-record, kill-off, kill-back).',
   );
   test.skip(
-    !process.env.STAGE5_ROLE ||
-      ['anonymous', 'platform', 'portal'].includes(process.env.STAGE5_ROLE),
+    ['platform', 'portal', null].includes(stage5Role()),
     'Runs in an organisation member’s run (admin).',
   );
 });
