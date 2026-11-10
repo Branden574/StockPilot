@@ -211,12 +211,15 @@ export function UserMenu({
           {glassBuild ? <GlassWhatsNewItem /> : null}
           <DropdownMenuSeparator />
           {glassBuild ? (
-            <>
-              {/* Design first (Liquid Glass, Classic; components/theme/
-                  appearance-select.tsx). Only when this build has Liquid Glass. */}
+            // Design first (Liquid Glass, Classic; components/theme/
+            // appearance-select.tsx). Only when this build has Liquid Glass.
+            // One inert wrapper that draws no box (display: contents), as in
+            // the header menu (theme-toggle.tsx): the lab's parity run takes
+            // the group out by this one selector; nothing styles or reads it.
+            <div data-appearance-design="" className="contents">
               <DropdownMenuLabel className={GROUP_LABEL}>Design</DropdownMenuLabel>
               <AppearanceDesignRadioGroup itemClassName="pl-10" />
-            </>
+            </div>
           ) : null}
           <DropdownMenuLabel className={GROUP_LABEL}>Theme</DropdownMenuLabel>
           {/* One choice of three: the one in use is marked with a dot in the

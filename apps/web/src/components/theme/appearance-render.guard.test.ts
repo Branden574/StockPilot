@@ -14,8 +14,13 @@ import { describe, expect, it } from 'vitest';
  * components/theme reads the sp_style cookie or the data-appearance
  * attribute, except the dashboard's own sidebar breakpoint helper when it
  * arrives (stage 3) and the error boundaries through components/theme. The
- * inert markers data-appearance-exempt (the signature pad, the label sheet)
- * and data-appearance-panel (Settings > Profile) are not reads.
+ * inert markers data-appearance-exempt (the signature pad, the label sheet),
+ * data-appearance-panel (Settings > Profile) and data-appearance-design (the
+ * two menus' Design group, L4 triage BF3) are not reads: each is written on
+ * an element and never read back, and the last two exist only so that the
+ * lab's parity run can take the approved selector places out of a page
+ * (stockpilot-work/liquid-glass/verify/allowances.json). The design marker is
+ * held to its two menus, its one spelling and no CSS (checked below).
  *
  * Revision (plans/REVISION-DEFAULT.md R13, items 20 and 23): every Theme
  * control goes through the provider's chooseTheme; next-themes' setTheme is
@@ -46,7 +51,26 @@ const FILES = walk(SRC).map((f) => ({
 }));
 
 /** Either appearance hook: the provider's own, or the selectors' (appearance-select.tsx). */
-const USES_APPEARANCE = /\buseAppearance(?:Choice)?\b/u;
+const USES_APPEARANCE = /\buseAppearance(?:Choice|Actions)?\b/u;
+
+/**
+ * A read of the attribute <html> carries. The three inert markers are not
+ * reads (see above); anything else that starts with data-appearance is.
+ */
+const READS_ATTRIBUTE = /data-appearance(?!-(exempt|panel|design))/;
+
+/** The menus' inert Design wrapper, exactly as the lab's allowances expect it. */
+const DESIGN_MARKER = 'data-appearance-design';
+const DESIGN_WRAPPER = '<div data-appearance-design="" className="contents">';
+
+function walkCss(dir: string, out: string[] = []): string[] {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) walkCss(full, out);
+    else if (entry.name.endsWith('.css')) out.push(full);
+  }
+  return out;
+}
 
 const MAY_USE_APPEARANCE = new Set([
   // The appearance modules.
@@ -74,6 +98,8 @@ describe('appearance render guard', () => {
     expect(USES_APPEARANCE.test('const a = useAppearance();')).toBe(true);
     expect(USES_APPEARANCE.test('const { style } = useAppearanceChoice();')).toBe(true);
     expect(USES_APPEARANCE.test('import { useAppearanceChoice } from "x";')).toBe(true);
+    // The actions alone (the recovery): still the appearance layer's own hook.
+    expect(USES_APPEARANCE.test('const a = useAppearanceActions();')).toBe(true);
     expect(USES_APPEARANCE.test('const a = useAppearances();')).toBe(false);
   });
 
@@ -89,9 +115,47 @@ describe('appearance render guard', () => {
         !file.startsWith('styles/liquid-glass/') &&
         // The route that re-issues the Design cookie sets it; it renders nothing.
         file !== 'app/api/appearance/style/route.ts' &&
-        (/sp_style|sp_appearance/.test(text) || /data-appearance(?!-(exempt|panel))/.test(text)),
+        (/sp_style|sp_appearance/.test(text) || READS_ATTRIBUTE.test(text)),
     ).map((f) => f.file);
     expect(readers).toEqual([]);
+  });
+
+  it('the attribute check still sees a read next to the inert markers', () => {
+    for (const read of [
+      "root.getAttribute('data-appearance')",
+      '<div data-appearance="liquid-glass">',
+      "[data-appearance='liquid-glass'] .card",
+      'data-appearance-style',
+      'data-appearances',
+    ]) {
+      expect(READS_ATTRIBUTE.test(read), read).toBe(true);
+    }
+    for (const marker of [
+      'data-appearance-exempt=""',
+      'data-appearance-panel=""',
+      'data-appearance-design=""',
+    ]) {
+      expect(READS_ATTRIBUTE.test(marker), marker).toBe(false);
+    }
+  });
+
+  it('the Design marker is written once in each of the two menus, in its one spelling, and nothing reads or styles it', () => {
+    const carriers = FILES.filter(({ text }) => text.includes(DESIGN_MARKER));
+    expect(carriers.map((f) => f.file).sort()).toEqual([
+      'components/dashboard/user-menu.tsx',
+      'components/theme/theme-toggle.tsx',
+    ]);
+    for (const { file, text } of carriers) {
+      // The only mention is the wrapper itself: no selector, no query, no
+      // longer name that the prefix would let through.
+      expect(text.split(DESIGN_MARKER), file).toHaveLength(2);
+      expect(text, file).toContain(DESIGN_WRAPPER);
+    }
+    // No stylesheet selects it: the wrapper is `contents` and nothing else.
+    const styled = walkCss(SRC)
+      .filter((f) => readFileSync(f, 'utf8').includes(DESIGN_MARKER))
+      .map((f) => relative(SRC, f));
+    expect(styled).toEqual([]);
   });
 
   it('no layout or page reads cookies() for the appearance', () => {
@@ -137,7 +201,8 @@ describe('appearance render guard', () => {
     // first client render. glassApplied is false until the provider has
     // written the attribute after mount, so the trigger hydrates as classic.
     const toggle = FILES.find((f) => f.file === 'components/theme/theme-toggle.tsx')!.text;
-    expect(toggle).not.toMatch(
+    // (The inert Design wrapper's marker is not a read; it is pinned above.)
+    expect(toggle.replace(DESIGN_WRAPPER, '')).not.toMatch(
       /\bdocument\b|\bwindow\b|cookie|sp_style|data-appearance|getAttribute|localStorage|isGlassShowing/u,
     );
     expect(toggle).toMatch(/\{\s*chooseTheme,\s*glassApplied\s*\}\s*=\s*useAppearanceChoice\(\)/u);

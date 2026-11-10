@@ -212,12 +212,20 @@ describe('the header appearance menu', () => {
               },
             },
       );
-      const [label, group, separator] = Array.from(current.menu.children);
+      // The group's three parts sit in one inert wrapper, the menu's first
+      // child (L4 triage BF3; appearance-design-hook.test.tsx): taken out, the
+      // menu is origin/main's.
+      const wrapper = current.menu.firstElementChild;
+      expect(
+        wrapper?.outerHTML.startsWith('<div data-appearance-design="" class="contents">'),
+      ).toBe(true);
+      const [label, group, separator, ...more] = Array.from(wrapper?.children ?? []);
+      expect(more).toEqual([]);
       expect(label?.textContent).toBe('Design');
       expect(group?.getAttribute('role')).toBe('group');
       expect(group?.getAttribute('aria-label')).toBe('Design');
       expect(separator?.getAttribute('role')).toBe('separator');
-      for (const el of [label, group, separator]) el?.remove();
+      wrapper?.remove();
       expect(markup(current.menu)).toBe(markup(origin.menu));
     },
   );
