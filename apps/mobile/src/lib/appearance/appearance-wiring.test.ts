@@ -286,6 +286,35 @@ describe('Settings', () => {
     );
   });
 
+  // A11Y-2. After the text size changed while the app ran, the glass
+  // Appearance screen kept every row at its old height with its text cut,
+  // until a relaunch: React Native's stale measurement, docket B10
+  // (dynamic-type-layout.ts fontScaleKey). The cure is B10's: remount what was
+  // laid out at the old size. Here it is glass-only and stays undefined until
+  // the size really changes, so a Design switch remounts nothing.
+  it('Liquid Glass remounts the head and the scroll of the Appearance screen after a live text-size change', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('const { fontScale } = useWindowDimensions();');
+    expect(provider).toContain('const [launchFontScale] = React.useState(fontScale);');
+    expect(provider).toContain(
+      "const textSizeKey = snapshot.style === 'liquid-glass' ? liveFontScaleKey(launchFontScale, fontScale) : undefined;",
+    );
+    // It rides on the control (four readers), never on the theme every screen reads.
+    expect(provider).toContain('textSizeKey, chooseStyle: controller.chooseStyle,');
+    expect(provider).toContain('[snapshot, material, textSizeKey, controller],');
+    expect(provider).toContain(
+      '() => ({ style: snapshot.style, theme: snapshot.theme, material, scene }), [snapshot.style, snapshot.theme, material, scene],',
+    );
+
+    const screen = flat('app/(drawer)/settings/appearance.tsx');
+    const key = 'key={lg ? appearance.textSizeKey : undefined}';
+    expect(screen.split(key)).toHaveLength(3);
+    expect(screen).toContain(`<View ${key} style={lg ? GLASS_LIST.head : styles.head} >`);
+    expect(screen).toContain(`<ScrollView ${key} contentContainerStyle={`);
+    // The back button keeps its place, as the list screens' top bar does.
+    expect(screen).toContain('<View style={lg ? GLASS_LIST.nav : styles.topbar}>');
+  });
+
   it('the Appearance screen: DESIGN first, then THEME, each a radio group of labelled choices, with no permission gate (item 38)', () => {
     const src = flat('app/(drawer)/settings/appearance.tsx');
     const design = src.indexOf('accessibilityRole="radiogroup" accessibilityLabel="Design"');

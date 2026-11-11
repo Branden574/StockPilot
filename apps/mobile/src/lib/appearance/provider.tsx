@@ -1,8 +1,9 @@
 import type { AppearanceStyle } from '@stockpilot/core';
 import * as Network from 'expo-network';
 import * as React from 'react';
-import { AppState, Platform } from 'react-native';
+import { AppState, Platform, useWindowDimensions } from 'react-native';
 
+import { liveFontScaleKey } from '../dynamic-type-layout';
 import {
   ControlContext,
   ReadyContext,
@@ -113,6 +114,18 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
     applyOsScheme(snapshot.theme);
   }, [snapshot.theme]);
 
+  // A11Y-2: after a live text-size change React Native keeps the old
+  // measurements of what is mounted (docket B10), and the Appearance screen in
+  // Liquid Glass stayed cut until a relaunch. The control carries a key that
+  // is undefined until the size changes while the app runs; that screen
+  // remounts its head and its scroll on it. Liquid Glass only: in Classic it
+  // never changes, so Classic is never re-rendered for it. It is not part of
+  // the theme, which every screen reads.
+  const { fontScale } = useWindowDimensions();
+  const [launchFontScale] = React.useState(fontScale);
+  const textSizeKey =
+    snapshot.style === 'liquid-glass' ? liveFontScaleKey(launchFontScale, fontScale) : undefined;
+
   const theme = React.useMemo<AppearanceThemeContextValue>(
     () => ({ style: snapshot.style, theme: snapshot.theme, material, scene }),
     [snapshot.style, snapshot.theme, material, scene],
@@ -131,6 +144,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       fallbackActive: snapshot.fallbackActive,
       introVisible: snapshot.introVisible,
       material,
+      textSizeKey,
       chooseStyle: controller.chooseStyle,
       chooseTheme: controller.chooseTheme,
       keepGlass: controller.keepGlass,
@@ -138,7 +152,7 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
       retry: controller.retry,
       endFallback: controller.endFallback,
     }),
-    [snapshot, material, controller],
+    [snapshot, material, textSizeKey, controller],
   );
 
   return (
