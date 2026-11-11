@@ -1,5 +1,5 @@
 {
-  "mergeBase": "1c9abdd2e43c729409177499c45764b23888a85c",
+  "source": "1c9abdd2e43c729409177499c45764b23888a85c",
   "files": [
     "app/(auth)/auth.css",
     "app/globals.css",
@@ -7,6 +7,9 @@
     "components/orders/storefront/storefront.css",
     "components/po/po-list.css"
   ],
+  "imports": {
+    "app/globals.css": ["@import 'tailwindcss'", "@plugin 'tailwindcss-animate'"]
+  },
   "stylesheetImports": [
     "app/(auth)/auth.css",
     "app/globals.css",
@@ -15,16 +18,5 @@
     "components/po/po-list.css",
     "maplibre-gl/dist/maplibre-gl.css"
   ],
-  "candidates": 2467,
-  "toolchain": {
-    "packages": {
-      "@tailwindcss/node": "4.3.3",
-      "@tailwindcss/oxide": "4.3.3",
-      "@tailwindcss/postcss": "4.3.3",
-      "postcss": "8.5.31",
-      "tailwindcss": "4.3.3",
-      "tailwindcss-animate": "1.0.7"
-    },
-    "postcssConfig": "/** @type {import('postcss-load-config').Config} */\nconst config = {\n  plugins: {\n    '@tailwindcss/postcss': {},\n  },\n};\n\nexport default config;\n"
-  }
+  "candidates": 2467
 }

@@ -15,9 +15,10 @@ jobs:
     name: Lint + Typecheck
     runs-on: ubuntu-latest
     steps:
-      # Full history: the Classic CSS pin (apps/web/src/styles/liquid-glass/
-      # classic-css-pin.guard.test.ts) ties its fixture to origin/main and the
-      # recorded merge base, and fails in CI when either is missing.
+      # Full history: the appearance server surface guard (apps/web/src/test/
+      # appearance-server-surface.guard.test.ts) compares the tree with the
+      # merge base of the tip and origin/main, and fails when origin/main is
+      # missing, as it is in a pull request's shallow checkout.
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
