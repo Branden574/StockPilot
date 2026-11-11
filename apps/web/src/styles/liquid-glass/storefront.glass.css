@@ -581,13 +581,9 @@
     border-color: var(--lg-accent);
     box-shadow: 0 0 0 3px var(--lg-focus-halo);
   }
-  /* A list row's stepper beside "Add all" (a 210 px cell): the 34 px buttons
-     and the 14 px figure leave the count about 13 px beside the IN CART
-     label, less than two digits need. The label goes, as Classic drops it
-     at 639.98 px and under; the count and the button's name stay. */
-  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row .sf-ctl .in-lbl {
-    display: none;
-  }
+  /* Beside "Add all" the stepper shows the count alone: Classic's own rules
+     drop the IN CART label there (a list row and a grid card at every width,
+     the quick view at 639.98 px and under), so no glass rule names it. */
 
   /* ── The list view (the card, .li rows) ──────────────────────────────── */
   :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rows {
@@ -1013,6 +1009,24 @@
     /* Classic's 44 px touch rows on a phone stay; only the corners change. */
     :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step {
       grid-template-columns: 44px 1fr 44px;
+    }
+    /* A grid card's control beside "Add all": Classic's 128 px base leaves the
+       count 38 px between the 44 px buttons, and the 14 px glass figure needs
+       45 px for 10000, which drew as "1000". The control keeps 136 px (46 px
+       for the count), so the button goes under it 8 px sooner; a wider card
+       draws as before. Add to cart keeps the same width, so "Add all" does
+       not jump when one turns into the other. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-card
+      .sf-ctl
+      > .sf-add:not(.sf-add-all),
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-card
+      .sf-ctl
+      > .sf-step {
+      min-width: 136px;
     }
     :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step.mini {
       height: 36px;
