@@ -317,11 +317,11 @@ select is(
   -- 0396 (read 2026-10-11). 0399 (Ungroup) adds one key: the grouping
   -- request log's person, item_grouping_requests.user_id>user_profiles:c:NN
   -- (recomputed from that production census with the one entry added).
-  -- 0432 (Liquid Glass, placeholder number) adds one more: a person's chosen
+  -- 0418 (Liquid Glass, placeholder number) adds one more: a person's chosen
   -- appearance, user_appearance.user_id>auth.users:c:NN (the local census
-  -- through 0416 gave 885e1d5a...|135; with 0432 applied it gives this).
+  -- through 0416 gave 885e1d5a...|135; with 0418 applied it gives this).
   '3e027513d5d267367f318ced17abb6f3|136|0/0',
-  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log and 0432''s appearance (136 keys), and no key to a person is composite or names SET NULL columns');
+  'K1: the person-key census in public is 0393''s plus 0399''s grouping request log and 0418''s appearance (136 keys), and no key to a person is composite or names SET NULL columns');
 select is(
   (select coalesce(string_agg(c.conrelid::regclass::text || '.' || c.conname || ':' || c.confdeltype::text, ',' order by 1), '')
      from pg_constraint c
@@ -341,7 +341,7 @@ select is(
   'user_appearance.user_id,'
   'user_category_assignments.user_id,user_login_devices.user_id,user_onboarding.user_id,user_permission_overrides.user_id,'
   'user_profiles.id,user_release_state.user_id,user_warehouse_assignments.user_id',
-  'K3: the person keys in public that cascade are exactly the 21 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log; 0432 adds the chosen appearance)');
+  'K3: the person keys in public that cascade are exactly the 21 personal ones (0393 adds the driver''s live position and the placer''s submission log; invites move to SET NULL; 0399 adds the grouping request log; 0418 adds the chosen appearance)');
 select is(
   (select string_agg(c.relname, ',' order by c.relname collate "C")
      from pg_attribute a join pg_class c on c.oid = a.attrelid

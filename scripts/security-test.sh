@@ -164,11 +164,11 @@ PGTAP_TESTS=(
   # Per-person release state. Own-row RLS is the control, and its writer is
   # SECURITY INVOKER precisely so it has no power beyond those policies.
   supabase/tests/0353_user_release_state.test.sql
-  # A person's chosen appearance (Liquid Glass, 0432 placeholder number):
+  # A person's chosen appearance (Liquid Glass, 0418 placeholder number):
   # own-row RLS on the same shape, no delete, anon has nothing, only the known
   # Design and Theme words are stored and a row with neither is refused, a
   # save of one column keeps the other, and the row goes with the account.
-  supabase/tests/0432_user_appearance.test.sql
+  supabase/tests/0418_user_appearance.test.sql
   supabase/tests/0354_module_enabled_honours_comp.test.sql
 
   # Direct-write lockdown (Phase 0 S1/S2, 2026-09-24): the ledger flag and the

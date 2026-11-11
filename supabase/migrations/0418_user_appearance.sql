@@ -1,4 +1,4 @@
--- 0432_user_appearance.sql
+-- 0418_user_appearance.sql
 -- ─────────────────────────────────────────────────────────────────────────────
 -- A person's chosen appearance, so the choice follows the same account across
 -- the web and the phone. Two separate choices: the Design (`style`: Liquid
