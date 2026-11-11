@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { TYPE_CEILING, capTo } from '../../../lib/theme';
 import { useTheme } from '../../../lib/use-theme';
@@ -47,7 +47,9 @@ export function GlassSegmented<T extends string>({
         return (
           <Pressable
             key={o.value}
-            accessibilityRole="tab"
+            // iOS React Native gives the role "tab" no trait, so a segment
+            // would not be read as a button there (A11Y-1, as the tab bar).
+            accessibilityRole={Platform.OS === 'ios' ? 'button' : 'tab'}
             accessibilityState={{ selected: on }}
             onPress={() => onChange(o.value)}
             style={styles.target}

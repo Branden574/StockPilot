@@ -146,7 +146,11 @@ function IosGlassTabBar(props: BottomTabBarProps) {
             return (
               <Pressable
                 key={route.key}
-                accessibilityRole="tab"
+                // "button", as the classic bar's own tab item asks for on iOS:
+                // React Native gives the role "tab" no trait there, so
+                // VoiceOver read no "button" (A11Y-1). Selected comes from
+                // accessibilityState.
+                accessibilityRole="button"
                 accessibilityState={{ selected: focused }}
                 accessibilityLabel={options.tabBarAccessibilityLabel ?? title}
                 onPress={() => press(route)}
@@ -237,7 +241,7 @@ function ScanCircle({
         />
       )}
       <Pressable
-        accessibilityRole="tab"
+        accessibilityRole="button"
         accessibilityState={{ selected: focused }}
         accessibilityLabel={title}
         onPress={onPress}
