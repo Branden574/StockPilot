@@ -42,6 +42,13 @@ export interface AppearanceControl {
   /** The one-time "new look" card on Home (R13). */
   introVisible: boolean;
   material: GlassMaterial;
+  /**
+   * Liquid Glass only: a key that is undefined until the text size changes
+   * while the app runs, then that size's (dynamic-type-layout.ts
+   * liveFontScaleKey). The Appearance screen remounts what it laid out at the
+   * old size on it (A11Y-2). Always undefined in Classic.
+   */
+  textSizeKey: string | undefined;
   chooseStyle(style: AppearanceStyle): void;
   chooseTheme(theme: ThemeSetting): void;
   keepGlass(): void;
@@ -92,6 +99,7 @@ const OUTSIDE_PROVIDER: AppearanceControl = {
   fallbackActive: false,
   introVisible: false,
   material: 'opaque',
+  textSizeKey: undefined,
   chooseStyle: noop,
   chooseTheme: noop,
   keepGlass: noop,

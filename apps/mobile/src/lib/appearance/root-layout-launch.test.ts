@@ -33,6 +33,7 @@ import { PHONE_APPEARANCE_KEYS, type AppearanceStorage } from './store';
 const env = vi.hoisted(() => ({
   controller: null as unknown as AppearanceController,
   scheme: 'light' as 'light' | 'dark',
+  fontScale: 1,
 }));
 
 vi.mock('react-native', () => ({
@@ -45,6 +46,7 @@ vi.mock('react-native', () => ({
   },
   Appearance: { setColorScheme: () => undefined },
   useColorScheme: () => env.scheme,
+  useWindowDimensions: () => ({ width: 393, height: 852, scale: 3, fontScale: env.fontScale }),
 }));
 vi.mock('react-native-gesture-handler', () => ({
   GestureHandlerRootView: 'GestureHandlerRootView',
@@ -318,6 +320,7 @@ async function launch(rollout: GlassRollout) {
 beforeEach(() => {
   vi.useFakeTimers();
   env.scheme = 'light';
+  env.fontScale = 1;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -405,4 +408,50 @@ describe('root layout at fontsReady', () => {
       expect(has(shown, 'RootGate')).toBe(true);
     });
   }
+});
+
+// ── The text-size key on the control (A11Y-2) ────────────────────────────
+
+/** The appearance control the provider hands down (the context value that can choose a Design). */
+function controlOf(tree: unknown): { style: string; textSizeKey: string | undefined } {
+  let found: unknown = null;
+  const visit = (x: unknown): void => {
+    if (Array.isArray(x)) return x.forEach(visit);
+    if (!isElement(x)) return;
+    const value = x.props.value;
+    if (found === null && typeof value === 'object' && value !== null && 'chooseStyle' in value) {
+      found = value;
+    }
+    visit(x.props.children);
+  };
+  visit(tree);
+  if (found === null) throw new Error('no appearance control in the tree');
+  return found as { style: string; textSizeKey: string | undefined };
+}
+
+describe('the text-size key', () => {
+  it('Liquid Glass: nothing at the size the app started at, the new size after a live change, nothing again back at it', async () => {
+    env.fontScale = 1.118;
+    const { root } = await launch('default');
+    const first = controlOf(root.mount());
+    expect(first.style).toBe('liquid-glass');
+    expect(first.textSizeKey).toBeUndefined();
+
+    env.fontScale = 1.353;
+    expect(controlOf(root.render()).textSizeKey).toBe('1.353');
+    env.fontScale = 1;
+    expect(controlOf(root.render()).textSizeKey).toBe('1.000');
+    env.fontScale = 1.118;
+    expect(controlOf(root.render()).textSizeKey).toBeUndefined();
+  });
+
+  it('Classic never has one, whatever the text size does', async () => {
+    const { root } = await launch('off');
+    expect(controlOf(root.mount())).toMatchObject({ style: 'classic', textSizeKey: undefined });
+    env.fontScale = 1.353;
+    const after = controlOf(root.render());
+    expect(after.style).toBe('classic');
+    expect(after.textSizeKey).toBeUndefined();
+    expect('textSizeKey' in after).toBe(true);
+  });
 });

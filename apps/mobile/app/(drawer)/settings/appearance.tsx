@@ -34,8 +34,8 @@ import { useTheme } from '@/lib/use-theme';
  * with no permission gate, and it never changes anyone else's.
  *
  * A choice applies at once, without leaving this screen or restarting
- * anything (the provider re-renders the tree; nothing is keyed or remounted),
- * is kept on this phone, and is saved to the person's account. The line under
+ * anything (the provider re-renders the tree; a choice keys and remounts
+ * nothing), is kept on this phone, and is saved to the person's account. The line under
  * the choices says only what is true: "Saved to your account" after the
  * server answered, otherwise that it is on this phone, with Try again after a
  * failed save.
@@ -49,6 +49,13 @@ import { useTheme } from '@/lib/use-theme';
  * Every row is at least 56pt tall (44pt targets), and the words grow with
  * Larger Text without a cap (the description moves under the name past the
  * shared threshold).
+ *
+ * Liquid Glass, after the text size changes while the app runs: the head and
+ * the scroll remount once, on the control's textSizeKey, so each is measured
+ * at the new size (A11Y-2; React Native keeps the old measurements of what is
+ * mounted, docket B10, and the rows stayed at their old height with the text
+ * cut). The key is undefined until such a change, so switching the Design
+ * remounts nothing. The back button keeps its place.
  */
 export default function AppearanceScreen() {
   const { c } = useTheme();
@@ -81,7 +88,10 @@ export default function AppearanceScreen() {
             minTap
           />
         </View>
-        <View style={lg ? GLASS_LIST.head : styles.head}>
+        <View
+          key={lg ? appearance.textSizeKey : undefined}
+          style={lg ? GLASS_LIST.head : styles.head}
+        >
           {lg ? null : <Eyebrow>SETTINGS · APPEARANCE</Eyebrow>}
           <Display
             size={34}
@@ -95,6 +105,7 @@ export default function AppearanceScreen() {
       </SafeAreaView>
 
       <ScrollView
+        key={lg ? appearance.textSizeKey : undefined}
         contentContainerStyle={
           lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
         }
