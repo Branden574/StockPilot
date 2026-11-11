@@ -200,6 +200,22 @@ describe('the link pages: contrast over the scene picture itself', () => {
     }
   }
 
+  it('the way back to Classic in the corner: its icon (ink) holds 3:1 on the floating glass over every part of both pictures, and does not on the bare Day picture', () => {
+    for (const scheme of ['day', 'night'] as const) {
+      for (const win of WINDOWS) {
+        expect(
+          lowest(
+            SCENES.get(`${scheme} ${win.name}`)!,
+            T[scheme]['--lg-ink']!,
+            T[scheme]['--lg-glass']!,
+          ),
+          `${scheme} ${win.name}`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
+    expect(lowest(SCENES.get('day 1440 x 900')!, T.day['--lg-ink']!, null)).toBeLessThan(3);
+  });
+
   it('why the pill is ink 2: ink 3 on the floating glass falls under 4.5:1 over the darkest part of the Day picture', () => {
     expect(
       lowest(SCENES.get('day 1440 x 900')!, T.day['--lg-ink-3']!, T.day['--lg-glass']!),
@@ -251,6 +267,52 @@ describe('the rules that put those surfaces under the words', () => {
     );
     expect(page).toContain("import '@/styles/liquid-glass/storefront.glass.css';");
     expect(page.match(/className="sp-storefront sf-public"/gu)?.length).toBe(2);
+  });
+
+  it('every link page column is a sheet of the same fill, with no blur, and the public order page keeps one sheet', () => {
+    const base = `${ROOT} [data-glass-page='links']`;
+    const column = one('pages/links.css', `${base} [data-slot='external-column']`);
+    expect(column.decls['background-color']).toBe('var(--lg-glass-strong)');
+    for (const prop of [
+      'backdrop-filter',
+      '-webkit-backdrop-filter',
+      'position',
+      'isolation',
+      'transform',
+      'filter',
+      'opacity',
+      'z-index',
+      'overflow',
+    ]) {
+      expect(column.decls[prop], prop).toBeUndefined();
+    }
+    const inner = one('pages/links.css', `${base} .sf-public [data-slot='external-column']`);
+    expect(inner.decls).toMatchObject({ 'background-color': 'transparent', 'box-shadow': 'none' });
+    // /r/track and /r/confirm: 12 px of sheet each side, the column 24 px wider, the words as wide as before.
+    const bare = one('pages/links.css', `${base} > main > [data-slot='external-column']`);
+    expect(bare.decls).toMatchObject({
+      width: 'min(100% + 24px, 28rem + 24px)',
+      'padding-left': '12px',
+      'padding-right': '12px',
+    });
+  });
+
+  it('the appearance control in the corner is floating glass with the ink, and drops its blur where the cards drop theirs', () => {
+    const control = one(
+      'pages/links.css',
+      `${ROOT} [data-glass-page='links'] [data-slot='external-appearance'] > button`,
+    );
+    expect(control.decls).toMatchObject({
+      'background-color': 'var(--lg-glass)',
+      color: 'var(--lg-ink)',
+      'backdrop-filter': 'blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat))',
+    });
+    const noBlur = cssRules('pages/links.css').filter(
+      (r) =>
+        r.decls['backdrop-filter'] === 'none' &&
+        flat(r).includes("[data-slot='external-appearance'] > button"),
+    );
+    expect(noBlur.length).toBe(3);
   });
 
   it('"Powered by StockPilot" is an ink 2 pill of the floating glass, with its blur dropped where the cards drop theirs', () => {

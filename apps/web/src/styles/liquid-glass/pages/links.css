@@ -37,6 +37,88 @@
       color: var(--lg-ink);
     }
 
+    /* ── The page's sheet: no words on the bare picture (R11) ─────────────
+       With the ground gone, everything a page prints outside a card sat on
+       the picture: the title block (the eyebrow in ink 3, the line under
+       the title in ink 2), the maintenance request's header and closing
+       note, the item page's title and small print, the portal's brand row.
+       Over the picture files themselves ink 3 falls to 2.2:1 and ink 2 to
+       3.6:1 where a centred title block rests in Day, and to 2:1 and 3:1
+       over the lamp in Night (links-scene-contrast.test.ts). So the column
+       every link page shares (the external frame's data-slot=
+       "external-column") is one sheet, as the sign-in column is a glass
+       holder around its card (auth.glass.css): the overlay material's fill,
+       ring and shadow at the card radius, the same sheet the public order
+       page takes (storefront.glass.css), and for the same reasons no blur.
+       Cards keep their own surface on it.
+       A page that draws the whole frame: the sheet floats 12 px clear of
+       the window's top and of the line under it and is as tall as its
+       content (in Classic the column stretches to push the footer down;
+       the footer pill now follows the sheet). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='links'] [data-slot='external-column'] {
+      border-radius: 24px;
+      background-color: var(--lg-glass-strong);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-sh-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      > [data-slot='external-column'] {
+      flex-grow: 0;
+      /* 8 px of picture on each side of the sheet in a window narrower
+         than the column (its max-width still caps it in a wider one). */
+      width: calc(100% - 16px);
+      margin-top: 12px;
+      margin-bottom: 12px;
+    }
+    /* /r/track and /r/confirm draw only their column, inside the /r layout's
+       main, with no side padding of its own. The sheet reaches 12 px past
+       the words on each side, into main's gutter in a narrow window, and
+       the column is that much wider, so the words keep the width they have
+       in Classic at every window size (28rem is the column's max-w-md). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      > main
+      > [data-slot='external-column'] {
+      width: min(100% + 24px, 28rem + 24px);
+      max-width: none;
+      margin-right: max(-12px, calc((100% - 28rem - 24px) / 2));
+      margin-left: max(-12px, calc((100% - 28rem - 24px) / 2));
+      padding-right: 12px;
+      padding-left: 12px;
+    }
+    /* The public order page's closed card sits in a column inside that
+       page's own sheet (storefront.glass.css): no second sheet. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      .sf-public
+      [data-slot='external-column'] {
+      border-radius: 0;
+      background-color: transparent;
+      box-shadow: none;
+    }
+
+    /* The way back to Classic (the appearance menu in the page's top right
+       corner, R13) is an icon on the picture too: 2.6:1 over the plant in
+       Day at 1440 px. It takes the floating glass, as the top bar's
+       controls do (materials.css, tb-btn). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      [data-slot='external-appearance']
+      > button {
+      border-color: transparent;
+      background-color: var(--lg-glass);
+      color: var(--lg-ink);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+    }
+
     /* ── The title block (.h1 26/32 at 650; .eyebrow 12/16 at 600, +0.06em,
        capitals, ink 3; the line under it .sm in ink 2) ─────────────────── */
     :root[data-appearance='liquid-glass']
@@ -386,6 +468,7 @@
           [data-slot='external-card'],
           [data-slot='external-status-card'],
           [data-slot='external-footer'],
+          [data-slot='external-appearance'] > button,
           .bg-card.rounded-lg.border,
           div.bg-card.fixed.inset-x-0.bottom-0.border-t
         ) {
@@ -401,6 +484,7 @@
         [data-slot='external-card'],
         [data-slot='external-status-card'],
         [data-slot='external-footer'],
+        [data-slot='external-appearance'] > button,
         .bg-card.rounded-lg.border,
         div.bg-card.fixed.inset-x-0.bottom-0.border-t
       ) {
@@ -416,6 +500,7 @@
           [data-slot='external-card'],
           [data-slot='external-status-card'],
           [data-slot='external-footer'],
+          [data-slot='external-appearance'] > button,
           .bg-card.rounded-lg.border,
           div.bg-card.fixed.inset-x-0.bottom-0.border-t
         ) {
