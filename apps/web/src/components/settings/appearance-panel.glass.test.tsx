@@ -20,8 +20,12 @@ import { classicMarkup } from '@/test/classic-parity';
 
 const { getMy, setMy } = vi.hoisted(() => ({ getMy: vi.fn(), setMy: vi.fn() }));
 vi.mock('@/server/actions/appearance', () => ({
-  getMyAppearanceAction: (...a: unknown[]) => getMy(...a),
   setMyAppearanceAction: (...a: unknown[]) => setMy(...a),
+}));
+// The account read is a plain request (appearance-account-read.ts), never the
+// read action: these tests answer it here.
+vi.mock('@/components/theme/appearance-account-read', () => ({
+  readAccountAppearance: (...a: unknown[]) => getMy(...a),
 }));
 vi.mock('sonner', () => ({ toast: vi.fn() }));
 vi.mock('next/navigation', () => ({

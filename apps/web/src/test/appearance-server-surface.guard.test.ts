@@ -13,10 +13,14 @@ import { describe, expect, it } from 'vitest';
  *   (c) the server surface added since the merge base is exactly the
  *       appearance one: the server actions setMyAppearanceAction and
  *       getMyAppearanceAction (apps/web/src/server/actions/appearance.ts,
- *       both planned, plans/REVISION-DEFAULT.md) and the route handler
- *       POST /api/appearance/style. Any other new exported server action
- *       (a 'use server' module's export), any new inline 'use server'
- *       function, and any new route handler method fails.
+ *       both planned, plans/REVISION-DEFAULT.md) and the route handlers
+ *       POST /api/appearance/style and POST /api/appearance/account (the
+ *       account read as a plain request, from the read action's own server
+ *       function: a server action pending on load holds the hydration of the
+ *       page's streamed content and a client redirect, measured 2026-11-11;
+ *       appearance-account-read.guard.test.ts). Any other new exported
+ *       server action (a 'use server' module's export), any new inline
+ *       'use server' function, and any new route handler method fails.
  *
  * The comparison is the working tree against the merge base of the branch's
  * tip and origin/main (the tip is HEAD, or for a pull request's merge commit
@@ -44,7 +48,9 @@ const EXPECTED_ACTIONS = [
   `${APPEARANCE_ACTIONS}: getMyAppearanceAction`,
   `${APPEARANCE_ACTIONS}: setMyAppearanceAction`,
 ];
-const EXPECTED_ROUTES = ['apps/web/src/app/api/appearance/style/route.ts: POST'];
+const ACCOUNT_ROUTE = 'apps/web/src/app/api/appearance/account/route.ts';
+const STYLE_ROUTE = 'apps/web/src/app/api/appearance/style/route.ts';
+const EXPECTED_ROUTES = [`${ACCOUNT_ROUTE}: POST`, `${STYLE_ROUTE}: POST`];
 const HTTP_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
 
 /** Whether a module's first statement is the 'use server' directive. */
@@ -235,14 +241,11 @@ describe('the appearance server surface (plan 8.5 static guards b and c)', () =>
       const tree: Record<string, string> = {
         ...baseFiles,
         [APPEARANCE_ACTIONS]: actionsFile,
-        'apps/web/src/app/api/appearance/style/route.ts': route,
+        [ACCOUNT_ROUTE]: route,
+        [STYLE_ROUTE]: route,
         ...options.tree,
       };
-      const changed = [
-        APPEARANCE_ACTIONS,
-        'apps/web/src/app/api/appearance/style/route.ts',
-        ...(options.changed ?? []),
-      ];
+      const changed = [APPEARANCE_ACTIONS, ACCOUNT_ROUTE, STYLE_ROUTE, ...(options.changed ?? [])];
       const git: Git = (...args) => {
         const [cmd, ...rest] = args;
         if (cmd === 'rev-parse' && rest[0] === '--git-dir') return '.git';
@@ -267,8 +270,16 @@ describe('the appearance server surface (plan 8.5 static guards b and c)', () =>
       return surfaceVerdict(git, (p) => tree[p] ?? null, true);
     }
 
-    it('passes with exactly the appearance actions and the style route', () => {
+    it('passes with exactly the appearance actions and the two appearance routes', () => {
       expect(fake({})).toEqual({ findings: [] });
+    });
+    it('fails when a planned route is missing, and on another method of a planned route', () => {
+      expect(fake({ tree: { [ACCOUNT_ROUTE]: 'export const dynamic = 1;' } })).toEqual({
+        findings: [`the planned route handler is missing: ${ACCOUNT_ROUTE}: POST`],
+      });
+      expect(
+        fake({ tree: { [ACCOUNT_ROUTE]: `${route}\nexport async function GET() {}` } }),
+      ).toEqual({ findings: [`a new route handler: ${ACCOUNT_ROUTE}: GET`] });
     });
     it('fails on a new server action anywhere else', () => {
       const path = 'apps/web/src/server/actions/glass-extra.ts';

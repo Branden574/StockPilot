@@ -19,8 +19,12 @@ const { getMy, setMy, toast, nav } = vi.hoisted(() => ({
   nav: { pathname: '/dashboard' },
 }));
 vi.mock('@/server/actions/appearance', () => ({
-  getMyAppearanceAction: (...a: unknown[]) => getMy(...a),
   setMyAppearanceAction: (...a: unknown[]) => setMy(...a),
+}));
+// The account read is a plain request (appearance-account-read.ts), never the
+// read action: these tests answer it here.
+vi.mock('@/components/theme/appearance-account-read', () => ({
+  readAccountAppearance: (...a: unknown[]) => getMy(...a),
 }));
 vi.mock('sonner', () => ({ toast: (...a: unknown[]) => toast(...a) }));
 vi.mock('next/navigation', () => ({

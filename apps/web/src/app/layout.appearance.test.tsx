@@ -25,7 +25,6 @@ vi.mock('@/components/analytics/posthog-provider', () => ({
 vi.mock('@/components/perf/web-vitals-reporter', () => ({ WebVitalsReporter: () => null }));
 vi.mock('@/components/ui/sonner', () => ({ Toaster: () => null }));
 vi.mock('@/server/actions/appearance', () => ({
-  getMyAppearanceAction: vi.fn(),
   setMyAppearanceAction: vi.fn(),
 }));
 // Under opt-in and default the provider renders the marketing variant guard,

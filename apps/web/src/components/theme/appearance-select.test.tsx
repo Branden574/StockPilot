@@ -31,7 +31,6 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn() }),
 }));
 vi.mock('@/server/actions/appearance', () => ({
-  getMyAppearanceAction: vi.fn(),
   setMyAppearanceAction: vi.fn(),
 }));
 

@@ -2,11 +2,16 @@
 
 import { z } from 'zod';
 
-import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError } from '@/lib/error-reporter';
-import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
-import { createClient } from '@/lib/supabase/server';
+import {
+  APPEARANCE_ROW_COLUMNS,
+  appearanceUserIdSchema,
+  ownAppearanceClientFor,
+  readOwnAppearanceRow,
+  type OwnAppearanceAnswer,
+  type OwnAppearanceRow,
+} from '@/server/lib/own-appearance-row';
 
 import {
   appearanceStyleSchema,
@@ -38,13 +43,20 @@ import {
  * before the migration) is its own reason, so the page says "saved on this
  * device only" and never claims sync. Nothing here redirects: a signed-out
  * request gets `unauthenticated`, and the page keeps the choice on the device.
+ *
+ * THE BROWSER NEVER CALLS THE READ ACTION. A server action pending on load
+ * holds the hydration of the page's streamed content and a client redirect
+ * (measured 2026-11-11), and the provider reads the row on every signed-in
+ * load. So the browser reads by a plain request, POST /api/appearance/account,
+ * which answers from the same server function as the read action here
+ * (server/lib/own-appearance-row.ts); src/test/appearance-account-read.guard
+ * .test.ts keeps every other module from importing the read action. The save
+ * stays an action: it only runs when a person chooses.
  */
-
-const userIdSchema = z.string().uuid();
 
 const setAppearanceSchema = z
   .object({
-    userId: userIdSchema,
+    userId: appearanceUserIdSchema,
     style: appearanceStyleSchema.optional(),
     theme: themeSettingSchema.optional(),
   })
@@ -52,47 +64,19 @@ const setAppearanceSchema = z
     message: 'a Design, a Theme, or both',
   });
 
-/** The columns read back: the row as the server holds it. */
-const ROW_COLUMNS = 'style, theme, updated_at';
+/** The row as the server holds it (server/lib/own-appearance-row.ts). */
+export type AppearanceRowAnswer = OwnAppearanceRow;
 
-export interface AppearanceRowAnswer {
-  style: string | null;
-  theme: string | null;
-  updated_at: string;
-}
+/** What the read, the save and POST /api/appearance/account answer. */
+export type AppearanceActionResult = OwnAppearanceAnswer;
 
-export type AppearanceActionResult =
-  | { ok: true; userId: string; row: AppearanceRowAnswer | null }
-  | { ok: false; reason: 'missing-table' | 'unauthenticated' | 'invalid' | 'error' };
-
-async function clientFor(userId: string) {
-  const session = await readVerifiedSessionTokenOf(await createClient(), userId);
-  return session ? createAccessTokenClient(session.token) : null;
-}
-
-/** Read the signed-in person's own row: `row` null when they never chose on an account. */
+/**
+ * Read the signed-in person's own row: `row` null when they never chose on an
+ * account. The same read as POST /api/appearance/account; no module the
+ * browser loads imports this one (see above).
+ */
 export async function getMyAppearanceAction(userId: unknown): Promise<AppearanceActionResult> {
-  const parsed = userIdSchema.safeParse(userId);
-  if (!parsed.success) return { ok: false, reason: 'invalid' };
-  try {
-    const supabase = await clientFor(parsed.data);
-    if (!supabase) return { ok: false, reason: 'unauthenticated' };
-    const { data, error } = await supabase
-      .from('user_appearance')
-      .select(ROW_COLUMNS)
-      .eq('user_id', parsed.data)
-      .maybeSingle();
-    if (error) {
-      if (isMissingAppearanceTableError(error)) return { ok: false, reason: 'missing-table' };
-      void reportError(error, { tag: 'appearance.read', level: 'warning' });
-      return { ok: false, reason: 'error' };
-    }
-    return { ok: true, userId: parsed.data, row: (data as AppearanceRowAnswer | null) ?? null };
-  } catch (e) {
-    rethrowControlFlow(e);
-    void reportError(e, { tag: 'appearance.read', level: 'warning' });
-    return { ok: false, reason: 'error' };
-  }
+  return readOwnAppearanceRow(userId);
 }
 
 /**
@@ -107,12 +91,12 @@ export async function setMyAppearanceAction(input: unknown): Promise<AppearanceA
   if (style !== undefined) columns.style = style;
   if (theme !== undefined) columns.theme = theme;
   try {
-    const supabase = await clientFor(userId);
+    const supabase = await ownAppearanceClientFor(userId);
     if (!supabase) return { ok: false, reason: 'unauthenticated' };
     const { data, error } = await supabase
       .from('user_appearance')
       .upsert(columns, { onConflict: 'user_id' })
-      .select(ROW_COLUMNS)
+      .select(APPEARANCE_ROW_COLUMNS)
       .single();
     if (error) {
       if (isMissingAppearanceTableError(error)) return { ok: false, reason: 'missing-table' };

@@ -20,7 +20,6 @@ vi.mock('@/lib/analytics', () => ({ reset: vi.fn() }));
 vi.mock('@/lib/onboarding/tour-state-cache', () => ({ forgetTourState: vi.fn() }));
 vi.mock('@/server/actions/auth', () => ({ signOutAction: vi.fn() }));
 vi.mock('@/server/actions/appearance', () => ({
-  getMyAppearanceAction: vi.fn(),
   setMyAppearanceAction: vi.fn(),
 }));
 

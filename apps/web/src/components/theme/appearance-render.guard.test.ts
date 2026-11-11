@@ -316,6 +316,9 @@ describe('appearance render guard', () => {
       ({ file, text }) =>
         (file.startsWith('lib/') || file.startsWith('server/')) &&
         file !== 'server/actions/appearance.ts' &&
+        // The one read of a person's own row, behind the read action and the
+        // route POST /api/appearance/account alike.
+        file !== 'server/lib/own-appearance-row.ts' &&
         file !== WORDS_ONLY &&
         /appearance/i.test(text),
     ).map((f) => f.file);

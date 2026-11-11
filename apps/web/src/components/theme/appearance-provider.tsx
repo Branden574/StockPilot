@@ -23,8 +23,9 @@ import {
 } from '@stockpilot/core';
 
 import { isControlFlow } from '@/lib/control-flow';
-import { getMyAppearanceAction, setMyAppearanceAction } from '@/server/actions/appearance';
+import { setMyAppearanceAction } from '@/server/actions/appearance';
 
+import { readAccountAppearance } from './appearance-account-read';
 import {
   APPEARANCE_SIGNED_OUT_EVENT,
   clearCrashFallback,
@@ -112,7 +113,10 @@ import { removeEarlyHide, VARIANT_GUARD_STYLE_ATTRIBUTE } from './twin-first-pai
  * PERSISTENCE AND SYNC follow core's pure reducer (packages/core/src/
  * appearance). This file performs its effects: the device record and the
  * Design cookie, the account sync record, this tab's signed-out stamp, and the
- * account row through the self-only server actions. The account is known only
+ * account row: read by a plain request to the self-only route POST
+ * /api/appearance/account (appearance-account-read.ts; never a server action,
+ * which held the page's hydration and a client redirect while it was pending)
+ * and saved through the self-only server action. The account is known only
  * where a page names its signed-in person (<AppearanceAccountSync>: the
  * dashboard shell and the portal).
  *
@@ -525,7 +529,10 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
         }
         case 'fetch': {
           const { userId, gen } = effect;
-          void getMyAppearanceAction(userId).then(
+          // A plain request, never a server action: one pending on load holds
+          // the hydration of the page's streamed content and a client
+          // redirect (appearance-account-read.ts; measured 2026-11-11).
+          void readAccountAppearance(userId).then(
             (answer) => {
               if (answer.ok && answer.userId === userId) {
                 dispatchRef.current({ type: 'fetch-succeeded', userId, gen, row: answer.row });
@@ -541,8 +548,9 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
                 if (missing && userIdRef.current === userId) setAccountRead(userId);
               }
             },
-            (e: unknown) => {
-              if (isControlFlow(e)) return;
+            // The reader never rejects (every failure is its `error` answer);
+            // should it ever, that is the same quiet failure.
+            () => {
               dispatchRef.current({ type: 'fetch-failed', userId, gen, reason: 'error' });
             },
           );
