@@ -222,9 +222,33 @@ describe('tab bar', () => {
     );
   });
 
-  it('every tab is a selected-aware tab for VoiceOver', () => {
-    expect((bar.match(/accessibilityRole="tab"/g) ?? []).length).toBe(3);
-    expect((bar.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(3);
+  // A11Y-1. iOS React Native gives the role "tab" no trait
+  // (accessibilityPropsConversions.h: anything it does not list is None), so
+  // the glass tabs were read without "button" where Classic's are buttons
+  // (the navigator's own tab item asks for 'button' on iOS and 'tab'
+  // elsewhere). Selected comes from accessibilityState and is kept.
+  it('every tab is a selected-aware button for VoiceOver on iOS, a tab on Android', () => {
+    const ios = bar.slice(
+      bar.indexOf('function IosGlassTabBar('),
+      bar.indexOf('function AndroidMaterialTabBar('),
+    );
+    const android = bar.slice(bar.indexOf('function AndroidMaterialTabBar('));
+    // The capsule's tabs and the Scan circle.
+    expect((ios.match(/accessibilityRole="button"/g) ?? []).length).toBe(2);
+    expect(ios).not.toContain('accessibilityRole="tab"');
+    expect((ios.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(2);
+    expect((android.match(/accessibilityRole="tab"/g) ?? []).length).toBe(1);
+    expect((android.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(1);
+    // The names VoiceOver reads are unchanged.
+    expect(ios).toContain('accessibilityLabel={options.tabBarAccessibilityLabel ?? title}');
+    expect(ios).toContain('accessibilityLabel={title}');
+  });
+
+  it('the glass segmented control (not on a screen yet) asks for the same roles', () => {
+    const segmented = flat('src/components/ui/glass/glass-segmented.tsx');
+    expect(segmented).not.toContain('accessibilityRole="tab"');
+    expect(segmented).toContain("accessibilityRole={Platform.OS === 'ios' ? 'button' : 'tab'}");
+    expect(segmented).toContain('accessibilityState={{ selected: on }}');
   });
 });
 
