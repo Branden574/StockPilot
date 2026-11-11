@@ -262,6 +262,34 @@ describe('states.css reads only these hooks', () => {
       ].sort(),
     );
   });
+  it('the status card behind the 404 and root error words spans their rows: the frame stretches its items', () => {
+    // Both frames carry the classic class items-center (align-items: center), which a grid reads too.
+    // Centred, the card (the frame's ::before and ::after, placed on every row) took its own height,
+    // nothing, and the words sat on the bare picture (lab 2026-11-11: a 2 px line; "Pilot" 2.9:1 in Day).
+    for (const view of [
+      render(<NotFound />),
+      render(<RootError error={ERROR} reset={() => undefined} />),
+    ]) {
+      const frame = view.container.querySelector('[data-glass="state-screen"]');
+      expect(frame!.className).toMatch(/(^|\s)items-center(\s|$)/u);
+    }
+    const frameRule = new RegExp(
+      String.raw`:root\[data-appearance='liquid-glass'\] \[data-glass='state-screen'\] \{([^}]*)\}`,
+      'u',
+    ).exec(css.replace(/\/\*[\s\S]*?\*\//gu, ''));
+    expect(frameRule).not.toBeNull();
+    expect(frameRule![1]).toMatch(/display: grid;/u);
+    expect(frameRule![1]).toMatch(/align-items: stretch;/u);
+    const card = new RegExp(
+      String.raw`\[data-glass='state-screen'\]::before,\s*:root\[data-appearance='liquid-glass'\] \[data-glass='state-screen'\]::after \{([^}]*)\}`,
+      'u',
+    ).exec(css.replace(/\/\*[\s\S]*?\*\//gu, ''));
+    expect(card![1]).toMatch(/grid-row: 1 \/ -1;/u);
+    // Nothing on the card or the frame's children undoes the stretch.
+    expect(css.replace(/\/\*[\s\S]*?\*\//gu, '')).not.toMatch(
+      /\[data-glass='state-screen'\][^{]*\{[^}]*align-(self|items): (center|start|end)/u,
+    );
+  });
   it('every rule that names a shared hook is anchored to a state hook', () => {
     const SHARED = /\[data-glass='(button|card|page-header|state-panel)'\]/u;
     const STATE =
