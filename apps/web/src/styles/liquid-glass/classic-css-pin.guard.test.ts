@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join, posix, relative, sep } from 'node:path';
+import { dirname, join, posix, relative, sep } from 'node:path';
 
 import tailwindcss from '@tailwindcss/postcss';
 import postcss, { type AtRule, type ChildNode, type Container, type Rule } from 'postcss';
@@ -39,13 +39,20 @@ import { glassSourceFiles, splitSelectors } from './glass-css';
  *       reviewed change that adds it to manifest.json in the same commit.
  *   (d) globals.css compiled from the app's whole source (Tailwind's automatic
  *       scan of apps/web, as the app builds it), without the glass @import,
- *       differs from the same text compiled with only Classic's class list
- *       (classic-css-pin/candidates.dat, the class tokens of Classic's source
- *       when the glass was built) by nothing but utilities for classes not on
- *       that list and theme variables nothing Classic reads with var(). So
- *       class names in the glass markup cannot change what Classic's classes
- *       and custom properties compile to. Both sides are HEAD's own text, so a
- *       Classic change does not trip it.
+ *       differs from the same text compiled from Classic's source (the same
+ *       scan with the glass markup left out: every path under apps/web whose
+ *       name holds "glass", so styles/liquid-glass, components/marketing/glass,
+ *       app/(site-glass) and the *-glass*.tsx files) by nothing but utilities
+ *       for classes Classic's source does not use and theme variables nothing
+ *       Classic reads with var(). So class names in the glass markup cannot
+ *       bring a keyframe, an @property or a theme variable Classic reads into
+ *       the app's stylesheet, or change what Classic's classes compile to.
+ *       Both sides are read from HEAD at test time, so a Classic markup or CSS
+ *       change (a class's last use removed, a new class that brings its own
+ *       keyframe) is on both sides and does not trip it.
+ *       Limit: glass markup in a file whose path does not name "glass" (a
+ *       glass branch inside a shared component) counts as Classic's here; its
+ *       Tailwind classes render under Classic too.
  *
  * The glass at-rule guard (glass-at-rules.guard.test.ts) stays as it was: no
  * glass stylesheet may hold an at-rule that acts outside the glass root.
@@ -59,7 +66,7 @@ const GLASS_PREFIX = 'styles/liquid-glass/';
 const STYLESHEET = /\.(css|scss|sass|less|pcss|postcss)$/;
 
 interface Manifest {
-  /** The commit candidates.dat and these lists were taken at (the merge base the glass was built on). */
+  /** The commit these lists were taken at (the merge base the glass was built on). */
   source: string;
   /** Every Classic stylesheet, by its path under apps/web/src. */
   files: string[];
@@ -67,11 +74,8 @@ interface Manifest {
   imports: Record<string, string[]>;
   /** Every stylesheet a source file imports, other than a glass sheet. */
   stylesheetImports: string[];
-  /** How many tokens candidates.dat holds. */
-  candidates: number;
 }
 const MANIFEST = JSON.parse(readFileSync(join(PIN, 'manifest.json'), 'utf8')) as Manifest;
-const CANDIDATES = readFileSync(join(PIN, 'candidates.dat'), 'utf8').split('\n').filter(Boolean);
 
 /** The glass @import of globals.css (the line; its comment compiles to nothing). */
 const GLASS_IMPORT = "@import '../styles/liquid-glass/index.css';";
@@ -202,9 +206,41 @@ const tailwindNode = fromTailwind('@tailwindcss/node') as {
 const scan = (sources: Source[]) => new Scanner({ sources }).scan();
 
 const TMP = mkdtempSync(join(tmpdir(), 'classic-css-pin-'));
-const CANDIDATE_FILE = join(TMP, 'candidates.txt');
-writeFileSync(CANDIDATE_FILE, `${CANDIDATES.join('\n')}\n`);
 afterAll(() => rmSync(TMP, { recursive: true, force: true }));
+
+const toPosix = (p: string) => p.split(sep).join('/');
+
+/**
+ * The glass markup, below any source root: every file or folder whose name
+ * holds "glass" (styles/liquid-glass, components/marketing/glass,
+ * app/(site-glass), the *-glass*.tsx files, public/liquid-glass).
+ */
+const GLASS_MARKUP = ['**/*glass*', '**/*glass*/**'];
+
+/**
+ * What a compile reads. `roots` are scanned whole after apps/web (the controls
+ * add a folder of probe files); `not` are folders left out of both sides (the
+ * controls take a Classic folder away).
+ */
+interface Scope {
+  roots?: string[];
+  not?: string[];
+}
+const rootsOf = (scope: Scope) => [WEB, ...(scope.roots ?? [])].map(toPosix);
+const glassOf = (scope: Scope) =>
+  rootsOf(scope).flatMap((root) => GLASS_MARKUP.map((glob) => posix.join(root, glob)));
+
+/** The class tokens Tailwind's scanner finds in a scope's source, the glass markup left out. */
+const classicTokens = (scope: Scope = {}) =>
+  new Set(
+    scan([
+      ...rootsOf(scope).map((base) => ({ base, pattern: '**/*', negated: false })),
+      ...rootsOf(scope).flatMap((base) =>
+        GLASS_MARKUP.map((pattern) => ({ base, pattern, negated: true })),
+      ),
+      ...(scope.not ?? []).map((dir) => ({ base: toPosix(dir), pattern: '**/*', negated: true })),
+    ]),
+  );
 
 /** globals.css without the glass @import line (it must be there exactly once). */
 function withoutGlassImport(text: string): string {
@@ -216,13 +252,18 @@ function withoutGlassImport(text: string): string {
 
 let compiles = 0;
 /**
- * globals.css through Tailwind as compiled-css.guard.test.ts compiles it, with
- * no automatic sources and Classic's fixed candidate list as the one source.
+ * globals.css through Tailwind as the app builds it (the PostCSS plugin, run
+ * from apps/web/src/app), with its automatic scan replaced by explicit sources:
+ * every root, less the folders in `not`.
  */
-async function compileClassic(text: string) {
+async function compileFrom(text: string, roots: string[], not: string[]) {
   const importLine = "@import 'tailwindcss';";
   if (!text.includes(importLine)) throw new Error('globals.css no longer imports Tailwind');
-  const input = `${text.replace(importLine, "@import 'tailwindcss' source(none);")}\n@source "${CANDIDATE_FILE}";\n`;
+  const sources = [
+    ...roots.map((r) => `@source "${r}";`),
+    ...not.map((n) => `@source not "${n}";`),
+  ].join('\n');
+  const input = `${text.replace(importLine, "@import 'tailwindcss' source(none);")}\n${sources}\n`;
   compiles += 1;
   // A path of its own each time: the plugin caches its compiler by file.
   return postcss([tailwindcss({ optimize: false })]).process(input, {
@@ -230,15 +271,19 @@ async function compileClassic(text: string) {
   });
 }
 
-/**
- * globals.css through Tailwind with the app's whole source as the class list:
- * Tailwind's automatic scan of apps/web, as the app builds it (its PostCSS
- * plugin runs from apps/web, the base of that scan), and nothing else.
- */
-async function compileFullScan(text: string) {
+/** globals.css from Classic's source: the whole source with the glass markup left out. */
+const compileClassic = (text: string, scope: Scope = {}) =>
+  compileFrom(text, rootsOf(scope), [...(scope.not ?? []).map(toPosix), ...glassOf(scope)]);
+
+/** globals.css from the app's whole source (and a control's probe roots). */
+const compileFullScan = (text: string, scope: Scope = {}) =>
+  compileFrom(text, rootsOf(scope), (scope.not ?? []).map(toPosix));
+
+/** globals.css exactly as the app builds it: Tailwind's automatic scan of apps/web. */
+async function compileAsBuilt(text: string) {
   const importLine = "@import 'tailwindcss';";
   if (!text.includes(importLine)) throw new Error('globals.css no longer imports Tailwind');
-  const web = posix.relative(APP.split(sep).join('/'), WEB.split(sep).join('/'));
+  const web = posix.relative(toPosix(APP), toPosix(WEB));
   compiles += 1;
   return postcss([tailwindcss({ optimize: false })]).process(
     text.replace(importLine, `@import 'tailwindcss' source('${web}');`),
@@ -459,7 +504,6 @@ function compiledFindings(classicCss: string, fullCss: string, allow: Allow = {}
   return out;
 }
 
-const CANDIDATE_SET = new Set(CANDIDATES);
 /** The first class of a selector, unescaped: a backslash escape becomes its character. */
 const firstClass = (selector: string) =>
   /\.((?:\\.|[^\s.#:[\]>+~,()\\])+)/.exec(selector)?.[1]?.replace(/\\(.)/g, '$1');
@@ -475,11 +519,16 @@ const classicSheets = (sheets: Sheets = SHEETS) =>
 
 /**
  * (d) What the app's whole source may add to Classic's compile: a utility for a
- * class not on Classic's list (its first class is not in candidates.dat), and a
- * theme variable on :root that nothing Classic reads (Classic's compiled
- * globals.css and the other Classic stylesheets name it in no var()).
+ * class Classic's source does not use (its first class is not among the tokens
+ * Tailwind's scanner finds there), and a theme variable on :root that nothing
+ * Classic reads (Classic's compiled globals.css and the other Classic
+ * stylesheets name it in no var()).
  */
-function fullScanAllow(classicCss: string, sheets: Sheets = SHEETS): Allow {
+function fullScanAllow(
+  classicCss: string,
+  sheets: Sheets = SHEETS,
+  tokens: Set<string> = classicTokens(),
+): Allow {
   const reads = new Set([classicCss, ...classicSheets(sheets)].flatMap(varReads));
   return {
     newEntry(e) {
@@ -487,7 +536,7 @@ function fullScanAllow(classicCss: string, sheets: Sheets = SHEETS): Allow {
       if (e.what.startsWith('@') && e.inside.length === 0) return false;
       return splitSelectors(e.inside[0] ?? e.what).every((sel) => {
         const cls = firstClass(sel);
-        return cls !== undefined && !CANDIDATE_SET.has(cls);
+        return cls !== undefined && !tokens.has(cls);
       });
     },
     newDecl: (key, prop) =>
@@ -495,12 +544,20 @@ function fullScanAllow(classicCss: string, sheets: Sheets = SHEETS): Allow {
   };
 }
 
-/** (d) for a globals.css text (with the glass @import) and the Classic sheets around it. */
-async function fullScanFindings(globals: string, sheets: Sheets = SHEETS): Promise<string[]> {
+/** (d) for a globals.css text (with the glass @import), the Classic sheets around it and a scope. */
+async function fullScanFindings(
+  globals: string,
+  sheets: Sheets = SHEETS,
+  scope: Scope = {},
+): Promise<string[]> {
   const classic = withoutGlassImport(globals);
-  const { css: classicCss } = await compileClassic(classic);
-  const { css: fullCss } = await compileFullScan(classic);
-  return compiledFindings(classicCss, fullCss, fullScanAllow(classicCss, sheets));
+  const { css: classicCss } = await compileClassic(classic, scope);
+  const { css: fullCss } = await compileFullScan(classic, scope);
+  return compiledFindings(
+    classicCss,
+    fullCss,
+    fullScanAllow(classicCss, sheets, classicTokens(scope)),
+  );
 }
 
 let classicCompiled: Promise<string> | undefined;
@@ -518,12 +575,18 @@ describe('what stays of the Classic CSS pin (defence g, retired at the release)'
     for (const file of Object.keys(ALLOWED_IMPORTS)) expect(MANIFEST.files).toContain(file);
   });
 
-  it('the candidate list is sorted and unique, and Tailwind’s scanner reads it back whole', () => {
-    expect(CANDIDATES.length).toBe(MANIFEST.candidates);
-    expect(CANDIDATES.length).toBeGreaterThan(1000);
-    expect([...new Set(CANDIDATES)].sort()).toEqual(CANDIDATES);
-    const read = new Set(scan([{ base: TMP, pattern: 'candidates.txt', negated: false }]));
-    expect(CANDIDATES.filter((c) => !read.has(c))).toEqual([]);
+  it('(d) reads the source the app builds: the whole-source compile is Tailwind’s automatic scan of apps/web, and Classic’s leaves out the glass markup', async () => {
+    const { css: built } = await compileAsBuilt(CLASSIC_GLOBALS);
+    const { css: whole } = await compileFullScan(CLASSIC_GLOBALS);
+    expect(whole).toBe(built);
+    // The glass markup is there to leave out, and leaving it out changes the compile.
+    const glass = scan(GLASS_MARKUP.map((pattern) => ({ base: WEB, pattern, negated: false })));
+    expect(glass.length).toBeGreaterThan(1000);
+    const tokens = classicTokens();
+    const everything = new Set(scan([{ base: WEB, pattern: '**/*', negated: false }]));
+    expect(tokens.size).toBeLessThan(everything.size);
+    expect([...tokens].filter((t) => !everything.has(t))).toEqual([]);
+    expect((await compiledClassic()).length).toBeLessThan(whole.length);
   });
 
   it('the guard’s own files (this test and classic-css-pin/) add nothing to the stylesheet the app builds', async () => {
@@ -572,7 +635,7 @@ describe('what stays of the Classic CSS pin (defence g, retired at the release)'
     expect([...stylesheetImports().keys()]).toEqual(expect.arrayContaining(['app/globals.css']));
   });
 
-  it('(d) globals.css compiled from the whole source adds only utilities for classes not on Classic’s list and theme variables nothing Classic reads', async () => {
+  it('(d) globals.css compiled from the whole source adds only utilities for classes Classic’s source does not use and theme variables nothing Classic reads', async () => {
     const classic = await compiledClassic();
     expect(classic).toContain('@layer utilities');
     expect(classic).toContain('@property --tw-');
@@ -595,6 +658,26 @@ function once(text: string, from: string, to: string): string {
 // Built from parts, so this file names no new whole class for Tailwind to build.
 const PULSE = ['animate', 'pulse'].join('-');
 const PULSE_VAR = `--${PULSE}`;
+/** Tailwind's own animations: each class brings in its @keyframes. */
+const ANIMATIONS = ['spin', 'ping', 'pulse', 'bounce'];
+/** A class that brings in @property --tw-text-shadow-color. */
+const TEXT_SHADOW = ['text-sha', 'dow-sm'].join('');
+const TEXT_SHADOW_PROPERTY = '@property --tw-text-shadow-color';
+/** A utility for a class no source uses, and that brings in nothing else. */
+const PLAIN = ['mt', '[13.5px]'].join('-');
+
+/** A probe source root in the temporary folder holding one .tsx file of class names. */
+function probeRoot(name: string, file: string, classes: string[]): string {
+  expect(TMP).not.toMatch(/glass/i);
+  const root = join(TMP, name);
+  const full = join(root, file);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(
+    full,
+    `export const Probe = () => (\n  <>\n${classes.map((c) => `    <i className="${c}" />\n`).join('')}  </>\n);\n`,
+  );
+  return root;
+}
 
 /** The sheets with globals.css replaced. */
 const withGlobals = (css: string): Sheets => new Map([...SHEETS, ['app/globals.css', css]]);
@@ -617,6 +700,57 @@ describe('controls', () => {
     expect(importFindings(sheets)).toEqual([]);
     expect(importedFindings()).toEqual([]);
     expect(await fullScanFindings(edited, sheets)).toEqual([]);
+  });
+
+  it('a Classic markup edit passes (d): classes losing their last use, and a new Classic file whose classes bring in keyframes and an @property', async () => {
+    // Both edits failed (d) while Classic's class list was frozen in candidates.dat:
+    // "missing from the whole source: ..." and "new in the whole source: @keyframes ...".
+    const root = probeRoot('classic-probe', 'components/po/po-probe.tsx', [
+      ...ANIMATIONS.map((a) => ['animate', a].join('-')),
+      TEXT_SHADOW,
+    ]);
+    // components/rentals taken away from both sides (a Classic folder deleted):
+    // classes used only there lose their last use.
+    const scope: Scope = { roots: [root], not: [join(SRC, 'components', 'rentals')] };
+    const before = await compiledClassic();
+    const { css: after } = await compileClassic(CLASSIC_GLOBALS, scope);
+    const kept = keyed(entriesOf(after).entries);
+    expect(
+      [...keyed(entriesOf(before).entries).keys()].filter((k) => !kept.has(k)).length,
+    ).toBeGreaterThan(0);
+    for (const a of ANIMATIONS) expect(after).toContain(`@keyframes ${a} {`);
+    expect(after).toContain(`${TEXT_SHADOW_PROPERTY} {`);
+    expect(await fullScanFindings(HEAD_GLOBALS, SHEETS, scope)).toEqual([]);
+  });
+
+  it('glass markup whose classes bring in a keyframe or an @property Classic does not have fails (d); glass markup with only a utility for a new class passes', async () => {
+    const classic = await compiledClassic();
+    const fresh = ANIMATIONS.filter((a) => !classic.includes(`@keyframes ${a} {`));
+    // If Classic ever uses all four, pick another class that brings in a keyframe.
+    expect(fresh.length).toBeGreaterThan(0);
+    const name = fresh[0]!;
+    const root = probeRoot('markup-probe', 'components/marketing/glass/probe-tilt.tsx', [
+      ['animate', name].join('-'),
+      TEXT_SHADOW,
+    ]);
+    const findings = await fullScanFindings(HEAD_GLOBALS, SHEETS, { roots: [root] });
+    expect(
+      findings.some((f) => f.startsWith(`new in the whole source: @keyframes ${name} {`)),
+    ).toBe(true);
+    expect(
+      findings.some((f) => f.startsWith(`new in the whole source: ${TEXT_SHADOW_PROPERTY} {`)),
+    ).toBe(!classic.includes(`${TEXT_SHADOW_PROPERTY} {`));
+    // The same file at a Classic path is Classic's markup: it passes.
+    const asClassic = probeRoot('markup-probe-classic', 'components/marketing/probe-tilt.tsx', [
+      ['animate', name].join('-'),
+      TEXT_SHADOW,
+    ]);
+    expect(await fullScanFindings(HEAD_GLOBALS, SHEETS, { roots: [asClassic] })).toEqual([]);
+    // A utility for a class nothing else uses brings in nothing else: it passes.
+    const plain = probeRoot('plain-probe', 'app/(site-glass)/probe/page.tsx', [PLAIN]);
+    const { css: whole } = await compileFullScan(CLASSIC_GLOBALS, { roots: [plain] });
+    expect(whole).toContain('13.5px');
+    expect(await fullScanFindings(HEAD_GLOBALS, SHEETS, { roots: [plain] })).toEqual([]);
   });
 
   it('a change inside styles/liquid-glass passes (b); a new Classic file fails it', () => {
@@ -670,7 +804,7 @@ describe('controls', () => {
     );
   });
 
-  describe('(d) lets through only unread theme variables and utilities for classes not on Classic’s list', () => {
+  describe('(d) lets through only unread theme variables and utilities for classes Classic’s source does not use', () => {
     const THEME_OPEN = /(@layer theme \{\s*:root, :host \{\n)/;
     const withTheme = (css: string, decl: string) => {
       expect(css).toMatch(THEME_OPEN);

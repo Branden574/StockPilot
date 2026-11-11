@@ -28,7 +28,7 @@ import { glassSourceFiles, isUnlayeredCompanion, parse } from './glass-css';
  * Anything else fails, and so does a stylesheet under styles/liquid-glass that
  * glassSourceFiles() does not read (a subfolder other than pages/, another
  * extension), so no glass stylesheet is outside the guards. The folder
- * classic-css-pin/ holds no stylesheet (only manifest.json and candidates.dat),
+ * classic-css-pin/ holds no stylesheet (only manifest.json),
  * so it has no exception here.
  */
 

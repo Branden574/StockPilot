@@ -17,6 +17,5 @@
     "components/orders/storefront/storefront.css",
     "components/po/po-list.css",
     "maplibre-gl/dist/maplibre-gl.css"
-  ],
-  "candidates": 2467
+  ]
 }
