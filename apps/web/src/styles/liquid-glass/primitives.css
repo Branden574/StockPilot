@@ -503,6 +503,10 @@
     :root[data-appearance='liquid-glass'] [data-glass='popover'] {
       border-radius: var(--lg-r-lg);
     }
+    /* The product-update card floats as a popover does (materials.css). */
+    :root[data-appearance='liquid-glass'] [data-update-notice] {
+      border-radius: var(--lg-r-lg);
+    }
 
     /* ── Dialog, sheet (10, 12.9) ─────────────────────────────────────── */
     :root[data-appearance='liquid-glass'] [data-glass='dialog'] {

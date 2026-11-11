@@ -72,8 +72,9 @@ async function missesNow(
   context: BrowserContext,
   page: Page,
   where: string,
+  within?: string,
 ): Promise<{ misses: string[]; runs: number }> {
-  const runs = await textRuns(page);
+  const runs = await textRuns(page, 400, within);
   if (runs.length === 0) return { misses: [], runs: 0 };
   const png = await backdropShot(page);
   const dpr = await page.evaluate(() => devicePixelRatio);
@@ -243,4 +244,111 @@ test.describe('signed out', () => {
       expect(misses).toEqual([]);
     });
   }
+});
+
+/**
+ * THE PRODUCT-UPDATE CARD OVER A BUSY PAGE (lab finding, 2026-11-11).
+ *
+ * The card (components/updates/update-card.tsx, [data-update-notice]) floats
+ * bottom right over whatever page is open. The route checks above never met
+ * it: the lab account has read every release, so no notice was up. In Liquid
+ * Glass it was drawn with the 46% content fill and no blur, and the Items
+ * rows behind it crossed its own words.
+ *
+ * Here the release list is pinned to hold one unread release (only the list:
+ * the app is not changed), so the What's New notice comes up over the Items
+ * list, and in Day and Night glass, in each material:
+ *  - every text run INSIDE the card holds AA against the pixels composed
+ *    behind it (the page's rows are part of those pixels);
+ *  - the card is drawn with the overlay material: a fill of at least 70%
+ *    and a backdrop blur in the normal material, an opaque fill and no blur
+ *    in the reduced and contrast materials.
+ */
+const UPDATE_NOTICE = '[data-update-notice]';
+const PINNED_UNREAD = {
+  id: 'inventory-and-orders-2026-09',
+  revision: 1,
+  status: 'published',
+  title: 'Inventory and orders',
+  summary: 'Pinned by the contrast spec.',
+  publishedAt: '2026-09-18T00:00:00.000Z',
+  entryCount: 1,
+  state: { read: false, dismissed: false },
+};
+
+/** The card's fill alpha and whether it blurs what is behind it, as computed. */
+async function noticeSurface(page: Page): Promise<{ alpha: number; blurred: boolean }> {
+  return page.locator(UPDATE_NOTICE).evaluate((el) => {
+    const cs = getComputedStyle(el);
+    const m = /^rgba?\(([^)]*)\)$/u.exec(cs.backgroundColor);
+    const parts = m ? m[1]!.split(/[,/\s]+/u).filter(Boolean) : [];
+    const filter =
+      cs.backdropFilter ||
+      (cs as unknown as { webkitBackdropFilter?: string }).webkitBackdropFilter ||
+      'none';
+    return { alpha: parts.length >= 4 ? Number(parts[3]) : 1, blurred: filter !== 'none' };
+  });
+}
+
+test.describe('signed in: the product-update card over a busy page', () => {
+  test.beforeEach(() => {
+    const info = test.info();
+    test.skip(!signedIn(info), 'This project has no session.');
+    test.skip(
+      ['platform', 'portal'].includes(process.env.STAGE5_ROLE ?? ''),
+      'Dashboard routes only.',
+    );
+    test.skip(!['chrome', 'webkit'].includes(info.project.name), 'Chrome and WebKit only.');
+  });
+
+  test('its words hold AA over the Items list and it is overlay glass', async ({
+    page,
+    context,
+  }) => {
+    await page.route('**/api/v1/me/releases', (route) =>
+      route.fulfill({
+        json: {
+          releases: [PINNED_UNREAD],
+          unreadCount: 1,
+          latestUnread: PINNED_UNREAD,
+          stateAvailable: true,
+        },
+      }),
+    );
+    const route = '/dashboard/inventory';
+    if (!(await visit(page, route, null))) test.skip(true, `${route} does not open for this role.`);
+    await requireGlass(page);
+    const misses: string[] = [];
+    const measured: string[] = [];
+    for (const look of GLASS_LOOKS) {
+      await chooseLook(page, look);
+      await settle(page);
+      const notice = page.locator(UPDATE_NOTICE);
+      await expect(notice, 'the pinned unread release brings the notice up').toBeVisible({
+        timeout: 20_000,
+      });
+      // The entrance (200 ms fade and slide) is over before anything is measured.
+      await page.waitForTimeout(400);
+      for (const material of MATERIALS) {
+        await setMaterial(page, material);
+        const where = `${route} update card ${look.label} ${material}`;
+        const now = await missesNow(context, page, where, UPDATE_NOTICE);
+        misses.push(...now.misses);
+        if (now.runs === 0) misses.push(`${where}: no text run was measured`);
+        const surface = await noticeSurface(page);
+        if (material === 'normal') {
+          if (!(surface.alpha >= 0.7))
+            misses.push(`${where}: fill alpha ${surface.alpha} is under the overlay material's`);
+          if (!surface.blurred) misses.push(`${where}: no backdrop blur`);
+        } else {
+          if (surface.alpha !== 1) misses.push(`${where}: fill alpha ${surface.alpha}, not opaque`);
+          if (surface.blurred) misses.push(`${where}: still blurred`);
+        }
+      }
+      await setMaterial(page, 'normal');
+      measured.push(look.label);
+    }
+    misses.push(...coverageProblems(route, measured, requiredLooks(true, false)));
+    expect(misses).toEqual([]);
+  });
 });
