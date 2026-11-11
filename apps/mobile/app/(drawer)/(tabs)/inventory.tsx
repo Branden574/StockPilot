@@ -117,6 +117,7 @@ import {
   GLASS_LOOKUP_NAV_TITLE,
   GLASS_LOOKUP_SEPARATOR_INSET,
   GLASS_LOOKUP_THUMB,
+  glassCountLine,
 } from '@/components/ui/glass/screens/lookup';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { inventoryViewPredicate } from '@stockpilot/core';
@@ -1101,7 +1102,7 @@ export default function Inventory() {
           {/* The board's count line (.ios-sub num): the rows the list holds. */}
           {lg ? (
             <GlassSubline style={GLASS_LOOKUP.count}>
-              {loadError !== null ? 'Items' : `${datasetRowCount.toLocaleString()} items`}
+              {loadError !== null ? 'Items' : glassCountLine(datasetRowCount, 'item', 'items')}
             </GlassSubline>
           ) : null}
 

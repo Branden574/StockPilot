@@ -48,7 +48,7 @@ import { Card } from '@/components/ui/card';
 import { GlassSubline } from '@/components/ui/glass/parts';
 import { glassSearchBox, glassSearchInput } from '@/components/ui/glass/primitive-styles';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
-import { GLASS_LOOKUP } from '@/components/ui/glass/screens/lookup';
+import { GLASS_LOOKUP, glassCountLine } from '@/components/ui/glass/screens/lookup';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { Paginator } from '@/components/ui/paginator';
@@ -1026,7 +1026,7 @@ export default function BooksScreen() {
             <GlassSubline style={GLASS_LOOKUP.count}>
               {loadError !== null
                 ? 'Placements'
-                : `${datasetRowCount.toLocaleString()} placements`}
+                : glassCountLine(datasetRowCount, 'placement', 'placements')}
             </GlassSubline>
           ) : null}
 
