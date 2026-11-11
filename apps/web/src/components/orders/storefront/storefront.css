@@ -1166,9 +1166,11 @@
 }
 
 /* "Add all" beside the card's control (SfAddControl). The two sit side by
-   side where the main control keeps 128px (the list row, the quick view) and
-   wrap to two lines where it would not (a 220px grid card), so the stepper's
-   count is never squeezed. */
+   side where the main control keeps 128px (the list row, the quick view, a
+   grid card from about 224px) and wrap to two lines where it would not (a
+   220px grid card). 128px is the stepper's two buttons and a count of up to
+   five digits, with no room left for the IN CART label: see the rule after
+   the label's own, below. */
 .sp-storefront .sf-ctl {
   display: flex;
   flex-wrap: wrap;
@@ -1241,6 +1243,16 @@
   letter-spacing: 0.06em;
   margin-left: 6px;
   flex: none;
+}
+/* Beside "Add all" the stepper shows the count alone. In a list row (a 210px
+   cell) and on a grid card the label left the count 15 to 25px, so 100 drew
+   as "10"; without it the count has 62px or more, five digits in either
+   face. The quick view keeps the label down to 640px: its stepper is 250px
+   wide or more there. A stepper with no "Add all" (1 available) is not in
+   .sf-ctl and keeps it everywhere. */
+.sp-storefront .sf-row .sf-ctl .in-lbl,
+.sp-storefront .sf-card .sf-ctl .in-lbl {
+  display: none;
 }
 /* Typeable quantity: styled to be indistinguishable from the static
    mono count (transparent, centered, borderless). */
@@ -3001,14 +3013,16 @@ html[data-sp-update-card] .sp-storefront .sf-fab {
   }
   /* The row's control cell is as wide as its content here: "Add all" goes
      under the main control, in a fixed width (the stepper's two 44px buttons
-     and a count of up to five digits), so the name keeps its room. The
-     stepper's IN CART label is dropped in that width; the count stays. */
+     and a count of up to five digits), so the name keeps its room. */
   .sp-storefront .sf-row .sf-ctl {
     flex-direction: column;
     flex-wrap: nowrap;
     width: 148px;
   }
-  .sp-storefront .sf-row .sf-ctl .in-lbl {
+  /* With 44px buttons the quick view's stepper has no room for the IN CART
+     label either (at 320px wide it left the count 11 to 35px): every stepper
+     beside "Add all" shows the count alone here. */
+  .sp-storefront .sf-ctl .in-lbl {
     display: none;
   }
   .sp-storefront .sf-row .sf-ctl > .sf-add,
