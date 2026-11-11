@@ -49,7 +49,7 @@
        "external-column") is one sheet, as the sign-in column is a glass
        holder around its card (auth.glass.css): the overlay material's fill,
        ring and shadow at the card radius, the same sheet the public order
-       page takes (storefront.glass.css), and for the same reasons no blur.
+       page takes (below), and for the same reasons no blur.
        Cards keep their own surface on it.
        A page that draws the whole frame: the sheet floats 12 px clear of
        the window's top and of the line under it and is as tall as its
@@ -89,8 +89,56 @@
       padding-right: 12px;
       padding-left: 12px;
     }
+    /* ── The public order page (/r/<token>): a sheet under its words ─────
+       The open page is not a card: it is the storefront (.sp-storefront
+       .sf-public), which Classic draws on the page colour. With the ground
+       gone it had no surface at all, so its brand row, heading, intro line,
+       list of facts and section titles sat on the bare picture: "Powered by
+       StockPilot" measured 1.31:1 over the plant in the picture's top right
+       corner and the intro line 4.06:1 (Day, 1440 px).
+       The sheet is the overlay material's fill, ring and shadow at the link
+       cards' radius: the only fill under which the page's quietest words
+       (ink 3) hold 4.5:1 over every part of both pictures, Day and Night
+       (links-scene-contrast.test.ts measures the picture files). It does not
+       blur: the picture is already out of focus, and a backdrop-filter here
+       would make this element the containing block of the page's fixed
+       overlays (the quick view, the review sheet and the phone cart bar are
+       fixed inside it). The sheet reaches 12 px past the words on every
+       side: the negative margin and the padding cancel, so nothing on the
+       page moves.
+       !important on the fill, and only there: the classic rule that clears
+       this element's background (public-orders.css, .sp-storefront
+       .sf-public) is unlayered, which no normal declaration in a layer can
+       beat; a layered !important does. The rule lives here, in the sheet
+       this page already loads, so the page takes no other stylesheet. Under
+       Reduce Transparency, Increase Contrast and the low-power material the
+       token is opaque; forced colours draw the system ground. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='links'] .sp-storefront.sf-public {
+      margin: -12px;
+      padding: 12px;
+      border-radius: 24px;
+      background-color: var(--lg-glass-strong) !important;
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-sh-3);
+    }
+    /* "View all N" beside a section title is the accent as words. On the
+       sheet over the picture the Day accent measured 4.34:1 (5.06:1 on
+       Classic's page colour); the glass token for accent-coloured words is
+       --lg-accent-text, which the signed-in order page already uses for
+       this link (storefront.glass.css). !important for the same reason as
+       above (storefront.css is unlayered); :not(:hover) leaves the classic
+       hover colour (the ink) in place. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      .sp-storefront.sf-public
+      .sf-sec-head
+      .see:not(:hover) {
+      color: var(--lg-accent-text) !important;
+    }
     /* The public order page's closed card sits in a column inside that
-       page's own sheet (storefront.glass.css): no second sheet. */
+       page's own sheet (above): no second sheet. */
     :root[data-appearance='liquid-glass']
       [data-glass-page='links']
       .sf-public

@@ -27,7 +27,7 @@ import { cssRules, GLASS_DIR, normaliseQuotes, type CssRule } from './glass-css'
  * floor of what a browser draws. It pins:
  *  - the defect: on the bare picture ink 3 falls under 4.5:1 in Day (so a
  *    rule that puts words there is wrong, whatever the tokens say);
- *  - the public order page's sheet (storefront.glass.css): the overlay fill,
+ *  - the public order page's sheet (pages/links.css): the overlay fill,
  *    under which ink, ink 2 and ink 3 hold 4.5:1 over every part of both
  *    pictures;
  *  - the "Powered by StockPilot" pill (pages/links.css): ink 2 on the
@@ -232,7 +232,10 @@ describe('the rules that put those surfaces under the words', () => {
   };
 
   it('the public order page is a sheet of the overlay fill, and nothing on it moves', () => {
-    const sheet = one('storefront.glass.css', `${ROOT} .sp-storefront.sf-public`);
+    const sheet = one(
+      'pages/links.css',
+      `${ROOT} [data-glass-page='links'] .sp-storefront.sf-public`,
+    );
     expect(sheet.decls['background-color']).toBe('var(--lg-glass-strong)');
     // The margin and the padding cancel: the words stay where Classic puts them.
     expect(sheet.decls.margin).toBe('-12px');
@@ -253,19 +256,62 @@ describe('the rules that put those surfaces under the words', () => {
     }
   });
 
-  it('the sheet is the only rule of storefront.glass.css that reaches the public page', () => {
+  it('the sheet beats the unlayered classic rule that clears the page ground, with one !important', () => {
+    // public-orders.css is unlayered: `.sp-storefront.sf-public { background: transparent }`
+    // wins over any normal declaration in @layer lg. A layered !important wins over it.
+    const classic = readFileSync(
+      join(__dirname, '..', '..', 'components', 'orders', 'public-v2', 'public-orders.css'),
+      'utf8',
+    );
+    expect(classic).toMatch(/\.sp-storefront\.sf-public \{\s*background: transparent;/u);
+    expect(classic).not.toMatch(/@layer/u);
+    const links = readFileSync(join(__dirname, 'pages', 'links.css'), 'utf8');
+    const important = [...links.matchAll(/^\s*([\w-]+):[^;]*!important;/gmu)].map((m) => m[1]);
+    // The sheet's fill and the accent words on it: nothing else in the file is !important.
+    expect(important).toEqual(['background-color', 'color']);
+    expect(links).toMatch(/background-color: var\(--lg-glass-strong\) !important;/u);
+  });
+
+  it('accent-coloured words on the sheet take the glass token for accent words, and keep the classic hover', () => {
+    const see = one(
+      'pages/links.css',
+      `${ROOT} [data-glass-page='links'] .sp-storefront.sf-public .sf-sec-head .see:not(:hover)`,
+    );
+    expect(see.decls).toEqual({ color: 'var(--lg-accent-text)' });
+    // Over the sheet at its darkest (the fill over the picture's darkest part) the token holds 4.5:1
+    // in Day and Night; the Day accent itself does not.
+    for (const scheme of ['day', 'night'] as const) {
+      for (const win of WINDOWS) {
+        expect(
+          lowest(
+            SCENES.get(`${scheme} ${win.name}`)!,
+            T[scheme]['--lg-accent-text']!,
+            T[scheme]['--lg-glass-strong']!,
+          ),
+          `${scheme} ${win.name}`,
+        ).toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    const accent = lowest(
+      SCENES.get('day 1440 x 900')!,
+      T.day['--lg-accent']!,
+      T.day['--lg-glass-strong']!,
+    );
+    expect(accent).toBeLessThan(4.5);
+  });
+
+  it('no rule of storefront.glass.css reaches the public page, and the page loads no stylesheet for the sheet', () => {
     const reaching = cssRules('storefront.glass.css').filter((r) =>
       r.selectors.some((s) => /\.sf-public/u.test(s) && !/:not\(\.sf-public\)/u.test(s)),
     );
-    expect(reaching.map(flat)).toEqual([`${ROOT} .sp-storefront.sf-public`]);
-  });
-
-  it('the page that draws .sf-public loads the sheet, and only that page', () => {
+    expect(reaching.map(flat)).toEqual([]);
     const page = readFileSync(
       join(__dirname, '..', '..', 'app', 'r', '[token]', 'page.tsx'),
       'utf8',
     );
-    expect(page).toContain("import '@/styles/liquid-glass/storefront.glass.css';");
+    // The sheet lives in the composition the page already imports.
+    expect(page).toContain("import '@/styles/liquid-glass/pages/links.css';");
+    expect(page).not.toContain('storefront.glass.css');
     expect(page.match(/className="sp-storefront sf-public"/gu)?.length).toBe(2);
   });
 
