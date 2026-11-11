@@ -352,3 +352,87 @@ test.describe('signed in: the product-update card over a busy page', () => {
     expect(misses).toEqual([]);
   });
 });
+
+/**
+ * THE PAGES PEOPLE OPEN FROM A LINK (lab finding, 2026-11-11).
+ *
+ * These pages have no workspace pane: the scene picture is their ground, and
+ * the route lists above hold none of them (each needs a record's token). On
+ * the public order page in Day glass at 1440 px "Powered by StockPilot"
+ * measured 1.31:1 and the intro line 4.06:1, ink 3 straight on the picture.
+ *
+ * Each page is opened with the fictional lab token the runner minted (the
+ * same variables action-inventory.spec.ts reads; a page with no token is
+ * skipped and named), signed out, in Day and Night glass, and every text run
+ * is checked as on every other route: 4.5:1 (3:1 large) against the pixels
+ * composed behind it, in the three materials, at the top, the middle and the
+ * end of the page (the scene is fixed, so the words move over it). The
+ * phone-390 project runs it at 390 px, where the public order page prints
+ * "Powered by StockPilot" only in the footer.
+ */
+const LINK_ID = '0d3c2b1a-0000-4000-8000-0000000000a1';
+const linkToken = (prefix: string, variable: string): string | null => {
+  const token = process.env[variable];
+  return token ? `${prefix}${encodeURIComponent(token)}` : null;
+};
+const LINK_PAGES: Array<{ name: string; path(): string | null; needs: string }> = [
+  {
+    name: '/r/[token] (the public order page)',
+    path: () => linkToken('/r/', 'STAGE5_TOKEN_REQUEST_LINK'),
+    needs: 'STAGE5_TOKEN_REQUEST_LINK',
+  },
+  {
+    name: '/orders/sign/[token] (an order’s signature link)',
+    path: () => linkToken('/orders/sign/', 'STAGE5_TOKEN_SIGNATURE'),
+    needs: 'STAGE5_TOKEN_SIGNATURE',
+  },
+  {
+    name: '/returns/request/[token] (a return link)',
+    path: () => linkToken('/returns/request/', 'STAGE5_TOKEN_RETURN'),
+    needs: 'STAGE5_TOKEN_RETURN',
+  },
+  {
+    name: '/m/[token] (a maintenance share link)',
+    path: () => linkToken('/m/', 'STAGE5_TOKEN_MAINTENANCE_SHARE'),
+    needs: 'STAGE5_TOKEN_MAINTENANCE_SHARE',
+  },
+  { name: '/r/track (the track form)', path: () => '/r/track', needs: '' },
+  { name: '/r/confirm (confirmed)', path: () => `/r/confirm?done=${LINK_ID}`, needs: '' },
+];
+
+test.describe('signed out: the pages people open from a link', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+  test.beforeEach(() => {
+    const info = test.info();
+    test.skip(
+      !['anonymous', 'webkit', 'phone-390'].includes(info.project.name),
+      'Signed-out pages run in the anonymous (Chrome), webkit and phone-390 projects.',
+    );
+  });
+  for (const link of LINK_PAGES) {
+    test(`${link.name}: text holds AA over composed glass`, async ({ browser, baseURL }) => {
+      const path = link.path();
+      test.skip(path === null, `No lab record: set ${link.needs}.`);
+      const misses: string[] = [];
+      const measured: string[] = [];
+      for (const look of GLASS_LOOKS) {
+        const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+        try {
+          await arriveSignedOut(context, baseURL!, look);
+          const page = await context.newPage();
+          const response = await page.goto(path!);
+          expect(response?.status(), `${link.name} opens`).toBe(200);
+          await page.locator('h1, main').first().waitFor({ state: 'visible', timeout: 15_000 });
+          await requireGlass(page);
+          await settle(page);
+          misses.push(...(await checkRoute(context, page, link.name, look)));
+          measured.push(look.label);
+        } finally {
+          await context.close();
+        }
+      }
+      misses.push(...coverageProblems(link.name, measured, requiredLooks(true, false)));
+      expect(misses).toEqual([]);
+    });
+  }
+});

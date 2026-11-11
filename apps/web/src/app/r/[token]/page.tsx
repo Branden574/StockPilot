@@ -18,6 +18,12 @@ import {
 // data-glass-page="links" root that app/r/layout.tsx draws and to glass, so Classic never
 // matches it (styles/liquid-glass/glass-scope.guard.test.ts).
 import '@/styles/liquid-glass/pages/links.css';
+// The sheet under this page's words in Liquid Glass (the last rule of
+// styles/liquid-glass/storefront.glass.css). That file is the unlayered
+// companion of storefront.css, which app/r/layout.tsx loads for this page;
+// every other rule in it skips this page (.sf-public), and all of it is
+// scoped to glass, so Classic never matches it.
+import '@/styles/liquid-glass/storefront.glass.css';
 
 /**
  * F9: org.logo_url is editable by org admins and could in theory hold

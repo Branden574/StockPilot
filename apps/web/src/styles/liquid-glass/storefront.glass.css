@@ -15,8 +15,9 @@
    only the sf-* classes the page already has are read.
 
    The public order page (/r/<token>, .sp-storefront.sf-public) is not this
-   lane's page: every selector skips it, so loading this file there changes
-   nothing until that page is composed.
+   lane's page: every selector but the last rule of this file skips it. That
+   last rule gives the public page the one thing it needs in glass, a sheet
+   under its words (app/r/[token]/page.tsx imports this file for it).
 
    Values come from the generated --lg-* tokens; under Reduce Transparency,
    Increase Contrast and the low-power material the tokens are opaque, and the
@@ -1388,5 +1389,37 @@
     :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fab[data-show='true'] {
       border: 1px solid CanvasText;
     }
+  }
+
+  /* ── The public order page (/r/<token>): a sheet under its words ───────
+     In Classic the page's words sit on the page colour. Glass takes that
+     ground away on the pages people open from a link (pages/links.css: the
+     scene shows), and this page was never given a surface in its place, so
+     its brand row, heading, intro line, list of facts and section titles
+     sat on the bare picture: "Powered by StockPilot" measured 1.31:1 over
+     the plant in the picture's top right corner and the intro line 4.06:1
+     (Day, 1440 px). No text sits on the bare picture (R11; the sign-in
+     page's help links sit on glass for the same reason).
+     The sheet is the overlay material's fill, ring and shadow at the link
+     cards' radius. It is the only fill under which the page's quietest
+     words (ink 3) hold 4.5:1 over every part of both pictures, Day and
+     Night (links-scene-contrast.test.ts measures the picture files). It
+     does not blur: the picture is already out of focus, a page-tall
+     backdrop-filter is the cost the scrim avoids, and without one the page
+     keeps its in-page overlays (the quick view and the review sheet are
+     fixed inside this element) exactly as they are.
+     The sheet reaches 12 px past the words on every side: the negative
+     margin and the padding cancel, so nothing on the page moves. Under
+     Reduce Transparency, Increase Contrast and the low-power material the
+     fill is opaque (the tokens); forced colours draw the system ground. */
+  :root[data-appearance='liquid-glass'] .sp-storefront.sf-public {
+    margin: -12px;
+    padding: 12px;
+    border-radius: 24px;
+    background-color: var(--lg-glass-strong);
+    box-shadow:
+      var(--lg-glass-inner),
+      0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+      var(--lg-sh-3);
   }
 }

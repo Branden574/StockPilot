@@ -186,11 +186,29 @@
       line-height: 18px;
     }
 
-    /* "Powered by StockPilot" and the pages' own small print (.xs in ink 3). */
+    /* "Powered by StockPilot" under the page: a glass pill, as the sign-in
+       page's line under its card is (auth.glass.css, .auth-panel-foot p: the
+       floating glass, 6 x 14, radius 16, ink 2, the inner light and the
+       ring), so the words never sit on the bare picture (R11). On a phone
+       this is the only place the public order page prints the line. Ink 2,
+       not the .xs ink 3: on the floating glass ink 3 falls under 4.5:1 over
+       the picture's darkest parts (links-scene-contrast.test.ts). The pill
+       and the 28 px under it are the 56 px the line and its 40 px foot take
+       in Classic, so the page is as tall as it was. */
     :root[data-appearance='liquid-glass'] [data-glass-page='links'] [data-slot='external-footer'] {
-      color: var(--lg-ink-3);
+      width: fit-content;
+      margin-bottom: 28px;
+      padding: 6px 14px;
+      border-radius: 16px;
+      background-color: var(--lg-glass);
+      color: var(--lg-ink-2);
       font-size: 12px;
       line-height: 16px;
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
     }
 
     /* ── The public item page (/p/items/<id>) ───────────────────────────
@@ -367,6 +385,7 @@
         :is(
           [data-slot='external-card'],
           [data-slot='external-status-card'],
+          [data-slot='external-footer'],
           .bg-card.rounded-lg.border,
           div.bg-card.fixed.inset-x-0.bottom-0.border-t
         ) {
@@ -381,6 +400,7 @@
       :is(
         [data-slot='external-card'],
         [data-slot='external-status-card'],
+        [data-slot='external-footer'],
         .bg-card.rounded-lg.border,
         div.bg-card.fixed.inset-x-0.bottom-0.border-t
       ) {
@@ -395,6 +415,7 @@
         :is(
           [data-slot='external-card'],
           [data-slot='external-status-card'],
+          [data-slot='external-footer'],
           .bg-card.rounded-lg.border,
           div.bg-card.fixed.inset-x-0.bottom-0.border-t
         ) {
