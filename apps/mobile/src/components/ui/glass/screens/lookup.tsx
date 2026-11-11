@@ -53,6 +53,14 @@ export const GLASS_LOOKUP = StyleSheet.create({
   },
 });
 
+/**
+ * The count line's words (.ios-sub num): "1 item", "1,234 items". One of a
+ * thing is said in the singular; the line read "1 items" before.
+ */
+export function glassCountLine(count: number, one: string, many: string): string {
+  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+}
+
 /** The inline large title's size (iOS-Lookup sets .ios-large to 30px in the nav). */
 export const GLASS_LOOKUP_NAV_TITLE = 30;
 
