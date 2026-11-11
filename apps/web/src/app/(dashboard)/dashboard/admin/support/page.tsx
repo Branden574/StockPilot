@@ -6,6 +6,11 @@ import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-heade
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { listSupportTickets } from '@/server/services/support-tickets';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Support tickets · Admin' };
 
@@ -19,7 +24,11 @@ export default async function AdminSupportPage() {
   const open = tickets.filter((t) => t.status === 'open' || t.status === 'in_progress').length;
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="support"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/admin">← Admin</PageHeaderBackLink>}
         title="Support tickets"

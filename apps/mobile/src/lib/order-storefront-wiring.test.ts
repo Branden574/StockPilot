@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { TOUCHABLE_TAG, attrText, parseTsx, tagOf, walkJsx, type JsxNode } from './__fixtures__/jsx-touch-audit';
 
 /**
@@ -1011,10 +1012,21 @@ describe('the Orders list says when a read again failed over the rows shown (PO-
     // Re-pinned by the redesign (P5.7a): the note is DataListScreen's
     // reloadNote, which it says above the rows the failed read kept.
     expect(flat(orders)).toContain('reloadNote: reloadNote ?? undefined,');
-    const list = codeOnly(read('src/components/data-list-screen.tsx'));
+    const frame = 'src/components/data-list-screen.tsx';
+    const list = codeOnly(read(frame));
     expect(list).toContain('const reloadNote = dataListReloadNote(failed, data.length);');
-    expect(list).toMatch(
-      /reloadNote \? \(\s*<View style=\{styles\.reloadNote\}>\s*(?:\{\}\s*)?<Body size=\{13\} color=\{c\.warnText\} accessibilityRole="alert">\s*\{reloadNote\}/,
+    // Classic's note, read off the frame's Classic projection (every Liquid
+    // Glass branch folded to Classic: lib/__fixtures__/classic-projection.ts).
+    expect(classicFlat(read(frame), frame)).toContain(
+      flatNorm(
+        'reloadNote ? (<View style={styles.reloadNote}><Body size={13} color={c.warnText} accessibilityRole="alert">{reloadNote}</Body>',
+      ),
+    );
+    // Liquid Glass says the same words, as the same alert, on the warning wash.
+    expect(flatNorm(list.replace(/\{\}/g, ''))).toContain(
+      flatNorm(
+        'reloadNote ? (<View style={lg ? [GLASS_LIST.reloadNote, { backgroundColor: c.warnWash }] : styles.reloadNote}><Body size={lg ? 14 : 13} color={c.warnText} accessibilityRole="alert">{reloadNote}</Body>',
+      ),
     );
   });
 });

@@ -5,6 +5,7 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 
 import { useSessionUserId } from '@/components/dashboard/session-user';
+import { hiddenTwinSelector, isGlassShowing } from '@/components/theme/appearance-cookie';
 import { Button } from '@/components/ui/button';
 import { readTourState, recordTourOutcome } from '@/lib/onboarding/tour-state-cache';
 import type { TourDefinition, TourStep } from '@/lib/onboarding/types';
@@ -83,10 +84,34 @@ function cardPosition(rect: Rect | null, placement?: 'top' | 'bottom'): React.CS
  * (`button[aria-label^="Hide "]`) used to spotlight the top bar's "Hide
  * sidebar" instead of the editor's eye toggles. A selector that matches only
  * outside the page (`#dashboard-sidebar …`) still finds its one match.
+ *
+ * Appearance twins (Liquid Glass): a page can hold two copies of a target,
+ * one of them hidden by styles/liquid-glass/visibility.css, and a hidden twin
+ * has no box to spotlight. So the twin the page is not showing is skipped,
+ * with everything inside it: a [data-glass-only] element in Classic (Classic
+ * under the default rollout carries the Reports hub's glass links before its
+ * Classic tiles, REPORTS_TOUR's `main a[href^="/dashboard/reports/"]`), a
+ * [data-classic-only] one in glass. Nothing else changes in Classic: under the
+ * `off` rollout no glass-only element is rendered and <html> never shows
+ * glass, so the rule above is main's exactly, and Classic under opt-in or
+ * default differs from it only by the skipped glass twins
+ * (page-tour.target.test.tsx; page-tour.twins.test.tsx lists the tour steps
+ * that match a twin).
+ *
+ * In glass a drawn match comes first (an element that renders no box has no
+ * client rects), then the rule above; where no match is drawn (a test DOM has
+ * no layout), the first match by the rule above.
  */
-function findTarget(selector: string): Element | null {
-  const all = document.querySelectorAll(selector);
-  return Array.from(all).find((el) => el.closest('main') !== null) ?? all[0] ?? null;
+export function findTarget(selector: string): Element | null {
+  const glass = isGlassShowing();
+  const hiddenTwin = hiddenTwinSelector(glass);
+  const all = Array.from(document.querySelectorAll(selector)).filter(
+    (el) => el.closest(hiddenTwin) === null,
+  );
+  const first = (list: Element[]) =>
+    list.find((el) => el.closest('main') !== null) ?? list[0] ?? null;
+  if (!glass) return first(all);
+  return first(all.filter((el) => el.getClientRects().length > 0)) ?? first(all);
 }
 
 /**

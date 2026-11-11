@@ -37,10 +37,12 @@ describe('OrderStatusBadge for a completed order', () => {
 
   it('the order page and the orders list pass the order fulfilment', () => {
     const app = resolve(__dirname, '../../app/(dashboard)/dashboard/orders');
-    expect(readFileSync(resolve(app, '[id]/page.tsx'), 'utf8')).toContain(
+    // The JSX as written, whatever lines Prettier wraps it over.
+    const source = (file: string) => readFileSync(resolve(app, file), 'utf8').replace(/\s+/g, ' ');
+    expect(source('[id]/page.tsx')).toContain(
       '<OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />',
     );
-    expect(readFileSync(resolve(app, 'page.tsx'), 'utf8')).toContain(
+    expect(source('page.tsx')).toContain(
       '<OrderStatusBadge status={r.status} fulfillmentType={r.fulfillmentType} />',
     );
   });

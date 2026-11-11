@@ -44,6 +44,10 @@ const FILES = [
   'src/app/unsubscribe/route.settings-parity.test.tsx',
   'src/server/services/member-email-unsubscribe.test.ts',
   'src/server/actions/digest.preview.test.ts',
+  // Liquid Glass stage 5: the committed fidelity seed and its runner (plan 8.1; also
+  // guarded for fictional-only data by fidelity-fixture.guard.test.ts).
+  'tests/e2e/appearance/fixtures/seed-fidelity.sql',
+  'tests/e2e/appearance/fixtures/seed-fidelity.mjs',
 ];
 
 // A password-, secret- or token-shaped name (identifier, property or quoted

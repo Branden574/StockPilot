@@ -57,6 +57,7 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
     <DetailSection
       title="Notification history"
       flush
+      data-glass-role="notification-history"
       aside={
         unread.length > 0 ? (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -126,6 +127,7 @@ export function NotificationsList({ notifications }: NotificationsListProps) {
                   )}
                   <p
                     className="text-muted-foreground mt-1 text-[11px] uppercase leading-4 tracking-[0.06em]"
+                    data-glass-role="notification-when"
                     suppressHydrationWarning
                   >
                     {n.type.replace('_', ' ')} · {formatRelative(n.createdAt)}

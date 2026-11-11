@@ -38,10 +38,14 @@ export function CharterFilterSelect({
 
   return (
     <Select value={current ?? 'all'} onValueChange={onChange}>
-      <SelectTrigger className="w-[220px] max-w-full" aria-label="Filter by charter">
+      <SelectTrigger
+        className="w-[220px] max-w-full"
+        aria-label="Filter by charter"
+        data-glass-role="report-charter-select"
+      >
         <SelectValue placeholder="All charters" />
       </SelectTrigger>
-      <SelectContent>
+      <SelectContent data-glass-role="report-charter-menu">
         <SelectItem value="all">All charters</SelectItem>
         {charters.map((c) => (
           <SelectItem key={c.id} value={c.id}>

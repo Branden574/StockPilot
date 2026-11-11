@@ -98,15 +98,19 @@ const told = (v: ReleaseViewer) =>
     ?.entries.map((e) => e.id);
 
 describe('the Add all release: order, status and date', () => {
-  it('is published once, as revision 1, at the top, above the count sheet release, and no draft is left', () => {
+  // Renamed when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: "is published once, as revision 1, at the top, above the count sheet release, and no draft is left"): the Liquid Glass release is held as a draft at the top until G5. Claim kept: it is the newest published release, and no other draft is left.
+  it('is published once, as revision 1, directly below the Liquid Glass draft at the top, above the count sheet release, and no draft but the Liquid Glass release is left', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
-    expect(RELEASES[0]?.id).toBe(ID);
-    expect(RELEASES[1]?.id).toBe(COUNT_SHEET_ID);
+    // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[1]?.id).toBe(ID);
+    expect(RELEASES[2]?.id).toBe(COUNT_SHEET_ID);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
     // Permanent, unused anywhere else, and ends in the month it went out.
     expect(ID).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*-2026-11$/);
     expect(RELEASES.flatMap((r) => r.entries).filter((e) => e.id === ENTRY_ID)).toHaveLength(1);
@@ -117,7 +121,8 @@ describe('the Add all release: order, status and date', () => {
     const at = Date.parse(release().publishedAt);
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
     expect(at).toBeLessThanOrEqual(Date.now());
-    for (const r of RELEASES.slice(1)) {
+    // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    for (const r of RELEASES.slice(2)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

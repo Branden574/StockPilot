@@ -4,6 +4,11 @@ import { ItemDetail } from '@/components/inventory/item-detail';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 
+// The Liquid Glass item page (Item-Detail.dc.html, Book-Detail.dc.html): every
+// rule is scoped to ItemDetail's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/item-detail.css';
+
 // The browser tab's title (CONFLICTS D16: the item page had none, so it read
 // "Dashboard · StockPilot"). A fixed word, as the Exception and Location pages
 // have: the record's name would cost a read of its own before the page renders.

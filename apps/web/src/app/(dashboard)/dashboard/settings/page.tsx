@@ -9,6 +9,11 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 import { can, PERMISSIONS } from '@stockpilot/core';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export const metadata: Metadata = { title: 'Settings' };
 
 /**
@@ -32,7 +37,11 @@ export default async function SettingsPage() {
     uncheckedModules: maintenanceAccess.checkFailed ? ['maintenance_requests'] : [],
   };
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="settings"
+      data-glass-view="hub"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         title="Settings"
         subline="Manage your workspace and account."

@@ -6,6 +6,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { glassRowSub } from '@/components/ui/glass/primitive-styles';
+import { glassHeroWell, glassStackRow } from '@/components/ui/glass/screens/admin';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -25,6 +31,10 @@ import { useTheme } from '@/lib/use-theme';
  */
 export default function AIAssistantScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: the iOS grouped list with example prompts): the
+  // scene, the glass nav and large title, the hero on the grouped surface,
+  // the prompts as one grouped list. Start chat and every prompt stay.
+  const lg = useGlass();
   const navigation = useNavigation();
   const router = useRouter();
   const { return: returnPath } = useLocalSearchParams<{ return?: string }>();
@@ -42,10 +52,15 @@ export default function AIAssistantScreen() {
   ];
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
+          <View
+            style={
+              lg ? GLASS_LIST.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip
               icon={ArrowLeft}
               accessibilityLabel="Back"
@@ -55,18 +70,32 @@ export default function AIAssistantScreen() {
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
         </View>
-        <View style={styles.head}>
-          <Eyebrow>INSIGHTS · BETA</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            AI <Em>assistant.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {lg ? null : <Eyebrow>INSIGHTS · BETA</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            AI {lg ? 'assistant' : <Em>assistant.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Insights · Beta</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={lg ? GLASS_AI_SCROLL : styles.scroll}
+        showsVerticalScrollIndicator={false}
+      >
         <Card hero style={styles.heroCard}>
-          <View style={[styles.iconWell, { backgroundColor: c.sunk, borderColor: c.hair }]}>
-            <Sparkles size={36} color={c.ink} strokeWidth={1.3} />
+          <View
+            style={[
+              styles.iconWell,
+              { backgroundColor: c.sunk, borderColor: c.hair },
+              lg && glassHeroWell(lg),
+            ]}
+          >
+            <Sparkles size={36} color={lg ? lg.g.accentText : c.ink} strokeWidth={lg ? 1.8 : 1.3} />
             <View style={[styles.pip, { backgroundColor: c.accent }]} />
           </View>
           <Pill status="ok">BETA · NATIVE</Pill>
@@ -87,23 +116,46 @@ export default function AIAssistantScreen() {
           </Button>
         </Card>
 
-        <View style={{ marginTop: 24 }}>
-          <Eyebrow>TRY ASKING</Eyebrow>
-          <View style={{ marginTop: 12, gap: 8 }}>
+        <View style={{ marginTop: lg ? 22 : 24 }}>
+          {lg ? <GlassHeading>Try asking</GlassHeading> : <Eyebrow>TRY ASKING</Eyebrow>}
+          <View style={lg ? { marginTop: 8, gap: 0 } : { marginTop: 12, gap: 8 }}>
             {examples.map((ex) => (
               <Pressable
                 key={ex}
                 onPress={() => openChat()}
                 accessibilityRole="button"
-                style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+                style={({ pressed }) =>
+                  lg
+                    ? { transform: [{ scale: pressed ? 0.98 : 1 }] }
+                    : { opacity: pressed ? 0.85 : 1 }
+                }
               >
-                <Card padding={14}>
+                <Card
+                  padding={14}
+                  style={
+                    lg
+                      ? glassStackRow(lg, ex === examples[0], ex === examples[examples.length - 1])
+                      : undefined
+                  }
+                >
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                    <Sparkles size={14} color={c.ink4} strokeWidth={1.5} />
-                    <Body size={14} color={c.ink2} style={{ flex: 1, fontFamily: FONT.displayRegular }}>
+                    <Sparkles
+                      size={lg ? 16 : 14}
+                      color={lg ? lg.g.accentText : c.ink4}
+                      strokeWidth={lg ? 1.8 : 1.5}
+                    />
+                    <Body
+                      size={lg ? 16 : 14}
+                      color={lg ? c.ink : c.ink2}
+                      style={{ flex: 1, fontFamily: FONT.displayRegular }}
+                    >
                       {ex}
                     </Body>
-                    <ArrowUpRight size={14} color={c.ink4} strokeWidth={1.5} />
+                    <ArrowUpRight
+                      size={14}
+                      color={lg ? lg.ios.l2 : c.ink4}
+                      strokeWidth={lg ? 1.8 : 1.5}
+                    />
                   </View>
                 </Card>
               </Pressable>
@@ -111,7 +163,16 @@ export default function AIAssistantScreen() {
           </View>
         </View>
 
-        <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 18, textAlign: 'center' }}>
+        <Mono
+          size={10.5}
+          tracking={0.04}
+          color={c.ink3}
+          style={
+            lg
+              ? [glassRowSub(lg), { marginTop: 18, textAlign: 'center' }]
+              : { marginTop: 18, textAlign: 'center' }
+          }
+        >
           {AI_FOOTER}
         </Mono>
       </ScrollView>
@@ -124,6 +185,9 @@ export default function AIAssistantScreen() {
  * in beta, as the eyebrow's BETA and the BETA · NATIVE pill say.
  */
 const AI_FOOTER = 'Native mobile chat is in beta.';
+
+/** Liquid Glass: the scroll at the 16pt edge, 14 under the title (.ios-scroll). */
+const GLASS_AI_SCROLL = { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 40 } as const;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

@@ -1,12 +1,24 @@
 import { headers } from 'next/headers';
 
-import { ExternalHeader, ExternalShell, ExternalStatusCard } from '@/components/auth/external-shell';
+import {
+  ExternalHeader,
+  ExternalShell,
+  ExternalStatusCard,
+} from '@/components/auth/external-shell';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
-import { RETURN_PAGE_VIEWS_PER_IP_PER_HOUR, returnPageIpBucketKey } from '@/lib/returns/public-limits';
+import {
+  RETURN_PAGE_VIEWS_PER_IP_PER_HOUR,
+  returnPageIpBucketKey,
+} from '@/lib/returns/public-limits';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { loadRequesterReturnSheet } from '@/server/services/returns-requester';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root on the external frame (ExternalShell glassPage="links") and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 import { requesterEntryLabel, RETURNS_COPY } from '@stockpilot/core';
 
@@ -79,7 +91,7 @@ export default async function RequesterReturnPage({
 
   const exchanges = sheet.exchangesEnabled;
   return (
-    <ExternalShell width="xl" poweredBy>
+    <ExternalShell glassPage="links" width="xl" poweredBy>
       <ExternalHeader
         align="start"
         divided
@@ -90,14 +102,15 @@ export default async function RequesterReturnPage({
           exchanges ? (
             <>
               Choose the items you&apos;re sending back and how many of each. For each one, choose{' '}
-              {RETURNS_COPY.returnOnly} or {RETURNS_COPY.exchangeRequester}. The warehouse team reviews
-              every request before anything happens, and this page shows where each request stands.
+              {RETURNS_COPY.returnOnly} or {RETURNS_COPY.exchangeRequester}. The warehouse team
+              reviews every request before anything happens, and this page shows where each request
+              stands.
             </>
           ) : (
             <>
-              Pick the items you&apos;d like to return and how many of each. The
-              warehouse team reviews every request before anything is processed —
-              you&apos;ll hear back once it&apos;s approved.
+              Pick the items you&apos;d like to return and how many of each. The warehouse team
+              reviews every request before anything is processed — you&apos;ll hear back once
+              it&apos;s approved.
             </>
           )
         }
@@ -125,16 +138,15 @@ export default async function RequesterReturnPage({
  */
 function ReturnLinkInvalid() {
   return (
-    <ExternalShell width="xl" poweredBy>
+    <ExternalShell glassPage="links" width="xl" poweredBy>
       <ExternalStatusCard
         eyebrow="Return request"
         title="This return link isn't active"
         body={
           <>
-            The link may have been mistyped, or it&apos;s no longer available.
-            If you received it by email and think this is a mistake, reply to
-            that email or contact the team that fulfilled your order — they can
-            start the return for you.
+            The link may have been mistyped, or it&apos;s no longer available. If you received it by
+            email and think this is a mistake, reply to that email or contact the team that
+            fulfilled your order — they can start the return for you.
           </>
         }
       />
@@ -145,7 +157,7 @@ function ReturnLinkInvalid() {
 /** Too many page views from one address in an hour (its own words). */
 function ReturnLinkBusy() {
   return (
-    <ExternalShell width="xl">
+    <ExternalShell glassPage="links" width="xl">
       <ExternalStatusCard
         eyebrow="Return request"
         title="Too many requests"

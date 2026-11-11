@@ -125,3 +125,4 @@ export * from './maintenance/email';
 export * from './schemas/maintenance';
 export * from './guards/db-guard-copy';
 export * from './auth/step-up';
+export * from './appearance';

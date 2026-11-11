@@ -613,7 +613,8 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: 29): the count sheet release is published after it, at the top, so it sits one place lower.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    expect(at).toBe(31);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(at).toBe(32);
     // Re-pinned by docs/whats-new-ungroup-follow-ups (2026-10-12): the Ungroup follow-ups release is published at the top, above Group selected's, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-pages-keep-groups-whole (2026-10-12; was: the Ungroup follow-ups release at 0, the public link release at 7): the pages-keep-groups-whole release is published at the top, above the Ungroup follow-ups release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-redesign-2026-10 (2026-10-20; was: the pages-keep-groups-whole release at 0, the public link release at 8): the three redesign releases and the parked ai-search-finds-every-item release (#367) are published at the top, above the pages-keep-groups-whole release, so every position below them moves down by four.
@@ -626,26 +627,26 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0 and the public link release at 21): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[9]?.id).toBe('authenticator-code-requests-2026-11');
-    expect(RELEASES[9]?.status).toBe('published');
-    expect(RELEASES[10]?.id).toBe('integration-retries-2026-11');
+    expect(RELEASES[10]?.id).toBe('authenticator-code-requests-2026-11');
     expect(RELEASES[10]?.status).toBe('published');
-    expect(RELEASES[11]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[11]?.id).toBe('integration-retries-2026-11');
     expect(RELEASES[11]?.status).toBe('published');
-    expect(RELEASES[12]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[12]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
     expect(RELEASES[12]?.status).toBe('published');
-    expect(RELEASES[13]?.id).toBe('export-fixes-2026-10');
+    expect(RELEASES[13]?.id).toBe('update-ready-and-fixes-2026-11');
     expect(RELEASES[13]?.status).toBe('published');
-    // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
-    expect(RELEASES[14]?.id).toBe('small-fixes-8-2026-10');
+    expect(RELEASES[14]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES[14]?.status).toBe('published');
-    expect(RELEASES[15]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
+    // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
+    expect(RELEASES[15]?.id).toBe('small-fixes-8-2026-10');
     expect(RELEASES[15]?.status).toBe('published');
-    expect(RELEASES[16]?.id).toBe('ended-session-group-page-fixes-2026-10');
+    expect(RELEASES[16]?.id).toBe('manage-order-items-and-app-fixes-2026-10');
     expect(RELEASES[16]?.status).toBe('published');
-    expect(RELEASES[17]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    expect(RELEASES[17]?.id).toBe('ended-session-group-page-fixes-2026-10');
     expect(RELEASES[17]?.status).toBe('published');
-    expect(RELEASES.slice(18, 22).map((r) => [r.id, r.status])).toEqual([
+    expect(RELEASES[18]?.id).toBe('unsubscribe-rack-question-fixes-2026-10');
+    expect(RELEASES[18]?.status).toBe('published');
+    expect(RELEASES.slice(19, 23).map((r) => [r.id, r.status])).toEqual([
       ['redesign-2026-10', 'published'],
       ['redesign-mobile-app-2026-10', 'published'],
       ['redesign-web-fixes-2026-10', 'published'],
@@ -654,25 +655,25 @@ describe('the dates fixes release is published', () => {
     // Re-pinned by docs/whats-new-small-fixes-8 for export-fixes-2026-10 (2026-10-31; was: one place higher): the export fixes release is published at the top, above the small-fixes-8 release, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[22]?.id).toBe('pages-keep-groups-whole-2026-10');
-    expect(RELEASES[22]?.status).toBe('published');
-    expect(RELEASES[23]?.id).toBe('ungroup-follow-ups-2026-10');
+    expect(RELEASES[23]?.id).toBe('pages-keep-groups-whole-2026-10');
     expect(RELEASES[23]?.status).toBe('published');
-    expect(RELEASES[24]?.id).toBe('group-selected-2026-10');
+    expect(RELEASES[24]?.id).toBe('ungroup-follow-ups-2026-10');
     expect(RELEASES[24]?.status).toBe('published');
-    expect(RELEASES[25]?.id).toBe('ungroup-2026-10');
+    expect(RELEASES[25]?.id).toBe('group-selected-2026-10');
     expect(RELEASES[25]?.status).toBe('published');
-    expect(RELEASES[26]?.id).toBe('returns-history-hand-over-2026-10');
+    expect(RELEASES[26]?.id).toBe('ungroup-2026-10');
     expect(RELEASES[26]?.status).toBe('published');
-    expect(RELEASES[27]?.id).toBe('returns-close-rest-2026-10');
+    expect(RELEASES[27]?.id).toBe('returns-history-hand-over-2026-10');
     expect(RELEASES[27]?.status).toBe('published');
-    expect(RELEASES[28]?.id).toBe('returns-requester-exchange-2026-10');
+    expect(RELEASES[28]?.id).toBe('returns-close-rest-2026-10');
     expect(RELEASES[28]?.status).toBe('published');
-    expect(RELEASES[29]?.id).toBe('returns-exchange-2026-10');
+    expect(RELEASES[29]?.id).toBe('returns-requester-exchange-2026-10');
     expect(RELEASES[29]?.status).toBe('published');
-    expect(RELEASES[30]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[30]?.id).toBe('returns-exchange-2026-10');
     expect(RELEASES[30]?.status).toBe('published');
-    expect(Date.parse(RELEASES[30]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
+    expect(RELEASES[31]?.id).toBe('public-link-sent-request-2026-10');
+    expect(RELEASES[31]?.status).toBe('published');
+    expect(Date.parse(RELEASES[31]!.publishedAt) - Date.parse(release().publishedAt)).toBe(60_000);
     for (const r of RELEASES.slice(at + 1)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }

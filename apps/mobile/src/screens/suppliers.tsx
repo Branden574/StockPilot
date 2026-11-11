@@ -7,6 +7,8 @@ import { plainAddressMailtoUrl } from '@stockpilot/core';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { glassIconWell } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
 import { supabase } from '@/lib/supabase';
@@ -242,13 +244,21 @@ function ContactLine({ text, url }: { text: string; url: string | null }) {
 
 function SupplierCard({ supplier }: { supplier: SupplierRow }) {
   const { c } = useTheme();
+  // Liquid Glass: the truck's well on the iOS fill.
+  const lg = useGlass();
 
   return (
     <Card padding={14}>
       <View style={styles.row}>
         {/* The truck sits in a recessed well (sunk: paper2 and the card are
             one colour in dark, so a card-coloured well drew nothing). */}
-        <View style={[styles.well, { borderColor: c.hair, backgroundColor: c.sunk }]}>
+        <View
+          style={[
+            styles.well,
+            { borderColor: c.hair, backgroundColor: c.sunk },
+            lg && glassIconWell(lg),
+          ]}
+        >
           <Truck size={18} color={c.ink} strokeWidth={1.5} />
         </View>
         <View style={styles.body}>

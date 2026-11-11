@@ -25,6 +25,9 @@ import {
 } from '@/components/book-order-sheet-parts';
 import { Modal } from '@/components/ui/modal';
 import { Body, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import {
   BOOK_REPORT_CHARTER_SEARCH_OVER,
   bookReportCharterChoices,
@@ -96,6 +99,9 @@ function CharterContent({
   echo,
 }: React.ComponentProps<typeof BookOrderCharterSheet>) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [text, setText] = React.useState('');
   const choices = bookReportCharterChoices({ current: value, options, labels, echo });
   const searchable = choices.length > BOOK_REPORT_CHARTER_SEARCH_OVER;
@@ -120,9 +126,19 @@ function CharterContent({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            lg && glassScrim(lg),
           ]}
         />
-        <View style={[styles.card, { backgroundColor: c.card }, SHADOW.sheet]}>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.card },
+            SHADOW.sheet,
+            lg && GLASS_SHEET_CARD,
+          ]}
+        >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Mono
               size={13}

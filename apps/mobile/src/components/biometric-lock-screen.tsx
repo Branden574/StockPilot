@@ -13,6 +13,9 @@ import {
 import { AuthShell } from '@/components/auth/auth-shell';
 import { Avatar } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_AUTH } from '@/components/ui/glass/screens/auth';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { useColdLaunchGate } from '@/lib/cold-launch-gate';
@@ -84,6 +87,10 @@ export function BiometricLockScreen() {
   const { unlock, signOutToFallback } = useAuth();
   const profile = useProfile();
   const { c } = useTheme();
+  // Liquid Glass: the iOS-NotifyFlow step 2 sheet (the grabber, who is signed
+  // in, the Face ID tile in the accent wash, the heading, Unlock and Use
+  // password instead) over the scene; the same prompt, words and way out.
+  const lg = useGlass();
   // While the cold-launch splash is still on screen, defer the Face-ID
   // auto-prompt so the system scan doesn't run BEHIND the splash. Released at
   // hand-off. False (no gate) on a warm re-lock, preserving prior behavior.
@@ -132,12 +139,14 @@ export function BiometricLockScreen() {
   const labelText = cap?.label ?? 'Biometric';
 
   return (
-    <AuthShell>
-      <View style={{ marginTop: 18 }}>
+    <AuthShell contentStyle={lg ? GLASS_AUTH.lockSheet : undefined}>
+      {lg ? <GlassSheetBackdrop /> : null}
+      {lg ? <GlassSheetGrabber /> : null}
+      <View style={lg ? { alignItems: 'center' } : { marginTop: 18 }}>
         <Eyebrow>UNLOCK STOCKPILOT</Eyebrow>
       </View>
 
-      <View style={styles.center}>
+      <View style={[styles.center, lg && GLASS_AUTH.lockCentre]}>
         <Avatar size={56} />
         <View style={{ alignItems: 'center', gap: 4, marginTop: 16 }}>
           <Body size={14} color={c.ink3}>
@@ -148,27 +157,47 @@ export function BiometricLockScreen() {
           </Body>
         </View>
 
-        <View style={styles.iconWell}>
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.pulseRing,
-              {
-                borderColor: c.hair2,
-                transform: [{ scale: pulseScale }],
-                opacity: pulseOpacity,
-              },
-            ]}
-          />
-          {busy ? (
-            <ActivityIndicator size="large" color={c.ink} />
-          ) : (
-            <Icon size={96} color={c.ink} strokeWidth={1.2} />
+        <View
+          style={[
+            styles.iconWell,
+            lg && GLASS_AUTH.lockWell,
+            lg && { backgroundColor: lg.g.accentWash },
+          ]}
+        >
+          {lg ? null : (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.pulseRing,
+                {
+                  borderColor: c.hair2,
+                  transform: [{ scale: pulseScale }],
+                  opacity: pulseOpacity,
+                },
+              ]}
+            />
           )}
-          <View style={[styles.pip, { backgroundColor: c.accent }]} />
+          {busy ? (
+            <ActivityIndicator size={lg ? 'small' : 'large'} color={lg ? lg.g.accentText : c.ink} />
+          ) : (
+            <Icon
+              size={lg ? 32 : 96}
+              color={lg ? lg.g.accentText : c.ink}
+              strokeWidth={lg ? 1.8 : 1.2}
+            />
+          )}
+          {lg ? null : <View style={[styles.pip, { backgroundColor: c.accent }]} />}
         </View>
 
-        <Display size={26} style={{ textAlign: 'center', maxWidth: 280, marginTop: 8 }}>
+        <Display
+          size={lg ? 22 : 26}
+          style={
+            lg
+              ? [GLASS_AUTH.lockTitle, { lineHeight: 28, letterSpacing: -0.3 }]
+              : { textAlign: 'center', maxWidth: 280, marginTop: 8 }
+          }
+          accessibilityRole={lg ? 'header' : undefined}
+        >
           {failedOnce
             ? <>That didn&apos;t verify. <Em>Try again.</Em></>
             : cap && (!cap.hasHardware || !cap.isEnrolled)
@@ -177,7 +206,7 @@ export function BiometricLockScreen() {
         </Display>
       </View>
 
-      <View style={styles.footer}>
+      <View style={[styles.footer, lg && GLASS_AUTH.lockFooter]}>
         {cap && cap.hasHardware && cap.isEnrolled ? (
           <Button
             block
@@ -188,7 +217,8 @@ export function BiometricLockScreen() {
             Unlock with {labelText}
           </Button>
         ) : null}
-        <Button block variant="ghost" onPress={signOutToFallback}>
+        {/* Liquid Glass: the board's .ios-btn.gray (iOS-NotifyFlow step 2), the outline's glass look. */}
+        <Button block variant={lg ? 'outline' : 'ghost'} onPress={signOutToFallback}>
           Use password instead
         </Button>
       </View>

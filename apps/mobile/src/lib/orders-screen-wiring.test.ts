@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
+
 /**
  * Call-site pins for the phone's Orders list (src/screens/orders.tsx), which
  * vitest cannot load (native modules). Each names the mutation it catches.
@@ -37,8 +39,15 @@ describe('the order screen header (L83a)', () => {
   it('names the status through the tested helper, never its raw key', () => {
     // Re-pinned by returns RX-3 PR stage, polish (c) (was: without the
     // fulfilment): a completed pickup's header says HANDED OVER.
-    expect(screen).toContain('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>');
+    // Classic's header, read off the Classic projection.
+    expect(classicFlat(screen, 'app/order/[id].tsx')).toContain(
+      flatNorm('<Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>'),
+    );
     expect(screen).not.toContain("order.status.replace(/_/g, ' ')");
+    // Liquid Glass names it in the nav's badge through the same helper.
+    expect(screen.replace(/\s+/g, ' ')).toContain(
+      'sentenceCase(orderStatusPill(order.status, order.fulfillmentType).label)',
+    );
   });
 });
 

@@ -1,11 +1,22 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { ArrowLeft } from 'lucide-react-native';
+import { ArrowLeft, CircleHelp, CircleX, UserRound } from 'lucide-react-native';
 import * as React from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import {
+  GLASS_PAGE,
+  GLASS_SYNC_LIST,
+  GlassNavTitle,
+  GlassSyncRecord,
+  GlassSyncSectionHead,
+} from '@/components/ui/glass/screens/admin';
+import { GlassNavSpacer } from '@/components/ui/glass/screens/po';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { isUnconfirmedAdjustRow } from '@/lib/adjust-outbox';
@@ -65,6 +76,11 @@ import { useTheme } from '@/lib/use-theme';
  */
 export default function RejectedWorkScreen() {
   const { c } = useTheme();
+  // Liquid Glass (iOS-Sync.dc.html, exact for the parts that exist): Back
+  // and the title in the glass nav, each section as the board's heading with
+  // its count, each record as the board's Needs checking card. The board's
+  // combined Sync status and per-row Remove are [Proposed]: not built.
+  const lg = useGlass();
   const router = useRouter();
   const [rows, setRows] = React.useState<PendingActionRow[] | null>(null);
   const [held, setHeld] = React.useState<PendingActionRow[] | null>(null);
@@ -167,9 +183,10 @@ export default function RejectedWorkScreen() {
   const neverSentRows = (rows ?? []).filter((r) => !isUnconfirmedAdjustRow(r));
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_PAGE.navTitled : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -179,17 +196,23 @@ export default function RejectedWorkScreen() {
             accessibilityLabel="Back"
             minTap
           />
+          {lg ? <GlassNavTitle lg={lg} title="Unsent work" /> : null}
+          {lg ? <GlassNavSpacer /> : null}
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SETTINGS · OFFLINE WORK</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Unsent <Em>work.</Em>
-          </Display>
-        </View>
+        {lg ? null : (
+          <View style={styles.head}>
+            <Eyebrow>SETTINGS · OFFLINE WORK</Eyebrow>
+            <Display size={34} style={{ marginTop: 12 }}>
+              Unsent <Em>work.</Em>
+            </Display>
+          </View>
+        )}
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
+        contentContainerStyle={
+          lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
+        }
         showsVerticalScrollIndicator={false}
       >
         <Body muted size={14} style={{ marginTop: 6 }}>
@@ -216,39 +239,61 @@ export default function RejectedWorkScreen() {
 
         {held !== null && held.length > 0 ? (
           <View style={{ marginTop: 18 }}>
-            <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-              <Eyebrow>{`QUEUED BY ANOTHER ACCOUNT · ${held.length}`}</Eyebrow>
-            </View>
-            <Card padding={0}>
-              {held.map((row, idx) => (
-                <View key={row.id}>
-                  {idx > 0 ? <Hair /> : null}
-                  <View style={styles.row}>
-                    <View style={styles.rowHead}>
-                      <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
-                        {pendingActionLabel(row.kind)}
+            {lg ? (
+              <GlassSyncSectionHead lg={lg} title="Queued by another account" count={held.length} />
+            ) : (
+              <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
+                <Eyebrow>{`QUEUED BY ANOTHER ACCOUNT · ${held.length}`}</Eyebrow>
+              </View>
+            )}
+            <Card padding={0} style={lg ? GLASS_SYNC_LIST : undefined}>
+              {held.map((row, idx) =>
+                lg ? (
+                  <GlassSyncRecord
+                    key={row.id}
+                    lg={lg}
+                    icon={UserRound}
+                    tone="accent"
+                    title={pendingActionLabel(row.kind)}
+                    sub={rejectedWhen(row.createdAt, now)}
+                    message="Queued by another account. It sends when that account signs in on this device."
+                    action={{
+                      label: 'Discard',
+                      accessibilityLabel: `Discard ${pendingActionLabel(row.kind)} queued by another account`,
+                      onPress: () => confirmDiscard(row),
+                    }}
+                  />
+                ) : (
+                  <View key={row.id}>
+                    {idx > 0 ? <Hair /> : null}
+                    <View style={styles.row}>
+                      <View style={styles.rowHead}>
+                        <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
+                          {pendingActionLabel(row.kind)}
+                        </Body>
+                        <Mono size={11} color={c.ink3}>
+                          {rejectedWhen(row.createdAt, now)}
+                        </Mono>
+                      </View>
+                      <Body muted size={13.5} style={{ marginTop: 4 }}>
+                        Queued by another account. It sends when that account signs in on this
+                        device.
                       </Body>
-                      <Mono size={11} color={c.ink3}>
-                        {rejectedWhen(row.createdAt, now)}
-                      </Mono>
+                      <Pressable
+                        onPress={() => confirmDiscard(row)}
+                        hitSlop={10}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Discard ${pendingActionLabel(row.kind)} queued by another account`}
+                        style={({ pressed }) => [styles.discard, { opacity: pressed ? 0.7 : 1 }]}
+                      >
+                        <Body size={14} color={c.critText} style={{ fontFamily: FONT.display }}>
+                          Discard
+                        </Body>
+                      </Pressable>
                     </View>
-                    <Body muted size={13.5} style={{ marginTop: 4 }}>
-                      Queued by another account. It sends when that account signs in on this device.
-                    </Body>
-                    <Pressable
-                      onPress={() => confirmDiscard(row)}
-                      hitSlop={10}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Discard ${pendingActionLabel(row.kind)} queued by another account`}
-                      style={({ pressed }) => [styles.discard, { opacity: pressed ? 0.7 : 1 }]}
-                    >
-                      <Body size={14} color={c.critText} style={{ fontFamily: FONT.display }}>
-                        Discard
-                      </Body>
-                    </Pressable>
                   </View>
-                </View>
-              ))}
+                ),
+              )}
             </Card>
           </View>
         ) : null}
@@ -273,65 +318,107 @@ export default function RejectedWorkScreen() {
           <View style={{ marginTop: 18 }}>
             {unconfirmedRows.length > 0 ? (
               <View style={{ marginBottom: 18 }}>
-                <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-                  <Eyebrow>{`NOT CONFIRMED · ${unconfirmedRows.length}`}</Eyebrow>
-                </View>
-                <Card padding={0}>
-                  {unconfirmedRows.map((row, idx) => (
-                    <View key={row.id}>
-                      {idx > 0 ? <Hair /> : null}
-                      <View style={styles.row}>
-                        <View style={styles.rowHead}>
-                          <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
-                            {pendingActionLabel(row.kind)}
+                {lg ? (
+                  <GlassSyncSectionHead
+                    lg={lg}
+                    title="Not confirmed"
+                    count={unconfirmedRows.length}
+                    tone="warn"
+                  />
+                ) : (
+                  <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
+                    <Eyebrow>{`NOT CONFIRMED · ${unconfirmedRows.length}`}</Eyebrow>
+                  </View>
+                )}
+                <Card padding={0} style={lg ? GLASS_SYNC_LIST : undefined}>
+                  {unconfirmedRows.map((row, idx) =>
+                    lg ? (
+                      <GlassSyncRecord
+                        key={row.id}
+                        lg={lg}
+                        icon={CircleHelp}
+                        tone="warn"
+                        title={pendingActionLabel(row.kind)}
+                        sub={`${rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)} · ${row.idempotencyKey.slice(0, 8).toUpperCase()}`}
+                        message={row.lastError}
+                      />
+                    ) : (
+                      <View key={row.id}>
+                        {idx > 0 ? <Hair /> : null}
+                        <View style={styles.row}>
+                          <View style={styles.rowHead}>
+                            <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
+                              {pendingActionLabel(row.kind)}
+                            </Body>
+                            <Mono size={11} color={c.ink3}>
+                              {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
+                            </Mono>
+                          </View>
+                          {/* Warn, not crit: this may have worked. The message
+                            names the item and the change to check. */}
+                          <Body size={13.5} color={c.warnText} style={{ marginTop: 4 }}>
+                            {row.lastError}
                           </Body>
-                          <Mono size={11} color={c.ink3}>
-                            {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
+                          <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}>
+                            {row.idempotencyKey.slice(0, 8).toUpperCase()}
                           </Mono>
                         </View>
-                        {/* Warn, not crit: this may have worked. The message
-                            names the item and the change to check. */}
-                        <Body size={13.5} color={c.warnText} style={{ marginTop: 4 }}>
-                          {row.lastError}
-                        </Body>
-                        <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}>
-                          {row.idempotencyKey.slice(0, 8).toUpperCase()}
-                        </Mono>
                       </View>
-                    </View>
-                  ))}
+                    ),
+                  )}
                 </Card>
               </View>
             ) : null}
             {neverSentRows.length > 0 ? (
               <>
-                <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-                  <Eyebrow>{`NEVER SENT · ${neverSentRows.length}`}</Eyebrow>
-                </View>
-                <Card padding={0}>
-                  {neverSentRows.map((row, idx) => (
-                    <View key={row.id}>
-                      {idx > 0 ? <Hair /> : null}
-                      <View style={styles.row}>
-                        <View style={styles.rowHead}>
-                          <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
-                            {pendingActionLabel(row.kind)}
-                          </Body>
-                          <Mono size={11} color={c.ink3}>
-                            {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
+                {lg ? (
+                  <GlassSyncSectionHead
+                    lg={lg}
+                    title="Never sent"
+                    count={neverSentRows.length}
+                    tone="danger"
+                  />
+                ) : (
+                  <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
+                    <Eyebrow>{`NEVER SENT · ${neverSentRows.length}`}</Eyebrow>
+                  </View>
+                )}
+                <Card padding={0} style={lg ? GLASS_SYNC_LIST : undefined}>
+                  {neverSentRows.map((row, idx) =>
+                    lg ? (
+                      <GlassSyncRecord
+                        key={row.id}
+                        lg={lg}
+                        icon={CircleX}
+                        tone="danger"
+                        title={pendingActionLabel(row.kind)}
+                        sub={`${rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)} · ${row.idempotencyKey.slice(0, 8).toUpperCase()}`}
+                        message={row.lastError}
+                      />
+                    ) : (
+                      <View key={row.id}>
+                        {idx > 0 ? <Hair /> : null}
+                        <View style={styles.row}>
+                          <View style={styles.rowHead}>
+                            <Body size={15.5} style={{ fontFamily: FONT.display, flexShrink: 1 }}>
+                              {pendingActionLabel(row.kind)}
+                            </Body>
+                            <Mono size={11} color={c.ink3}>
+                              {rejectedWhen(row.lastAttemptAt ?? row.createdAt, now)}
+                            </Mono>
+                          </View>
+                          {row.lastError ? (
+                            <Body size={13.5} color={c.critText} style={{ marginTop: 4 }}>
+                              {row.lastError}
+                            </Body>
+                          ) : null}
+                          <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}>
+                            {row.idempotencyKey.slice(0, 8).toUpperCase()}
                           </Mono>
                         </View>
-                        {row.lastError ? (
-                          <Body size={13.5} color={c.critText} style={{ marginTop: 4 }}>
-                            {row.lastError}
-                          </Body>
-                        ) : null}
-                        <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 6 }}>
-                          {row.idempotencyKey.slice(0, 8).toUpperCase()}
-                        </Mono>
                       </View>
-                    </View>
-                  ))}
+                    ),
+                  )}
                 </Card>
               </>
             ) : null}
@@ -349,12 +436,20 @@ export default function RejectedWorkScreen() {
           </View>
         )}
 
-        <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 18 }}>
-          {/* Retention applies to this account's record only (never sent and
-              not confirmed): work held for another account is never removed
-              except by Discard. */}
-          {`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
-        </Mono>
+        {lg ? (
+          // The board's centred .ios-sub line (iOS-Sync.dc.html): 13/18 in
+          // ink-2 on glass (sp.css:707, 1049), in sentence case.
+          <GlassSubline style={GLASS_RETENTION_LINE}>
+            {`These records are kept for ${REJECTED_RETENTION_DAYS} days, then removed automatically.`}
+          </GlassSubline>
+        ) : (
+          <Mono size={10} tracking={0.1} color={c.ink3} style={{ marginTop: 18 }}>
+            {/* Retention applies to this account's record only (never sent and
+                not confirmed): work held for another account is never removed
+                except by Discard. */}
+            {`THESE RECORDS ARE KEPT FOR ${REJECTED_RETENTION_DAYS} DAYS, THEN REMOVED AUTOMATICALLY`}
+          </Mono>
+        )}
       </ScrollView>
     </View>
   );
@@ -362,6 +457,9 @@ export default function RejectedWorkScreen() {
 
 /** The iOS minimum tap target, in points. */
 const MIN_TAP = 44;
+
+/** Liquid Glass: the retention line, centred 18 under the list (.ios-sub, margin 0 4). */
+const GLASS_RETENTION_LINE = { marginTop: 18, marginHorizontal: 4, textAlign: 'center' } as const;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

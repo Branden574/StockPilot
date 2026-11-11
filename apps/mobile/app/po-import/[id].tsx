@@ -29,6 +29,24 @@ import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Chip } from '@/components/ui/chip';
+import { GlassHeading, GlassSheetBackdrop, GlassSubline } from '@/components/ui/glass/parts';
+import {
+  GLASS_SHEET_CARD,
+  glassFieldBox,
+  glassFieldInput,
+  glassScrim,
+} from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
+import {
+  GLASS_ACTION_BAR,
+  GLASS_ACTION_BAR_LIFT,
+  GLASS_ACTION_BAR_NOTE,
+  GLASS_OPS,
+  GlassFootBackdrop,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { listWarehouses, type CachedWarehouse } from '@/lib/db-reads';
 import { footerReservation } from '@/lib/dynamic-type-layout';
 import {
@@ -183,6 +201,11 @@ export default function PoImportDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { orgId } = useOrg();
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of the iOS-PO board): the scene,
+  // Back in the glass nav, the title block, the parsed lines under an iOS
+  // heading, the actions on the floating glass bar and Approve on the glass
+  // sheet. Every action, gate and word stays.
+  const lg = useGlass();
   const insets = useSafeAreaInsets();
   const { role } = useRole();
   const permissions = useEffectivePermissions();
@@ -541,27 +564,46 @@ export default function PoImportDetailScreen() {
     : null;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.paper }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+    <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
         {/* The back chip's 44pt frame (IconChip minTap) is 3pt wider than the
             38pt chip on every side, so the bar takes 3pt off each padding
             (12, 8, 4): the chip and the title sit where they did. */}
         <View
-          style={{
-            paddingHorizontal: 9,
-            paddingTop: 5,
-            paddingBottom: 1,
-            flexDirection: 'row',
-            alignItems: 'center',
-          }}
+          style={
+            lg
+              ? GLASS_LIST.nav
+              : {
+                  paddingHorizontal: 9,
+                  paddingTop: 5,
+                  paddingBottom: 1,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                }
+          }
         >
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
-        <View style={{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }}>
-          <Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>
-          <Display size={28} style={{ marginTop: 10 }}>
-            Review <Em>import.</Em>
+        <View
+          style={
+            lg
+              ? [{ paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }, GLASS_OPS.recordHead]
+              : { paddingHorizontal: 20, paddingTop: 8, paddingBottom: 4 }
+          }
+        >
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>PROCUREMENT · PO IMPORT</Eyebrow>}
+          <Display
+            size={lg ? 26 : 28}
+            style={lg ? GLASS_ITEM.name : { marginTop: 10 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? glassListTitle('Review', 'import.') : 'Review '}
+            {lg ? null : <Em>import.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Procurement · PO import</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
@@ -594,12 +636,16 @@ export default function PoImportDetailScreen() {
         <>
           <ScrollView
             contentContainerStyle={{
-              paddingHorizontal: 20,
+              paddingHorizontal: lg ? 16 : 20,
               paddingTop: 12,
               // The footer's own height, measured, with 160 as the floor: an
               // error and the approve note above the buttons made it taller
               // than the fixed 160, and the last parsed line sat under it.
-              paddingBottom: footerReservation(actions.length > 0 ? footerHeight : null, 160),
+              // Liquid Glass: plus the floating bar's lift.
+              paddingBottom: lg
+                ? footerReservation(actions.length > 0 ? footerHeight : null, 160) +
+                  GLASS_ACTION_BAR_LIFT
+                : footerReservation(actions.length > 0 ? footerHeight : null, 160),
               gap: 10,
             }}
             refreshControl={
@@ -760,7 +806,7 @@ export default function PoImportDetailScreen() {
             ) : null}
 
             <View style={{ marginTop: 8 }}>
-              <Eyebrow>PARSED LINES</Eyebrow>
+              {lg ? <GlassHeading>Parsed lines</GlassHeading> : <Eyebrow>PARSED LINES</Eyebrow>}
             </View>
             {itemNamesError !== null ? (
               <Body size={12} color={c.warnText}>
@@ -788,28 +834,41 @@ export default function PoImportDetailScreen() {
           {actions.length > 0 ? (
             <View
               onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
-              style={{
-                position: 'absolute',
-                left: 0,
-                right: 0,
-                bottom: 0,
-                paddingHorizontal: 20,
-                paddingTop: 12,
-                // Clear of the home indicator on a phone that has one.
-                paddingBottom: Math.max(28, insets.bottom),
-                backgroundColor: c.paper,
-                borderTopWidth: 1,
-                borderTopColor: c.hair,
-                gap: 8,
-              }}
+              style={[
+                {
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  paddingHorizontal: 20,
+                  paddingTop: 12,
+                  // Clear of the home indicator on a phone that has one.
+                  paddingBottom: Math.max(28, insets.bottom),
+                  backgroundColor: c.paper,
+                  borderTopWidth: 1,
+                  borderTopColor: c.hair,
+                  gap: 8,
+                },
+                // Liquid Glass: the floating glass action bar.
+                lg && GLASS_ACTION_BAR,
+              ]}
             >
+              {lg ? <GlassFootBackdrop /> : null}
               {actionError ? (
-                <Mono size={11.5} color={c.critText} style={{ lineHeight: 16 }}>
+                <Mono
+                  size={11.5}
+                  color={c.critText}
+                  style={lg ? [{ lineHeight: 16 }, GLASS_ACTION_BAR_NOTE] : { lineHeight: 16 }}
+                >
                   {actionError}
                 </Mono>
               ) : null}
               {actions.includes('approve') && itemNamesError !== null ? (
-                <Mono size={11.5} color={c.warnText} style={{ lineHeight: 16 }}>
+                <Mono
+                  size={11.5}
+                  color={c.warnText}
+                  style={lg ? [{ lineHeight: 16 }, GLASS_ACTION_BAR_NOTE] : { lineHeight: 16 }}
+                >
                   Approve is unavailable until item names load, so every line can be checked against
                   its item. Pull down to try again.
                 </Mono>
@@ -1104,6 +1163,9 @@ function ApproveSheetContent({
   onApproved: (poId: string) => void;
 }) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the glass sheet over the --scrim tint, the grabber in
+  // --ios-sep and the date as a glass field.
+  const lg = useGlass();
   const [loading, setLoading] = React.useState(true);
   const [warehouses, setWarehouses] = React.useState<CachedWarehouse[]>([]);
   const [vendors, setVendors] = React.useState<PickerOption[]>([]);
@@ -1340,6 +1402,7 @@ function ApproveSheetContent({
             {
               backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
             },
+            lg && glassScrim(lg),
           ]}
         />
         <View
@@ -1354,15 +1417,21 @@ function ApproveSheetContent({
               maxHeight: '90%',
             },
             SHADOW.sheet,
+            lg && GLASS_SHEET_CARD,
           ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
           <View style={{ alignItems: 'center', marginBottom: 18 }}>
             <View
               style={{
                 width: 36,
                 height: 5,
                 borderRadius: 100,
-                backgroundColor: mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+                backgroundColor: lg
+                  ? lg.ios.sep
+                  : mode === 'dark'
+                    ? 'rgba(250,250,247,0.22)'
+                    : 'rgba(14,15,13,0.18)',
               }}
             />
           </View>
@@ -1541,18 +1610,26 @@ function ApproveSheetContent({
                   accessibilityLabel={EXPECTED_DATE_LABEL}
                   onFocus={() => setDateFocused(true)}
                   onBlur={() => setDateFocused(false)}
-                  style={{
-                    fontFamily: FONT.displayRegular,
-                    fontSize: 15,
-                    minHeight: 46,
-                    paddingHorizontal: 12,
-                    paddingVertical: 10,
-                    borderWidth: 1,
-                    borderColor: !expected.ok ? c.critText : dateFocused ? c.ink : c.hair2,
-                    borderRadius: 8,
-                    color: c.ink,
-                    backgroundColor: c.card,
-                  }}
+                  style={[
+                    {
+                      fontFamily: FONT.displayRegular,
+                      fontSize: 15,
+                      minHeight: 46,
+                      paddingHorizontal: 12,
+                      paddingVertical: 10,
+                      borderWidth: 1,
+                      borderColor: !expected.ok ? c.critText : dateFocused ? c.ink : c.hair2,
+                      borderRadius: 8,
+                      color: c.ink,
+                      backgroundColor: c.card,
+                    },
+                    // Liquid Glass: the glass field, the refusal edge kept.
+                    lg && [
+                      glassFieldBox(lg, dateFocused),
+                      glassFieldInput(lg),
+                      !expected.ok && { borderColor: c.critText },
+                    ],
+                  ]}
                 />
                 {!expected.ok ? (
                   <Mono size={11} color={c.critText}>

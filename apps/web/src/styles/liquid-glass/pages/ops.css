@@ -1,0 +1,721 @@
+/* Liquid Glass, the operations pages (stage 4, lane L1): cycle counts,
+   exceptions, movements, returns, rentals, bundles, schedule, customers,
+   maintenance, procedures, purchasing (purchase orders, imports, recurring,
+   planning, suppliers), locations, warehouses, categories and tags. The
+   shared frame every one of them takes from the boards: the page box and
+   head (sp.css .page, .page-h, .h1), the toolbars (.seg, .ctrl), the table
+   cards (.card + .dt: the 38 px quiet header band, the row metrics, the
+   pager), the status badges (.badge with its dot and the board's tones),
+   the empty and failed states (.empty), the record cards (.card-h, .card-b,
+   .kv) and the dialogs (.dialog, .dlg-h, .dlg-f). Exact boards
+   (Cycle-Counts, Cycle-Count-Detail, Purchase-Order, Return-Detail and the
+   Routes-Gallery-1 and -2 panels) add their own composition in
+   pages/counts.css, pages/po.css and pages/returns.css; every other page
+   here is an inferred extension built from these parts only.
+
+   Same DOM as Classic (plan M1): every rule restyles today's markup, found
+   through the inert root hooks each page carries (data-glass-page="ops" and
+   data-glass-view="<page>"), the stage 2 hooks of the shared components
+   (data-glass="card", "table", "badge", "seg", "state-panel", ...), the
+   pattern components' own data-slot attributes and the cards' own utility
+   classes, and through one more inert hook, data-glass-role="status" with
+   data-glass-state on the status badges. Every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen, so Classic
+   Dark and Light never match one and printing never gets one
+   (glass-scope.guard.test.ts reads this folder). App Router keeps a route's
+   stylesheet after a client navigation, so every selector also names the
+   lane's page root: nothing here reaches another lane's page. Dialogs are
+   portalled out of the page, so their rules name the root through
+   :root:has([data-glass-page='ops']).
+
+   Imported only by the lane's route pages (never globally, plan 4.1). The
+   layer order statement is insurance: it is the order globals.css already
+   declares, so it changes nothing when this file loads after globals.css. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The page box (.page: 6 / 28 / 48 padding, 20 between) ───────────
+       Wide pages (lists and records) take the board's 1480 px; the form
+       pages and the narrow records keep their own reading width
+       (data-glass-width="form"). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops']:not([data-glass-width='form']) {
+      max-width: 1480px;
+    }
+
+    /* ── The page head (.page-h: the Large title 26/32, the subline in
+       ink 2 at 13/18, the 36 px header buttons) ───────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='page-header'] h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    /* A reference in the title is set in the title's own face, as the boards
+       draw "PO-000412" and "Cycle count CC-000042" (.h1), not in mono. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      h1
+      .font-mono {
+      font-family: inherit;
+      font-size: inherit;
+      letter-spacing: inherit;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    /* .page-h .titles: the way back, the title row and the line under it
+       4 px apart; the title row is .row.g10 (the title, its copy or edit
+       button and its badges 10 px apart). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      > .mb-2:first-child {
+      margin-bottom: 4px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      div:has(> h1) {
+      column-gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div {
+      margin-top: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='page-header-actions']
+      [data-glass='button'][data-glass-size='default']:not([data-glass-variant='ghost']):not(
+        [data-glass-variant='link']
+      ) {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ── Toolbars: the segmented views (.seg: 30 px segments, 13 px) ──── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='seg'] {
+      gap: 2px;
+      padding: 3px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='seg'] > * {
+      height: 30px;
+      padding: 0 12px;
+      border-radius: 8px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='seg'] > *:hover {
+      color: var(--lg-ink);
+    }
+    /* The selected segment keeps stage 2's lift and its 650 (.seg > .on). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='seg']
+      [data-slot='segmented-tab-count'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active'])
+      [data-slot='segmented-tab-count'] {
+      color: var(--lg-accent-text);
+    }
+    /* The search and filter fields (.ctrl / .input: 36 px, radius 10). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [role='search']
+      [data-glass='input'] {
+      height: 36px;
+      font-size: 14px;
+    }
+
+    /* ── Cards the pages draw themselves (.card: the content glass, radius
+       20). A plain block with the card fill, hairline and radius, unhooked
+       (a hooked one takes its material from materials.css). ─────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      :is(div, section, aside, ul, ol, li, form, article).bg-card.rounded-lg.border:not(
+        [data-glass]
+      ) {
+      background-color: var(--lg-card-fill);
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    /* Record cards (DetailSection) are the board's .card (radius 20), not
+       the 26 px panel: a 52 px head (12 x 16) with the 16/22 title, 16 px
+       inside, a 12 x 16 foot. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='detail-section'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='detail-section-header'] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='detail-section-header']
+      > :is(h2, h3, h4) {
+      color: var(--lg-ink);
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='detail-section-body'].p-\[18px\] {
+      padding: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='detail-section-footer'] {
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+
+    /* ── Label and value lists (.kv: the label in ink 3, the value in ink
+       at 500, 14 px; one label column, the values left-aligned) ─────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='key-value-list'] {
+      padding: 8px 0;
+      border-color: transparent;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='key-value-list'] > * {
+      border-color: transparent;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='key-value-row'] {
+      display: grid;
+      grid-template-columns: minmax(110px, 38%) minmax(0, 1fr);
+      gap: 16px;
+      padding: 4px 16px;
+      font-size: 14px;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='key-value-row'] > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='key-value-row'] > dd {
+      color: var(--lg-ink);
+      font-weight: 500;
+      text-align: left;
+    }
+    /* A value Classic sets in 600 (a total) stays in 600 (.kv dd.strong). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='key-value-row']
+      > dd.font-semibold {
+      font-weight: 600;
+    }
+
+    /* ── Figures (StatStrip on a record: the board's .stat, the label 13/18
+       in ink 3 over the 28/34 figure; one card, no rules between) ──────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='stat-strip'][data-variant='detail']
+      > div {
+      gap: 18px;
+      margin: 0;
+      padding: 18px 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item'] {
+      padding: 0;
+      border-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item']
+      > div:first-child {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='stat-strip'][data-variant='detail']
+      [data-slot='stat-strip-item']
+      > div:nth-child(2) {
+      font-size: 28px;
+      font-weight: 650;
+      line-height: 34px;
+      letter-spacing: -0.02em;
+    }
+
+    /* ── Tables in a card (.dt): 14 px, the 38 px header band (12 / 600 in
+       ink 3, no capitals), 12 px cells, the row hairline, 52 px rows ─────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='table'] {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='table']
+      > thead
+      > tr {
+      border-bottom: 1px solid var(--lg-line);
+      background: var(--lg-card-fill-2);
+    }
+    /* The header band (.dt .hd) is frosted where rows can scroll under it
+       (sp.css:985); the rows themselves never blur. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='table'] > thead {
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='table'] th {
+      height: 38px;
+      padding-top: 0;
+      padding-bottom: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='table']
+      > tbody
+      > tr {
+      border-bottom: 1px solid var(--lg-line);
+    }
+    /* The 52 px row is a table row's least height. The purchase orders list
+       folds its rows into flex lines in a narrow card (components/po/
+       po-list.css), where a height would cut them: pages/po.css gives that
+       list its rows only while it is a table. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='table']:where(:not([data-slot='po-list']))
+      > tbody
+      > tr {
+      height: var(--lg-row-h);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='table']
+      > tbody
+      > tr:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td {
+      padding-top: var(--lg-row-pad);
+      padding-bottom: var(--lg-row-pad);
+    }
+
+    /* ── Status badges (.badge: 22 px, 12 / 600, radius 6; a status with
+       its 7 px dot in the label's own colour) ─────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='badge'] {
+      height: 22px;
+      gap: 5px;
+      padding: 0 8px;
+      font-size: 12px;
+      line-height: 1;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='badge'][data-glass-variant='outline'] {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='badge'][data-glass-variant='secondary'] {
+      border-color: transparent;
+      background: var(--lg-neutral-wash);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass-role='status'] {
+      border-color: transparent;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass-role='status']::before {
+      content: '';
+      display: inline-block;
+      flex: none;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    /* Where a board names another tone for a status (Cycle-Counts.dc.html:
+       In progress b-info, Canceled b-outline; Routes-Gallery-1 returns:
+       Received b-info; an approval is the accent wash, as on the orders
+       pages), the words stay and only the tone follows the board. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass-role='status']:is(
+        [data-glass-state='in_progress'],
+        [data-glass-state='received'][data-glass-variant='secondary']
+      ) {
+      background: var(--lg-info-wash);
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass-role='status'][data-glass-state='canceled'] {
+      background: transparent;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass-role='status'][data-glass-variant='default'] {
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+
+    /* ── Pagers (.pager: 13 px ink 3 on a hairline) ───────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='pager'] {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+
+    /* ── Empty and failed states (.empty: the 56 px wash tile) ─────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='state-panel'] {
+      gap: 10px;
+      padding: 56px 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='state-panel-icon'] {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-state-kind='failed']
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-state-kind='no-match']
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-slot='state-panel-icon']
+      svg {
+      width: 26px;
+      height: 26px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='state-panel']
+      > :is(h1, h2, h3, p):not([data-slot]) {
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops']
+      [data-glass='state-panel']
+      > :is(h1, h2, h3, p)
+      + div {
+      max-width: 460px;
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* ── Timelines (.tl rows: the title 13 / 600, the time in ink 3) ──── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='timeline-row'] {
+      padding: 10px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-slot='timeline-row-title'] {
+      color: var(--lg-ink);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* ── Dialogs opened from these pages (.dialog: the 20/26 title in the
+       glass display face, the description in ink 2, the 36 px foot
+       buttons). The dialog material and radius are stage 2's. ─────────── */
+    /* The title is ink, as the boards draw every alert dialog's .h2 (a
+       destructive confirmation keeps its danger button: Classic also inks
+       the title red). The shell's own dialogs, open on every page
+       (Keyboard shortcuts and the command palette, data-glass-role
+       "shell-dialog"), are left as every other page draws them. */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
+      [data-glass='dialog']:not([data-glass-role='shell-dialog'])
+      h2:first-child {
+      color: var(--lg-ink);
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
+      [data-glass='dialog']:not([data-glass-role='shell-dialog'])
+      h2:first-child
+      + :is(p, div) {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='ops'])
+      [data-glass='dialog']:not([data-glass-role='shell-dialog'])
+      [data-glass='button'][data-glass-size='default']:not([data-glass-variant='ghost']):not(
+        [data-glass-variant='link']
+      ) {
+      min-height: 36px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ── The procedures list (Routes-Gallery-2.dc.html panel
+       "/dashboard/procedures"): each procedure is the panel's card (.card
+       col with its own radius 14 and no drop shadow: the card fill and line,
+       never Classic's opaque page fill), 10 px apart, the media an 86 px band
+       (.proc-thumb: the accent wash into surface 3 where there is no video
+       poster), the title sm strong (13/18, 600) and the meta lines xs muted
+       (12/16, ink 3). The video count sits where the panel puts the length,
+       on its dark chip at the band's foot (.proc-thumb .xs: radius 6, white
+       600 on black 68%). The card's border strengthens on hover, as in
+       Classic (the board draws no hover). Kept from Classic: the grid's
+       column rule, the category pill, the title's second line and the
+       comments line (the panel draws none of them). ─────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-grid'] {
+      gap: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card'] {
+      border-color: var(--lg-card-line);
+      border-radius: 14px;
+      background-color: var(--lg-card-fill);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']:hover {
+      border-color: var(--lg-line-2);
+    }
+    /* Keyboard focus: Classic's ring on the card is a box-shadow (its
+       focus-visible:ring utilities), which the rule above clears in glass, so
+       the card takes the board's ring as the buttons do (primitives.css): an
+       outline of --lg-focus-w in --lg-focus, 2 px off the edge. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card-media'] {
+      height: 86px;
+      aspect-ratio: auto;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card-media']
+      > [data-slot='procedure-fallback-band'] {
+      background: linear-gradient(135deg, var(--lg-accent-wash), var(--lg-surface-3));
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card-media']
+      > span:not([data-slot]) {
+      top: auto;
+      right: 8px;
+      bottom: 6px;
+      padding: 1px 6px;
+      border-color: transparent;
+      border-radius: 6px;
+      background-color: rgba(0, 0, 0, 0.68);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']
+      h3 {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='procedures']
+      [data-slot='procedure-card']
+      h3
+      ~ p {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+
+    /* ── The tags list (Routes-Gallery-1.dc.html, the categories and tags
+       panel: its list rows, .li: 56 px at least, 12 x 16, 12 apart, on the
+       hairline, the card hover; the name sm strong, the count xs muted in
+       the body face with tabular figures). The panel shows the tags as
+       chips under the categories; this page lists them as the panel's rows,
+       because each row keeps its count and its Edit and Delete. ─────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li {
+      min-height: 56px;
+      gap: 12px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li
+      > button {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    /* The name opens the tag's dialog; it keeps Classic's accent on hover. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li
+      > button:hover {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='tags']
+      ul[aria-label='Tags']
+      > li
+      > span:not([aria-hidden]) {
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 16px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* ── The exceptions list (Routes-Gallery-1.dc.html panel
+       "/dashboard/exceptions": in each row the reference mono xs strong in
+       ink beside the title sm strong, the detail xs in ink 2). Every row
+       keeps Classic's link, chips, time and chevron. ──────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='exceptions']
+      li
+      a[href^='/dashboard/exceptions/']
+      > div
+      > p:first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='exceptions']
+      li
+      a[href^='/dashboard/exceptions/']
+      > div
+      > p:first-child
+      > .font-mono {
+      color: var(--lg-ink);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='exceptions']
+      li
+      a[href^='/dashboard/exceptions/']
+      > div
+      > p:nth-child(2) {
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      line-height: 16px;
+    }
+
+    /* ── Phones (sp.css 760 px: 4 / 16 / 96, 16 between, the 24/30 title) */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='ops'] {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='page-header'] h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
+
+    /* Reduce Transparency and Increase Contrast: no frost on the header
+       band (the tokens are already opaque there). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='ops'] [data-glass='table'] > thead {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='ops']
+      [data-glass='table']
+      > thead {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}

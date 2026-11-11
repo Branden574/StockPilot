@@ -1,0 +1,393 @@
+<span data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div>
+  <div class="flex flex-col gap-1.5 min-w-0" data-orders-placed="true">
+    <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id1»-range">
+      "Orders placed"
+    <div class="flex flex-col gap-2 lg:flex-row lg:items-center" data-orders-placed-row="true">
+      <select class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 lg:shrink-0 lg:w-44 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id1»-range">
+        <option value="all">
+          "All time"
+        <option value="today">
+          "Today"
+        <option value="week">
+          "This week"
+        <option value="month">
+          "This month"
+        <option value="30d">
+          "Last 30 days"
+        <option value="90d">
+          "Last 90 days"
+        <option value="year">
+          "This year"
+        <option value="custom">
+          "Custom range"
+      <div class="flex flex-1 flex-nowrap gap-1.5 items-center min-w-0" data-date-pair="true" data-radix-popper-align="start" data-radix-popper-side="bottom">
+        <button aria-expanded="true" aria-haspopup="dialog" aria-label="Start date" class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 flex flex-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-2 h-8 hover:border-ink-4 items-center max-sm:h-11 max-sm:text-base min-w-0 px-2.5 rounded-md text-[13px] text-foreground text-left transition-colors w-full" type="button">
+          <svg aria-hidden="true" class="h-3.5 lucide lucide-calendar-days shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 2v3">
+            <path d="M16 2v3">
+            <rect height="18" rx="2" width="18" x="3" y="3">
+            <path d="M3 9h18">
+            <path d="M8 13h.01">
+            <path d="M12 13h.01">
+            <path d="M16 13h.01">
+            <path d="M8 17h.01">
+            <path d="M12 17h.01">
+            <path d="M16 17h.01">
+          <span class="text-muted-foreground truncate">
+            "Start date"
+        <svg aria-hidden="true" class="h-3.5 lucide lucide-arrow-right shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+          <path d="M5 12h14">
+          <path d="m12 5 7 7-7 7">
+        <button aria-expanded="true" aria-haspopup="dialog" aria-label="End date" class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 flex flex-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-2 h-8 hover:border-ink-4 items-center max-sm:h-11 max-sm:text-base min-w-0 px-2.5 rounded-md text-[13px] text-foreground text-left transition-colors w-full" type="button">
+          <svg aria-hidden="true" class="h-3.5 lucide lucide-calendar-days shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 2v3">
+            <path d="M16 2v3">
+            <rect height="18" rx="2" width="18" x="3" y="3">
+            <path d="M3 9h18">
+            <path d="M8 13h.01">
+            <path d="M12 13h.01">
+            <path d="M16 13h.01">
+            <path d="M8 17h.01">
+            <path d="M12 17h.01">
+            <path d="M16 17h.01">
+          <span class="text-muted-foreground truncate">
+            "End date"
+<div data-radix-popper-content-wrapper="" style="position: fixed; left: 0px; top: 0px; transform: translate(0px, 4px); min-width: max-content; --radix-popper-available-width: -16px; --radix-popper-available-height: -16px; --radix-popper-anchor-width: 0px; --radix-popper-anchor-height: 0px; --radix-popper-transform-origin: 0% 0px;">
+  <div aria-label="Orders placed" class="bg-popover border border-[var(--ed-line-strong)] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 flex flex-col focus-visible:ring-0 focus-visible:ring-offset-0 max-h-[var(--radix-popover-content-available-height)] max-w-[calc(100vw-2rem)] outline-none p-0 rounded-lg shadow-md text-popover-foreground w-auto z-50" data-align="start" data-side="bottom" data-state="open" id="radix-«id2»" role="dialog" style="--radix-popover-content-transform-origin: var(--radix-popper-transform-origin); --radix-popover-content-available-width: var(--radix-popper-available-width); --radix-popover-content-available-height: var(--radix-popper-available-height); --radix-popover-trigger-width: var(--radix-popper-anchor-width); --radix-popover-trigger-height: var(--radix-popper-anchor-height);" tabindex="-1">
+    <form class="flex flex-col min-h-0" data-custom-range="true" novalidate="">
+      <div class="min-h-0 overflow-y-auto overscroll-contain p-3 pb-0 space-y-3" data-custom-range-body="true">
+        <div class="flex gap-2">
+          <div class="flex flex-1 flex-col gap-1 min-w-0" data-typed-date="true">
+            <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id1»-from">
+              "Start date"
+            <input class="[&::-webkit-calendar-picker-indicator]:hidden [color-scheme:light] bg-card border border-line-strong dark:[color-scheme:dark] disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id1»-from" max="2100-12-31" min="2000-01-01" type="date" value="">
+          <div class="flex flex-1 flex-col gap-1 min-w-0" data-typed-date="true">
+            <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id1»-to">
+              "End date"
+            <input class="[&::-webkit-calendar-picker-indicator]:hidden [color-scheme:light] bg-card border border-line-strong dark:[color-scheme:dark] disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id1»-to" max="2100-12-31" min="2000-01-01" type="date" value="">
+        <div class="flex flex-col gap-4 sm:flex-row sm:gap-6">
+          <span hidden="" id="«id3»-in-range">
+            "In the chosen range"
+          <div class="shrink-0 w-[16rem]">
+            <div class="flex h-9 items-center justify-between mb-2">
+              <button aria-label="Previous month" class="disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md text-muted-foreground w-9" type="button">
+                <svg aria-hidden="true" class="h-4 lucide lucide-chevron-left w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="m15 18-6-6 6-6">
+              <h3 aria-live="polite" class="font-medium text-sm" id="«id3»-title-0">
+                "September 2026"
+              <span aria-hidden="true" class="h-9 w-9">
+            <table aria-labelledby="«id3»-title-0" class="border-collapse w-full" role="grid">
+              <thead>
+                <tr>
+                  <th abbr="Sunday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "S"
+                    <span class="sr-only">
+                      "Sunday"
+                  <th abbr="Monday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "M"
+                    <span class="sr-only">
+                      "Monday"
+                  <th abbr="Tuesday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "T"
+                    <span class="sr-only">
+                      "Tuesday"
+                  <th abbr="Wednesday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "W"
+                    <span class="sr-only">
+                      "Wednesday"
+                  <th abbr="Thursday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "T"
+                    <span class="sr-only">
+                      "Thursday"
+                  <th abbr="Friday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "F"
+                    <span class="sr-only">
+                      "Friday"
+                  <th abbr="Saturday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "S"
+                    <span class="sr-only">
+                      "Saturday"
+              <tbody>
+                <tr>
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, September 1, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-01" tabindex="-1" type="button">
+                      "1"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, September 2, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-02" tabindex="-1" type="button">
+                      "2"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, September 3, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-03" tabindex="-1" type="button">
+                      "3"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, September 4, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-04" tabindex="-1" type="button">
+                      "4"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, September 5, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-05" tabindex="-1" type="button">
+                      "5"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, September 6, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-06" tabindex="-1" type="button">
+                      "6"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, September 7, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-07" tabindex="-1" type="button">
+                      "7"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, September 8, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-08" tabindex="-1" type="button">
+                      "8"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, September 9, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-09" tabindex="-1" type="button">
+                      "9"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, September 10, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-10" tabindex="-1" type="button">
+                      "10"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, September 11, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-11" tabindex="-1" type="button">
+                      "11"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, September 12, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-12" tabindex="-1" type="button">
+                      "12"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, September 13, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-13" tabindex="-1" type="button">
+                      "13"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, September 14, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-14" tabindex="-1" type="button">
+                      "14"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, September 15, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-15" tabindex="-1" type="button">
+                      "15"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, September 16, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-16" tabindex="-1" type="button">
+                      "16"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, September 17, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-17" tabindex="-1" type="button">
+                      "17"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, September 18, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-18" tabindex="-1" type="button">
+                      "18"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, September 19, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-19" tabindex="-1" type="button">
+                      "19"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, September 20, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-20" tabindex="-1" type="button">
+                      "20"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, September 21, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-21" tabindex="-1" type="button">
+                      "21"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, September 22, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-22" tabindex="-1" type="button">
+                      "22"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, September 23, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-23" tabindex="-1" type="button">
+                      "23"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, September 24, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-24" tabindex="-1" type="button">
+                      "24"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, September 25, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-25" tabindex="-1" type="button">
+                      "25"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, September 26, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-26" tabindex="-1" type="button">
+                      "26"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, September 27, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-27" tabindex="-1" type="button">
+                      "27"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, September 28, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-28" tabindex="-1" type="button">
+                      "28"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-current="date" aria-label="Tuesday, September 29, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center ring-1 ring-inset ring-muted-foreground/60 rounded-md tabular-nums text-sm w-9" data-day="2026-09-29" tabindex="0" type="button">
+                      "29"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, September 30, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-09-30" tabindex="-1" type="button">
+                      "30"
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                <tr>
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+          <div class="shrink-0 w-[16rem]">
+            <div class="flex h-9 items-center justify-between mb-2">
+              <span aria-hidden="true" class="h-9 w-9">
+              <h3 aria-live="polite" class="font-medium text-sm" id="«id3»-title-1">
+                "October 2026"
+              <button aria-label="Next month" class="disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md text-muted-foreground w-9" type="button">
+                <svg aria-hidden="true" class="h-4 lucide lucide-chevron-right w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="m9 18 6-6-6-6">
+            <table aria-labelledby="«id3»-title-1" class="border-collapse w-full" role="grid">
+              <thead>
+                <tr>
+                  <th abbr="Sunday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "S"
+                    <span class="sr-only">
+                      "Sunday"
+                  <th abbr="Monday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "M"
+                    <span class="sr-only">
+                      "Monday"
+                  <th abbr="Tuesday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "T"
+                    <span class="sr-only">
+                      "Tuesday"
+                  <th abbr="Wednesday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "W"
+                    <span class="sr-only">
+                      "Wednesday"
+                  <th abbr="Thursday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "T"
+                    <span class="sr-only">
+                      "Thursday"
+                  <th abbr="Friday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "F"
+                    <span class="sr-only">
+                      "Friday"
+                  <th abbr="Saturday" class="font-medium h-8 text-center text-muted-foreground text-xs w-9" scope="col">
+                    <span aria-hidden="true">
+                      "S"
+                    <span class="sr-only">
+                      "Saturday"
+              <tbody>
+                <tr>
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, October 1, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-01" tabindex="-1" type="button">
+                      "1"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, October 2, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-02" tabindex="-1" type="button">
+                      "2"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, October 3, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-03" tabindex="-1" type="button">
+                      "3"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, October 4, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-04" tabindex="-1" type="button">
+                      "4"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, October 5, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-05" tabindex="-1" type="button">
+                      "5"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, October 6, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-06" tabindex="-1" type="button">
+                      "6"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, October 7, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-07" tabindex="-1" type="button">
+                      "7"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, October 8, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-08" tabindex="-1" type="button">
+                      "8"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, October 9, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-09" tabindex="-1" type="button">
+                      "9"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, October 10, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-10" tabindex="-1" type="button">
+                      "10"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, October 11, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-11" tabindex="-1" type="button">
+                      "11"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, October 12, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-12" tabindex="-1" type="button">
+                      "12"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, October 13, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-13" tabindex="-1" type="button">
+                      "13"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, October 14, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-14" tabindex="-1" type="button">
+                      "14"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, October 15, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-15" tabindex="-1" type="button">
+                      "15"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, October 16, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-16" tabindex="-1" type="button">
+                      "16"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, October 17, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-17" tabindex="-1" type="button">
+                      "17"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, October 18, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-18" tabindex="-1" type="button">
+                      "18"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, October 19, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-19" tabindex="-1" type="button">
+                      "19"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, October 20, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-20" tabindex="-1" type="button">
+                      "20"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, October 21, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-21" tabindex="-1" type="button">
+                      "21"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, October 22, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-22" tabindex="-1" type="button">
+                      "22"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, October 23, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-23" tabindex="-1" type="button">
+                      "23"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, October 24, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-24" tabindex="-1" type="button">
+                      "24"
+                <tr>
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Sunday, October 25, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-25" tabindex="-1" type="button">
+                      "25"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Monday, October 26, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-26" tabindex="-1" type="button">
+                      "26"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Tuesday, October 27, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-27" tabindex="-1" type="button">
+                      "27"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Wednesday, October 28, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-28" tabindex="-1" type="button">
+                      "28"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Thursday, October 29, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-29" tabindex="-1" type="button">
+                      "29"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Friday, October 30, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-30" tabindex="-1" type="button">
+                      "30"
+                  <td aria-selected="false" class="h-9 p-0 text-center w-9" role="gridcell">
+                    <button aria-label="Saturday, October 31, 2026" class="focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring h-9 hover:bg-muted hover:text-foreground inline-flex items-center justify-center rounded-md tabular-nums text-sm w-9" data-day="2026-10-31" tabindex="-1" type="button">
+                      "31"
+                <tr>
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+                  <td class="h-9 p-0 w-9" role="gridcell">
+        <p aria-live="polite" class="min-h-4 text-muted-foreground text-xs">
+      <div class="border-t flex flex-wrap gap-2 items-center justify-between mb-3 mt-3 mx-3 pt-3 shrink-0" data-custom-range-footer="true">
+        <p class="max-w-[16rem] text-muted-foreground text-xs">
+          "Times are in America/Los_Angeles."
+        <div class="flex gap-2">
+          <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 border border-transparent disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-muted hover:text-foreground inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] transition-colors whitespace-nowrap" type="button">
+            "Cancel"
+          <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-primary border border-transparent disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-primary/90 inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] text-primary-foreground transition-colors whitespace-nowrap" disabled="" type="submit">
+            "Apply"
+<span data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

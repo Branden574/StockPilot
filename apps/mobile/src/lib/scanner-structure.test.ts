@@ -1849,12 +1849,17 @@ describe('scanner tip: defects fixed in this package', () => {
       chains.push(
         ancestors.map((a) => {
           const content = attrText(a, 'contentContainerStyle', sf);
-          return content ? `${tagOf(a, sf)} ${content}` : tagOf(a, sf);
+          return content ? `${tagOf(a, sf)} ${content.replace(/\s+/g, ' ')}` : tagOf(a, sf);
         }),
       );
     });
+    // Liquid Glass sets the card at the foot as the iOS sheet (the same
+    // scroll, so it still reaches its button); Classic keeps both ends.
     expect(chains).toEqual([
-      ['Modal', 'ScrollView [styles.centerWrap, { paddingVertical: edge }]'],
+      [
+        'Modal',
+        'ScrollView [ styles.centerWrap, lg ? { paddingTop: edge, paddingBottom: 0 } : { paddingVertical: edge }, ]',
+      ],
     ]);
     const src = sourceOf(SCANNER_TIP);
     expect(styleBlock(src, 'centerWrap')).toMatch(/flexGrow: 1,[\s\S]*justifyContent: 'center',/);

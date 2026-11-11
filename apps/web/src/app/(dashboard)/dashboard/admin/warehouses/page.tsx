@@ -6,6 +6,11 @@ import { WarehousesService } from '@/server/services/warehouses';
 
 import { resolveTerminology } from '@stockpilot/core';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export default async function WarehousesAdminPage({
   searchParams,
 }: {
@@ -44,7 +49,11 @@ export default async function WarehousesAdminPage({
   });
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="warehouses"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <WarehousesManager
         view={isArchivedView ? 'archived' : 'active'}
         initial={warehouses}

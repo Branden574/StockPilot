@@ -1,0 +1,164 @@
+<div>
+<div class="mx-auto flex w-full max-w-[1320px] flex-col px-4 pb-16 pt-2 sm:px-8">
+<div data-testid="item-detail-header" data-item-detail-header="" class="bg-card sticky top-0 z-20 -mx-4 px-4 pt-4 sm:-mx-8 sm:px-8 sm:pt-5">
+<div class="mb-2">
+<a href="/dashboard/inventory">← Back to inventory</a>
+</div>
+<div class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+<div data-slot="page-header" class="flex flex-col min-w-0 flex-1 basis-72">
+<div class="flex min-w-0 flex-wrap justify-between gap-4 items-center">
+<div class="min-w-0 max-w-full flex items-center gap-4">
+<div class="shrink-0">
+<span data-slot="thumb" class="border-border relative block shrink-0 overflow-hidden border bg-white size-16 rounded-lg">
+<span aria-hidden="true" data-slot="missing-photo" class="block h-full w-full absolute inset-0" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+</span>
+</span>
+</div>
+<div class="min-w-0">
+<div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+<h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[26px] leading-[1.2]">Wall-mounted HVAC unit</h1>
+<button type="button">Tour</button>
+</div>
+<div class="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]">
+<span class="break-all font-mono">HVAC-WALL-204</span>
+<span aria-hidden="true" class="text-ink-4">·</span>
+<span data-testid="status-badge">In stock</span>
+</div>
+<div class="contents">
+<span data-testid="group-host">closed</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<div data-tour="item-actions" class="-mx-4 -my-1 w-[calc(100%+2rem)] overflow-x-auto px-4 py-1 sm:mx-0 sm:w-auto sm:overflow-visible sm:px-0">
+<div class="flex w-max gap-2 sm:w-auto sm:flex-wrap [&amp;>a]:h-8 [&amp;>a]:px-3 [&amp;>a]:text-[13px] [&amp;>button]:h-8 [&amp;>button]:px-3 [&amp;>button]:text-[13px]">
+<a href="/dashboard/inventory/11111111-1111-1111-1111-111111111111/edit">Edit</a>
+<button type="button">Duplicate</button>
+<button type="button">Label</button>
+<a href="/dashboard/inventory/labels?items=11111111-1111-1111-1111-111111111111">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-printer h-4 w-4" aria-hidden="true">
+<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2">
+</path>
+<path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6">
+</path>
+<rect x="6" y="14" width="12" height="8" rx="1">
+</rect>
+</svg> Print label</a>
+<button type="button">Adjust stock</button>
+<button type="button">Report a problem</button>
+</div>
+</div>
+</div>
+<div class="mt-4">
+<div role="tablist" aria-label="Item detail sections" data-active="overview">
+</div>
+</div>
+</div>
+<div role="tabpanel" id="item-detail-panel-overview" aria-labelledby="item-detail-tab-overview" class="@container mt-4 flex flex-col gap-4 sm:mt-5">
+<div data-slot="stat-strip" data-variant="detail" class="border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip" data-testid="item-figures">
+<div class="[&amp;>*]:border-border -mb-px -mr-px grid [&amp;>*:last-child]:border-r-0 [&amp;>*]:border-b [&amp;>*]:border-r grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))]">
+<div data-slot="stat-strip-item" class="min-w-0 px-[18px] py-3.5" data-testid="item-on-hand">
+<div class="text-muted-foreground text-[12.5px] leading-[18.75px]">On hand</div>
+<div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">6 <span class="text-muted-foreground font-sans text-[13px] font-normal tracking-normal">each</span>
+</div>
+</div>
+<div data-slot="stat-strip-item" class="min-w-0 px-[18px] py-3.5" data-testid="item-reserved">
+<div class="text-muted-foreground text-[12.5px] leading-[18.75px]">Reserved for open orders</div>
+<div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">9 <span class="text-muted-foreground font-sans text-[13px] font-normal tracking-normal">each</span>
+</div>
+</div>
+<div data-slot="stat-strip-item" class="min-w-0 px-[18px] py-3.5" data-testid="item-available">
+<div class="text-muted-foreground text-[12.5px] leading-[18.75px]">Available</div>
+<div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">0 <span class="text-muted-foreground font-sans text-[13px] font-normal tracking-normal">each</span>
+</div>
+<div class="text-[12px] leading-[18px] text-destructive">
+<span class="inline-flex items-center gap-1 font-medium">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-triangle-alert lucide-alert-triangle size-3 shrink-0" aria-hidden="true">
+<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+</path>
+<path d="M12 9v4">
+</path>
+<path d="M12 17h.01">
+</path>
+</svg>3 short of what is promised</span>
+</div>
+</div>
+<div data-slot="stat-strip-item" class="min-w-0 px-[18px] py-3.5" data-testid="item-value">
+<div class="text-muted-foreground text-[12.5px] leading-[18.75px]">Value</div>
+<div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">$240.00</div>
+<div class="text-[12px] leading-[18px] text-muted-foreground">@ $40.00 unit cost</div>
+</div>
+<div data-slot="stat-strip-item" class="min-w-0 px-[18px] py-3.5" data-testid="item-reorder-at">
+<div class="text-muted-foreground text-[12.5px] leading-[18.75px]">Reorder at</div>
+<div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">10 <span class="text-muted-foreground font-sans text-[13px] font-normal tracking-normal">each</span>
+</div>
+</div>
+</div>
+</div>
+<div class="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] @min-[856px]:grid-rows-[repeat(var(--item-detail-left-rows),auto)_1fr] @min-[856px]:items-start grid gap-4" style="--item-detail-left-rows: 1;">
+<section data-slot="detail-section" class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border @min-[856px]:col-start-1">
+<div data-slot="detail-section-header" class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5">
+<h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">Details</h2>
+</div>
+<div data-slot="detail-section-body" class="">
+<dl data-slot="key-value-list" class="divide-border divide-y">
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Category</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+<span class="text-muted-foreground">Uncategorized</span>
+</dd>
+</div>
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Location</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+<span class="text-muted-foreground">Not set</span>
+</dd>
+</div>
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Supplier</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+<span class="text-muted-foreground">No supplier</span>
+</dd>
+</div>
+</dl>
+</div>
+</section>
+<div class="@min-[856px]:col-start-2 @min-[856px]:row-span-full flex min-w-0 flex-col gap-4">
+<section data-slot="detail-section" class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border">
+<div data-slot="detail-section-header" class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5">
+<h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">Reorder</h2>
+</div>
+<div data-slot="detail-section-body" class="">
+<dl data-slot="key-value-list" class="divide-border divide-y">
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Reorder at</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">10 each</dd>
+</div>
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Reorder qty</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">5 each</dd>
+</div>
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Retail price</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">$100.00</dd>
+</div>
+<div data-slot="key-value-row" class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]">
+<dt class="text-muted-foreground shrink-0">Status</dt>
+<dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">Active</dd>
+</div>
+</dl>
+</div>
+</section>
+</div>
+<section data-slot="detail-section" class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border @min-[856px]:col-start-1">
+<div data-slot="detail-section-header" class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5">
+<h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">Images</h2>
+</div>
+<div data-slot="detail-section-body" class="p-[18px]">
+</div>
+</section>
+</div>
+</div>
+</div>
+</div>

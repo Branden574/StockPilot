@@ -19,6 +19,9 @@ import {
   cycleCountStartedMessage,
 } from '@stockpilot/core';
 
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
 import { CheckboxMark } from '@/components/ui/checkbox';
@@ -67,6 +70,10 @@ const MIN_TAP = 44;
 export default function NewCycleCount() {
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (inferred from the iOS Lookup rows with checkboxes): the
+  // scene behind the picker, the glass nav, the rows on the grouped glass
+  // surface and the Start bar on the glass-strong fill; every choice stays.
+  const lg = useGlass();
   const picks = useCountPicks();
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -115,9 +122,10 @@ export default function NewCycleCount() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -191,7 +199,11 @@ export default function NewCycleCount() {
       <SafeAreaView
         edges={['bottom']}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
-        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        style={[
+          styles.footer,
+          { backgroundColor: c.paper, borderTopColor: c.hair },
+          lg && { backgroundColor: lg.g.glassStrong, borderTopColor: lg.g.paneLine },
+        ]}
       >
         {managerOnly ? (
           <Body muted size={13} style={{ marginBottom: 10 }}>

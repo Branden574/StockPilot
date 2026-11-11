@@ -11,6 +11,12 @@ import { LocationsService } from '@/server/services/locations';
 
 import { can } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 // The tab names the page ("Locations · StockPilot"); before, it read the
 // group's "Dashboard" (CONFLICTS D16).
 export const metadata: Metadata = { title: 'Locations' };
@@ -54,7 +60,7 @@ export default async function LocationsPage({ searchParams }: LocationsPageProps
   return (
     // The header (h1, subline, Active / Archived, New location) is drawn by
     // LocationsManager, which holds the dialog New location opens.
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="locations">
       <LocationsManager
         view={isArchivedView ? 'archived' : 'active'}
         title={title}

@@ -36,6 +36,19 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
 import { DigitalPick } from '@/components/digital-pick';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GlassNavSpacer } from '@/components/ui/glass/screens/po';
+import {
+  GLASS_NAV_BADGE,
+  GLASS_ORDER_DIALOG_RADIUS,
+  GlassOrderNavTitle,
+  glassOrderStyles,
+  glassOrderTitle,
+} from '@/components/ui/glass/screens/order';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { OrderLineReadiness } from '@/components/order-line-readiness';
 import { OrderNeededByCard } from '@/components/order-needed-by-card';
 import { OrderReadinessSummary } from '@/components/order-readiness-summary';
@@ -208,7 +221,7 @@ import {
 } from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
 import { orderItemsEyebrow } from '@/lib/order-items-eyebrow';
-import { orderHeaderEyebrow } from '@/lib/orders-list';
+import { orderHeaderEyebrow, orderStatusPill } from '@/lib/orders-list';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -492,6 +505,7 @@ export default function OrderDetail() {
   const router = useRouter();
   const { user } = useAuth();
   const { c, mode } = useTheme();
+  const lg = useGlass();
   // The shared outline button (tones.ts buttonTone): the card fill in the
   // stronger border, for this screen's secondary actions and chips.
   const outlineTone = buttonTone('outline', c);
@@ -499,6 +513,7 @@ export default function OrderDetail() {
     backgroundColor: outlineTone.bg,
     borderWidth: 1,
     borderColor: outlineTone.border,
+    ...(lg && glassOrderStyles(lg).outline),
   };
 
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
@@ -2357,12 +2372,24 @@ export default function OrderDetail() {
           disabled={retrying}
           accessibilityRole="button"
           accessibilityState={{ disabled: retrying }}
-          style={[styles.addBtn, { ...outlineButton, opacity: retrying ? 0.5 : 1 }]}
+          style={[
+            styles.addBtn,
+            lg && glassOrderStyles(lg).addBtn,
+            { ...outlineButton, opacity: retrying ? 0.5 : 1 },
+          ]}
         >
           {retrying ? (
             <ActivityIndicator color={c.ink} />
           ) : (
-            <Text style={[styles.actionLabel, { color: c.ink }]}>Try again</Text>
+            <Text
+              style={[
+                styles.actionLabel,
+                lg && glassOrderStyles(lg).actionLabel,
+                { color: c.ink },
+              ]}
+            >
+              Try again
+            </Text>
           )}
         </Pressable>
       ) : null}
@@ -2570,8 +2597,16 @@ export default function OrderDetail() {
     // Cancel) as the outline with its words in the per-mode refusal ink,
     // never a full red bar.
     const tones = buttonTone(tone === 'primary' ? 'primary' : 'outline', c);
-    const bg = tones.bg;
-    const fg = tone === 'danger' ? c.critText : tones.fg;
+    const bg = lg ? (tone === 'primary' ? lg.g.accent : lg.ios.fill) : tones.bg;
+    const fg = lg
+      ? tone === 'primary'
+        ? lg.g.onAccent
+        : tone === 'danger'
+          ? c.critText
+          : c.ink
+      : tone === 'danger'
+        ? c.critText
+        : tones.fg;
     return (
       <Pressable
         key={label}
@@ -2582,18 +2617,28 @@ export default function OrderDetail() {
         accessibilityHint={hint}
         style={[
           styles.addBtn,
+          lg && glassOrderStyles(lg).addBtn,
           {
             backgroundColor: bg,
             borderWidth: 1,
             borderColor: tones.border,
             opacity: disabled || (acting !== null && !isBusy) ? 0.5 : 1,
           },
+          lg && glassOrderStyles(lg).actionEdge,
         ]}
       >
         {isBusy ? (
           <ActivityIndicator color={fg} />
         ) : (
-          <Text style={[styles.actionLabel, { color: fg }]}>{label}</Text>
+          <Text
+            style={[
+              styles.actionLabel,
+              lg && glassOrderStyles(lg).actionLabel,
+              { color: fg },
+            ]}
+          >
+            {label}
+          </Text>
         )}
       </Pressable>
     );
@@ -2827,9 +2872,10 @@ export default function OrderDetail() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? glassOrderStyles(lg).nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -2839,6 +2885,30 @@ export default function OrderDetail() {
             accessibilityLabel="Back"
             minTap
           />
+          {/* Liquid Glass: the order number as the nav title and the status
+              as the board's badge beside it; Classic's eyebrow holds both. */}
+          {lg ? (
+            <GlassOrderNavTitle
+              lg={lg}
+              title={glassOrderTitle(
+                order?.orderNumber ? formatOrderNumber(order.orderNumber) : null,
+                canDigitalPick,
+              )}
+            />
+          ) : null}
+          {lg ? (
+            order ? (
+              <Pill
+                status={orderStatusPill(order.status, order.fulfillmentType).status}
+                dot={false}
+                style={GLASS_NAV_BADGE}
+              >
+                {sentenceCase(orderStatusPill(order.status, order.fulfillmentType).label)}
+              </Pill>
+            ) : (
+              <GlassNavSpacer />
+            )
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -2857,13 +2927,22 @@ export default function OrderDetail() {
             accessibilityState={{ disabled: retrying }}
             style={[
               styles.addBtn,
+              lg && glassOrderStyles(lg).addBtn,
               { marginTop: 16, ...outlineButton, opacity: retrying ? 0.5 : 1 },
             ]}
           >
             {retrying ? (
               <ActivityIndicator color={c.ink} />
             ) : (
-              <Text style={[styles.actionLabel, { color: c.ink }]}>Try again</Text>
+              <Text
+                style={[
+                  styles.actionLabel,
+                  lg && glassOrderStyles(lg).actionLabel,
+                  { color: c.ink },
+                ]}
+              >
+                Try again
+              </Text>
             )}
           </Pressable>
         </View>
@@ -2882,15 +2961,28 @@ export default function OrderDetail() {
         >
         <ScrollView
           ref={scrollRef}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
+          contentContainerStyle={
+            lg ? glassOrderStyles(lg).scroll : { paddingHorizontal: 20, paddingBottom: 60, gap: 16 }
+          }
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
-          <View style={{ paddingTop: 1 }}>
-            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>
-            <Display size={30} style={{ marginTop: 10 }}>
+          <View style={lg ? glassOrderStyles(lg).headBlock : { paddingTop: 1 }}>
+            {lg ? null : (
+              <Eyebrow>
+                {orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}
+              </Eyebrow>
+            )}
+            <Display
+              size={lg ? 22 : 30}
+              style={lg ? glassOrderStyles(lg).headName : { marginTop: 10 }}
+            >
               {order.requester ?? 'Order'}
             </Display>
-            <Body size={13} color={c.ink3} style={{ marginTop: 4 }}>
+            <Body
+              size={13}
+              color={c.ink3}
+              style={lg ? glassOrderStyles(lg).headLine : { marginTop: 4 }}
+            >
               {[order.orgLabel, order.warehouseName].filter(Boolean).join(' · ') || '—'}
             </Body>
           </View>
@@ -3923,6 +4015,7 @@ export default function OrderDetail() {
                     accessibilityState={{ disabled: uploading || offline }}
                     style={[
                       styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
                       { ...outlineButton, opacity: uploading || offline ? 0.6 : 1 },
                     ]}
                   >
@@ -3930,7 +4023,13 @@ export default function OrderDetail() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <ActivityIndicator color={c.ink} />
                         {uploadProgress ? (
-                          <Text style={[styles.actionLabel, { color: c.ink }]}>
+                          <Text
+                            style={[
+                              styles.actionLabel,
+                              lg && glassOrderStyles(lg).actionLabel,
+                              { color: c.ink },
+                            ]}
+                          >
                             {uploadProgress.total > 1
                               ? `Uploading ${uploadProgress.done}/${uploadProgress.total} · ${uploadProgress.percent}%`
                               : `Uploading… ${uploadProgress.percent}%`}
@@ -3940,7 +4039,15 @@ export default function OrderDetail() {
                     ) : (
                       <>
                         <Camera size={16} color={c.ink} strokeWidth={1.8} />
-                        <Text style={[styles.actionLabel, { color: c.ink }]}>Add proof</Text>
+                        <Text
+                          style={[
+                            styles.actionLabel,
+                            lg && glassOrderStyles(lg).actionLabel,
+                            { color: c.ink },
+                          ]}
+                        >
+                          Add proof
+                        </Text>
                       </>
                     )}
                   </Pressable>
@@ -4076,13 +4183,20 @@ export default function OrderDetail() {
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+              lg && glassScrim(lg),
             ]}
           />
           <View
             style={{ flex: 1, justifyContent: 'center', padding: 24 }}
             pointerEvents="box-none"
           >
-            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+            <View
+              style={[
+                { backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 },
+                lg && glassOrderStyles(lg).dialog,
+              ]}
+            >
+              {lg ? <GlassSheetBackdrop radius={GLASS_ORDER_DIALOG_RADIUS} /> : null}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Body
                   size={15}
@@ -4205,13 +4319,20 @@ export default function OrderDetail() {
               style={[
                 StyleSheet.absoluteFill,
                 { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+                lg && glassScrim(lg),
               ]}
             />
             <View
               style={{ flex: 1, justifyContent: 'center', padding: 24 }}
               pointerEvents="box-none"
             >
-              <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <View
+                style={[
+                  { backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 },
+                  lg && glassOrderStyles(lg).dialog,
+                ]}
+              >
+                {lg ? <GlassSheetBackdrop radius={GLASS_ORDER_DIALOG_RADIUS} /> : null}
                 <ScrollView
                   style={{
                     maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top),
@@ -4239,6 +4360,7 @@ export default function OrderDetail() {
                     style={[
                       styles.reasonInput,
                       { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                      lg && glassOrderStyles(lg).reasonInput,
                     ]}
                   />
                 </ScrollView>
@@ -4251,9 +4373,21 @@ export default function OrderDetail() {
                   <Pressable
                     onPress={dismissDenyModal}
                     accessibilityRole="button"
-                    style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+                    style={[
+                      styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
+                      { ...outlineButton, paddingHorizontal: 18 },
+                    ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.ink },
+                      ]}
+                    >
+                      Cancel
+                    </Text>
                   </Pressable>
                   <Pressable
                     onPress={() => void submitDeny()}
@@ -4261,6 +4395,7 @@ export default function OrderDetail() {
                     accessibilityRole="button"
                     style={[
                       styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
                       {
                         ...outlineButton,
                         paddingHorizontal: 18,
@@ -4268,7 +4403,15 @@ export default function OrderDetail() {
                       },
                     ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.critText },
+                      ]}
+                    >
+                      Deny
+                    </Text>
                   </Pressable>
                 </View>
               </View>
@@ -4310,13 +4453,20 @@ export default function OrderDetail() {
               style={[
                 StyleSheet.absoluteFill,
                 { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+                lg && glassScrim(lg),
               ]}
             />
             <View
               style={{ flex: 1, justifyContent: 'center', padding: 24 }}
               pointerEvents="box-none"
             >
-              <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <View
+                style={[
+                  { backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 },
+                  lg && glassOrderStyles(lg).dialog,
+                ]}
+              >
+                {lg ? <GlassSheetBackdrop radius={GLASS_ORDER_DIALOG_RADIUS} /> : null}
                 <ScrollView
                   style={{
                     maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top),
@@ -4351,6 +4501,7 @@ export default function OrderDetail() {
                     style={[
                       styles.reasonInput,
                       { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                      lg && glassOrderStyles(lg).reasonInput,
                     ]}
                   />
                 </ScrollView>
@@ -4361,9 +4512,21 @@ export default function OrderDetail() {
                   <Pressable
                     onPress={dismissReopenModal}
                     accessibilityRole="button"
-                    style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+                    style={[
+                      styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
+                      { ...outlineButton, paddingHorizontal: 18 },
+                    ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.ink },
+                      ]}
+                    >
+                      Cancel
+                    </Text>
                   </Pressable>
                   <Pressable
                     onPress={() => void reopenPicking()}
@@ -4371,6 +4534,7 @@ export default function OrderDetail() {
                     accessibilityRole="button"
                     style={[
                       styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
                       {
                         ...outlineButton,
                         paddingHorizontal: 18,
@@ -4378,7 +4542,15 @@ export default function OrderDetail() {
                       },
                     ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.critText },
+                      ]}
+                    >
+                      Reopen picking
+                    </Text>
                   </Pressable>
                 </View>
               </View>
@@ -4454,20 +4626,26 @@ export default function OrderDetail() {
                 {
                   backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
                 },
+                lg && glassScrim(lg),
               ]}
             />
             <View
               onStartShouldSetResponder={returnKb.claimTapOutside}
               onResponderRelease={returnKb.onTapOutside}
-              style={{
-                backgroundColor: c.card,
-                borderTopLeftRadius: 18,
-                borderTopRightRadius: 18,
-                padding: 18,
-                gap: 12,
-                maxHeight: returnSheetLayout.sheetMaxHeight,
-              }}
+              style={[
+                {
+                  backgroundColor: c.card,
+                  borderTopLeftRadius: 18,
+                  borderTopRightRadius: 18,
+                  padding: 18,
+                  gap: 12,
+                  maxHeight: returnSheetLayout.sheetMaxHeight,
+                },
+                lg && GLASS_SHEET_CARD,
+              ]}
             >
+              {lg ? <GlassSheetBackdrop /> : null}
+              {lg ? <GlassSheetGrabber /> : null}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                 <Body
                   size={15}
@@ -4744,6 +4922,7 @@ export default function OrderDetail() {
                     style={[
                       styles.reasonInput,
                       { minHeight: 60, borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                      lg && glassOrderStyles(lg).reasonInput,
                     ]}
                   />
                 </View>
@@ -4770,17 +4949,24 @@ export default function OrderDetail() {
                 accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
                 style={[
                   styles.addBtn,
+                  lg && glassOrderStyles(lg).addBtn,
                   // The box grows with its capped label (Dynamic Type policy: a
                   // cap always comes with its box fix).
                   { height: undefined, minHeight: 44, paddingVertical: 10 },
                   { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 },
+                  lg && { backgroundColor: lg.g.accent },
                 ]}
               >
                 {returnSubmitting ? (
-                  <ActivityIndicator color={c.paper} />
+                  <ActivityIndicator color={lg ? lg.g.onAccent : c.paper} />
                 ) : (
                   <Text
-                    style={[styles.actionLabel, { color: c.paper }]}
+                    style={[
+                      styles.actionLabel,
+                      lg && glassOrderStyles(lg).actionLabel,
+                      { color: c.paper },
+                      lg && { color: lg.g.onAccent },
+                    ]}
                     maxFontSizeMultiplier={capTo(13, TYPE_CEILING.control)}
                   >
                     Submit return
@@ -4945,11 +5131,23 @@ export default function OrderDetail() {
               {
                 backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
               },
+              lg && glassScrim(lg),
             ]}
           />
           <View
-            style={{ backgroundColor: c.card, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, gap: 10 }}
+            style={[
+              {
+                backgroundColor: c.card,
+                borderTopLeftRadius: 18,
+                borderTopRightRadius: 18,
+                padding: 18,
+                gap: 10,
+              },
+              lg && GLASS_SHEET_CARD,
+            ]}
           >
+            {lg ? <GlassSheetBackdrop /> : null}
+            {lg ? <GlassSheetGrabber /> : null}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Body
                 size={15}

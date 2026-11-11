@@ -104,18 +104,23 @@ const told = (v: ReleaseViewer) =>
     ?.entries.map((e) => e.id);
 
 describe('the count sheet release: order, status and date', () => {
-  it('is published once, as revision 1, at the top, above the S2 release, and no draft is left', () => {
+  // Renamed when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: "is published once, as revision 1, at the top, above the S2 release, and no draft is left"): the Liquid Glass release is held as a draft at the top until G5. Claim kept: no other draft is left.
+  it('is published once, as revision 1, near the top (below the Liquid Glass draft and the Add all release), above the S2 release, and no draft but the Liquid Glass release is left', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe(S2_ID);
+    // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[2]?.id).toBe(ID);
+    expect(RELEASES[3]?.id).toBe(S2_ID);
     // Re-pinned by feat/order-add-all (2026-11-10; was: this release at 0, the newest published): the Add all release is published later, at the top.
-    expect(RELEASES[0]?.id).toBe(ADD_ALL_ID);
+    // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[1]?.id).toBe(ADD_ALL_ID);
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ADD_ALL_ID);
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
     // Permanent, unused anywhere else, and ends in the month it went out.
     expect(ID).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*-2026-11$/);
     expect(RELEASES.flatMap((r) => r.entries).filter((e) => e.id === ENTRY_ID)).toHaveLength(1);
@@ -129,7 +134,8 @@ describe('the count sheet release: order, status and date', () => {
     // #492 was live on production from 19:41Z on 2026-11-10.
     expect(at).toBeGreaterThan(Date.parse('2026-11-10T19:41:00Z'));
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    for (const r of RELEASES.slice(3)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

@@ -26,7 +26,7 @@ export default async function PlatformLayout({ children }: { children: ReactNode
   const session = await requirePlatformAdmin();
 
   return (
-    <div className="bg-background min-h-screen">
+    <div data-glass-page="platform" className="bg-background min-h-screen">
       <header
         data-slot="platform-topbar"
         className="border-border bg-background sticky top-0 z-30 border-b"
@@ -37,6 +37,7 @@ export default async function PlatformLayout({ children }: { children: ReactNode
         >
           <Link
             href="/platform"
+            data-glass="plat-brand"
             className="order-1 inline-flex h-10 shrink-0 items-center gap-2.5 rounded-md font-display text-[15px] font-semibold tracking-[-0.01em]"
           >
             <span
@@ -50,7 +51,10 @@ export default async function PlatformLayout({ children }: { children: ReactNode
             </span>
           </Link>
           <PlatformNav className="order-3 basis-full max-lg:pb-2 lg:order-2 lg:flex-1 lg:basis-auto" />
-          <div className="order-2 ml-auto flex min-w-0 items-center gap-3 lg:order-3">
+          <div
+            data-glass="plat-account"
+            className="order-2 ml-auto flex min-w-0 items-center gap-3 lg:order-3"
+          >
             <span className="text-muted-foreground hidden min-w-0 truncate text-[12.5px] sm:inline">
               {session.email}
             </span>

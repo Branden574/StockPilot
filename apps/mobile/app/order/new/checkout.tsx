@@ -48,6 +48,9 @@ import { Segmented, SetupRow } from '@/components/order-storefront/controls';
 import { NeededBySheet, QuantitySheet, RequesterSheet, SiteSheet } from '@/components/order-storefront/sheets';
 import { StorefrontState } from '@/components/order-storefront/storefront-state';
 import { UnconfirmedPanel } from '@/components/order-storefront/unconfirmed-panel';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, FieldLabel } from '@/components/ui/text';
 import { MISSING_VALUE, lineChangeAnnouncement, notesCounterAnnouncement, quantityAnnouncement } from '@/lib/order-storefront/a11y';
@@ -95,6 +98,10 @@ export default function Checkout() {
   const router = useRouter();
   const focused = useIsFocused();
   const { c } = useTheme();
+  // Liquid Glass (inferred from the Order-New review): the scene behind the
+  // review, Back in the glass nav, the fields and cart on the grouped glass
+  // surface (the shared rows and cards); every field, sheet and Submit stay.
+  const lg = useGlass();
   const { width, fontScale } = useWindowDimensions();
   const layout = storefrontLayout({ width, fontScale });
   const [sheet, setSheet] = React.useState<CheckoutSheet>(null);
@@ -182,7 +189,7 @@ export default function Checkout() {
   }
 
   const topBar = (
-    <View style={styles.topbar}>
+    <View style={lg ? GLASS_LIST.nav : styles.topbar}>
       <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel={STOREFRONT_BACK_COPY} minTap />
     </View>
   );
@@ -224,7 +231,8 @@ export default function Checkout() {
   // Nothing to show yet: the answer loading, or the cart not read yet.
   if (stage === 'loading' || !snap || !ready || !snap.cart) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.paper }}>
+      <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+        {lg ? <SceneBackground /> : null}
         <SafeAreaView edges={['top']}>{topBar}</SafeAreaView>
         <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
       </View>
@@ -250,8 +258,9 @@ export default function Checkout() {
   const forRow = forRowView({ canOrderOnBehalf: ready.viewer.canOrderOnBehalf, onBehalfOf: cart.onBehalfOf, lockHint });
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.paper }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+    <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
         {topBar}
       </SafeAreaView>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>

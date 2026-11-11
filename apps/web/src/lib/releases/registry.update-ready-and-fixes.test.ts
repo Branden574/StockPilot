@@ -231,9 +231,10 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[12]?.id).toBe(ID);
-    expect(RELEASES.slice(9, 12).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[13]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[13]?.id).toBe(ID);
+    expect(RELEASES.slice(10, 13).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[14]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -241,7 +242,9 @@ describe('the update-ready-and-fixes release', () => {
     // The draft's id is gone and is not reused; a draft never left the
     // server, so no reader's state names it.
     expect(RELEASES.map((r) => r.id)).not.toContain('mobile-app-asks-before-restarting');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
   });
 
   it('is dated on a whole minute in the past, after the web build was live and the phone update was published, and after every release below it', () => {
@@ -257,12 +260,13 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    for (const r of RELEASES.slice(13)) {
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    for (const r of RELEASES.slice(14)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    for (const r of RELEASES.slice(9, 12)) {
+    for (const r of RELEASES.slice(10, 13)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });

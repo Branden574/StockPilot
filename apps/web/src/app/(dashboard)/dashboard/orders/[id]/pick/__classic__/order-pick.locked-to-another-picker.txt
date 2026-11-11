@@ -1,0 +1,33 @@
+<div>
+  <div class="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div class="flex min-w-0 flex-col" data-slot="page-header">
+      <div class="mb-2">
+        <a href="/dashboard/orders/11111111-1111-4111-8111-111111111111">
+          "← Back to order"
+      <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+        <div class="min-w-0 max-w-full">
+          <div class="min-w-0">
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+                "Pick slip"
+            <div class="text-muted-foreground text-[13.5px] mt-0.5">
+              "Order "
+              <span class="font-mono">
+                "#"
+                "11111111"
+              " ·"
+              ␣
+              "Robin Example"
+    <div>
+      <div class="flex w-full min-w-0 flex-col items-center justify-center text-center border-border bg-card rounded-lg border min-h-[200px] gap-2 px-4 py-8" data-slot="state-panel" data-state-kind="forbidden" data-testid="digital-pick-locked">
+        <div aria-hidden="true" class="flex items-center justify-center rounded-full size-9 bg-sunk text-muted-foreground" data-slot="state-panel-icon">
+          <svg aria-hidden="true" class="lucide lucide-lock h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <rect height="11" rx="2" ry="2" width="18" x="3" y="11">
+            <path d="M7 11V7a5 5 0 0 1 10 0v4">
+        <h2 class="max-w-md text-foreground font-medium text-[14px] leading-5">
+          "This order is being picked by Dana Example."
+        <div class="text-muted-foreground max-w-md text-[13.5px] leading-[20.25px]">
+          "Ask a manager to reassign it if you need to take over."
+        <div class="flex flex-wrap items-center justify-center gap-2 mt-1">
+          <a href="/dashboard/orders/11111111-1111-4111-8111-111111111111">
+            "Back to order"

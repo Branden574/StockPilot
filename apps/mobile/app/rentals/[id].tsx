@@ -31,6 +31,10 @@ import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_RECORD_BODY, glassGrayCapsule } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   RENTAL_WORKSPACE_UNAVAILABLE,
@@ -77,6 +81,11 @@ export default function RentalDetailScreen() {
   const router = useRouter();
   const { orgId, loading: workspaceLoading } = useOrg();
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html's cards): the
+  // scene, Back in the glass nav, the borrower's name under it, the borrower,
+  // emails, details and items on the grouped glass surface. Every action,
+  // state and word stays.
+  const lg = useGlass();
   const enabledModules = useEnabledModules();
   const enabled = enabledModules.has('rentals');
   const perms = useEffectivePermissions();
@@ -155,7 +164,8 @@ export default function RentalDetailScreen() {
 
   if (load === null) {
     return (
-      <View style={[styles.root, { backgroundColor: c.paper }]}>
+      <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+        {lg ? <SceneBackground /> : null}
         <TopBar onBack={goBack} />
         <ActivityIndicator color={c.ink3} style={{ marginTop: 37 }} />
       </View>
@@ -180,10 +190,11 @@ export default function RentalDetailScreen() {
   const webAction = rentalWebActionLabel(rental.status, perms);
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
       <TopBar onBack={goBack} />
       <ScrollView
-        contentContainerStyle={styles.body}
+        contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void reload()} />}
       >
         <View style={styles.head}>
@@ -346,9 +357,11 @@ export default function RentalDetailScreen() {
 
 function TopBar({ onBack }: { onBack: () => void }) {
   const { c } = useTheme();
+  // Liquid Glass: Back as the 44pt glass circle in the glass nav, on the scene.
+  const lg = useGlass();
   return (
-    <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-      <View style={styles.topbar}>
+    <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+      <View style={lg ? GLASS_LIST.nav : styles.topbar}>
         <IconChip icon={ChevronLeft} onPress={onBack} accessibilityLabel="Back" minTap />
       </View>
     </SafeAreaView>
@@ -381,10 +394,12 @@ function Gate({
   children: React.ReactNode;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
       <TopBar onBack={onBack} />
-      <View style={{ paddingHorizontal: 20, marginTop: 21 }}>
+      <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 21 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
           {onRetry ? (
@@ -402,6 +417,8 @@ function Gate({
                   backgroundColor: c.card,
                   opacity: retrying ? 0.5 : pressed ? 0.85 : 1,
                 },
+                // Liquid Glass: the iOS gray capsule.
+                lg && glassGrayCapsule(lg),
               ]}
             >
               <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>

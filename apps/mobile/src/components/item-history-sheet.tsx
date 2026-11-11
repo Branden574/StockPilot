@@ -16,6 +16,9 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Body, Display, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { api } from '@/lib/api';
 import {
   appendHistoryMovements,
@@ -78,6 +81,7 @@ export function ItemHistorySheet({
   onClose: () => void;
 }) {
   const { mode } = useTheme();
+  const lg = useGlass();
   return (
     <Modal
       visible={visible}
@@ -107,6 +111,8 @@ export function ItemHistorySheet({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            // Liquid Glass: the --scrim tint (it never blurs the page).
+            lg && glassScrim(lg),
           ]}
           onPress={onClose}
           onAccessibilityTap={onClose}
@@ -143,6 +149,7 @@ function ItemHistorySheetContent({
   onClose: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   // The list is capped as a FRACTION of the screen, not at a fixed 460pt: on a
   // 4.7" phone a fixed cap pushes the "Load older movements" footer and the
   // error line off the bottom of the sheet, where neither can be reached.
@@ -225,12 +232,15 @@ function ItemHistorySheetContent({
           paddingBottom: Platform.OS === 'ios' ? 28 : 22,
         },
         SHADOW.sheet,
+        // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+        lg && GLASS_SHEET_CARD,
       ]}
     >
+      {lg ? <GlassSheetBackdrop /> : null}
       {Platform.OS === 'ios' ? (
         <View style={styles.grabberRow}>
           {/* The grabber is a decorative mark in the faint ink. */}
-          <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+          <View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />
         </View>
       ) : null}
 

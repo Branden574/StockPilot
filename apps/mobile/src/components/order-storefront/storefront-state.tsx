@@ -2,6 +2,8 @@ import * as React from 'react';
 import { ActivityIndicator, RefreshControl, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display } from '@/components/ui/text';
 import { outcomeBesideSetup, storefrontStateMessage, type StorefrontOutcome } from '@/lib/order-storefront/outcome';
 import type { SetupState } from '@/lib/order-storefront/session';
@@ -42,11 +44,15 @@ export function StorefrontState({
   offline?: boolean;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the storefront's loading, setup and refusal states over the
+  // scene, under the caller's glass nav; the same words and actions.
+  const lg = useGlass();
   // The same sentence as the setup message is said once (simulator walk D10).
   const shown = outcomeBesideSetup(outcome ?? null, setup);
   return (
-    <View style={{ flex: 1, backgroundColor: c.paper }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+    <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
         {topBar}
       </SafeAreaView>
       <ScrollView

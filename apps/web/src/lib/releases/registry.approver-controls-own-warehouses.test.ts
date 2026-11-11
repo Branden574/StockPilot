@@ -144,19 +144,23 @@ const LOAD_UPDATE =
   'tap Restart now when the app says Update ready, or close the app completely and open it again.';
 
 describe('the S2 release: order, status and date', () => {
-  it('is published once, as revision 1, directly below the count sheet release (published later, at the top) and above the Export items release, and no draft is left', () => {
+  // Renamed by lg/s5-flag-home (2026-11-09, and again when main was merged in after #493 and #494, 2026-11-10; was: "is published once, as revision 1, directly below the count sheet release (published later, at the top) and above the Export items release, and no draft is left"): the Liquid Glass release is held as a draft at the top until G5. Claim kept: no other draft is left.
+  it('is published once, as revision 1, directly below the count sheet release (published later, below the Liquid Glass draft at the top) and above the Export items release, and no draft but the Liquid Glass release is left', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: this release at 0, the newest published, and the Export items release at 1): the count sheet release is published later, at the top, the newest published release, so this one is at 1, directly above the Export items release at 2.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    expect(RELEASES[1]?.id).toBe(COUNT_SHEET_ID);
-    expect(RELEASES[2]?.id).toBe(ID);
-    expect(RELEASES[3]?.id).toBe(EXPORT_ID);
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    expect(RELEASES[2]?.id).toBe(COUNT_SHEET_ID);
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe(EXPORT_ID);
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ADD_ALL_ID);
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
     // Permanent, unused anywhere else, and ends in the month it went out.
     expect(ID).toMatch(/^[a-z0-9]+(?:-[a-z0-9]+)*-2026-11$/);
     expect(RELEASES.flatMap((r) => r.entries).filter((e) => e.id === ENTRY_ID)).toHaveLength(1);
@@ -173,7 +177,8 @@ describe('the S2 release: order, status and date', () => {
     expect(at).toBeGreaterThan(Date.parse('2026-11-05T07:35:00Z'));
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: slice(1)): the count sheet release is published at the top, so the releases below this one start at 2, and the one above it is dated later.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

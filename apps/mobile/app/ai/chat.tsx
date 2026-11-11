@@ -16,6 +16,12 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Card } from '@/components/ui/card';
+import { GlassBackdrop } from '@/components/ui/glass/glass-backdrop';
+import { INPUT_LINE, glassCardStyle, glassRowSub } from '@/components/ui/glass/primitive-styles';
+import { glassHeroWell, glassStackRow } from '@/components/ui/glass/screens/admin';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Mono } from '@/components/ui/text';
@@ -31,7 +37,7 @@ import { CONNECTION_FAILURE_COPY } from '@/lib/connection-copy';
 import { resizeForUpload } from '@/lib/image-resize';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
-import { FONT } from '@/lib/theme';
+import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
 interface Turn {
@@ -61,6 +67,11 @@ interface Turn {
 export default function AIChat() {
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (inferred: DS-Components fields and cards as a native
+  // chat): the scene, the glass nav, the prompts as one grouped list, the
+  // assistant's answers on the grouped surface, the person's own in the
+  // accent, and the composer as a glass field on the floating glass.
+  const lg = useGlass();
   const [turns, setTurns] = React.useState<Turn[]>([]);
   // The session the route's answer named. A ref, not state: send() reads it
   // when it runs, so the photo flow's send() (from the render attachPhoto
@@ -280,14 +291,27 @@ export default function AIChat() {
   ];
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Sparkles size={14} color={c.ink3} strokeWidth={1.4} />
-            <Mono size={11} tracking={0.12} upper color={c.ink3}>
-              AI · BETA
+            <Sparkles
+              size={lg ? 16 : 14}
+              color={lg ? lg.g.accentText : c.ink3}
+              strokeWidth={lg ? 1.8 : 1.4}
+            />
+            <Mono
+              size={11}
+              tracking={0.12}
+              upper
+              color={c.ink3}
+              style={lg ? [lg.font.displaySemi, GLASS_CHAT_TITLE, { color: c.ink }] : undefined}
+              accessibilityRole={lg ? 'header' : undefined}
+              maxFontSizeMultiplier={lg ? capTo(17, TYPE_CEILING.chrome) : undefined}
+            >
+              {lg ? 'AI · Beta' : 'AI · BETA'}
             </Mono>
           </View>
           {/* New chat once the chat has started, hidden while an answer or a
@@ -324,9 +348,14 @@ export default function AIChat() {
                   backgroundColor: c.card,
                   alignItems: 'center',
                   justifyContent: 'center',
+                  ...(lg ? glassHeroWell(lg) : null),
                 }}
               >
-                <Sparkles size={32} color={c.ink} strokeWidth={1.3} />
+                <Sparkles
+                  size={32}
+                  color={lg ? lg.g.accentText : c.ink}
+                  strokeWidth={lg ? 1.8 : 1.3}
+                />
               </View>
               <View style={{ alignItems: 'center', gap: 8 }}>
                 <Display size={22} style={{ textAlign: 'center' }}>
@@ -336,18 +365,37 @@ export default function AIChat() {
                   Natural-language queries with real reads + drafts.
                 </Body>
               </View>
-              <View style={{ gap: 8, width: '100%' }}>
+              <View style={{ gap: lg ? 0 : 8, width: '100%' }}>
                 {examples.map((ex) => (
                   <Pressable
                     key={ex}
                     onPress={() => setInput(ex)}
                     accessibilityRole="button"
-                    style={({ pressed }) => ({ opacity: pressed ? 0.85 : 1 })}
+                    style={({ pressed }) =>
+                      lg
+                        ? { transform: [{ scale: pressed ? 0.98 : 1 }] }
+                        : { opacity: pressed ? 0.85 : 1 }
+                    }
                   >
-                    <Card padding={12}>
+                    <Card
+                      padding={12}
+                      style={
+                        lg
+                          ? glassStackRow(lg, ex === examples[0], ex === examples[examples.length - 1])
+                          : undefined
+                      }
+                    >
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <Sparkles size={12} color={c.ink4} strokeWidth={1.5} />
-                        <Body size={13} color={c.ink2} style={{ flex: 1, fontFamily: FONT.displayRegular }}>
+                        <Sparkles
+                          size={lg ? 16 : 12}
+                          color={lg ? lg.g.accentText : c.ink4}
+                          strokeWidth={lg ? 1.8 : 1.5}
+                        />
+                        <Body
+                          size={lg ? 16 : 13}
+                          color={lg ? c.ink : c.ink2}
+                          style={{ flex: 1, fontFamily: FONT.displayRegular }}
+                        >
                           {ex}
                         </Body>
                       </View>
@@ -361,9 +409,26 @@ export default function AIChat() {
           )}
         </ScrollView>
 
-        <View style={[styles.inputBar, { backgroundColor: c.paper, borderTopColor: c.hair }]}>
+        <View
+          style={[
+            styles.inputBar,
+            { backgroundColor: c.paper, borderTopColor: c.hair },
+            lg && GLASS_CHAT_BAR,
+          ]}
+        >
+          {lg ? <GlassBackdrop variant="floating" radius={0} /> : null}
           {/* The composer is a control: the stronger border, as the shared Field. */}
-          <View style={[styles.inputBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
+          <View
+            style={[
+              styles.inputBox,
+              { backgroundColor: c.card, borderColor: c.hair2 },
+              lg && {
+                backgroundColor: lg.g.fieldFill,
+                borderColor: INPUT_LINE[lg.mode],
+                borderRadius: 24,
+              },
+            ]}
+          >
             <Pressable
               onPress={attachPhoto}
               disabled={uploading || busy}
@@ -388,7 +453,7 @@ export default function AIChat() {
               placeholderTextColor={c.ink3}
               accessibilityLabel="Message StockPilot"
               multiline
-              style={[styles.input, { color: c.ink }]}
+              style={[styles.input, { color: c.ink }, lg && lg.font.displayRegular]}
             />
             {/* A 44pt frame around the same 36pt circle; it was a nameless
                 icon with no role, so VoiceOver could not find Send. */}
@@ -409,6 +474,7 @@ export default function AIChat() {
                     // vanished on the composer there.
                     backgroundColor: input.trim() && !busy ? c.ink : c.sunk,
                   },
+                  lg && { backgroundColor: input.trim() && !busy ? lg.g.accent : lg.ios.fill },
                 ]}
               >
                 {/* While it sends, the box is cleared and the circle is the
@@ -417,7 +483,13 @@ export default function AIChat() {
                 {busy ? (
                   <ActivityIndicator size="small" color={c.ink} />
                 ) : (
-                  <Send size={16} color={input.trim() ? c.paper : c.ink4} strokeWidth={1.6} />
+                  <Send
+                    size={16}
+                    color={
+                      lg ? (input.trim() ? lg.g.onAccent : c.ink3) : input.trim() ? c.paper : c.ink4
+                    }
+                    strokeWidth={lg ? 1.8 : 1.6}
+                  />
                 )}
               </View>
             </Pressable>
@@ -430,6 +502,7 @@ export default function AIChat() {
 
 function Bubble({ turn }: { turn: Turn }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const isUser = turn.role === 'user';
   return (
     <View style={{ alignItems: isUser ? 'flex-end' : 'flex-start' }}>
@@ -451,16 +524,24 @@ function Bubble({ turn }: { turn: Turn }) {
           backgroundColor: isUser ? c.ink : c.card,
           borderWidth: isUser ? 0 : 1,
           borderColor: c.hair,
+          ...(lg
+            ? isUser
+              ? { backgroundColor: lg.g.accent, borderRadius: 20 }
+              : { ...glassCardStyle(lg), borderRadius: 20 }
+            : null),
         }}
       >
         {turn.content.length > 0 ? (
-          <Body size={14.5} color={isUser ? c.paper : c.ink}>
+          <Body
+            size={lg ? 16 : 14.5}
+            color={lg ? (isUser ? lg.g.onAccent : c.ink) : isUser ? c.paper : c.ink}
+          >
             {turn.content}
           </Body>
         ) : turn.streaming ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <ActivityIndicator size="small" color={isUser ? c.paper : c.ink} />
-            <Mono size={11} tracking={0.04} color={c.ink3}>
+            <Mono size={11} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined}>
               thinking…
             </Mono>
           </View>
@@ -469,6 +550,12 @@ function Bubble({ turn }: { turn: Turn }) {
     </View>
   );
 }
+
+/** Liquid Glass: the nav title's words (.ios-nav .ttl [701], 17/600). */
+const GLASS_CHAT_TITLE = { fontSize: 17, letterSpacing: -0.4, textTransform: 'none' } as const;
+
+/** Liquid Glass: the composer's bar on the floating glass, no rule over it. */
+const GLASS_CHAT_BAR = { backgroundColor: 'transparent', borderTopWidth: 0 } as const;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

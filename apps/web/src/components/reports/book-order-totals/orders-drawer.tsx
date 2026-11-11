@@ -272,8 +272,9 @@ export function BookOrdersDrawer({
       <SheetContent
         side="right"
         className="flex flex-col gap-0 p-0 sm:max-w-xl md:max-w-2xl lg:max-w-2xl"
+        data-glass-role="bot-orders-drawer"
       >
-        <SheetHeader className="pr-12">
+        <SheetHeader className="pr-12" data-glass-role="bot-drawer-head">
           <SheetTitle>{title}</SheetTitle>
           <SheetDescription>
             {answer?.book
@@ -283,7 +284,7 @@ export function BookOrdersDrawer({
                 : BOOK_REPORT_UI.loadingOrders}
           </SheetDescription>
         </SheetHeader>
-        <SheetBody>
+        <SheetBody data-glass-role="bot-drawer-body">
           {answer && itemId ? (
             <OrdersBody
               answer={answer}
@@ -372,6 +373,7 @@ function OrdersBody({
     <div className="space-y-4">
       <dl
         data-drawer-scope
+        data-glass-role="bot-drawer-scope"
         className="border-border grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-2 rounded-lg border px-4 py-3 text-[13px] leading-5"
       >
         <dt className="text-muted-foreground">{BOOK_REPORT_DRAWER_TERMS.book}</dt>
@@ -413,7 +415,10 @@ function OrdersBody({
       {answer.rows.length === 0 ? (
         <p className="text-muted-foreground text-[13.5px]">{BOOK_REPORT_EMPTY}</p>
       ) : (
-        <div className="border-border overflow-x-auto rounded-lg border">
+        <div
+          className="border-border overflow-x-auto rounded-lg border"
+          data-glass-role="bot-drawer-table"
+        >
           <table className="w-full text-[13px]">
             <caption className="sr-only">{bookReportDrawerHeader(book, answer.totals)}</caption>
             <thead className="bg-sunk text-muted-foreground border-border border-b text-[11px] uppercase leading-[16.5px] tracking-[0.06em]">

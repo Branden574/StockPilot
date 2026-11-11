@@ -1,0 +1,217 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+              "Reports"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            "13"
+            " pre-baked reports."
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <span data-tour="reports">
+        <span data-pdf="/api/reports/inventory-snapshot/pdf">
+  <ul class="grid grid-cols-1 gap-3 md:grid-cols-2" role="list">
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/inventory-valuation">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-dollar-sign h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <line x1="12" x2="12" y1="2" y2="22">
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Inventory valuation"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Cost basis · per item, per warehouse, per category"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/stock-movements">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-arrow-left-right h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M8 3 4 7l4 4">
+            <path d="M4 7h16">
+            <path d="m16 21 4-4-4-4">
+            <path d="M20 17H4">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Stock movement summary"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "By movement type · top movers · last 30 days"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/reorder-forecast">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-triangle-alert lucide-alert-triangle h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+            <path d="M12 9v4">
+            <path d="M12 17h.01">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Reorder forecast"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Items at or below reorder point + estimated refill cost"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/shrinkage">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-circle-minus lucide-minus-circle h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10">
+            <path d="M8 12h8">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Shrinkage & adjustments"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Negative adjustments · cost impact · last 30 days"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/supplier-scorecard">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-truck h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2">
+            <path d="M15 18H9">
+            <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14">
+            <circle cx="17" cy="18" r="2">
+            <circle cx="7" cy="18" r="2">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Supplier scorecard"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "On-time rate · lead time · fill rate · spend · last 90 days"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/velocity-class">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-trending-up h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16 7h6v6">
+            <path d="m22 7-8.5 8.5-5-5L2 17">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Velocity classes (ABC)"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Items ranked A→D by dollars-out — focus stocking + spot dead stock"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/dead-stock">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-clock h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="12" cy="12" r="10">
+            <path d="M12 6v6l4 2">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Dead stock"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "On-hand items with no out-movement, ranked by carrying value"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/bundle-activity">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-package h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z">
+            <path d="M12 22V12">
+            <polyline points="3.29 7 12 12 20.71 7">
+            <path d="m7.5 4.27 9 5.15">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Bundle activity"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Distribution runs by bundle · kits out · component cost out"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/bundle-shortages">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-package-x h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 22V12">
+            <path d="m16.5 14.5 5 5">
+            <path d="m16.5 19.5 5-5">
+            <path d="M21 10.5V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.729l7 4a2 2 0 0 0 2 .001l.13-.074">
+            <path d="M3.29 7 12 12l8.71-5">
+            <path d="m7.5 4.27 8.997 5.148">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Bundle shortages"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Components that ran short during distribution, grouped by item"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/item-cost-history">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-trending-up h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16 7h6v6">
+            <path d="m22 7-8.5 8.5-5-5L2 17">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Item cost history"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Unit cost over time by supplier — from PO + receipt history"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/book-order-totals">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-book-open h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 5v16">
+            <path d="M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Book Order Totals"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Book covers, quantities requested, and the orders behind each total."
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/lot-expiry">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-calendar-clock h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M16 14v2.2l1.6 1">
+            <path d="M16 2v3">
+            <path d="M21 7.338V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2h2.338">
+            <path d="M3 9h5.859">
+            <path d="M8 2v3">
+            <circle cx="16" cy="16" r="6">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Aging & expiry"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Lots by days-to-expiry · near-expiry & expired flagged"
+    <li class="min-w-0">
+      <a class="border-border bg-card hover:bg-muted group flex h-full min-w-0 items-start gap-3 rounded-lg border px-[18px] py-4 transition-colors hover:border-[var(--ed-line-strong)]" href="/dashboard/reports/lot-trace">
+        <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 shrink-0 items-center justify-center rounded-md border">
+          <svg aria-hidden="true" class="lucide lucide-recycle h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M7 19H4.815a1.83 1.83 0 0 1-1.57-.881 1.785 1.785 0 0 1-.004-1.784L7.196 9.5">
+            <path d="M11 19h8.203a1.83 1.83 0 0 0 1.556-.89 1.784 1.784 0 0 0 0-1.775l-1.226-2.12">
+            <path d="m14 16-3 3 3 3">
+            <path d="M8.293 13.596 7.196 9.5 3.1 10.598">
+            <path d="m9.344 5.811 1.093-1.892A1.83 1.83 0 0 1 11.985 3a1.784 1.784 0 0 1 1.546.888l3.943 6.843">
+            <path d="m13.378 9.633 4.096 1.098 1.097-4.096">
+        <span class="min-w-0 flex-1">
+          <span class="flex items-center justify-between gap-2">
+            <span class="text-foreground text-[13.5px] font-medium leading-5">
+              "Recall / lot trace"
+            <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 [.group:focus-visible_&]:opacity-100" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m9 18 6-6-6-6">
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18.75px]">
+            "Trace a lot number across receipts + picks"

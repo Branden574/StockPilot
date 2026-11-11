@@ -164,6 +164,11 @@ PGTAP_TESTS=(
   # Per-person release state. Own-row RLS is the control, and its writer is
   # SECURITY INVOKER precisely so it has no power beyond those policies.
   supabase/tests/0353_user_release_state.test.sql
+  # A person's chosen appearance (Liquid Glass, 0418 placeholder number):
+  # own-row RLS on the same shape, no delete, anon has nothing, only the known
+  # Design and Theme words are stored and a row with neither is refused, a
+  # save of one column keeps the other, and the row goes with the account.
+  supabase/tests/0418_user_appearance.test.sql
   supabase/tests/0354_module_enabled_honours_comp.test.sql
 
   # Direct-write lockdown (Phase 0 S1/S2, 2026-09-24): the ledger flag and the
@@ -1923,6 +1928,14 @@ CORE_TESTS=(
   # link, so a link can add no recipient or parameter and opens only the
   # address the screen shows.
   src/email/mailto-link.test.ts
+  # Appearance sync (Liquid Glass): one person's unsaved or synced choice is
+  # never written under, or adopted by, another account on the same device; an
+  # unsaved choice not known to be in step with the account is checked against
+  # the account's row first; a choice made signed out reaches only an account
+  # that signs in in the same flow within 30 minutes, and only where its row
+  # holds nothing; a malformed stored or account value is dropped and counts
+  # as never chosen.
+  src/appearance/reconcile.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -27,6 +27,155 @@ import type { Release } from '@stockpilot/core';
  * change. docs/releases/PUBLISHING.md is the workflow.
  */
 export const RELEASES: Release[] = [
+  // DRAFT: the Liquid Glass release (RELEASE.md section 2 item 4), from
+  // docket-2026-10-24/whatsnew-lg/registry-release.ts, written 2026-11-09
+  // against feat/liquid-glass b64bd37cc and added here at cb4f4949d. A draft
+  // never leaves the server (logic.ts visibleReleases and registryFingerprint;
+  // registry.liquid-glass-draft.test.ts). Publish at G5 only, after the G3
+  // phone update shows iOS launches: status 'published', publishedAt the whole
+  // minute at or after both the web default deployment going live and the
+  // first iOS launch, the re-pins of RELEASE.md R-6, and every line marked
+  // RECHECK below read again at the release head and the marker removed
+  // (RECHECK is deliberately not a word the publish guard looks for, so grep
+  // this block for it before publishing).
+  {
+    id: 'liquid-glass-2026-11',
+    revision: 1,
+    // Liquid Glass: web G2b (NEXT_PUBLIC_LIQUID_GLASS=default) and phone G3 (OTA for runtime 1.4.0 with
+    // EXPO_PUBLIC_LIQUID_GLASS=default). Claims checked against b64bd37cc:
+    // - Design and Theme words: apps/web/src/components/theme/appearance-select.tsx:51-77 (Liquid Glass, Classic;
+    //   Light, Dark, System); phone apps/mobile/src/lib/appearance/labels.ts:31-44.
+    // - Day/Night by Theme: appearance-select.tsx:55 ("Day or Night follows your Theme"); plan D3 (revised R1, R2).
+    // - Account menu: components/dashboard/user-menu.tsx:182-204 (Design above Theme, only when the build has glass);
+    //   trigger named "Account menu for ..." (:104). Header menu: components/theme/theme-toggle.tsx:79-94; in the
+    //   dashboard top bar only from 680 px of bar width (components/dashboard/topbar.tsx:329-331); on the sign-in pages
+    //   ((auth)/layout.tsx:72,80), invite, onboarding, marketing headers, external pages (external-shell.tsx:132:
+    //   RECHECK until stage 4 lane L2a is merged and walked; README RECHECK 3).
+    // - Settings > Profile > Appearance: settings/profile/page.tsx:101-110, components/settings/appearance-panel.tsx
+    //   (status lines appearance-select.tsx:135-150).
+    // - Intro notice: appearance-provider.tsx:207-211 (web), phone labels.ts:108-114 (Home card).
+    // - Crash fallback and recovery: appearance-provider.tsx:207 ("Liquid Glass hit a problem, so StockPilot opened in
+    //   the classic look."), the error boundaries' Use classic design (app/error.tsx:57, (dashboard)/error.tsx:101,
+    //   global-error.tsx:253).
+    // - Account sync: server/actions/appearance.ts (self row only); the web reads the row when the dashboard names the
+    //   person (appearance-provider.tsx:166-171); the phone reads it at the first start of the new JS within the 4 s
+    //   cap and later at a calm moment (REVISION-DEFAULT R9). RECHECK on the lab walk: a Theme chosen on the phone is
+    //   adopted by the web, and the reverse.
+    // - Print and documents never glass: EXEMPT_PATHS (appearance-flag.ts:47) for the order print page; the signature
+    //   pad and label sheet carry data-appearance-exempt; emails and server PDFs are not rendered by the web app's CSS
+    //   (plan Q15, 4.8). RECHECK stage 4 kept every print, PDF, export and signature output unchanged.
+    // - Accessibility (web): styles/liquid-glass/materials.css:73-91 (prefers-reduced-transparency or
+    //   prefers-contrast: more: no blur, opaque materials), :92-107 (the same under data-lg-material="reduced"),
+    //   :109 on (forced-colors: system colours); the reduced attribute is set only on browsers that report
+    //   deviceMemory, at 2 GB or less or 2 cores or less (appearance-script.ts:80-84), i.e. Chromium browsers.
+    //   Safari and Firefox do not report Reduce transparency (REVISION-DEFAULT R11, verified there).
+    // - Phone material: apps/mobile/src/lib/appearance/material.ts selectMaterial (glass on iOS 26+ with the module;
+    //   blur below; opaque with Reduce Transparency, a low-end device: year class before 2019 or under 3 GB, Android).
+    //   RECHECK until the REAL iOS 26 iPhone walk after G3 (RELEASE.md section 6 step 6; DECISIONS "RELEASE PREP
+    //   REVIEW" item 3): "On iOS 26 and later the bars use Apple's Liquid Glass" rests on build 54 linking
+    //   expo-glass-effect, which is inferred (expo-router's native stack needs it), not yet seen on a real device. If
+    //   the walk shows frosted bars on iOS 26, drop the sentence here and in appstore-whats-new.txt (README RECHECK 10).
+    // - "Chrome and Edge ... little memory or few processor cores": isLowPowerBrowser (appearance-script.ts:80-84):
+    //   deviceMemory reported AND (2 GB or less OR 2 cores or less).
+    //   Tab bar capsule and round Scan button: plan 5.2 / IosTabBar board, built in stage 4 lane native-core: RECHECK.
+    // - Phone Theme now forces Light or Dark: labels.ts:41-43 and os-scheme.ts (REVISION-DEFAULT R9, "Dark or Light
+    //   fixes the OS scheme in both designs"): RECHECK on the simulator.
+    // - Phone footnote: labels.ts:88-89.
+    // - Phones before 1.4.0: runtimeVersion appVersion (app.config.ts:51-53), the OTA targets 1.4.0 only (R9).
+    // - "Every page ... still there": BRIEF (every feature stays) and the stage 5 parity and coverage checks: RECHECK
+    //   when stage 4 and 5 are done.
+    // - The stockroom picture: the scene illustrations (stage3/scene-assets.md), shipped once lg/scene-assets is
+    //   merged: RECHECK.
+    // Who is told: every entry has no audience (every member sees the look); the one link is
+    // /dashboard/settings/profile, which registry.test.ts:561-570 lists as open to every member.
+    status: 'draft',
+    title:
+      'StockPilot opens in a new look, Liquid Glass, and the previous design is one choice away',
+    summary:
+      'StockPilot now opens in Liquid Glass, a new look on the web and, after the latest update, in the mobile app. Day glass goes with your Light theme and Night glass with Dark, and System follows your device. Every page and button is still there under the same name. To use the previous look, choose Design, Classic in your account menu on the web, or in Settings, Appearance in the mobile app. Your choice is saved to your account.',
+    // RECHECK at publish: the instant (see the header). This placeholder keeps the registry newest-first.
+    // Moved when main was merged in after #493 and #494 (2026-11-10; was: '2026-11-09T12:00:00Z'): the Add all
+    // release below is dated 2026-11-10T21:50:00Z, and dates must not increase going down, so the placeholder is
+    // that same minute. Move it again whenever a release is published below this draft.
+    publishedAt: '2026-11-10T21:50:00Z',
+    entries: [
+      {
+        id: 'liquid-glass-web',
+        category: 'new',
+        area: 'Web app',
+        title: 'The web app and the website open in Liquid Glass',
+        // RECHECK until stage 4 is merged and walked (lane L2a): "the pages people open from a link" have the glass look
+        // and show the appearance menu in their corner (external-shell.tsx:132 at b64bd37cc; README RECHECK 3).
+        whatChanged:
+          "The web app, the sign-in pages, the pages people open from a link and the public website now open in Liquid Glass: frosted panels over a soft picture of a stockroom, with a green accent. Day glass goes with the Light theme and Night glass with Dark. With System, StockPilot follows your device's light or dark setting, as before.",
+        whyItMatters:
+          'Liquid Glass is the new standard StockPilot design. The previous design stays available, unchanged, for anyone who prefers it.',
+        howItAffectsYou:
+          'Some pages are laid out differently, but every page, tab, filter, button, export and setting is still there under the same name, and what each member can do has not changed. Printed pages, PDFs, labels and emails keep their current look. Your Light, Dark or System choice is kept and now picks Day or Night glass.',
+        whatToDo:
+          'No action needed. To use the previous look, open your account menu at the top right and choose Design, Classic.',
+      },
+      {
+        id: 'liquid-glass-design-choice',
+        category: 'new',
+        area: 'Appearance',
+        title: 'Choose Liquid Glass or Classic in your account menu or in Settings',
+        whatChanged:
+          'A Design choice, Liquid Glass or Classic, now sits above Theme in your account menu at the top right, in the appearance menu at the top of the sign-in and public pages (and of the app on wider screens), and in Settings, Profile, under Appearance. Classic is the previous design. The first time you see Liquid Glass after signing in, a message offers Use classic design and Keep Liquid Glass.',
+        whyItMatters:
+          'Some people prefer the previous design, and switching back should take one choice, not a search through Settings.',
+        howItAffectsYou:
+          'A choice applies at once, without reloading the page. When you are signed in it is saved to your account, so StockPilot uses it when you sign in on another computer, and Settings, Profile says whether it was saved. If Liquid Glass ever fails to show a page, StockPilot opens it in Classic once and says so, and error pages offer Use classic design.',
+        whatToDo:
+          'No action needed. To switch, open your account menu and choose Design, then Classic or Liquid Glass.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
+      },
+      {
+        id: 'liquid-glass-accessibility',
+        category: 'new',
+        area: 'Accessibility',
+        title: 'Liquid Glass follows your accessibility settings',
+        whatChanged:
+          'With Increase contrast turned on, or Reduce transparency in Chrome or Edge, Liquid Glass shows solid panels with nothing blurred behind them, and with a Windows contrast theme it uses your system colours. Chrome and Edge also show the solid panels on their own on computers with little memory or few processor cores.',
+        whyItMatters:
+          'Frosted panels can be harder to read for some people, and they take more work for older computers to draw.',
+        howItAffectsYou:
+          "Safari and Firefox do not tell websites when Reduce transparency is on. If you use one of them and want solid panels, turn on Increase contrast in your computer's accessibility settings, or choose Classic.",
+        whatToDo: 'No action needed.',
+      },
+      // The two phone entries are true only once phones have the G3 update: publish this release after the iOS
+      // launches show (G5). For a web-first publish use registry-release-web-only.ts instead.
+      {
+        id: 'liquid-glass-mobile-app',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'The mobile app opens in Liquid Glass after the latest update',
+        // RECHECK until the real iOS 26 walk after G3: the sentence "On iOS 26 and later the bars use Apple's Liquid
+        // Glass" (see the Phone material note in the header; README RECHECK 10).
+        whatChanged:
+          "After the latest update, the mobile app on iPhone and iPad opens in Liquid Glass too, with the tab bar floating above the screen and Scan as a round button beside it when Scan is one of your tabs. On iOS 26 and later the bars use Apple's Liquid Glass, and on earlier versions they are frosted. With Reduce Transparency on, and on older iPhones and iPads with less memory, they are solid.",
+        whyItMatters:
+          'The mobile app and the web now share one look, and the previous design stays available in the app too.',
+        howItAffectsYou:
+          'The look changes when the app restarts for the update, never in the middle of a scan or a count. Your tabs, screens and steps are the same. If you chose Classic on the web, the app uses it once it has read your account, usually as it opens. Home shows a one-time card with Use classic design and Keep Liquid Glass. Phones on app versions before 1.4.0 keep the previous look until they update from the App Store.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To use the previous look, open Settings, Appearance and choose Classic.',
+      },
+      {
+        id: 'mobile-appearance-settings',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Settings in the mobile app has an Appearance page with Design and Theme',
+        whatChanged:
+          'In the mobile app, Settings, Appearance replaces the Theme row. It has Design (Liquid Glass or Classic) and Theme (Light, Dark or System). Light and Dark now keep the app light or dark whatever your phone is set to, and System follows your phone, as the app always did.',
+        whyItMatters:
+          "Before, the app always followed your phone's light or dark setting, with no way to choose.",
+        howItAffectsYou:
+          'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
   {
     id: 'order-add-all-2026-11',
     revision: 1,
