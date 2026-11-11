@@ -42,6 +42,7 @@ import { AddItemCard, type UpcLookupResult } from '@/components/AddItemCard';
 import { SignaturePadModal } from '@/components/signature-pad-modal';
 import { Button } from '@/components/ui/button';
 import { CachedImage } from '@/components/ui/cached-image';
+import { CameraGround } from '@/components/ui/glass/camera-ground';
 import { withGlass } from '@/components/ui/glass/merge-styles';
 import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
@@ -1049,6 +1050,9 @@ export default function Scan() {
 
   return (
     <View style={styles.container}>
+      {/* Liquid Glass: this page is dark in every scheme, and the tab bar
+          over it draws its Night look while this page is mounted (LG-1). */}
+      {lg ? <CameraGround /> : null}
       {/* The camera bar is dark in both modes, so the clock and battery over
           it are light while this tab is the one on screen and neither the
           drawer nor the signature pad covers the bar. */}

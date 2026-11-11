@@ -1,6 +1,8 @@
 import type { AppearanceStyle } from '@stockpilot/core';
 
+import type { ThemeMode } from '../theme';
 import type { GlassMaterial } from './material';
+import { themeValueFor, type ThemeValue } from './theme-value';
 
 /**
  * The bottom bar's geometry per style, and the height it reports
@@ -90,4 +92,42 @@ export function tabBarKind(style: AppearanceStyle, os: string): TabBarKind {
 /** The capsule's right edge: room for the Scan circle only when Scan is in the bar. */
 export function glassCapsuleRight(hasScan: boolean): number {
   return hasScan ? GLASS_IOS_TAB_BAR.rightWithScan : GLASS_IOS_TAB_BAR.right;
+}
+
+/** The colours and scheme the iOS glass bar draws with. */
+export interface GlassTabBarLook {
+  /** The scheme the capsule's glass (or its solid fallback) is drawn in. */
+  scheme: ThemeMode;
+  /** Icons and labels of the tabs that are not selected. */
+  ink: string;
+  /** The selected tab, and the Scan glyph on glass. */
+  accentText: string;
+  /** The selected Scan circle's fill and the glyph on it. */
+  accent: string;
+  onAccent: string;
+  /** A fill laid inside the capsule, under the tabs; null for none. */
+  cameraFill: string | null;
+}
+
+/**
+ * The bar's look (LG-1). Everywhere but over the Scan camera it is the
+ * theme's own, unchanged. Over the camera the page is dark in every scheme
+ * and the small capsule's system glass goes dark with it, so the bar draws
+ * the Night look: Night ink and accent, the Night scheme for the surface, and
+ * on the glass material the Night sheet fill (--glass-strong, ink at 70%)
+ * inside the capsule. The fill is what makes the words independent of the
+ * glass: pointed at something bright the glass may turn light again, and the
+ * Night ink still reads at 5.5:1 on the fill over white (16.6:1 over black).
+ * The solid and opaque bars are already a fixed colour and take no fill.
+ */
+export function glassTabBarLook(theme: ThemeValue, overCamera: boolean): GlassTabBarLook {
+  const t = overCamera ? themeValueFor(theme.style, 'dark', theme.material, theme.scene) : theme;
+  return {
+    scheme: t.mode,
+    ink: t.c.ink,
+    accentText: t.g?.accentText ?? t.c.accent,
+    accent: t.g?.accent ?? t.c.accent,
+    onAccent: t.g?.onAccent ?? t.c.accentInk,
+    cameraFill: overCamera && t.material === 'glass' && t.g ? t.g.glassStrong : null,
+  };
 }

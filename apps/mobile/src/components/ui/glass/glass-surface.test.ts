@@ -100,6 +100,41 @@ describe('GlassSurface', () => {
     }
   });
 
+  // LG-1: over the Scan camera the tab capsule is drawn in the Night scheme
+  // whatever the theme is, so the surface takes a scheme of its own.
+  it('a scheme of its own: the GlassView, the solid bar and the opaque bar are drawn in it', () => {
+    const day = (material: 'glass' | 'blur' | 'opaque') => ({
+      ...glassTheme(material),
+      style: 'liquid-glass',
+      scene: material !== 'opaque',
+    });
+    env.theme = day('glass');
+    env.glassView = 'GlassView';
+    const glass = GlassSurface({ variant: 'floating', radius: 32, scheme: 'dark' }) as Node;
+    expect(glass.type).toBe('GlassView');
+    expect(glass.props.colorScheme).toBe('dark');
+
+    env.theme = day('blur');
+    env.glassView = null;
+    const solid = GlassSurface({
+      variant: 'floating',
+      radius: 32,
+      solid: true,
+      scheme: 'dark',
+    }) as Node;
+    expect(flatStyle(solid).backgroundColor).toBe(GLASS_IOS_TOKENS.dark.card);
+
+    env.theme = day('opaque');
+    const opaque = GlassSurface({ variant: 'floating', radius: 32, scheme: 'dark' }) as Node;
+    expect(flatStyle(opaque).backgroundColor).toBe(GLASS_TOKENS.nightOpaque.chrome);
+
+    // The theme's own scheme asked for by name changes nothing.
+    env.theme = day('glass');
+    env.glassView = 'GlassView';
+    const same = GlassSurface({ variant: 'floating', radius: 32, scheme: 'light' }) as Node;
+    expect(same.props.colorScheme).toBe('light');
+  });
+
   it('in classic (never asked for glass) it still draws a readable classic card', () => {
     env.theme = { c: palette('dark'), g: null, ios: null, material: 'opaque', mode: 'dark' };
     const n = GlassSurface({ variant: 'floating', radius: 10 }) as Node;

@@ -182,6 +182,46 @@ describe('tab bar', () => {
     );
   });
 
+  // LG-1: over the Scan camera the capsule went near-black in Day and its
+  // Day-ink icons and labels with it. The Scan tab's camera page says it is
+  // on screen, and the bar then draws the Night look with the Night sheet fill.
+  it('over the Scan camera the bar draws the Night look and its fill, from one look', () => {
+    expect(bar).toContain(
+      'const overCamera = useCameraGround() && state.routes[state.index]?.name === SCAN_ROUTE;',
+    );
+    expect(bar).toContain('const look = glassTabBarLook(theme, overCamera);');
+    // No colour of the bar is read past the look: the old fixed Day ink is gone.
+    expect(bar).not.toContain('const color = focused ? accentText : c.ink;');
+    expect(bar).toContain('const color = focused ? look.accentText : look.ink;');
+    expect(bar).toContain('const selectedFill = withAlpha(look.ink, 0.08);');
+    expect((bar.match(/scheme=\{look\.scheme\}/g) ?? []).length).toBe(2);
+    expect(bar).toContain(
+      '{look.cameraFill ? ( <View pointerEvents="none" style={[styles.fill, { borderRadius: m.radius, backgroundColor: look.cameraFill }]} /> ) : null}',
+    );
+    // The fill is under the tabs, inside the capsule.
+    expect(bar.indexOf('look.cameraFill ? (')).toBeGreaterThan(bar.indexOf('variant="floating"'));
+    expect(bar.indexOf('look.cameraFill ? (')).toBeLessThan(
+      bar.indexOf('<View accessibilityRole="tablist" style={styles.tabs}>'),
+    );
+    expect(bar).toContain('const color = focused ? look.onAccent : look.accentText;');
+    expect(bar).toContain('backgroundColor: look.accent }');
+  });
+
+  it('the Scan tab holds the camera ground only on its camera page, and only in Liquid Glass', () => {
+    const scan = flat('app/(drawer)/(tabs)/scan.tsx');
+    const held = scan.indexOf('{lg ? <CameraGround /> : null}');
+    expect(held).toBeGreaterThan(-1);
+    expect(scan.match(/<CameraGround \/>/g)).toHaveLength(1);
+    // After both early returns: the permission pages sit over the Day or
+    // Night scene and keep the ordinary capsule.
+    expect(held).toBeGreaterThan(scan.indexOf('if (!permission.granted) {'));
+    expect(held).toBeGreaterThan(scan.indexOf('<View style={styles.container}>'));
+    expect(held).toBeLessThan(scan.indexOf('style={styles.cameraBar}'));
+    expect(flat('src/components/ui/glass/camera-ground.tsx')).toContain(
+      'React.useEffect(() => retainCameraGround(), []);',
+    );
+  });
+
   it('every tab is a selected-aware tab for VoiceOver', () => {
     expect((bar.match(/accessibilityRole="tab"/g) ?? []).length).toBe(3);
     expect((bar.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(3);
