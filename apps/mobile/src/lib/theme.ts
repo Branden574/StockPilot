@@ -241,22 +241,40 @@ export const CLASSIC_FONT: FontSet = {
 };
 
 /**
+ * The system face by name. React Native resolves 'system-ui' to the system
+ * font itself on iOS (RCTFontUtils.mm: the default system design, San
+ * Francisco, Text or Display chosen by size); Android has no family of that
+ * name and falls back to its default, Roboto.
+ *
+ * The glass faces NAME the system face instead of leaving the family unset,
+ * because a glass face is laid after a primitive's Classic family in a style
+ * array (`[classic, lg && glass]`) and React Native diffs that array entry by
+ * entry: a key that is present but undefined is skipped when its entry comes
+ * or goes ("was already empty anyway", ReactNativeAttributePayload.js), so
+ * after a Design switch without a relaunch the texts that stayed mounted kept
+ * the other look's typeface (Home's "Tour" chip kept its glass width in
+ * Classic). A defined value is sent, and restored, both ways.
+ */
+export const GLASS_SYSTEM_FAMILY = 'system-ui';
+
+/**
  * Liquid Glass type families (plan 5.3 "Native typography"): the system face
- * on Apple platforms (fontFamily left unset gives San Francisco, Text or
- * Display chosen by size) and the platform default, Roboto, on Android, with
- * the weight carried by fontWeight. Glass never uses Inter Tight or Instrument
- * Serif: the serif emphasis role is the system face in italic. References
- * (SKU, ISBN) keep the bundled JetBrains Mono: the artifact's stack is
- * ui-monospace, "SF Mono", "JetBrains Mono", and React Native cannot select SF
- * Mono by name, so the artifact's own next fallback is used (recorded).
+ * on Apple platforms (San Francisco, Text or Display chosen by size) and the
+ * platform default, Roboto, on Android, with the weight carried by
+ * fontWeight. Glass never uses Inter Tight or Instrument Serif: the serif
+ * emphasis role is the system face in italic. References (SKU, ISBN) keep the
+ * bundled JetBrains Mono: the artifact's stack is ui-monospace, "SF Mono",
+ * "JetBrains Mono", and React Native cannot select SF Mono by name, so the
+ * artifact's own next fallback is used (recorded).
  */
 export const GLASS_FONT: FontSet = {
-  // fontFamily is PRESENT and undefined on purpose: placed after a primitive's
-  // own family in a style array, it clears it, so the system face draws.
-  display: { fontFamily: undefined, fontWeight: '500' },
-  displayRegular: { fontFamily: undefined, fontWeight: '400' },
-  displaySemi: { fontFamily: undefined, fontWeight: '600' },
-  serifItalic: { fontFamily: undefined, fontWeight: '400', fontStyle: 'italic' },
+  // Every face carries a DEFINED family (GLASS_SYSTEM_FAMILY above): placed
+  // after a primitive's own family in a style array it replaces it, and it is
+  // taken away again when the look changes.
+  display: { fontFamily: GLASS_SYSTEM_FAMILY, fontWeight: '500' },
+  displayRegular: { fontFamily: GLASS_SYSTEM_FAMILY, fontWeight: '400' },
+  displaySemi: { fontFamily: GLASS_SYSTEM_FAMILY, fontWeight: '600' },
+  serifItalic: { fontFamily: GLASS_SYSTEM_FAMILY, fontWeight: '400', fontStyle: 'italic' },
   mono: { fontFamily: FONT.mono },
   monoRegular: { fontFamily: FONT.monoRegular },
 };
