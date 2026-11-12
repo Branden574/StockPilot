@@ -223,6 +223,14 @@ export interface MobileReturnWorkbench {
   /** RX-2: the REPLACEMENT column, the rail and the exchange facts
    *  (normalizeWorkbench fills it; read through returns-view exchangeOf). */
   exchange?: MobileReturnExchange;
+  /**
+   * F14: the organization's saved delivery-request mailboxes and the link
+   * back to this return, for "Email return request". Only the workbench READ
+   * carries it (an action's answer does not), and an older server sends
+   * none. Unread here on purpose: lib/return-request-actions.ts
+   * (returnRequestEmailFromWorkbench) reads it defensively.
+   */
+  returnRequestEmail?: unknown;
 }
 
 export interface MobileReturnStepResult {

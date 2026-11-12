@@ -126,6 +126,7 @@ import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { ReleaseReplacementSheet } from '@/components/release-replacement-sheet';
 import { RequesterReturnSheet } from '@/components/requester-return-sheet';
 import { RequesterTrackingCard } from '@/components/requester-tracking-card';
+import { ReturnRequestSection } from '@/components/return-request-section';
 import {
   requesterButtonShown,
   requesterEntryWords,
@@ -247,6 +248,12 @@ import {
   type DeliveryRequestOrderData,
 } from '@/lib/delivery-request-actions';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
+import {
+  anyReturnRequestSendable,
+  getReturnRequestEmailForOrder,
+  returnRequestContentForTracking,
+  type ReturnRequestEmailForOrder,
+} from '@/lib/return-request-actions';
 import {
   approveShortNotice,
   availableOrderActions,
@@ -827,6 +834,34 @@ export default function OrderDetail() {
     canReadReturns: canReadReturns === true,
   });
   const requesterScope = React.useMemo(() => (userId && orgId ? { userId, orgId } : null), [userId, orgId]);
+
+  // ── Return request (F14) ────────────────────────────────────────────────
+  // "Email return request" under each of the requester's own open requests:
+  // the web order page's "Send return request". The mailboxes and the
+  // order's facts come resolved from the server (GET
+  // .../return-request-email, the requester of the order only), read once
+  // the screen holds a request that could be written about, and never
+  // offline. The answer is kept with the order it was read for, so another
+  // order opened in this screen never shows it. Every decision is in
+  // lib/return-request-actions.
+  const returnRequestOrderId = order?.id ?? null;
+  const returnRequestWanted = anyReturnRequestSendable(returnsShown.tracking);
+  const [returnRequestRead, setReturnRequestRead] = React.useState<{
+    orderId: string;
+    email: ReturnRequestEmailForOrder | null;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!returnRequestOrderId || !returnRequestWanted || offline) return;
+    let cancelled = false;
+    void getReturnRequestEmailForOrder(returnRequestOrderId).then((email) => {
+      if (!cancelled) setReturnRequestRead({ orderId: returnRequestOrderId, email });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [returnRequestOrderId, returnRequestWanted, offline]);
+  const returnRequestEmail =
+    returnRequestRead && returnRequestRead.orderId === returnRequestOrderId ? returnRequestRead.email : null;
 
   // ── Delivery request ────────────────────────────────────────────────────
   // Mobile parity with the web order page's SendDeliveryRequestButton. Opens a
@@ -3806,9 +3841,24 @@ export default function OrderDetail() {
               {returnsShown.tracking.length > 0 ? (
                 <>
                   <Eyebrow>{RETURNS_COPY.requesterYourRequests}</Eyebrow>
-                  {returnsShown.tracking.map((t, i) => (
-                    <RequesterTrackingCard key={t.returnNumber ?? `${t.createdAt}-${i}`} request={t} />
-                  ))}
+                  {returnsShown.tracking.map((t, i) => {
+                    // F14: an open, numbered request with the mailboxes
+                    // saved carries the RETURN REQUEST section under its card.
+                    const content = returnRequestContentForTracking(t, returnRequestEmail);
+                    return (
+                      <React.Fragment key={t.returnNumber ?? `${t.createdAt}-${i}`}>
+                        <RequesterTrackingCard request={t} />
+                        {content && returnRequestEmail?.recipients && order ? (
+                          <ReturnRequestSection
+                            orderId={order.id}
+                            surface="order"
+                            content={content}
+                            recipients={returnRequestEmail.recipients}
+                          />
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
                 </>
               ) : null}
               {returnsShown.orderReturns.length > 0 || returnsShown.tracking.length === 0 ? (

@@ -1,6 +1,6 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useRouter } from 'expo-router';
-import { TriangleAlert, WifiOff } from 'lucide-react-native';
+import { TriangleAlert, WifiOff, Wrench } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
@@ -27,6 +27,7 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { ReturnActionSheet, type ReturnSheetMode } from '@/components/return-action-sheet';
+import { ReturnRequestSection } from '@/components/return-request-section';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -37,9 +38,17 @@ import { sentenceCase } from '@/components/ui/glass/screens/item';
 import { GLASS_NOTE, GLASS_WORKBENCH } from '@/components/ui/glass/screens/ops';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
+import { showWriteCta } from '@/lib/cta-gating';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOfflineState } from '@/lib/exceptions-api';
+import {
+  returnProblemLaunchParams,
+  returnRequestContentForWorkbench,
+  returnRequestEmailFromWorkbench,
+  type ReturnRequestEmailForReturn,
+} from '@/lib/return-request-actions';
 import {
   describeReturnError,
   getReturnWorkbench,
@@ -69,6 +78,7 @@ import {
   workbenchStillWaiting,
 } from '@/lib/returns-view';
 import { FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -121,6 +131,20 @@ export function ReturnWorkbenchView({
   const [busy, setBusy] = React.useState(false);
   const [sheet, setSheet] = React.useState<ReturnSheetMode | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  // F14: the mailboxes and the link for "Email return request", as the
+  // workbench READ answered them (GET /api/v1/returns/[id]
+  // `returnRequestEmail`). Kept apart from `wb` because an action's answer
+  // (the steps route) is a workbench without that field, and adopting it
+  // must not take the section away. An older server sends no field: no
+  // mailboxes, no section (lib/return-request-actions.ts).
+  const [requestEmail, setRequestEmail] = React.useState<ReturnRequestEmailForReturn>(NO_REQUEST_EMAIL);
+  // F14, "Report a problem": the item screen's two-part gate (the maintenance
+  // module on, and maintenance_requests:submit). Cosmetic: the form and the
+  // server check both again.
+  const enabledModules = useEnabledModules();
+  const permissions = useEffectivePermissions();
+  const canReportProblem =
+    enabledModules.has('maintenance_requests') && showWriteCta(permissions, 'maintenance_requests:submit');
 
   // Every read is numbered (the list's sequence guard): only the newest one
   // paints the screen, and an action's answer takes a number too (adopt), so
@@ -132,7 +156,10 @@ export function ReturnWorkbenchView({
     setLoadError(null);
     try {
       const next = await getReturnWorkbench(returnId);
-      if (reads.isCurrent(seq)) setWb(next);
+      if (reads.isCurrent(seq)) {
+        setWb(next);
+        setRequestEmail(returnRequestEmailFromWorkbench(next.returnRequestEmail));
+      }
     } catch (e) {
       if (reads.isCurrent(seq)) setLoadError(describeReturnError(e));
     } finally {
@@ -156,6 +183,7 @@ export function ReturnWorkbenchView({
     setWb(null);
     setSheet(null);
     setNotice(null);
+    setRequestEmail(NO_REQUEST_EMAIL);
   }
 
   React.useEffect(() => {
@@ -206,6 +234,11 @@ export function ReturnWorkbenchView({
   const r = wb.return;
   const ex = exchangeOf(wb);
   const hasExchange = ex.kind === 'exchange';
+  // F14: what the draft says, or null (no section): the mailboxes are
+  // missing, or the return is closed, denied, cancelled or has no number.
+  // Core's mapping of this workbench, the website's too; it never reads the
+  // notes or the denial reason.
+  const requestContent = returnRequestContentForWorkbench({ ...wb, exchange: ex }, requestEmail);
   const actions = workbenchActions(wb, { itemIsHere: wb.createdOnCounter, online: !offline, busy });
   const disabled = actions.disabledReason !== null;
   // Review fix P18: what "Get replacement ready" does, under it and as its
@@ -624,6 +657,37 @@ export function ReturnWorkbenchView({
           </Card>
         ) : null}
 
+        {/* F14: write to the warehouse about this return (a prefilled draft
+            to the saved delivery-request mailboxes), and report a problem
+            with it (the maintenance request form, with this return's order
+            attached and the return named in the subject). Both are open to
+            every member this screen opens for, like the website's header. */}
+        {requestContent && requestEmail.recipients ? (
+          <ReturnRequestSection
+            orderId={r.orderRequestId}
+            surface="return"
+            content={requestContent}
+            recipients={requestEmail.recipients}
+          />
+        ) : null}
+        {canReportProblem ? (
+          <Button
+            block
+            variant="outline"
+            onPress={() =>
+              router.push({
+                pathname: '/maintenance/new',
+                // Hints only: the form's server side re-derives the order
+                // against this organization before attaching it.
+                params: returnProblemLaunchParams(r),
+              } as unknown as Href)
+            }
+            leading={<Wrench size={16} color={c.ink} strokeWidth={1.5} />}
+          >
+            Report a problem
+          </Button>
+        ) : null}
+
         {lg ? (
           <GlassHeading>History</GlassHeading>
         ) : (
@@ -671,6 +735,8 @@ export function ReturnWorkbenchView({
     </>
   );
 }
+
+const NO_REQUEST_EMAIL: ReturnRequestEmailForReturn = { recipients: null, link: null };
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32, gap: 14 },
