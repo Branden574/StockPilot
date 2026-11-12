@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { isUserNotFound } from '@/lib/auth/gotrue-user-not-found';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -85,7 +86,8 @@ export const CONFIRM_RECIPIENT_LOOKUP_TIMEOUT_MS = 5000;
  *   found   its sign-in address, the new one an email change is waiting on
  *           (null when none) and when GoTrue recorded that change's latest
  *           request (email_change_sent_at, in ms; null when it gives none);
- *   gone    GoTrue answered 404 user_not_found, the account has no address,
+ *   gone    GoTrue answered 404 user_not_found (lib/auth/gotrue-user-not-found,
+ *           the one reading account deletion uses), the account has no address,
  *           or it is disabled (banned_until in the future,
  *           server/services/platform/account-status.ts): the link cannot be
  *           used, so the page answers as for an expired one;
@@ -136,13 +138,6 @@ export function pendingEmailChangeFor(
     return null;
   }
   return account.newEmail;
-}
-
-/** GoTrue v2's not-found answer for GET /admin/users/<id> (as account-deletion.ts reads it). */
-function isUserNotFound(e: unknown): boolean {
-  if (!e || typeof e !== 'object') return false;
-  const o = e as { status?: unknown; code?: unknown };
-  return o.status === 404 && o.code === 'user_not_found';
 }
 
 async function readRecipient(userId: string, now: Date): Promise<ConfirmRecipientAccount> {

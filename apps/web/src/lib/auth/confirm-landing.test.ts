@@ -182,6 +182,50 @@ describe("the app's confirmation emails land where the route sends them", () => 
     }
   });
 
+  /**
+   * Whether a source asks GoTrue for an emailed-link token: a use of
+   * auth.admin.generateLink, or of the admin API's generate_link path. Read on
+   * the syntax tree, so a comment naming either is not a use.
+   */
+  function asksGoTrueForALink(rel: string, src: string): boolean {
+    // Most sources name neither; only those that do are parsed.
+    if (!/generate_link|generateLink/.test(src)) return false;
+    const file = ts.createSourceFile(rel, src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let asks = false;
+    const visit = (node: ts.Node) => {
+      if (ts.isIdentifier(node) && node.text === 'generateLink') asks = true;
+      else if (
+        (ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) &&
+        /generate_link|generateLink/.test(node.text)
+      ) {
+        asks = true;
+      }
+      if (!asks) ts.forEachChild(node, visit);
+    };
+    visit(file);
+    return asks;
+  }
+
+  it('only the five builders ask GoTrue for a link token (a new one must write its link through confirmLinkUrl)', () => {
+    const minters = SOURCES.filter(({ rel, src }) => asksGoTrueForALink(rel, src)).map(
+      ({ rel }) => rel,
+    );
+    expect(minters.sort()).toEqual([
+      'app/api/admin/qa-recovery-link/route.ts',
+      'lib/auth/password-reset-email.ts',
+      'server/actions/platform-admin.ts',
+      'server/services/customers.ts',
+      'server/services/email-change.ts',
+    ]);
+    // The reading is not blind: a comment is no use, a call or the path is.
+    expect(asksGoTrueForALink('a.ts', '// admin.generateLink({ type })\nexport {};')).toBe(false);
+    expect(asksGoTrueForALink('a.ts', 'await admin.auth.admin.generateLink({ type });')).toBe(true);
+    expect(asksGoTrueForALink('a.ts', "await admin.auth.admin['generateLink']({ type });")).toBe(
+      true,
+    );
+    expect(asksGoTrueForALink('a.ts', 'fetch(`${base}/auth/v1/admin/generate_link`);')).toBe(true);
+  });
+
   it('each builder sends a kept landing, signed for the user id GoTrue gave it for the link', () => {
     const found = Object.fromEntries(
       SOURCES.filter(({ rel }) => rel !== 'lib/auth/confirm-link.ts')
@@ -296,6 +340,19 @@ describe("the repository's sign-in harnesses land where they wait", () => {
     expect(pairs.sort()).toEqual([
       'scripts/perf-lab/lab/trace-nav.mjs magiclink /dashboard r',
       'tests/perf/auth.setup.ts magiclink /dashboard r',
+    ]);
+  });
+
+  it('only those two harnesses ask GoTrue for a link token', () => {
+    const minters = [
+      ...files(path.join(WEB_ROOT, 'tests')),
+      ...files(path.join(WEB_ROOT, 'scripts')),
+    ]
+      .filter((file) => /generate_link|generateLink/.test(readFileSync(file, 'utf8')))
+      .map((file) => path.relative(WEB_ROOT, file).split(path.sep).join('/'));
+    expect(minters.sort()).toEqual([
+      'scripts/perf-lab/lab/trace-nav.mjs',
+      'tests/perf/auth.setup.ts',
     ]);
   });
 
