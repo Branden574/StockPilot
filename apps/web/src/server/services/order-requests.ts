@@ -5309,12 +5309,18 @@ export class OrderRequestsService {
     // let a manager-scoped session through the service gate and then trip
     // an RLS denial — confusing for the user.
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    // The changed row is asked back (S41): a filtered update that matches no
+    // row is not an error, so only the returned row proves a warehouse of
+    // this organization changed.
+    const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ is_public_orderable: on })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', warehouseId);
+      .eq('id', warehouseId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Warehouse not found.');
   }
 
   async getPublicSettings(): Promise<{

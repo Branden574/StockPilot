@@ -1787,6 +1787,9 @@ export class CycleCountsService {
         confirmed_at: new Date().toISOString(),
         confirmed_by: this.ctx.userId,
       })
+      // Filtered to THIS organization (S41), like every write named by a
+      // row id: only the app knows which organization is active.
+      .eq('organization_id', this.ctx.organizationId)
       .eq('id', scanId)
       .select('id')
       .maybeSingle();

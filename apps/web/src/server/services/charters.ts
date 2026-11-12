@@ -231,13 +231,37 @@ export class ChartersService {
     if (patch.contactEmail !== undefined)
       updates.contact_email = patch.contactEmail ? patch.contactEmail.toLowerCase() : null;
     if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone ?? null;
-    const { error } = await this.ctx.supabase
+    if (Object.keys(updates).length > 0) {
+      // The changed row is asked back, as archive() and restore() below do
+      // (S41): a filtered update that matches no row is not an error, so only
+      // the returned row proves a charter of this organization changed. No row
+      // answers not_found and records nothing.
+      const { data: row, error } = await this.ctx.supabase
+        .from('charters')
+        .update(updates)
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+      if (!row) throw new ServiceError('not_found', 'Charter not found.');
+      await audit(
+        { event: 'charter.updated', entityType: 'charter', entityId: id, after: patch },
+        this.ctx,
+      );
+      return;
+    }
+    // Nothing to change. An update with no columns writes no row, so the
+    // charter is read instead: a miss still answers not_found, and nothing is
+    // recorded because nothing changed.
+    const { data: current, error: readError } = await this.ctx.supabase
       .from('charters')
-      .update(updates)
+      .select('id')
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'charter.updated', entityType: 'charter', entityId: id, after: patch }, this.ctx);
+      .eq('id', id)
+      .maybeSingle();
+    if (readError) throw new ServiceError('internal_error', readError.message);
+    if (!current) throw new ServiceError('not_found', 'Charter not found.');
   }
 
   async archive(id: string) {

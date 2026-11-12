@@ -51,6 +51,9 @@ const W3 = '00000000-0000-4000-8000-0000000000a3';
 
 const charterId = (i: number) => `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
 
+/** The organization's warehouses: a save reads its warehouse here first. */
+const WAREHOUSE_ROWS = [W1, W2, W3].map((id) => ({ id, organization_id: ORG }));
+
 function links(warehouseId: string, from: number, n: number, organizationId = ORG) {
   return Array.from({ length: n }, (_, i) => ({
     organization_id: organizationId,
@@ -130,6 +133,7 @@ describe('WarehouseChartersService.setForWarehouse compares against every link',
 
   function stubWith(select: (call: MockCall) => QueryResult) {
     return makeSupabaseStub({
+      'warehouses.select': servedLikePostgrest(WAREHOUSE_ROWS),
       'warehouse_charters.select': select,
       'warehouse_charters.insert': (call) => {
         writes.inserts.push(call);
@@ -273,6 +277,7 @@ describe('at LOOKUP_ROW_CEILING', () => {
     }) {
       const itemsCounted = countedLikePostgrest(opts.items ?? []);
       return makeSupabaseStub({
+        'warehouses.select': servedLikePostgrest(WAREHOUSE_ROWS),
         'warehouse_charters.select': opts.links ?? countedLikePostgrest([...W1_LINKS, ...W2_LINKS]),
         'warehouse_charters.insert': (call) => {
           writes.inserts.push(call);

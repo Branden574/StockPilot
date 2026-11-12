@@ -165,12 +165,18 @@ export class TagsService {
    */
   async delete(id: string): Promise<void> {
     assertPermission(this.ctx, 'categories:manage');
-    const { error } = await this.ctx.supabase
+    // The deleted row is asked back (S41): a filtered delete that matches no
+    // row is not an error, so only the returned row proves a tag of this
+    // organization was deleted. No row answers not_found and records nothing.
+    const { data: row, error } = await this.ctx.supabase
       .from('tags')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Tag not found');
     void audit({ event: 'tag.deleted', entityType: 'tag', entityId: id }, this.ctx);
   }
 
