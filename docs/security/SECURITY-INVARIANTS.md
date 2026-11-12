@@ -47,7 +47,17 @@
      ledger functions of which one is on allowlist J) were read on a local
      Postgres with migrations 0001-0418 applied; the assertion count in
      section 10 was re-derived from `select plan(47)`. The 38 and 56 file
-     counts beside it were not re-derived. -->
+     counts beside it were not re-derived.
+
+     AMENDED 2026-11-12 (docket T24): INV-A1, INV-A2 and INV-A5 now say
+     "ordinary or partitioned" (INV-5, INV-6 and INV-11 sweep relation kinds
+     r and p; controls INV-7b and INV-11b), INV-B3 and INV-B4 gained the
+     side-effect arm of the allowlist audit (controls INV-30d and INV-30e),
+     and INV-B6 and INV-B7 were added with INV-40b, INV-40c, INV-41b and
+     INV-41c. The one allowlist-L row, the 19 allowlist-M rows and INV-A1's
+     104 org-scoped tables were read on a local Postgres with migrations
+     0001-0418 applied, where public holds no partitioned table; the
+     assertion count in section 10 was re-derived from `select plan(55)`. -->
 
 # Security invariants
 
@@ -109,8 +119,11 @@ organization from the moment it exists.
 
 ### INV-A1 — RLS is enabled on every org-scoped table
 
-- **Invariant**: every relation of kind `r` in schema `public` that has a
-  column named `organization_id` has `relrowsecurity = true`.
+- **Invariant**: every table in schema `public`, ordinary or partitioned
+  (relation kind `r` or `p`), that has a column named `organization_id` has
+  `relrowsecurity = true`. A partitioned table counts in its own right: a
+  query through the parent is filtered by the parent's row-level security, not
+  by its partitions'.
 - **Why it matters**: without it, one tenant reads and writes another's rows
   through PostgREST with no exploit required — just a different `organization_id`
   in the query string.
@@ -119,9 +132,10 @@ organization from the moment it exists.
   line someone has to write.
 - **Tested at**: INV-5. **Deliberately no allowlist** — there is no defensible
   reason for an org-scoped table to run without RLS, so a failure must be closed
-  by enabling RLS, not by adding an exemption. Current state: 89 org-scoped
-  tables, 89 with RLS. INV-7 is the control that the `organization_id` detector
-  still finds them.
+  by enabling RLS, not by adding an exemption. Current state: 104 org-scoped
+  tables, 104 with RLS. INV-7 is the control that the `organization_id` detector
+  still finds them, and INV-7b plants a partitioned table with an
+  `organization_id` and RLS off, which the sweep must name.
 
 Reproduce:
 
@@ -130,13 +144,14 @@ select c.relname from pg_class c
   join pg_namespace n on n.oid = c.relnamespace
   join pg_attribute a on a.attrelid = c.oid and a.attname = 'organization_id'
    and a.attnum > 0 and not a.attisdropped
- where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity;
+ where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relrowsecurity;
 ```
 
 ### INV-A2 — RLS is enabled on every other table in `public` too
 
-- **Invariant**: every relation of kind `r` in `public` has
-  `relrowsecurity = true` unless it is on the exemption allowlist.
+- **Invariant**: every table in `public`, ordinary or partitioned (relation
+  kind `r` or `p`), has `relrowsecurity = true` unless it is on the exemption
+  allowlist.
 - **Why it matters**: a table without an `organization_id` can still hold data
   worth protecting — rows keyed on `auth.uid()`, platform configuration,
   per-user MFA material. "It has no org column" is not by itself a reason to be
@@ -188,7 +203,9 @@ true)`.
   write. Both are one word long and both look like a placeholder someone meant to
   come back to.
 - **Enforced by**: review, plus this sweep.
-- **Tested at**: INV-11. Scoped to org-scoped tables on purpose: a literal true
+- **Tested at**: INV-11, over ordinary and partitioned tables, with INV-11b as
+  its control on a partitioned one (a planted `using (true)` policy must be
+  named). Scoped to org-scoped tables on purpose: a literal true
   is legitimate on a global reference table — `role_default_permissions_select`
   is the live example — and an assertion that failed on that would be reflexively
   neutered, which is how a real assertion gets lost.
@@ -387,14 +404,24 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
     table in any schema, quoted or not, `DELETE FROM [ONLY]` and `TRUNCATE`,
     read from the raw body so a write inside a `format()` string counts, plus
     `EXECUTE`;
+  - a **side effect that is not a table write**: a setting changed
+    (`set_config`, or a `SET` or `RESET` statement), a sequence moved
+    (`setval`, `nextval`), a notification sent (`pg_notify`, `NOTIFY`) or an
+    advisory lock taken. A setting changed inside a helper stays changed for
+    the rest of the caller's transaction, and `request.jwt.claim.sub` is what
+    `auth.uid()` reads;
   - a reached function with **no first-party body** (another schema, or an
     extension member anywhere) cannot be read, so it must carry a reasoned row
     in **allowlist K** (`_sec_inv_external_callee_allow`; one row today,
     `auth.uid`). A K row whose function is gone, or that no entry reaches any
     more, fails as stale.
 
-  The audit is one view, read by INV-26, INV-30, INV-30c, INV-31 and INV-32.
-  INV-30b plants one probe per write form and reads that must not match.
+  The audit is one view, read by INV-26, INV-30, INV-30c, INV-30e, INV-31 and
+  INV-32. INV-30b plants one probe per write form and reads that must not
+  match, and INV-30d does the same for the side-effect forms. INV-30e plants
+  an entry that sets `request.jwt.claim.sub`, one that reaches a notification
+  two calls down and one that runs `SET LOCAL`; each must be named, and an
+  entry that only reads the setting must not be.
   INV-30c plants entries whose own bodies write nothing and that reach a
   writer one, two and three calls down, a function that runs `EXECUTE`, an
   extension function in another schema, and a bare extension function through
@@ -406,7 +433,8 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   *every* run rather than once at review time. Not seen by the audit, as for
   every text census in that file: a call made through dynamic SQL (refused
   separately: `EXECUTE` in an entry or in a callee withdraws the exemption),
-  an operator, a cast or a trigger; `pg_catalog` functions are not judged.
+  an operator, a cast or a trigger; of `pg_catalog`'s functions only the
+  side-effect forms are judged.
   Per-function posture is pinned
   in
   [`0346_gate_secdef_stock_helpers.test.sql`](../../supabase/tests/0346_gate_secdef_stock_helpers.test.sql)
@@ -427,8 +455,8 @@ raises instead, which is the same answer with a different calling convention —
 and the single exception, `org_effective_tier`, returns the org's plan-tier
 string, which is not tenant data. **None writes**, and that is the property the
 exemption is bought with: INV-26 withdraws it the day one of them grows a write
-or starts calling something that writes, and INV-30 and INV-30c prove INV-26
-can still see that happen.
+or a side effect, or starts calling something that has one, and INV-30,
+INV-30c and INV-30e prove INV-26 can still see that happen.
 
 **An attribute-returning entry is a smell, not a category.**
 `_cycle_count_location_facts` was the single allowlist-E entry that returned
@@ -474,10 +502,11 @@ select p.proname,
   nothing, and answers only inside a ledger transaction.
 - **Tested at**: INV-31 (the sweep, plus allowlist F's own audit, which is
   the view INV-26 reads: no stale entry, and no entry that writes, runs
-  `EXECUTE`, reaches a writer, or reaches a function with no first-party body
-  that allowlist K does not list) and INV-32 (plants an ungated definer
-  probe in `ledger` and a stale allowlist row; both must be caught). INV-30c
-  plants an allowlist-F entry that reaches a writer. The
+  `EXECUTE` or has a side effect, reaches a function that does, or reaches a
+  function with no first-party body that allowlist K does not list) and
+  INV-32 (plants an ungated definer probe in `ledger` and a stale allowlist
+  row; both must be caught). INV-30c plants an allowlist-F entry that reaches
+  a writer, and INV-30e one that runs `SET LOCAL`. The
   helper's gate is pinned line by line in
   [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
   (section F), each line killed by its own live mutation.
@@ -519,6 +548,68 @@ select p.proname,
   posture is pinned in
   [`0373_draw_provenance.test.sql`](../../supabase/tests/0373_draw_provenance.test.sql)
   (A13).
+
+### INV-B6 — only listed functions set an identity setting
+
+- **Invariant**: every non-extension function in `public`, `ledger`, `storage`
+  and `graphql_public` whose body sets `request.jwt.*`, `role` or
+  `session_authorization` (through `set_config`, or a `SET` or `RESET`
+  statement) is on **allowlist L** (`_sec_inv_identity_setter_allow`), keyed on
+  its full signature with a reason, and none of them is executable by `anon`
+  or `authenticated`.
+- **Why it matters**: `auth.uid()` reads `request.jwt.claim.sub` and
+  `request.jwt.claims`, and `role` is who a statement runs as. Every RLS policy
+  and every in-body gate in sections 1 to 3 answers for that identity, so a
+  function that sets it decides who the rest of the transaction acts as. The
+  flag censuses (`stockpilot.ledger`, `stockpilot.order_submit`,
+  `stockpilot.return_exchange`, `stockpilot.draw_scope`) cover the
+  `stockpilot.*` settings only.
+- **Enforced by**: there is one such function,
+  `public.exception_evidence_record`
+  ([`0375`](../../supabase/migrations/0375_exception_evidence.sql)). It is
+  `service_role` only and its body refuses `authenticated` and `anon`. It puts
+  the uploader's id in the request claims for two helper calls that answer for
+  `auth.uid()`, with `is_local = true`, and puts the previous values back
+  before anything is written. PostgREST does not expose `set_config`, and no
+  API-callable function runs dynamic SQL or passes a non-literal name to
+  `set_config` (`0359_ledger_flag_carriers.test.sql`, tests 18 and 73).
+- **Tested at**: INV-40b (the census: an unlisted setter, a stale allowlist-L
+  row, or a listed function that `anon` or `authenticated` may execute fails,
+  each by name) and INV-41b (plants an unlisted `set_config` and an unlisted
+  `SET LOCAL ROLE`, three bad allowlist-L rows, and a function that only reads
+  the setting, which must not be named). The census reads the body with
+  comments removed and quoted text kept, so the name must be a literal to be
+  seen. The function's own posture is pinned in
+  [`0375_exception_evidence.test.sql`](../../supabase/tests/0375_exception_evidence.test.sql)
+  (G7, G12).
+
+### INV-B7 — only listed functions raise a transaction flag
+
+- **Invariant**: every non-extension function in `public`, `ledger`, `storage`
+  and `graphql_public` whose body sets a `stockpilot.*` setting (through
+  `set_config` with a literal name, or a `SET` statement) is on **allowlist M**
+  (`_sec_inv_flag_setter_allow`) for that flag, and every row of the list
+  still matches a function body.
+- **Why it matters**: a `stockpilot.*` setting is a flag that a guard, a
+  policy or a trigger reads to tell a write made inside one of this schema's
+  functions from a direct one (the ledger guards, the `order_submissions`
+  insert policy, the order top-up helper, the exchange item rule, the
+  `updated_at` trigger). A function that raises a flag opens that guard for
+  whatever it then does. Four flags also have a census in the test of the
+  migration that introduced them; this list holds all seven, and a flag
+  invented later has to be added to it.
+- **Enforced by**: each writer raises its flag around its own statements and
+  puts the previous value back before it returns. No Data API identity can set
+  a setting directly: PostgREST runs one statement per request and does not
+  expose `set_config`, and no API-callable function runs dynamic SQL or takes
+  a setting's name from its caller
+  (`0359_ledger_flag_carriers.test.sql`, tests 18 and 73).
+- **Tested at**: INV-40c (the census, against all 19 pairs of the seven flags:
+  an unlisted pair or a stale row fails, by name) and INV-41c (plants an
+  unlisted `set_config`, an unlisted `SET LOCAL` of a new flag, a flag name
+  finished at run time and two bad allowlist-M rows; a function that only
+  reads a flag must not be named). Per flag: `0359` test 17, `0391` G5, `0397`
+  A1b and INV-40.
 
 ---
 
@@ -2005,7 +2096,7 @@ checked.
   permanent: the sweep that would have caught it did not exist on the day the
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 47 class-wide assertions in
+  invariants**: 55 class-wide assertions in
   `supabase/tests/security_invariants.test.sql`, plus 38 security-focused pgTAP
   files and 56 security-focused vitest files, gated together as
   `pnpm security:test` and wired into CI.
@@ -2023,7 +2114,10 @@ checked.
   those two assertions are mutation-checked on every run. INV-31, INV-33 and
   INV-35 (0371) follow the same pattern through INV-32, INV-34 and INV-36, and
   so do INV-15 and INV-16 (through INV-18b and INV-18c), INV-27 and INV-27b
-  (through INV-28b) and the call walk of INV-26 and INV-31 (through INV-30c).
+  (through INV-28b), the call walk and the side-effect arm of INV-26 and
+  INV-31 (through INV-30c, INV-30d and INV-30e), INV-5, INV-6 and INV-11 on a
+  partitioned table (through INV-7b and INV-11b), INV-40b (through INV-41b)
+  and INV-40c (through INV-41c).
 - **What this does not establish**: no third-party penetration test has been
   performed, there is no SOC 2 or ISO 27001 process, and there is no bug bounty
   (`SECURITY.md`, "Things we haven't done"). Coverage of the invariants above is

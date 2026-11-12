@@ -381,7 +381,11 @@ select is(
 select ok(
   (select (select count(*) from regexp_matches(p.prosrc, '\minsert\s+into\s+public\.stock_reservations\M', 'gi')) = 1
           and (select count(*) from regexp_matches(p.prosrc, '\minsert\s+into\M', 'gi')) = 1
-          and p.prosrc !~* '\mupdate\s+(public\.|only\M)'
+          -- The UPDATE form is the security invariant suite's own (the UPDATE
+          -- arm of _sec_inv_writer_re in security_invariants.test.sql): ONLY,
+          -- unqualified or quoted, a table in any schema. A guard test keeps
+          -- this copy equal.
+          and p.prosrc !~* $w$\mupdate\s+(only\s+)?("?[a-z_][a-z0-9_$]*"?\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(\s+(as\s+)?"?[a-z_][a-z0-9_$]*"?)?\s+set\M$w$
           and p.prosrc !~* '\m(delete\s+from|truncate|merge\s+into)\M'
           and p.prosrc !~* 'adjust_stock|apply_level_delta|transfer_stock|quantity_on_hand\s*='
      from pg_proc p where p.oid = 'public.hold_order_stock(uuid)'::regprocedure),

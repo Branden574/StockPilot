@@ -60,7 +60,10 @@
 -- INV-35, for INV-39 (0373), the control for INV-37 and INV-38, and for
 -- INV-41 (0373), the control for INV-40, and for
 -- INV-18b, INV-18c, INV-28b and INV-30c (T23), the controls for INV-15, INV-16,
--- INV-27 and INV-27b, and the allowlist audit INV-26 and INV-31 share.
+-- INV-27 and INV-27b, and the allowlist audit INV-26 and INV-31 share, and
+-- for INV-7b, INV-11b, INV-30d, INV-30e, INV-41b and INV-41c (T24), the
+-- controls for the partitioned-table arm of INV-5, INV-6 and INV-11, the
+-- side-effect arm of the allowlist audit, INV-40b and INV-40c.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -69,7 +72,7 @@
 
 begin;
 
-select plan(47);
+select plan(55);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -146,7 +149,8 @@ insert into _sec_inv_anon_secdef_allow (proname, why) values
 -- each exposes at most a BOOLEAN about a caller-supplied uuid. None writes.
 -- Adding a name here must be defended in `why`; a function that WRITES must
 -- never appear, nor one that reaches a write through what it calls (INV-26
--- follows its calls, T23).
+-- follows its calls, T23), nor one with a side effect that is not a table
+-- write: a setting, a sequence, a notification or an advisory lock (T24).
 --
 -- _cycle_count_location_facts was the one entry that exposed ATTRIBUTES rather
 -- than a boolean (org, warehouse, kind, deleted_at for any location uuid) and
@@ -229,6 +233,43 @@ insert into _sec_inv_writer_re (re) values
 create temporary table _sec_inv_strip_re (re text not null);
 insert into _sec_inv_strip_re (re) values
   ($re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$);
+
+-- Comments only (T24): the same pass, with each quoted literal put back (the
+-- replacement is \1, the literal's own group, empty for a comment). The
+-- identity-setting census reads this text, because a setting's name is a
+-- literal and must stay readable while a name in a comment must not count.
+create temporary table _sec_inv_comment_re (re text not null);
+insert into _sec_inv_comment_re (re) values
+  ($re$/\*(?:[^*]|\*+[^*/])*\*+/|--[^\n]*|('(?:[^']|'')*')$re$);
+
+-- Side effects that are not table writes (T24), read from the stripped body:
+-- a setting changed (set_config, or a SET or RESET statement), a sequence
+-- moved (setval, nextval), a notification sent (pg_notify, NOTIFY) or an
+-- advisory lock taken. A read-only predicate has none of them: a setting
+-- changed inside a helper stays changed for the rest of the caller's
+-- transaction. SET, RESET and NOTIFY count only where a statement starts
+-- (the start of the body, after ";", THEN, ELSE, BEGIN or LOOP), so the SET
+-- of an UPDATE is left to the writer forms above. INV-30d plants a probe per
+-- form.
+create temporary table _sec_inv_side_effect_re (re text not null);
+insert into _sec_inv_side_effect_re (re) values
+  ($re$\m(set_config|setval|nextval|pg_notify|pg_(try_)?advisory_[a-z_]+)\s*\(|(^|;|\m(then|else|begin|loop))\s*(set|reset|notify)\M$re$);
+
+-- An identity setting being set (T24), read from the body with comments
+-- removed and quoted text kept: set_config with the literal name
+-- request.jwt.* (auth.uid() and auth.role() read these), role or
+-- session_authorization, or a SET or RESET statement naming one of them.
+create temporary table _sec_inv_identity_set_re (re text not null);
+insert into _sec_inv_identity_set_re (re) values
+  ($re$\mset_config\s*\(\s*'\s*(request\.jwt[^']*|role|session_authorization)\s*'|(^|;|\m(then|else|begin|loop))\s*(set\s+(local\s+|session\s+)?|reset\s+)(role\M|session\s+authorization\M|"?request\.jwt)$re$);
+
+-- A stockpilot.* transaction flag being set (T24), read from the same text:
+-- set_config with a literal name, or a SET statement. The one group is the
+-- flag's name; a name finished at run time ('stockpilot.' || x) reads as
+-- "stockpilot." and is on no list.
+create temporary table _sec_inv_flag_set_re (re text not null);
+insert into _sec_inv_flag_set_re (re) values
+  ($re$(?:\mset_config\s*\(\s*'\s*|(?:^|;|\m(?:then|else|begin|loop))\s*set\s+(?:local\s+|session\s+)?"?)(stockpilot\.[a-z0-9_]*)$re$);
 
 -- ── F. SECURITY DEFINER functions in `ledger` that `authenticated` may execute
 --       WITHOUT an authorization token in their own body (0371) ──────────────
@@ -315,6 +356,53 @@ insert into _sec_inv_search_path_allow (sig, why) values
 create temporary table _sec_inv_external_callee_allow (fn text primary key, why text not null);
 insert into _sec_inv_external_callee_allow (fn, why) values
   ('auth.uid', 'reads the caller''s JWT subject and writes nothing (module_enabled calls it, and is_org_member under it)');
+
+-- ── L. Functions that set an identity setting (T24) ────────────────────────
+--
+-- request.jwt.claim.sub and request.jwt.claims are what auth.uid() reads, and
+-- role and session_authorization are who the statement runs as. A function
+-- that sets one changes who the rest of the transaction acts as, so every
+-- first-party function that does is listed here with its reason, keyed on its
+-- full signature like allowlist J. INV-40b refuses a function that is not
+-- listed, a row whose function is gone or sets none of them any more, and a
+-- listed function that anon or authenticated may execute.
+create temporary table _sec_inv_identity_setter_allow (sig text primary key, why text not null);
+insert into _sec_inv_identity_setter_allow (sig, why) values
+  ('public.exception_evidence_record(uuid,uuid,text,text,text,bigint,timestamptz,text)',
+   'service_role only, and its body refuses authenticated and anon (0375); it puts the uploader''s id in request.jwt.claim.sub and request.jwt.claim.role for two helper calls that answer for auth.uid(), with is_local = true, and puts the previous values back before anything is written (0375:514-529); pinned per function by 0375 G7 and G12');
+
+-- ── M. Functions that raise a stockpilot.* transaction flag (T24) ──────────
+--
+-- A stockpilot.* setting is a flag that a guard, a policy or a trigger reads
+-- to tell a write made inside one of our functions from a direct one. Four
+-- of the flags have a census of their own (stockpilot.ledger in 0359 test
+-- 17, stockpilot.order_submit in 0391 G5, stockpilot.return_exchange in 0397
+-- A1b, stockpilot.draw_scope in INV-40). This list holds every (flag,
+-- function) pair, so a new flag, and a new function that raises an existing
+-- one, are both a reviewed row here. Keyed on schema.name, as those censuses
+-- are. INV-40c refuses a pair that is not listed and a row that matches no
+-- function body any more.
+create temporary table _sec_inv_flag_setter_allow (flag text not null, fn text not null, why text not null, primary key (flag, fn));
+insert into _sec_inv_flag_setter_allow (flag, fn, why) values
+  ('stockpilot.ledger', 'public.adjust_stock',                'ledger wrapper: raises the flag around its call into ledger (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.assemble_bundle',             'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.distribute_bundle',           'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.post_cycle_count',            'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.post_receipt_v2',             'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.process_return_disposition',  'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.reverse_receipt',             'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.ledger', 'public.transfer_stock',              'ledger wrapper (0359; also 0359 test 17)'),
+  ('stockpilot.order_submit', 'public.place_order_request',       'one of the two writers of order_submissions (0391; also 0391 G5)'),
+  ('stockpilot.order_submit', 'public.withdraw_order_submission', 'one of the two writers of order_submissions (0391; also 0391 G5)'),
+  ('stockpilot.return_exchange', 'public._return_exchange_on_cancel',        'no API role may execute it (0396, 0397; also 0397 A1b)'),
+  ('stockpilot.return_exchange', 'public._return_replacement_cancel_order',  'no API role may execute it (0396, 0397; also 0397 A1b)'),
+  ('stockpilot.return_exchange', 'public._return_replacement_close_partial', 'no API role may execute it (0397; also 0397 A1b)'),
+  ('stockpilot.draw_scope', 'ledger._seal',                'the draw scope cache, not a guard; no API role may execute it (0373; also INV-40)'),
+  ('stockpilot.draw_scope', 'ledger.tg_forget_draw_scope', 'clears the draw scope cache (0373; also INV-40)'),
+  ('stockpilot.add_lines', 'public.add_order_request_lines', 'raises the flag around its own top-ups and new lines, and puts the previous value back; the top-up helper runs only under it (0413)'),
+  ('stockpilot.exchange_kept_lines', 'public.change_return_replacement', 'names the exchange lines it keeps, one per item check, and puts the previous value back (0413)'),
+  ('stockpilot.derived_write', 'public.set_order_catalog_visibility', 'writes the two order catalog columns without moving updated_at, and puts the previous value back (0413)'),
+  ('stockpilot.derived_write', 'public._backfill_variant_size',       'the 0303 size backfill, which leaves updated_at alone');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -407,18 +495,29 @@ select ok(
 -- any organization the moment it exists.
 -- ═══════════════════════════════════════════════════════════════════════════
 
+-- The two sweeps' detector (T24), one view so INV-7b exercises the very same
+-- text: a table in public with RLS switched off. A partitioned table
+-- (relkind 'p') is swept with ordinary ones: a query through the parent is
+-- filtered by the parent's own row level security, not by its partitions',
+-- so a parent with RLS off is open even when every partition has it on.
+create temporary view _sec_inv_rls_off as
+  select c.relname::text as relname,
+         exists (select 1 from pg_attribute a
+                  where a.attrelid = c.oid and a.attname = 'organization_id'
+                    and a.attnum > 0 and not a.attisdropped) as org_scoped
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname = 'public' and c.relkind in ('r', 'p') and not c.relrowsecurity;
+
 -- INV-5. No allowlist, deliberately. There is no defensible reason for a table
 -- that carries an organization_id to run without RLS, so this one has no escape
--- hatch: closing a failure means enabling RLS and writing policies.
+-- hatch: closing a failure means enabling RLS and writing policies. Offenders
+-- are named.
 select is(
-  (select count(*)::int
-     from pg_class c
-     join pg_namespace n on n.oid = c.relnamespace
-     join pg_attribute a on a.attrelid = c.oid
-      and a.attname = 'organization_id' and a.attnum > 0 and not a.attisdropped
-    where n.nspname = 'public' and c.relkind = 'r' and not c.relrowsecurity),
-  0,
-  'INV-5: every table in public with an organization_id has RLS enabled'
+  (select coalesce(string_agg(v.relname, ', ' order by v.relname collate "C"), '')
+     from _sec_inv_rls_off v where v.org_scoped),
+  '',
+  'INV-5: every table in public with an organization_id, ordinary or partitioned, has RLS enabled'
 );
 
 -- INV-6. The wider sweep, with an allowlist that is currently empty. A table
@@ -426,14 +525,11 @@ select is(
 -- keyed on auth.uid(), platform-level configuration), and "it has no org
 -- column" is not by itself a reason to be open.
 select is(
-  (select count(*)::int
-     from pg_class c
-     join pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public' and c.relkind = 'r'
-      and not c.relrowsecurity
-      and c.relname not in (select relname from _sec_inv_rls_exempt_tables)),
-  0,
-  'INV-6: every table in public has RLS enabled unless explicitly allowlisted'
+  (select coalesce(string_agg(v.relname, ', ' order by v.relname collate "C"), '')
+     from _sec_inv_rls_off v
+    where v.relname not in (select relname from _sec_inv_rls_exempt_tables)),
+  '',
+  'INV-6: every table in public, ordinary or partitioned, has RLS enabled unless explicitly allowlisted'
 );
 
 -- INV-7. VACUITY CONTROL. INV-5 passes trivially if the organization_id
@@ -445,11 +541,25 @@ select cmp_ok(
      join pg_namespace n on n.oid = c.relnamespace
      join pg_attribute a on a.attrelid = c.oid
       and a.attname = 'organization_id' and a.attnum > 0 and not a.attisdropped
-    where n.nspname = 'public' and c.relkind = 'r'),
+    where n.nspname = 'public' and c.relkind in ('r', 'p')),
   '>',
   50,
   'INV-7 control: the org-scoped table sweep still finds the tenant tables'
 );
+
+-- INV-7b. MUTATION CONTROL for INV-5 and INV-6 on a partitioned table (T24).
+-- A planted partitioned table with an organization_id and no RLS must be
+-- named by the view both sweeps read. Dropped straight after (the enclosing
+-- rollback is the second belt).
+create table public._sec_inv_probe_parted (id uuid not null, organization_id uuid not null)
+  partition by list (organization_id);
+select is(
+  (select coalesce(string_agg(v.relname || ' (org-scoped: ' || v.org_scoped::text || ')', ' | ' order by v.relname collate "C"), '')
+     from _sec_inv_rls_off v where v.relname like '\_sec\_inv\_probe\_%'),
+  '_sec_inv_probe_parted (org-scoped: true)',
+  'INV-7b control: the RLS sweeps name a partitioned table that has an organization_id and RLS switched off'
+);
+drop table public._sec_inv_probe_parted;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -537,20 +647,40 @@ select cmp_ok(
 -- org-scoped tables on purpose: a literal true is legitimate on a global
 -- reference table (role_default_permissions_select is the live example), and an
 -- assertion that failed on that would be reflexively neutered.
+-- One view (T24), so INV-11b exercises the very same text. Partitioned
+-- tables are judged with ordinary ones, for the reason given at INV-5.
+create temporary view _sec_inv_literal_true_policies as
+  select pol.tablename::text as relname, pol.tablename || '.' || pol.policyname as x
+    from pg_policies pol
+    join pg_class c on c.relname = pol.tablename
+    join pg_namespace n on n.oid = c.relnamespace and n.nspname = pol.schemaname
+   where pol.schemaname = 'public'
+     and c.relkind in ('r', 'p')
+     and exists (select 1 from pg_attribute a
+                  where a.attrelid = c.oid and a.attname = 'organization_id'
+                    and a.attnum > 0 and not a.attisdropped)
+     and (pol.qual = 'true' or pol.with_check = 'true');
+
 select is(
-  (select count(*)::int
-     from pg_policies pol
-     join pg_class c on c.relname = pol.tablename
-     join pg_namespace n on n.oid = c.relnamespace and n.nspname = pol.schemaname
-    where pol.schemaname = 'public'
-      and c.relkind = 'r'
-      and exists (select 1 from pg_attribute a
-                   where a.attrelid = c.oid and a.attname = 'organization_id'
-                     and a.attnum > 0 and not a.attisdropped)
-      and (pol.qual = 'true' or pol.with_check = 'true')),
-  0,
-  'INV-11: no policy on an org-scoped table has a literal-true predicate'
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_literal_true_policies v),
+  '',
+  'INV-11: no policy on an org-scoped table, ordinary or partitioned, has a literal-true predicate'
 );
+
+-- INV-11b. MUTATION CONTROL for INV-11 on a partitioned table (T24): a
+-- planted org-scoped partitioned table with RLS on and a using (true) policy
+-- must be named. Dropped straight after.
+create table public._sec_inv_probe_parted (id uuid not null, organization_id uuid not null)
+  partition by list (organization_id);
+alter table public._sec_inv_probe_parted enable row level security;
+create policy _sec_inv_probe_open on public._sec_inv_probe_parted for select using (true);
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_literal_true_policies v where v.relname like '\_sec\_inv\_probe\_%'),
+  '_sec_inv_probe_parted._sec_inv_probe_open',
+  'INV-11b control: the literal-true sweep names a using (true) policy on an org-scoped partitioned table'
+);
+drop table public._sec_inv_probe_parted;
 
 -- INV-12. Pattern #25 sweep, in BOTH rendered forms. Which form the tautology
 -- takes depends on where the unqualified column sat:
@@ -898,9 +1028,11 @@ select is(
 -- INV-30c, INV-31 and INV-32 (allowlist F). An entry loses its exemption when
 -- it is stale (no SECURITY DEFINER function of that name in its schema), when
 -- its own body writes (the writer forms above, read from the raw text so a
--- write in a format() string counts) or runs EXECUTE, when a first-party
--- function it reaches through calls does, or when it reaches a function with
--- no first-party body that is not on allowlist K.
+-- write in a format() string counts) or runs EXECUTE, when its own body has
+-- a side effect that is not a table write (the side-effect forms above,
+-- T24), when a first-party function it reaches through calls does any of
+-- these, or when it reaches a function with no first-party body that is not
+-- on allowlist K.
 --   * A call is a name followed by "(" in the body with comments and quoted
 --     text removed. A qualified name resolves to that schema; a bare name to
 --     every schema on the CALLER's own pinned search_path (public when it
@@ -913,10 +1045,12 @@ select is(
 --     be on allowlist K.
 --   * The writer census is the non-extension functions whose raw body has a
 --     writer form or whose stripped body runs EXECUTE.
+--   * The side-effect census (T24) is the non-extension functions whose
+--     stripped body has a side-effect form.
 -- Not seen, as for every text census in this file: calls made through
 -- dynamic SQL (EXECUTE in an entry is refused by 0359 test 73, and in a
--- callee by the census), operators, casts and triggers; pg_catalog functions
--- are not judged.
+-- callee by the census), operators, casts and triggers; of pg_catalog's
+-- functions only the side-effect forms are judged.
 create temporary view _sec_inv_fn_scope as
   select p.oid, n.nspname::text as nspname, p.proname::text as proname,
          n.nspname || '.' || p.proname as fn, p.prosecdef,
@@ -924,6 +1058,8 @@ create temporary view _sec_inv_fn_scope as
                   where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e') as ext,
          p.prosrc as raw,
          regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), ' ', 'g') as s,
+         regexp_replace(p.prosrc, (select re from _sec_inv_comment_re), '\1', 'g') as c,
+         n.nspname || '.' || p.proname || '(' || oidvectortypes(p.proargtypes) || ')' as sig,
          case when exists (select 1 from unnest(p.proconfig) c where c like 'search_path=%')
               then coalesce((select array_agg(x)
                                from unnest(p.proconfig) c,
@@ -938,6 +1074,11 @@ create temporary view _sec_inv_writer_census as
   select f.oid, f.fn from _sec_inv_fn_scope f
    where not f.ext
      and (f.raw ~* (select re from _sec_inv_writer_re) or f.s ~* '\mexecute\M');
+
+create temporary view _sec_inv_side_effect_census as
+  select f.oid, f.fn from _sec_inv_fn_scope f
+   where not f.ext
+     and f.s ~* (select re from _sec_inv_side_effect_re);
 
 create temporary view _sec_inv_call_edges as
   with calls as (
@@ -987,6 +1128,14 @@ create temporary view _sec_inv_allowlist_audit as
       from reach w join _sec_inv_fn_scope f on f.oid = w.oid
      where w.oid <> w.root and w.oid in (select c.oid from _sec_inv_writer_census c)
     union all
+    select w.list, w.entry, 'allowlist-' || w.list || ' entry has a side effect (a setting, a sequence, a notification or an advisory lock): ' || f.fn
+      from reach w join _sec_inv_fn_scope f on f.oid = w.oid
+     where w.oid = w.root and w.oid in (select c.oid from _sec_inv_side_effect_census c)
+    union all
+    select w.list, w.entry, 'allowlist-' || w.list || ' entry ' || w.entry || ' reaches a function with a side effect (a setting, a sequence, a notification or an advisory lock): ' || f.fn
+      from reach w join _sec_inv_fn_scope f on f.oid = w.oid
+     where w.oid <> w.root and w.oid in (select c.oid from _sec_inv_side_effect_census c)
+    union all
     select o.list, o.entry, 'allowlist-' || o.list || ' entry ' || o.entry || ' reaches a function with no first-party body, not on allowlist K: ' || o.fn
       from outside o
      where o.fn not in (select k.fn from _sec_inv_external_callee_allow k)
@@ -996,15 +1145,15 @@ create temporary view _sec_inv_allowlist_audit as
      where not exists (select 1 from _sec_inv_fn_scope f where f.fn = k.fn)
         or k.fn not in (select o.fn from outside o)) v;
 
--- INV-26. No stale entry in allowlist E, and no entry that WRITES, in its own
--- body or through what it calls (T23); and no stale entry in allowlist K. A
--- predicate that grows a write must lose its exemption the same day.
--- Offenders are named.
+-- INV-26. No stale entry in allowlist E, and no entry that WRITES or has a
+-- side effect (T24), in its own body or through what it calls (T23); and no
+-- stale entry in allowlist K. A predicate that grows a write must lose its
+-- exemption the same day. Offenders are named.
 select is(
   (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '')
      from _sec_inv_allowlist_audit v where v.list in ('E', 'K')),
   '',
-  'INV-26: allowlist E has no stale entry and no entry that writes, runs EXECUTE, reaches a writer, or reaches a function with no first-party body that allowlist K does not list; allowlist K has no stale entry'
+  'INV-26: allowlist E has no stale entry and no entry that writes, runs EXECUTE or has a side effect, reaches a function that does, or reaches a function with no first-party body that allowlist K does not list; allowlist K has no stale entry'
 );
 
 
@@ -1417,6 +1566,95 @@ drop function public._sec_inv_probe_dynamic();
 drop function public._sec_inv_probe_ext_path();
 drop function public._sec_inv_probe_writer();
 
+-- INV-30d. VACUITY + MUTATION CONTROL for the side-effect forms (T24), one
+-- probe per form, read the way the census reads a body: comments and quoted
+-- text removed first. The last six must not match: a setting read, the
+-- names in a comment and in a message, an UPDATE's SET (the writer forms'
+-- business), column names that contain the words, a row lock and a sequence
+-- read.
+select is(
+  (select string_agg(v.form || '=' ||
+                     (regexp_replace(v.src, (select re from _sec_inv_strip_re), ' ', 'g')
+                        ~* (select re from _sec_inv_side_effect_re))::text, ', ' order by v.n)
+     from (values
+       (1, 'set_config',          $s$perform set_config('request.jwt.claim.sub', v, true);$s$),
+       (2, 'setval',              $s$select setval('public.s', 1);$s$),
+       (3, 'nextval',             $s$v := nextval('public.s');$s$),
+       (4, 'pg_notify',           $s$perform pg_notify('ch', 'x');$s$),
+       (5, 'advisory lock',       $s$perform pg_advisory_xact_lock(1);$s$),
+       (6, 'try advisory lock',   $s$if pg_try_advisory_xact_lock(1, 2) then return true; end if;$s$),
+       (7, 'set local',           $s$begin set local lock_timeout to '1s'; return true; end;$s$),
+       (8, 'set role',            $s$if v then set role authenticated; end if;$s$),
+       (9, 'reset',               $s$v := 1; reset role;$s$),
+       (10, 'notify',             $s$v := 1; notify ch;$s$),
+       (11, 'read: current_setting', $s$v := current_setting('request.jwt.claim.sub', true);$s$),
+       (12, 'read: names in a comment and a message', $s$-- set_config( and ; set role
+  v := 'pg_notify(1); reset all';$s$),
+       (13, 'not a statement: update set', $s$update public.t set a = 1;$s$),
+       (14, 'read: column names', $s$select t.reset_at, t.set_id, t.notify from public.t t;$s$),
+       (15, 'read: for update',   $s$select 1 from public.t for update;$s$),
+       (16, 'read: currval',      $s$v := currval('public.s');$s$)) v(n, form, src)),
+  'set_config=true, setval=true, nextval=true, pg_notify=true, advisory lock=true, try advisory lock=true, '
+  'set local=true, set role=true, reset=true, notify=true, read: current_setting=false, '
+  'read: names in a comment and a message=false, not a statement: update set=false, read: column names=false, '
+  'read: for update=false, read: currval=false',
+  'INV-30d control: the side-effect detector catches set_config, setval, nextval, pg_notify, an advisory lock and a SET, RESET or NOTIFY statement, and no read'
+);
+
+-- INV-30e. MUTATION CONTROL for the side-effect arm of the audit (T24). Three
+-- planted entries write no table: one sets request.jwt.claim.sub in its own
+-- body, one reaches a function two calls down that sends a notification, and
+-- an allowlist-F entry runs SET LOCAL. Each must be named. A fourth only
+-- reads the setting and names the forms in a comment and a message; it must
+-- not be named. Everything planted is removed straight after.
+create function public._sec_inv_probe_notifier() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform pg_notify('_sec_inv_probe', ''); return true; end; $probe$;
+create function public._sec_inv_probe_notify_relay() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin return public._sec_inv_probe_notifier(); end; $probe$;
+create function public._sec_inv_probe_sets_claim() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin perform set_config('request.jwt.claim.sub', '00000000-0000-0000-0000-000000000000', true); return true; end; $probe$;
+create function public._sec_inv_probe_reaches_notify() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin return public._sec_inv_probe_notify_relay(); end; $probe$;
+create function public._sec_inv_probe_reads_claim() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$
+  -- set_config('request.jwt.claim.sub', ...) is only named here
+  begin return current_setting('request.jwt.claim.sub', true) is distinct from 'set role; pg_notify('; end; $probe$;
+create function ledger._sec_inv_probe_runs_set() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin set local lock_timeout to '1s'; return true; end; $probe$;
+revoke all on function public._sec_inv_probe_notifier(), public._sec_inv_probe_notify_relay(),
+  public._sec_inv_probe_sets_claim(), public._sec_inv_probe_reaches_notify(), public._sec_inv_probe_reads_claim(),
+  ledger._sec_inv_probe_runs_set() from public, anon;
+insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_sets_claim',     'control probe: sets an identity setting in its own body; deleted below'),
+  ('_sec_inv_probe_reaches_notify', 'control probe: reaches a notification two calls down; deleted below'),
+  ('_sec_inv_probe_reads_claim',    'control probe: reads a setting and names the forms in a comment and a message; deleted below');
+insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_runs_set', 'control probe: allowlist-F entry running SET LOCAL; deleted below');
+
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_allowlist_audit v where v.entry like '%\_sec\_inv\_probe\_%'),
+  'allowlist-E entry _sec_inv_probe_reaches_notify reaches a function with a side effect (a setting, a sequence, a notification or an advisory lock): public._sec_inv_probe_notifier | '
+  'allowlist-E entry has a side effect (a setting, a sequence, a notification or an advisory lock): public._sec_inv_probe_sets_claim | '
+  'allowlist-F entry has a side effect (a setting, a sequence, a notification or an advisory lock): ledger._sec_inv_probe_runs_set',
+  'INV-30e control: the allowlist audit names an entry that changes a setting in its own body or reaches a notification through calls, for allowlists E and F, and leaves a setting read alone'
+);
+
+delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
+delete from _sec_inv_ledger_secdef_nogate_allow where why like 'control probe:%';
+drop function public._sec_inv_probe_sets_claim();
+drop function public._sec_inv_probe_reaches_notify();
+drop function public._sec_inv_probe_reads_claim();
+drop function ledger._sec_inv_probe_runs_set();
+drop function public._sec_inv_probe_notify_relay();
+drop function public._sec_inv_probe_notifier();
+
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- 11. THE `ledger` SCHEMA IS SWEPT TOO (0371)
@@ -1431,9 +1669,10 @@ drop function public._sec_inv_probe_writer();
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- INV-31. The sweep, plus allowlist F's own audit (the view INV-26 reads: no
--- stale entry, and no entry that writes, runs EXECUTE, reaches a writer, or
--- reaches a function with no first-party body that allowlist K does not
--- list). Offenders are named in the failure output.
+-- stale entry, and no entry that writes, runs EXECUTE or has a side effect,
+-- reaches a function that does, or reaches a function with no first-party
+-- body that allowlist K does not list). Offenders are named in the failure
+-- output.
 select is(
   (select coalesce(string_agg(x, ', ' order by x collate "C"), '') from (
      select 'ungated: ledger.' || p.proname as x
@@ -1991,6 +2230,165 @@ select is(
   'INV-41 control: the scope-cache census sees a planted writer'
 );
 drop function public._sec_inv_probe_draw_scope();
+
+
+-- ═══════════════════════════════════════════════════════════════════════════
+-- 15. WHO MAY SET AN IDENTITY SETTING OR RAISE A TRANSACTION FLAG (T24)
+--
+-- The setting censuses above and in the per-migration tests (0359 tests 17
+-- and 18, 0391 G5, 0397 A1b, INV-40) cover the stockpilot.* flags. This one
+-- covers the settings that say who the caller is: request.jwt.* (auth.uid()
+-- reads request.jwt.claim.sub and request.jwt.claims), role and
+-- session_authorization, set through set_config or a SET or RESET statement.
+-- Every function in public, ledger, storage and graphql_public that sets one
+-- is on allowlist L with its reason, and none of them is executable by anon
+-- or authenticated. Extension members are not judged. The name must be a
+-- literal to be read here; 0359 test 18 refuses a set_config whose name is
+-- not one. The second census holds every stockpilot.* flag and every
+-- function that raises it (allowlist M).
+-- ═══════════════════════════════════════════════════════════════════════════
+
+create temporary view _sec_inv_identity_setters as
+  with setters as (
+    select f.oid, f.sig
+      from _sec_inv_fn_scope f
+     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public') and not f.ext
+       and f.c ~* (select re from _sec_inv_identity_set_re)),
+  l as (select a.sig, to_regprocedure(a.sig) as oid from _sec_inv_identity_setter_allow a)
+  select 'unlisted identity setter: ' || s.sig as x, s.sig
+    from setters s
+   where s.oid not in (select l.oid from l where l.oid is not null)
+  union all
+  select 'stale allowlist-L entry (no such function, or it sets no identity setting now): ' || l.sig, l.sig
+    from l
+   where not exists (select 1 from setters s where s.oid = l.oid)
+  union all
+  select 'allowlist-L entry that anon or authenticated may execute: ' || l.sig, l.sig
+    from l join setters s on s.oid = l.oid
+   where has_function_privilege('anon', s.oid, 'execute')
+      or has_function_privilege('authenticated', s.oid, 'execute');
+
+-- INV-40b. The census. Offenders are named.
+select is(
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_identity_setters v),
+  '',
+  'INV-40b: every function that sets request.jwt.*, role or session_authorization is on allowlist L, and none of them is executable by anon or authenticated'
+);
+
+-- INV-41b. MUTATION CONTROL for INV-40b. Planted: a function in public that
+-- sets request.jwt.claims through set_config and a ledger function that runs
+-- SET LOCAL ROLE, neither listed; allowlist-L rows for a missing function,
+-- for one that sets no identity setting (ledger.active()) and for a planted
+-- setter authenticated may execute. Each must be named. A sixth function
+-- only reads the setting and names set_config in a comment; it must not be
+-- named. Everything planted is removed straight after.
+create function public._sec_inv_probe_sets_claims() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform set_config('request.jwt.claims', '{}', true); end; $probe$;
+create function ledger._sec_inv_probe_sets_role() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin set local role authenticated; end; $probe$;
+create function public._sec_inv_probe_listed_setter() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform set_config('request.jwt.claim.sub', '', true); end; $probe$;
+create function public._sec_inv_probe_reads_claims() returns text
+  language plpgsql security invoker set search_path = public
+  as $probe$
+  -- set_config('request.jwt.claims', ...) is only named here
+  begin return current_setting('request.jwt.claims', true); end; $probe$;
+revoke all on function public._sec_inv_probe_sets_claims(), ledger._sec_inv_probe_sets_role(),
+  public._sec_inv_probe_listed_setter(), public._sec_inv_probe_reads_claims() from public, anon;
+grant execute on function public._sec_inv_probe_listed_setter() to authenticated;
+insert into _sec_inv_identity_setter_allow (sig, why) values
+  ('public._sec_inv_probe_absent()',        'control probe: stale, no such function; deleted below'),
+  ('ledger.active()',                       'control probe: stale, it sets no identity setting; deleted below'),
+  ('public._sec_inv_probe_listed_setter()', 'control probe: listed, and authenticated may execute it; deleted below');
+
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_identity_setters v
+    where v.sig like '%\_sec\_inv\_probe\_%' or v.sig = 'ledger.active()'),
+  'allowlist-L entry that anon or authenticated may execute: public._sec_inv_probe_listed_setter() | '
+  'stale allowlist-L entry (no such function, or it sets no identity setting now): ledger.active() | '
+  'stale allowlist-L entry (no such function, or it sets no identity setting now): public._sec_inv_probe_absent() | '
+  'unlisted identity setter: ledger._sec_inv_probe_sets_role() | '
+  'unlisted identity setter: public._sec_inv_probe_sets_claims()',
+  'INV-41b control: the identity-setting census names an unlisted set_config and an unlisted SET ROLE, a missing, a non-setting and an API-executable allowlist-L entry, and leaves a setting read alone'
+);
+
+delete from _sec_inv_identity_setter_allow where why like 'control probe:%';
+drop function public._sec_inv_probe_sets_claims();
+drop function ledger._sec_inv_probe_sets_role();
+drop function public._sec_inv_probe_listed_setter();
+drop function public._sec_inv_probe_reads_claims();
+
+-- The flag census (T24): every (flag, function) pair found in a function
+-- body in the same four schemas, against allowlist M.
+create temporary view _sec_inv_flag_setters as
+  with found as (
+    select distinct lower(m[1]) as flag, f.fn
+      from _sec_inv_fn_scope f
+      cross join lateral regexp_matches(f.c, (select re from _sec_inv_flag_set_re), 'gi') m
+     where f.nspname in ('public', 'ledger', 'storage', 'graphql_public') and not f.ext)
+  select 'unlisted flag setter: ' || d.flag || ' <- ' || d.fn as x, d.flag, d.fn
+    from found d
+   where not exists (select 1 from _sec_inv_flag_setter_allow a where a.flag = d.flag and a.fn = d.fn)
+  union all
+  select 'stale allowlist-M entry (the function is gone, or does not set the flag): ' || a.flag || ' <- ' || a.fn, a.flag, a.fn
+    from _sec_inv_flag_setter_allow a
+   where not exists (select 1 from found d where d.flag = a.flag and d.fn = a.fn);
+
+-- INV-40c. The census. Offenders are named.
+select is(
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_flag_setters v),
+  '',
+  'INV-40c: every function that sets a stockpilot.* transaction flag is on allowlist M for that flag, and allowlist M has no stale entry'
+);
+
+-- INV-41c. MUTATION CONTROL for INV-40c. Planted: a function that raises a
+-- listed flag through set_config, one that sets a new flag with SET LOCAL,
+-- and one that finishes the flag's name at run time, none of them listed;
+-- and allowlist-M rows for a missing function and for one that sets no flag
+-- (ledger.active). Each must be named. A sixth function only reads a flag
+-- and names set_config in a comment; it must not be named. Everything
+-- planted is removed straight after.
+create function public._sec_inv_probe_raises_flag() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform set_config('stockpilot.add_lines', '1', true); end; $probe$;
+create function ledger._sec_inv_probe_new_flag() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin set local stockpilot._sec_inv_probe to 'on'; end; $probe$;
+create function public._sec_inv_probe_built_flag() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform set_config('stockpilot.' || 'add_lines', '1', true); end; $probe$;
+create function public._sec_inv_probe_reads_flag() returns text
+  language plpgsql security invoker set search_path = public
+  as $probe$
+  -- set_config('stockpilot.add_lines', ...) is only named here
+  begin return current_setting('stockpilot.add_lines', true); end; $probe$;
+revoke all on function public._sec_inv_probe_raises_flag(), ledger._sec_inv_probe_new_flag(),
+  public._sec_inv_probe_built_flag(), public._sec_inv_probe_reads_flag() from public, anon;
+insert into _sec_inv_flag_setter_allow (flag, fn, why) values
+  ('stockpilot.ledger',    'public._sec_inv_probe_absent', 'control probe: stale, no such function; deleted below'),
+  ('stockpilot.add_lines', 'ledger.active',                'control probe: stale, it sets no flag; deleted below');
+
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_flag_setters v
+    where v.fn like '%\_sec\_inv\_probe\_%' or v.fn = 'ledger.active'),
+  'stale allowlist-M entry (the function is gone, or does not set the flag): stockpilot.add_lines <- ledger.active | '
+  'stale allowlist-M entry (the function is gone, or does not set the flag): stockpilot.ledger <- public._sec_inv_probe_absent | '
+  'unlisted flag setter: stockpilot. <- public._sec_inv_probe_built_flag | '
+  'unlisted flag setter: stockpilot._sec_inv_probe <- ledger._sec_inv_probe_new_flag | '
+  'unlisted flag setter: stockpilot.add_lines <- public._sec_inv_probe_raises_flag',
+  'INV-41c control: the flag census names an unlisted set_config, an unlisted SET LOCAL of a new flag and a name finished at run time, a missing and a non-setting allowlist-M entry, and leaves a flag read alone'
+);
+
+delete from _sec_inv_flag_setter_allow where why like 'control probe:%';
+drop function public._sec_inv_probe_raises_flag();
+drop function ledger._sec_inv_probe_new_flag();
+drop function public._sec_inv_probe_built_flag();
+drop function public._sec_inv_probe_reads_flag();
 
 select * from finish();
 rollback;

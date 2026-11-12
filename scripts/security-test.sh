@@ -1161,6 +1161,12 @@ WEB_TESTS=(
   # GRANT or REVOKE on public or an ALTER DEFAULT PRIVILEGES ... GRANT fails
   # the file on its own.
   src/test/migration-grants.guard.test.ts
+  # T24: a pgTAP pin that says a database function writes nothing, or only
+  # what the pin names, reads the write forms of the invariant suite
+  # (_sec_inv_writer_re in security_invariants.test.sql, proved form by form
+  # by INV-30b): the whole pattern or its UPDATE arm byte for byte, or the
+  # five bare verbs. A pin with a narrower list of its own fails.
+  src/test/pgtap-write-pins.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web
   # toast both show the message verbatim). The route and action pin the
