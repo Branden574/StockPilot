@@ -4,7 +4,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // The Start a count page (redesign M6 / P-FORM): the way back, the page's one
 // h1 and its sentence, and the Scope card holding the form, with the gates it
 // always had: stock:adjust to open it, cycle_counts:assign for the member list
-// (read only then), and the sports module for the Product groups tab.
+// (read only then), and the sports module for the Product groups tab. Since
+// B42 the form is shown only to someone who can start a count; anyone else
+// who opens the page reads why.
 
 const ctxHolder = vi.hoisted(() => ({
   current: {
@@ -49,6 +51,8 @@ vi.mock('@/components/cycle-counts/new-cycle-count', () => ({
   },
 }));
 
+import { COUNT_START_MANAGER_ONLY_COPY } from '@stockpilot/core';
+
 import NewCycleCountPage from './page';
 
 beforeEach(() => {
@@ -86,13 +90,47 @@ describe('Start a count page', () => {
     );
   });
 
-  it('staff can open it but the member list is never read for them', async () => {
+  // B42: staff hold stock:adjust (this page's gate) but not
+  // cycle_counts:assign, so they opened the form and only learned at Start,
+  // from a toast with the raw words "Missing permission: cycle_counts:assign",
+  // that the server refuses them. The command palette and the n c shortcut
+  // still lead here, so the page says why instead.
+  it('staff see the manager sentence and a way back, and no form, and no member or warehouse read', async () => {
     ctxHolder.current = { role: 'staff', permissions: undefined };
     render(await NewCycleCountPage());
+    expect(screen.getByRole('heading', { level: 1, name: 'Start a count' })).toBeInTheDocument();
+    expect(screen.getByText(COUNT_START_MANAGER_ONLY_COPY)).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /Back to cycle counts/ })).not.toHaveLength(0);
+    for (const link of screen.getAllByRole('link', { name: /Back to cycle counts/ })) {
+      expect(link).toHaveAttribute('href', '/dashboard/cycle-counts');
+    }
+    expect(screen.queryByTestId('new-count-form')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Scope' })).not.toBeInTheDocument();
+    expect(shellProps).not.toHaveBeenCalled();
     expect(fetchCountAssignees).not.toHaveBeenCalled();
-    expect(shellProps).toHaveBeenCalledWith(
-      expect.objectContaining({ canAssign: false, members: [] }),
-    );
+    expect(listNames).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Missing permission/)).not.toBeInTheDocument();
+  });
+
+  it('a manager whose cycle_counts:assign was taken away gets the same sentence', async () => {
+    ctxHolder.current = {
+      role: 'manager',
+      permissions: new Set(['cycle_counts:read', 'stock:adjust']),
+    };
+    render(await NewCycleCountPage());
+    expect(screen.getByText(COUNT_START_MANAGER_ONLY_COPY)).toBeInTheDocument();
+    expect(shellProps).not.toHaveBeenCalled();
+    expect(listNames).not.toHaveBeenCalled();
+  });
+
+  it('staff granted both keys by override still stop at the role, as the server does', async () => {
+    ctxHolder.current = {
+      role: 'staff',
+      permissions: new Set(['cycle_counts:read', 'cycle_counts:assign', 'stock:adjust']),
+    };
+    render(await NewCycleCountPage());
+    expect(screen.getByText(COUNT_START_MANAGER_ONLY_COPY)).toBeInTheDocument();
+    expect(shellProps).not.toHaveBeenCalled();
   });
 
   it('the sports module unlocks the Product groups tab', async () => {

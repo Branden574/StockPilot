@@ -1,0 +1,9 @@
+<div>
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning border-0 py-0">
+    "In progress"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success border-0 py-0">
+    "Completed"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-destructive-wash text-destructive border-0 py-0">
+    "Canceled"
+  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground py-0">
+    "archived_later"

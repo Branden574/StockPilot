@@ -14,6 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -162,7 +163,13 @@ describe('Rentals list', () => {
     expect(styleBlock(LIST, 'segment')).toMatch(/minHeight: 44,/);
     expect(styleBlock(LIST, 'track')).toMatch(/padding: 3,[\s\S]*borderRadius: 10,/);
     expect(code).toContain("borderColor: active ? c.ink3 : 'transparent',");
-    expect(code).toContain('<View style={[styles.track, { backgroundColor: c.sunk }]}>');
+    // Classic's track, read off the list's Classic projection; Liquid Glass
+    // lays the iOS segmented control over the same two buttons.
+    expect(classicFlat(sourceOf(LIST), LIST)).toContain(
+      flatNorm('<View style={[styles.track, { backgroundColor: c.sunk }]}>'),
+    );
+    expect(code).toContain('lg && glassSegTrack(lg)');
+    expect(code).toContain('lg && glassSegment(lg, active),');
     expect(code).toContain('const SEGMENT_CAP = capTo(13, TYPE_CEILING.control);');
   });
 
@@ -279,14 +286,24 @@ describe('Check out', () => {
   });
 
   it('the steppers keep their names and states, on the stronger border', () => {
-    expect(code).toContain(
-      'style={[ styles.step, { borderColor: c.hair2, backgroundColor: c.card, opacity: qty === 0 ? 0.35 : 1, }, ]}',
+    // Classic, read through the classic projection: unchanged.
+    const classic = classicFlat(sourceOf(CHECKOUT), CHECKOUT);
+    expect(classic).toContain(
+      flatNorm(
+        'style={[ styles.step, { borderColor: c.hair2, backgroundColor: c.card, opacity: qty === 0 ? 0.35 : 1, }, ]}',
+      ),
     );
-    expect(code).toContain(
-      'style={[ styles.step, { borderColor: c.hair2, backgroundColor: c.card, opacity: qty >= avail ? 0.35 : 1, }, ]}',
+    expect(classic).toContain(
+      flatNorm(
+        'style={[ styles.step, { borderColor: c.hair2, backgroundColor: c.card, opacity: qty >= avail ? 0.35 : 1, }, ]}',
+      ),
     );
-    expect(code).toContain('<Minus size={16} color={c.ink} strokeWidth={2} />');
-    expect(code).toContain('<Plus size={16} color={c.ink} strokeWidth={2} />');
+    expect(classic).toContain(flatNorm('<Minus size={16} color={c.ink} strokeWidth={2}/>'));
+    expect(classic).toContain(flatNorm('<Plus size={16} color={c.ink} strokeWidth={2}/>'));
+    // Liquid Glass: the tinted iOS stepper, its sign in the accent words.
+    expect(code.match(/lg && glassTintedStep\(lg\),/g)).toHaveLength(2);
+    expect(code).toContain('<Minus size={16} color={lg ? lg.g.accentText : c.ink} strokeWidth={2} />');
+    expect(code).toContain('<Plus size={16} color={lg ? lg.g.accentText : c.ink} strokeWidth={2} />');
   });
 
   it('a warehouse choice: the recessed chip, ink when chosen', () => {

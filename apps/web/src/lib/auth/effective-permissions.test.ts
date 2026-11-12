@@ -4,8 +4,6 @@ vi.mock('server-only', () => ({}));
 const reportError = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError: (...a: unknown[]) => reportError(...a) }));
 
-import { createClient } from '@supabase/supabase-js';
-
 import {
   effectivePermissions,
   PERMISSIONS,
@@ -13,6 +11,8 @@ import {
   type Permission,
   type Role,
 } from '@stockpilot/core';
+
+import { json, NOT_A_LIST, realSupabaseClient } from '@/test/postgrest-answers';
 
 import {
   loadEffectivePermissions,
@@ -373,15 +373,6 @@ describe('loadEffectivePermissions: a refusal is logged every time and reported 
  * not a list.
  */
 describe('loadEffectivePermissions: an answer that is not a list is a failed read', () => {
-  const NOT_A_LIST = [
-    ['an empty 2xx body', { data: null, error: null, status: 200 }],
-    ['an empty 404 body (status rewritten to 204)', { data: null, error: null, status: 204 }],
-    [
-      'a JSON object',
-      { data: { permission: 'stock:adjust', granted: false }, error: null, status: 200 },
-    ],
-  ] as const;
-
   it.each(NOT_A_LIST)(
     '%s from the user override read refuses a staff member whose stock:adjust was revoked, never the role defaults',
     async (_shape, answer) => {
@@ -449,23 +440,11 @@ describe('loadEffectivePermissions: an answer that is not a list is a failed rea
  * request leaves the test.
  */
 describe('loadEffectivePermissions through a real supabase-js client', () => {
-  const json = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-
   /** The role read answers no rows; the user read answers `userAnswer()`. */
   function realClient(userAnswer: () => Response) {
-    return createClient('https://supabase.example.test', 'test-anon-key', {
-      auth: { persistSession: false, autoRefreshToken: false },
-      global: {
-        fetch: async (input: RequestInfo | URL) => {
-          const url = new URL(input instanceof Request ? input.url : String(input));
-          return url.pathname.endsWith('/user_permission_overrides') ? userAnswer() : json([]);
-        },
-      },
-    });
+    return realSupabaseClient(({ url }) =>
+      url.pathname.endsWith('/user_permission_overrides') ? userAnswer() : json([]),
+    );
   }
 
   it.each([

@@ -127,6 +127,7 @@ export function RangeCalendar({
   return (
     <div
       ref={gridRef}
+      data-glass="calendar"
       className={cn('flex flex-col gap-4 sm:flex-row sm:gap-6', className)}
       onPointerLeave={() => setHover(null)}
     >

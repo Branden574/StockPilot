@@ -14,6 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const poGet = vi.fn();
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => ({
     organizationId: 'org-1',
@@ -94,6 +98,9 @@ vi.mock('@/server/services/context', () => ({
 
 import PoDetailPage from './page';
 
+// A well-formed id: the page refuses any other before reading (B63).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
+
 function poWithExpected(expectedAt: string | null) {
   return {
     po: {
@@ -112,7 +119,7 @@ function poWithExpected(expectedAt: string | null) {
 }
 
 async function expectedRowText(): Promise<string | null> {
-  const { getByText } = render(await PoDetailPage({ params: Promise.resolve({ id: 'po-1' }) }));
+  const { getByText } = render(await PoDetailPage({ params: Promise.resolve({ id: PO_ID }) }));
   return getByText('Expected').nextElementSibling?.textContent ?? null;
 }
 

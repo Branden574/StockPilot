@@ -5,16 +5,20 @@ import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
-import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
+import {
+  BUNDLE_DUPLICATE_COMPONENT,
+  BUNDLE_NO_REQUIRED_COMPONENT,
+  componentItemsDistinct,
+  componentsHaveRequired,
+} from '@/lib/bundles/component-set';
 import { BundlesService } from '@/server/services/bundles';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.bundles');
 }
 
 const componentInputSchema = z.object({
@@ -23,12 +27,14 @@ const componentInputSchema = z.object({
   isOptional: z.boolean().optional(),
 });
 
-/** One row per item (L10): (bundle_id, item_id) is the table's key. */
+/** One row per item (L10): (bundle_id, item_id) is the table's key. At least
+ *  one component is required, not optional (0415: no kit from nothing). */
 const componentsSchema = z
   .array(componentInputSchema)
   .min(1)
   .max(100)
-  .refine(componentItemsDistinct, { message: BUNDLE_DUPLICATE_COMPONENT });
+  .refine(componentItemsDistinct, { message: BUNDLE_DUPLICATE_COMPONENT })
+  .refine(componentsHaveRequired, { message: BUNDLE_NO_REQUIRED_COMPONENT });
 
 const createBundleSchema = z.object({
   name: z.string().trim().min(1).max(200),

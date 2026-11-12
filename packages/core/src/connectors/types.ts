@@ -35,6 +35,12 @@ export interface PushResult {
   externalId?: string;
   retryable?: boolean;
   error?: string;
+  /**
+   * Nothing was sent: the connector held the event back because the cron run
+   * had too little time left (ConnectorDeps.deadlineAt). Not an attempt: the
+   * drainer puts the event's ledger row back as it was (docket B81).
+   */
+  notStarted?: boolean;
 }
 
 /** Injected seam to the service layer so connectors stay unit-testable. */
@@ -55,6 +61,12 @@ export interface ConnectorDeps {
     externalId: string,
     externalMeta?: Record<string, unknown>,
   ): Promise<void>;
+  /**
+   * Epoch ms by which the cron run must be done (docket B81). A connector that
+   * cannot repeat a create safely starts none it could not finish, with its
+   * writes, before then. Absent outside the cron.
+   */
+  deadlineAt?: number;
 }
 
 export interface Connector {

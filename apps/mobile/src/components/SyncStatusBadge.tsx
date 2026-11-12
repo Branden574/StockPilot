@@ -1,12 +1,8 @@
 import * as React from 'react';
-import {
-  ActivityIndicator,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { GlassBackdrop } from '@/components/ui/glass/glass-backdrop';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { syncBadgeDot, syncBadgeSurface, type Tone } from '@/components/ui/tones';
 import { cycleCountSync, useSyncStatus } from '@/lib/cycle-count-sync';
 import { syncBadgeState } from '@/lib/sync-badge';
@@ -45,6 +41,10 @@ import { useTheme } from '@/lib/use-theme';
  */
 export function SyncStatusBadge({ surface = 'screen' }: { surface?: SyncBadgeSurface }) {
   const { c } = useTheme();
+  // Liquid Glass (iOS-Count.dc.html): on a screen the badge is the board's
+  // glass sync capsule (.ios-capsule.glass, 13pt words, 44pt); on a camera
+  // bar it stays the dark chip, as the camera chrome does.
+  const lg = useGlass();
   const { status, pendingCount, rejectedCount, unconfirmedCount } = useSyncStatus();
   const { label, tone, spinner } = syncBadgeState({
     status,
@@ -66,11 +66,18 @@ export function SyncStatusBadge({ surface = 'screen' }: { surface?: SyncBadgeSur
         styles.pill,
         onCamera && styles.pillOnCamera,
         { backgroundColor: chip.bg, borderColor: chip.border },
-        pressed && { opacity: 0.65 },
+        lg ? (onCamera ? null : GLASS_CAPSULE) : null,
+        // A glass material never sits under a fading parent: glass scales.
+        lg
+          ? onCamera
+            ? pressed && { opacity: 0.65 }
+            : { transform: [{ scale: pressed ? 0.96 : 1 }] }
+          : pressed && { opacity: 0.65 },
       ]}
       accessibilityRole="button"
       accessibilityLabel={`Sync status: ${label}. Tap to retry.`}
     >
+      {lg ? onCamera ? null : <GlassBackdrop variant="floating" radius={22} /> : null}
       {kind === 'spinner' ? (
         <ActivityIndicator size="small" color={dotColor} />
       ) : (
@@ -81,7 +88,11 @@ export function SyncStatusBadge({ surface = 'screen' }: { surface?: SyncBadgeSur
           nothing else can shrink, so an uncapped "Offline · 12 queued" pushes
           them off-screen. */}
       <Text
-        style={[styles.label, { color: chip.fg }]}
+        style={[
+          styles.label,
+          { color: chip.fg },
+          lg ? (onCamera ? null : [lg.font.displaySemi, { fontSize: 13, color: c.ink }]) : null,
+        ]}
         numberOfLines={1}
         maxFontSizeMultiplier={LABEL_CAP}
       >
@@ -109,6 +120,18 @@ const CAMERA_CHIP: Tone = {
   bg: CAMERA_PALETTE.card,
   border: CAMERA_PALETTE.ink4,
 };
+
+/** The board's sync capsule (.ios-capsule [705], padding 0 12, 44pt tall). */
+const GLASS_CAPSULE = {
+  minHeight: 44,
+  paddingVertical: 6,
+  paddingHorizontal: 12,
+  borderRadius: 22,
+  borderWidth: 0,
+  backgroundColor: 'transparent',
+  marginRight: 0,
+  alignSelf: 'center',
+} as const;
 
 /** 11pt badge label against the chrome ceiling. */
 const LABEL_CAP = capTo(11, TYPE_CEILING.chrome);

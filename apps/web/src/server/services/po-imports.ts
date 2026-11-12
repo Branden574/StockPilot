@@ -220,6 +220,14 @@ export interface PoImportLineRow {
   mapping_confidence: number | null;
 }
 
+/** Bytes recorded as a PDF that are not one (MED-22): the person's file, not a fault. */
+class NotAPdfError extends Error {
+  constructor() {
+    super('not a PDF document');
+    this.name = 'NotAPdfError';
+  }
+}
+
 export class PoImportsService {
   constructor(private readonly ctx: ServiceContext) {}
 
@@ -1285,6 +1293,7 @@ export class PoImportsService {
 
     let canonical: CanonicalPo;
     let rawText: string | null = null;
+    const sourceType: ParseSourceType = (header.source_type as string) === 'pdf' ? 'pdf' : 'csv';
     try {
       const { data: blob, error: dlErr } = await this.ctx.supabase.storage
         .from('po-imports')
@@ -1294,8 +1303,6 @@ export class PoImportsService {
       }
       const ab = await blob.arrayBuffer();
       const buffer = Buffer.from(ab);
-      const sourceType: ParseSourceType =
-        (header.source_type as string) === 'pdf' ? 'pdf' : 'csv';
       // MED-22, byte leg. `createSignedUploadUrl` cannot carry a content type
       // (storage-js accepts only `{ upsert }`), so the PUT's Content-Type
       // header stays client-chosen even though the presign is now bound to an
@@ -1312,7 +1319,7 @@ export class PoImportsService {
       // text" is exactly what the CSV parser already decides (it yields zero
       // lines, which is already surfaced as a failed parse).
       if (sourceType === 'pdf' && !buffer.subarray(0, 1024).includes('%PDF-')) {
-        throw new Error('not a PDF document');
+        throw new NotAPdfError();
       }
       const parsed = await parsePoFile(buffer, sourceType);
       canonical = parsed;
@@ -1320,7 +1327,21 @@ export class PoImportsService {
       // debugging when the parser yields zero lines on a real-world PO.
       rawText = parsed.rawText ?? null;
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'parse error';
+      // S31: parse_error is shown as it is, on the web and the phone. It
+      // stored Storage's words or a PDF library's; it is the app's sentence
+      // now, and the error's own text is reported.
+      const notPdf = e instanceof NotAPdfError;
+      const msg = notPdf
+        ? 'This file is not a PDF.'
+        : 'The file could not be read. Upload it again as a PDF or CSV.';
+      if (!notPdf) {
+        void reportError(e instanceof Error ? e : new Error(String(e)), {
+          tag: 'po_import.parse',
+          organizationId: this.ctx.organizationId,
+          level: 'warning',
+          extra: { importId: id, sourceType },
+        });
+      }
       await this.ctx.supabase
         .from('po_imports')
         .update({ status: 'failed', parse_error: msg })

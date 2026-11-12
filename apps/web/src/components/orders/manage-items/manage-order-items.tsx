@@ -711,7 +711,7 @@ export function ManageOrderItems({
           })}
         />
       ) : (
-        <div className="border-border bg-card overflow-hidden rounded-lg border">
+        <div className="border-border bg-card overflow-hidden rounded-lg border" data-glass="card">
           <Table
             scrollLabel="Order items"
             className="min-w-[820px]"
@@ -808,6 +808,7 @@ export function ManageOrderItems({
                               <Button
                                 size="sm"
                                 variant="ghost"
+                                data-glass-role="order-items-family"
                                 disabled={disabled || busy}
                                 aria-label={`${ORDER_ITEMS_SELECT_FAMILY_COPY}: ${row.familyName ?? row.name}`}
                                 onClick={() => void openFamily(row)}
@@ -851,6 +852,7 @@ export function ManageOrderItems({
           role="region"
           aria-label="Selection"
           className="border-border bg-card sticky bottom-4 z-10 flex flex-wrap items-center gap-2 rounded-lg border px-4 py-2.5 shadow-sm"
+          data-glass="order-items-selbar"
         >
           <span className="text-foreground mr-auto text-[13.5px] font-medium tabular-nums">
             {orderItemsSelectedCopy(count)}
@@ -890,12 +892,16 @@ export function ManageOrderItems({
 
       {/* Review selection: every selected record, off-page ones included. */}
       <Sheet open={reviewOpen && count > 0} onOpenChange={(open) => !busy && setReviewOpen(open)}>
-        <SheetContent side="right" className="flex flex-col p-0 sm:max-w-md">
-          <SheetHeader>
+        <SheetContent
+          side="right"
+          className="flex flex-col p-0 sm:max-w-md"
+          data-glass-role="order-items-review"
+        >
+          <SheetHeader data-glass="dialog-header">
             <SheetTitle>{ORDER_ITEMS_REVIEW_SELECTION_COPY}</SheetTitle>
             <SheetDescription>{orderItemsSelectedCopy(count)}</SheetDescription>
           </SheetHeader>
-          <SheetBody>
+          <SheetBody data-glass="dialog-body">
             <ul aria-label="Selected items" className="flex flex-col gap-2">
               {[...selection.entries].map(([id, entry]) => (
                 <li
@@ -932,7 +938,7 @@ export function ManageOrderItems({
               ))}
             </ul>
           </SheetBody>
-          <SheetFooter>
+          <SheetFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               disabled={disabled || busy}
@@ -954,7 +960,7 @@ export function ManageOrderItems({
       {/* Select family: exactly the records listed and checked are added. */}
       <Dialog open={family !== null} onOpenChange={(open) => !open && setFamily(null)}>
         <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{ORDER_ITEMS_SELECT_FAMILY_COPY}</DialogTitle>
             <DialogDescription>{family?.familyName ?? ''}</DialogDescription>
           </DialogHeader>
@@ -988,6 +994,7 @@ export function ManageOrderItems({
               <ul
                 aria-label="Family records"
                 className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto"
+                data-glass="dialog-body"
               >
                 {family.rows.map((r) => {
                   const detail = [r.sizeOrEdition, r.warehouseName]
@@ -1028,13 +1035,14 @@ export function ManageOrderItems({
           {family?.status === 'ready' && family.truncated ? (
             <p className="text-muted-foreground text-[12.5px]">{FAMILY_TRUNCATED_COPY}</p>
           ) : null}
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button variant="outline" onClick={() => setFamily(null)}>
               Cancel
             </Button>
             <Button
               disabled={family?.status !== 'ready' || family.checked.size === 0}
               onClick={confirmFamily}
+              data-glass-role="order-items-family-add"
             >
               {FAMILY_ADD_COPY}
             </Button>

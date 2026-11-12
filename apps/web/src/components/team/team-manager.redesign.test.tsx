@@ -37,6 +37,7 @@ vi.mock('@/server/actions/team', () => ({
 }));
 vi.mock('@/server/actions/user-categories', () => ({ setUserCategoryAccessAction: vi.fn() }));
 
+import { avatarHue } from './avatar-hue';
 import { TeamManager } from './team-manager';
 
 import type { Role } from '@stockpilot/core';
@@ -183,6 +184,15 @@ describe('Team page header and cards', () => {
       .closest('section')!;
     expect(within(invites).getByRole('button', { name: /Resend/ })).toBeInTheDocument();
     expect(within(invites).getByRole('button', { name: /Copy link/ })).toBeInTheDocument();
+  });
+
+  it('hooks each initials avatar to the member’s own board hue (inert data-glass-hue, glass only)', () => {
+    renderTeam('admin');
+    const owner = screen.getByText('OO');
+    const staff = screen.getByText('SS');
+    expect(owner).toHaveAttribute('data-glass-role', 'member-initials');
+    expect(owner).toHaveAttribute('data-glass-hue', String(avatarHue('m-owner')));
+    expect(staff).toHaveAttribute('data-glass-hue', String(avatarHue('m-1')));
   });
 
   it('marks a delivery driver with the Driver pill and its explanation', () => {

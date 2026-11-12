@@ -14,6 +14,7 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, TextareaProps>(
     return (
       <textarea
         ref={ref}
+        data-glass="input"
         className={cn(
           'bg-card flex min-h-[80px] w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-2 text-[13px] transition-colors',
           'placeholder:text-muted-foreground',

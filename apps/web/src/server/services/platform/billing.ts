@@ -4,9 +4,15 @@ import { createAdminClient } from '@/lib/supabase/admin';
 
 import { PLAN_IDS, type PlanId } from '@stockpilot/core';
 
+import { ServiceError } from '../context';
+
 import { recordPlatformAudit } from './audit';
 
 /**
+ * Its own refusals are ServiceErrors, whose words the billing actions answer;
+ * a database error stays a plain Error, which they report and never answer
+ * (S31).
+ *
  * Platform-admin billing control. Writes the admin-override dials on an org
  * (service-role; the org may not be one the operator belongs to). Every write
  * is audited as 'billing_changed'. The CALLER must have passed the platform-
@@ -39,10 +45,10 @@ function isPlanId(v: string | null): v is PlanId {
 
 export async function setBilling(input: SetBillingInput): Promise<void> {
   if (input.accessTier !== null && !isPlanId(input.accessTier)) {
-    throw new Error('Invalid access tier');
+    throw new ServiceError('validation_error', 'Invalid access tier');
   }
   if (!ARRANGEMENTS.includes(input.arrangement)) {
-    throw new Error('Invalid billing arrangement');
+    throw new ServiceError('validation_error', 'Invalid billing arrangement');
   }
 
   const admin = createAdminClient();
@@ -66,7 +72,7 @@ export async function setBilling(input: SetBillingInput): Promise<void> {
   if (error) throw new Error(error.message);
   // Fail closed: a 0-row update means the org id was wrong/gone — never report
   // a silent success or audit a no-op change.
-  if (!updated) throw new Error('Organization not found.');
+  if (!updated) throw new ServiceError('not_found', 'Organization not found.');
 
   await recordPlatformAudit({
     actorUserId: input.actorUserId,
@@ -98,7 +104,7 @@ export interface StartTrialInput {
  * resolver. Audited.
  */
 export async function startTrial(input: StartTrialInput): Promise<void> {
-  if (!isPlanId(input.trialTier)) throw new Error('Invalid trial tier');
+  if (!isPlanId(input.trialTier)) throw new ServiceError('validation_error', 'Invalid trial tier');
   const days = Math.min(Math.max(Math.round(input.days), 1), 365);
   const startedAt = new Date(input.now).toISOString();
   const endsAt = new Date(input.now + days * 86_400_000).toISOString();
@@ -117,7 +123,7 @@ export async function startTrial(input: StartTrialInput): Promise<void> {
     .select('id')
     .maybeSingle();
   if (error) throw new Error(error.message);
-  if (!updated) throw new Error('Organization not found.');
+  if (!updated) throw new ServiceError('not_found', 'Organization not found.');
 
   await recordPlatformAudit({
     actorUserId: input.actorUserId,

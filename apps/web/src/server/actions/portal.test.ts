@@ -42,7 +42,15 @@ vi.mock('@/server/services/returns-requester', () => ({
   loadPortalReturnSheet: (...a: unknown[]) => loadPortalReturnSheet(...a),
 }));
 
-import { portalReturnOptionsAction, portalReturnSheetAction, requestPortalReturnAction } from './portal';
+import { reportError } from '@/lib/error-reporter';
+import { portalSubmitOrder } from '@/server/services/portal';
+
+import {
+  portalReturnOptionsAction,
+  portalReturnSheetAction,
+  requestPortalReturnAction,
+  submitPortalOrderAction,
+} from './portal';
 
 const ORDER_ID = '11111111-1111-4111-8111-111111111111';
 const OLINE_ID = '22222222-2222-4222-8222-222222222222';
@@ -218,5 +226,42 @@ describe('portal exchange (returns RX-3)', () => {
     expect(await portalReturnSheetAction(ORDER_ID)).toMatchObject({ ok: false, error: { code: 'internal_error' } });
     checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 121, resetAt: Date.now() + 1000 });
     expect(await portalReturnSheetAction(ORDER_ID)).toMatchObject({ ok: false, error: { code: 'rate_limited' } });
+  });
+});
+
+// S31: checkout answered ANY error's text as a validation error, so a
+// customer read Postgres or library text. The service's refusals are
+// ServiceErrors with their words; anything else is the fixed sentence,
+// reported.
+describe('submitPortalOrderAction: what a failed checkout says (S31)', () => {
+  const INPUT = { lines: [{ itemId: ORDER_ID, quantity: 1 }] };
+
+  it("keeps a refusal's code and words", async () => {
+    vi.mocked(portalSubmitOrder).mockRejectedValueOnce(
+      new ServiceError('validation_error', 'One of the items is no longer available to order.'),
+    );
+    expect(await submitPortalOrderAction(INPUT)).toEqual({
+      ok: false,
+      error: {
+        code: 'validation_error',
+        message: 'One of the items is no longer available to order.',
+      },
+    });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it("answers anything else with the fixed sentence, never the error's text, and reports it", async () => {
+    const e = new TypeError("Cannot read properties of undefined (reading 'unit_cost')");
+    vi.mocked(portalSubmitOrder).mockRejectedValueOnce(e);
+    const res = await submitPortalOrderAction(INPUT);
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Something went wrong. Please try again.' },
+    });
+    expect(JSON.stringify(res)).not.toContain('unit_cost');
+    expect(reportError).toHaveBeenCalledWith(e, {
+      tag: 'actions.portal.submit_portal_order',
+      organizationId: 'org-1',
+    });
   });
 });

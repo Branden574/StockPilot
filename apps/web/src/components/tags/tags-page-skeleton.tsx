@@ -10,24 +10,33 @@ export function TagsPageSkeleton({ rows = 6 }: { rows?: number }) {
   return (
     <div
       className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass="skeleton-page"
+      data-glass-width="wide"
       aria-busy="true"
       data-testid="tags-page-skeleton"
     >
       <span className="sr-only">Loading tags</span>
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex h-[42px] items-center">
+          <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
             <Skeleton className="h-[26px] w-28" />
           </div>
-          <div className="mt-0.5 flex h-5 items-center">
+          <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
             <Skeleton className="h-3 w-[420px] max-w-[70vw]" />
           </div>
         </div>
         <Skeleton className="h-8 w-24" />
       </div>
-      <div className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border">
+      <div
+        className="border-border bg-card divide-border divide-y overflow-hidden rounded-lg border"
+        data-glass="card"
+      >
         {Array.from({ length: rows }).map((_, i) => (
-          <div key={i} className="flex min-h-[52px] items-center gap-3 px-[18px] py-2">
+          <div
+            key={i}
+            className="flex min-h-[52px] items-center gap-3 px-[18px] py-2"
+            data-glass-role="skeleton-table-row"
+          >
             <Skeleton className="h-2.5 w-2.5 rounded-full" />
             <Skeleton className="h-3.5 w-40 max-w-[50%]" />
             <span className="flex-1" />

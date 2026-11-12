@@ -1,6 +1,8 @@
 import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
+
 /**
  * The Items page starts its table's reads in the SAME Promise.all as the
  * header, not after it.
@@ -74,6 +76,7 @@ const m = vi.hoisted(() => ({
   tableProps: vi.fn(),
   emptyStateProps: vi.fn(),
   noticeProps: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -211,9 +214,16 @@ vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: lookupSvc('listForLookups'),
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: async () => ({ list: async () => [], listLabels: m.charterLabels }),
+  },
+}));
 
-import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+import { effectivePermissions, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+
+import { getModulesForRequest } from '@/lib/dashboard/request-cache';
+import { createClient } from '@/lib/supabase/server';
 
 import InventoryPage from './page';
 
@@ -225,7 +235,14 @@ const ROW = {
   quantity_on_hand: 5,
   awaiting_first_receipt: false,
 };
-const LOOKUPS = { categories: [], locations: [], suppliers: [], tags: [], charters: [] };
+const LOOKUPS = {
+  categories: [],
+  locations: [],
+  suppliers: [],
+  tags: [],
+  charters: [],
+  unlistedCharters: [],
+};
 
 function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
   events.push(`${name}:start`);
@@ -294,6 +311,7 @@ beforeEach(() => {
     logged('dataset', async () => (h.datasetGate ? h.datasetGate : null)),
   );
   m.loadInventoryLookups.mockImplementation(async () => LOOKUPS);
+  m.charterLabels.mockImplementation(async () => []);
   m.loadInventoryTrendBuckets.mockImplementation(async () => ({}));
   m.inventoryList.mockImplementation(() =>
     logged('liveList', async () => ({
@@ -340,6 +358,72 @@ afterEach(() => {
 function callPage(params: Record<string, string> = {}) {
   return InventoryPage({ searchParams: Promise.resolve(params) });
 }
+
+/**
+ * B97 part 1: the table's charter lookup also names the archived and inactive
+ * charters (marked with their status), so a record tagged to one is no longer
+ * called "Generic"; the Charter filter (`charters`) keeps the active ones.
+ */
+describe('Items page: the Charter cell names archived charters (B97)', () => {
+  const ACTIVE = { id: 'ch-1', name: 'North Campus', code: 'NC' };
+  const ARCHIVED = { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' as const };
+  const charterLookup = () =>
+    (m.tableProps.mock.calls[0]![0] as { lookups: { charters: Map<string, unknown> } }).lookups
+      .charters;
+
+  it('manager, default view: from the cached lookups', async () => {
+    const withCharters = { ...LOOKUPS, charters: [ACTIVE], unlistedCharters: [ARCHIVED] };
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [ROW],
+      total: 1,
+      valueOnHand: 10,
+      ...withCharters,
+      trends: {},
+      placement: {},
+      expectedCount: 0,
+    }));
+    render(await callPage());
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(charterLookup().get('ch-1')).toEqual({ name: 'North Campus', code: 'NC' });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it('a deep link (the awaited instant table): from the cached lookups', async () => {
+    m.loadInventoryLookups.mockImplementation(async () => ({
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+    }));
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(charterLookup().get('ch-9')).toMatchObject({ status: 'archived' });
+    // The Charter filter keeps offering active charters only.
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it("staff, live path: from the member's own read of the archived and inactive charters", async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => [ARCHIVED]);
+    render(await callPage());
+    expect(m.charterLabels).toHaveBeenCalledWith({ exceptActive: true });
+    expect(charterLookup().get('ch-9')).toMatchObject({ name: 'Old Campus', status: 'archived' });
+  });
+
+  it('staff, live path: a failed label read names none, and the page still renders', async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => {
+      throw new Error('statement timeout');
+    });
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(charterLookup().has('ch-9')).toBe(false);
+  });
+});
 
 describe('Items page: the table starts with the header, not after it', () => {
   it('manager, default view: saved views, the cached list and image signing start while the racks read is still open', async () => {
@@ -646,6 +730,274 @@ describe('Items page: a zero Auto-archived only view', () => {
   );
 });
 
+/**
+ * Grouping walk 2026-10-20 (W4 no-match): a Category filter that leaves no
+ * item showed the table's "No items match your filters." with its filters only
+ * in instant mode right after the tick. A reload or a pasted address (the
+ * manager's awaited instant branch) and staff and viewers (the live path) got
+ * "No items yet" with an offer to add a first item and no filter bar, so the
+ * filter could be neither seen nor undone; a search, a stock view or the
+ * Expected chip had page-level states without the bar too. Every view a filter
+ * leaves empty is now the table, whose no-match state keeps the bar; "No items
+ * yet" is only for a list with nothing in it and no filter at all.
+ */
+describe('Items page: a filter that leaves nothing is the table, with its filters', () => {
+  const FILTERED: Array<[string, Record<string, string>]> = [
+    ['a Category', { cat: 'cat-empty' }],
+    ['a Location', { loc: 'loc-empty' }],
+    ['a Charter', { charter: 'generic' }],
+    ['a rack', { rack: '9-Z' }],
+    ['a search', { q: 'zzqqxx' }],
+    ['Low + critical', { stock: 'low' }],
+    ['Out of stock', { stock: 'out' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a Category on the Archived view', { status: 'archived', cat: 'cat-empty' }],
+    ['the Discontinued view', { status: 'discontinued' }],
+    ["a saved view's search and sort", { q: 'Grade 2', sort: 'name_asc' }],
+  ];
+
+  describe.each(['staff', 'viewer'])('%s (server mode)', (role) => {
+    it.each(FILTERED)(
+      '%s: the table with nothing in it, never an empty state',
+      async (_l, params) => {
+        h.role = role;
+        h.listTotal = 0;
+        render(await callPage(params));
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+        expect(m.tableProps.mock.calls[0]![0]).toMatchObject({
+          total: 0,
+          items: [],
+          // The search box holds the search (the table's own initial value).
+          initialQuery: params.q,
+        });
+      },
+    );
+  });
+
+  // Integrator decision 1 (2026-10-20): the table now says what this page said
+  // for a search, a stock view or the Expected chip on its own, and the page
+  // hands it the warehouse-scope sentence it added to those messages.
+  it.each<[string, Record<string, string>]>([
+    ['a search', { q: 'zzqqxx' }],
+    ['Low + critical', { stock: 'low' }],
+    ['the Expected chip', { expected: '1' }],
+  ])(
+    "staff, %s that leaves nothing: the table gets the page's warehouse-scope sentence",
+    async (_l, params) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({
+        emptyNote:
+          "You're viewing North only. An admin can adjust warehouse access from the Team page.",
+      });
+    },
+  );
+
+  // Review of batch D (2026-10-20): an Asset, Consumable or Book type (?type=,
+  // kept by a saved view) is a narrowing; the table names it as a chip.
+  it.each(['asset', 'consumable', 'book'])(
+    'staff, ?type=%s with nothing of that type: the table, never "No items yet"',
+    async (type) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage({ type }));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.inventoryList).toHaveBeenCalledWith(expect.objectContaining({ itemType: type }));
+    },
+  );
+
+  it.each(['product', 'all'])(
+    'staff, ?type=%s and an empty list: "No items yet", as before',
+    async (type) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage({ type }));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No items yet' });
+    },
+  );
+
+  it('manager: no warehouse-scope sentence (all access), in either branch', async () => {
+    render(await callPage({ q: 'zzqqxx' }));
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ emptyNote: null });
+    m.tableProps.mockClear();
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ q: 'zzqqxx' }));
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ emptyNote: null });
+  });
+
+  it.each(FILTERED)(
+    'manager, reloaded or pasted (the awaited instant branch), %s: the table, never an empty state',
+    async (_l, params) => {
+      h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      const props = m.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+      expect(props).toHaveProperty('instant');
+      expect(props).toMatchObject({ total: 0, initialQuery: params.q });
+    },
+  );
+
+  it.each<[string, Record<string, string>]>([
+    ['no address', {}],
+    ['a sort', { sort: 'name_asc' }],
+    ['a page', { page: '2' }],
+    ['the Active view', { status: 'active' }],
+    ['an all-whitespace search', { q: '   ' }],
+  ])(
+    'staff, an empty list with %s: "No items yet" and its add action, as before',
+    async (_l, params) => {
+      h.role = 'staff';
+      h.listTotal = 0;
+      render(await callPage(params));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'No items yet',
+        cta: { label: 'Add your first item', href: '/dashboard/inventory/new' },
+      });
+    },
+  );
+
+  it('viewer, an empty list and no filter: "No items yet" without an add action, as before', async () => {
+    h.role = 'viewer';
+    h.listTotal = 0;
+    render(await callPage());
+    expect(m.tableProps).not.toHaveBeenCalled();
+    const props = m.emptyStateProps.mock.calls[0]![0] as {
+      title: string;
+      description: string;
+      cta?: unknown;
+    };
+    expect(props.title).toBe('No items yet');
+    expect(props.description).toContain('No items have been added to this workspace yet.');
+    expect(props.cta).toBeUndefined();
+  });
+
+  it('manager, a deep link to an empty list with only a sort: "No items yet", as before', async () => {
+    h.datasetGate = Promise.resolve({ items: [], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No items yet' });
+  });
+
+  it.each(['manager', 'staff'])(
+    '%s, the Archived view with nothing archived and no filter: "No archived items", as before',
+    async (role) => {
+      h.role = role;
+      h.listTotal = 0;
+      h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+      render(await callPage({ status: 'archived' }));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'No archived items',
+        cta: { label: 'Back to active items', href: '/dashboard/inventory' },
+      });
+    },
+  );
+
+  describe('with a warehouse filter: "Nothing here in North" only when the search is the one filter', () => {
+    /** A user-authed client whose HEAD count answers `count` (the count elsewhere). */
+    const countReads = vi.fn();
+    function countingClient(count: number) {
+      // The query is the thenable, never the client (a thenable client would
+      // be adopted by createClient's own promise).
+      const q: Record<string, unknown> = {};
+      for (const k of ['select', 'eq', 'is', 'or']) q[k] = () => q;
+      q.then = (resolve: (v: unknown) => unknown) => resolve({ count, error: null });
+      return {
+        from: (table: string) => {
+          countReads(table);
+          return q;
+        },
+      };
+    }
+
+    afterEach(() => {
+      vi.mocked(createClient).mockReset();
+      countReads.mockReset();
+    });
+
+    it('a search that matches only in other warehouses still says so, with the way out', async () => {
+      vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+      h.filter = 'wh-1';
+      h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+      render(await callPage({ q: 'lanyard' }));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'Nothing here in North',
+        description: '3 items match in your other warehouses. This view is filtered to North.',
+      });
+    });
+
+    it.each<[string, Record<string, string>]>([
+      ['a Category', { cat: 'cat-empty' }],
+      ['a search and a stock view', { q: 'lanyard', stock: 'low' }],
+      ['the Expected chip', { expected: '1' }],
+    ])(
+      '%s: the table and its filters (the count elsewhere would leave that filter out)',
+      async (_l, params) => {
+        vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+        h.filter = 'wh-1';
+        h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+        render(await callPage(params));
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+        expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+        // Review of batch D (2026-10-20): and no round trip for a count the
+        // page would throw away.
+        expect(countReads).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['manager', 'staff'])(
+      '%s: the count elsewhere is asked only when the hint can answer (the search alone, Active or All)',
+      async (role) => {
+        vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+        h.role = role;
+        h.listTotal = 0;
+        h.filter = 'wh-1';
+        h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+        render(await callPage({ q: 'lanyard', status: 'all' }));
+        expect(countReads).toHaveBeenCalledWith('inventory_items');
+        expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+          title: 'Nothing here in North',
+        });
+      },
+    );
+
+    it.each<[string, Record<string, string>, string]>([
+      ['the Archived view', { status: 'archived' }, 'No archived items'],
+      ['a search on the Archived view', { status: 'archived', q: 'lanyard' }, ''],
+      ['the Discontinued view', { status: 'discontinued' }, ''],
+      ['an Asset type', { type: 'asset' }, ''],
+    ])(
+      "staff, %s with a warehouse filter: no count (it counts active products), the view's own state",
+      async (_l, params, title) => {
+        vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+        h.role = 'staff';
+        h.listTotal = 0;
+        h.filter = 'wh-1';
+        render(await callPage(params));
+        expect(countReads).not.toHaveBeenCalled();
+        if (title) {
+          // It used to say "Nothing here in North: 3 items match in your other
+          // warehouses" for the active ones elsewhere.
+          expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title });
+        } else {
+          expect(m.emptyStateProps).not.toHaveBeenCalled();
+          expect(m.tableProps).toHaveBeenCalledTimes(1);
+        }
+      },
+    );
+  });
+});
+
 // Phase 2 of the grouping brief (owner 2026-10-11, go to start 2026-10-12):
 // a staff member's or viewer's page is planned group-aware over the whole
 // filtered view (listPlanRows + planGroupAwarePage), so a size run is never
@@ -875,6 +1227,67 @@ describe('Items page: the Table / Grid choice comes from its cookie', () => {
 });
 
 /**
+ * B68: Export (the toolbar menu and the bulk bar's button) showed to every
+ * member, while the export, its sample and export.csv answer only
+ * items:export, which staff and viewers lack by default. The page passes the
+ * member's EFFECTIVE permission (core can() over the request's set) at both of
+ * its table calls, so a grant and a revoke both count.
+ */
+describe('Items page: Export only for a member who holds items:export', () => {
+  /** Signs in as `role`, with a user-level override of items:export if given. */
+  function signedInAs(role: 'manager' | 'staff', granted?: boolean) {
+    h.role = role;
+    const permissions = effectivePermissions(
+      role,
+      [],
+      granted === undefined ? [] : [{ permission: 'items:export', granted }],
+    );
+    m.requireOrgContext.mockImplementation(() =>
+      logged('ctx', async () => ({ organizationId: 'org-1', userId: 'u-1', role, permissions })),
+    );
+  }
+
+  it('a manager is offered it (the default view)', async () => {
+    signedInAs('manager');
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager is offered it (a deep link, the instant table)', async () => {
+    signedInAs('manager');
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('staff are not: they do not hold it by default', async () => {
+    signedInAs('staff');
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+
+  it('staff granted items:export are', async () => {
+    signedInAs('staff', true);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager whose items:export was revoked is not, at either table call', async () => {
+    signedInAs('manager', false);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+
+    m.tableProps.mockClear();
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+});
+
+/**
  * CONFLICTS D5 (fixed in redesign P3.2): the Archived view told people to
  * restore an item by editing it and setting its status to Active, but the
  * item form has no status field. The way back is Restore on the selection.
@@ -886,5 +1299,72 @@ describe('Items page: the Archived view says how to restore', () => {
       'Items you archived. Select one and choose Restore to make it active again.',
     );
     expect(container.textContent).not.toContain('setting status to Active');
+  });
+});
+
+/**
+ * B42: the bulk bar's Cycle count had no gate, so staff (and anyone else who
+ * could select rows) were sent to Start a count, which the server refuses
+ * below a manager with cycle_counts:assign and stock:adjust. The page decides
+ * with core countStartAllowed and the request-cached module set (no
+ * withContext on the Items page's first paint), at both of its table calls.
+ */
+describe('Items page: Cycle count in the bulk bar only for someone who can start a count', () => {
+  beforeEach(() => {
+    vi.mocked(getModulesForRequest).mockImplementation(
+      async () => new Set(['orders', 'cycle_counts']) as never,
+    );
+  });
+  afterEach(() => {
+    vi.mocked(getModulesForRequest).mockImplementation(async () => new Set(['orders']) as never);
+  });
+
+  it('a manager with Cycle Counts on is offered it (the default view)', async () => {
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('a manager with Cycle Counts on is offered it (a deep link, the instant table)', async () => {
+    h.datasetGate = Promise.resolve({ items: [ROW], placement: {} });
+    render(await callPage({ sort: 'name_asc' }));
+    expect(m.tableProps.mock.calls[0]![0]).toHaveProperty('instant');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('staff (stock:adjust, no cycle_counts:assign) are not', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+
+  it('nor a manager whose organization turned Cycle Counts off', async () => {
+    vi.mocked(getModulesForRequest).mockImplementation(async () => new Set(['orders']) as never);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+});
+
+/**
+ * CLASSIC PARITY (Liquid Glass stage 3, items lane; IMPLEMENTATION-PLAN.md
+ * 4.6 and 4.7 item 3). The page's own markup (its frame, header and notices;
+ * the table is mocked here and has its own parity file in
+ * components/inventory/items.classic-parity.test.tsx), every inert hook
+ * stripped, must stay the file written before the stage 3 hooks went in.
+ */
+describe('Items page: classic parity of its own markup', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("the off rollout renders no glass-only element and today's markup", async () => {
+    const { container } = render(await callPage());
+    expect(glassOnlyElements(container)).toEqual([]);
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/items-page.html');
+  });
+
+  it("the default rollout's markup, inert hooks stripped, is the same", async () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const { container } = render(await callPage());
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/items-page.html');
   });
 });

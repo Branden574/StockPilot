@@ -10,18 +10,43 @@
 #    minified gibberish. (Store builds are separate: EAS builders upload
 #    their own maps via the SENTRY_AUTH_TOKEN secret.)
 #
-# Usage: pnpm release:ota            (message defaults to the git commit)
-#        pnpm release:ota -m "text"  (explicit update message)
+# The Liquid Glass rollout, EXPO_PUBLIC_LIQUID_GLASS, is inlined into the
+# bundle, so every update decides the look of every phone it reaches. It comes
+# ONLY from the command that runs this script and must be named every time:
+# off, opt-in or default; anything else, unset and empty included, is refused
+# (scripts/liquid-glass-rollout.sh says why and how). An .env.local that names
+# it is refused too, and the command's value, kept read-only, is exported
+# again after .env.local is loaded, so nothing in that file can change what
+# reaches `eas update` or what is printed.
+#
+# Usage: EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota
+#          (message defaults to the git commit)
+#        EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota -m "text"
+#          (explicit update message)
+#   <rollout> is off, opt-in or default: the rollout phones have now (the
+#   last production update printed it at the top of its log), unless this
+#   update is the one meant to change it (docs/runbooks/mobile-ota.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+source scripts/liquid-glass-rollout.sh
+# Taken from the caller BEFORE .env.local is loaded.
+lg_rollout_take "pnpm release:ota"
+
+# The Liquid Glass scene illustrations ship only as the committed files the
+# manifest pins: refused when one is missing or differs.
+bash scripts/refuse-uncommitted-scene.sh
 
 if [[ ! -f .env.local ]]; then
   echo "FATAL: apps/mobile/.env.local missing — the OTA would ship without the Sentry DSN." >&2
   exit 1
 fi
+lg_rollout_refuse_env_file "pnpm release:ota"
 set -a; source .env.local; set +a
 : "${EXPO_PUBLIC_SENTRY_DSN:?FATAL: EXPO_PUBLIC_SENTRY_DSN not in .env.local — refusing to publish a Sentry-blind update}"
 : "${SENTRY_AUTH_TOKEN:?FATAL: SENTRY_AUTH_TOKEN not in .env.local — source maps could not be uploaded}"
+# The caller's value, whatever .env.local did, exported and printed.
+lg_rollout_export
 
 # `--environment production` is REQUIRED, not decorative: eas-cli refuses to
 # run `update` non-interactively without it, so omitting it fails the whole

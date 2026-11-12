@@ -22,10 +22,9 @@ import { makeServiceContext, makeSupabaseStub, type QueryResult } from '@/test/s
  *     tag is NOT revalidated (placing reserves nothing: graft 5);
  *   - a refusal keeps the service's code, words and details; a fault is core's
  *     "couldn't be confirmed" sentence with reason 'failed', and is reported;
- *   - the LEGACY branch (one release): a body with no key, from a tab opened
- *     before the deploy, gets a server-minted key and the session as placer,
- *     its needed-by instant passes through, and its phone and pickup notes are
- *     dropped;
+ *   - a body with no submission key is refused as unreadable before anything
+ *     is read (B20a: the one-release legacy branch for tabs opened before the
+ *     PO-2 deploy, which minted a key per call, is gone);
  *   - getOrderSubmissionAction / withdrawOrderSubmissionAction call the
  *     status and withdraw functions with the caller's org and the key.
  */
@@ -213,67 +212,53 @@ describe('createOrderRequestAction', () => {
     expect(stub.rpcCalls).toEqual([]);
   });
 
-  it('the LEGACY branch (no key): a server-minted key, the session as placer, the instant passed through', async () => {
+  // B20a: the legacy branch read a body with no submission key (a tab opened
+  // before the PO-2 deploy of 2026-10-04) and placed it under a key it minted
+  // on every call, so a resend placed a second order. It was kept for one
+  // release. Such a body is now refused as unreadable, before the session is
+  // read. Mutation caught: the branch put back, or the refusal moved after the
+  // context or the call.
+  it('a body without a submission key is refused before anything is read, and nothing is placed', async () => {
     const stub = arrange({
       'rpc:place_order_request': {
         data: { outcome: 'placed', replay: false, order: SUMMARY },
         error: null,
       },
     });
-    const res = await createOrderRequestAction({
-      warehouseId: WH,
-      notes: 'Room 12',
-      neededBy: '2026-10-05T17:00:00.000Z',
-      fulfillmentType: 'pickup',
-      requesterPhone: '555-0100',
-      deliveryCharterId: 'cccccccc-0000-4000-8000-000000000001',
-      pickupLocationNotes: 'Back door',
-      onBehalfOf: null,
-      lines: [{ itemId: ITEM, quantity: 2, notes: 'blue' }],
-    });
-    expect(res.ok).toBe(true);
-    const args = request(stub);
-    expect(args?.p_key).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(args?.p_request).toEqual({
-      organization_id: ORG,
-      placer_user_id: USER,
-      surface: 'web',
-      warehouse_id: WH,
-      fulfillment_type: 'pickup',
-      // A pickup carries no site; the phone and pickup notes are not sent.
-      delivery_charter_id: null,
-      on_behalf_name: null,
-      on_behalf_email: null,
-      notes: 'Room 12',
-      needed_by: '2026-10-05T17:00:00.000Z',
-      lines: [{ item_id: ITEM, quantity: 2 }],
-    });
-    // Each legacy call is its own key (no retry protection, as before).
-    await createOrderRequestAction({
-      warehouseId: WH,
-      fulfillmentType: 'pickup',
-      lines: [{ itemId: ITEM, quantity: 1 }],
-    });
-    const keys = stub.rpcCalls
-      .filter((c) => c.name === 'place_order_request')
-      .map((c) => (c.args as { p_key: string }).p_key);
-    expect(new Set(keys).size).toBe(2);
-  });
-
-  it('a legacy body that does not read is refused, nothing called', async () => {
-    const stub = arrange({});
-    const res = await createOrderRequestAction({ warehouseId: 'nope', lines: [] } as never);
-    expect(res).toEqual({
-      ok: false,
-      error: {
-        code: 'validation_error',
-        message: ORDER_BODY_UNREADABLE_COPY,
-        details: { reason: 'invalid', field: 'body' },
+    const { idempotencyKey: _key, ...withoutKey } = BODY;
+    const bodies: unknown[] = [
+      // The pre-PO-2 body: needed-by as an instant, the phone and pickup notes.
+      {
+        warehouseId: WH,
+        notes: 'Room 12',
+        neededBy: '2026-10-05T17:00:00.000Z',
+        fulfillmentType: 'pickup',
+        requesterPhone: '555-0100',
+        pickupLocationNotes: 'Back door',
+        onBehalfOf: null,
+        lines: [{ itemId: ITEM, quantity: 2, notes: 'blue' }],
       },
-    });
+      withoutKey,
+      {},
+      null,
+      'not a body',
+    ];
+    for (const body of bodies) {
+      for (const scope of [{ organizationId: ORG }, undefined]) {
+        const res = await createOrderRequestAction(body as never, scope);
+        expect(res, JSON.stringify(body)).toEqual({
+          ok: false,
+          error: {
+            code: 'validation_error',
+            message: ORDER_BODY_UNREADABLE_COPY,
+            details: { reason: 'invalid', field: 'idempotencyKey' },
+          },
+        });
+      }
+    }
+    expect(withContext).not.toHaveBeenCalled();
     expect(stub.rpcCalls).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 });
 

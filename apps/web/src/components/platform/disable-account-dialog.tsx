@@ -98,8 +98,8 @@ export function DisableAccountDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
-        <DialogHeader>
+      <DialogContent data-glass-role="disable-account">
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle className="text-destructive">Disable this account?</DialogTitle>
           <DialogDescription>
             This disables {email} across every organization, not just this one. They are signed out
@@ -108,7 +108,7 @@ export function DisableAccountDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div data-glass="dialog-body" className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="disable-reason-category">Reason</Label>
             <select
@@ -157,7 +157,7 @@ export function DisableAccountDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter data-glass="dialog-footer">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
             Cancel
           </Button>

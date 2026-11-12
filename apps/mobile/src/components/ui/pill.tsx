@@ -3,6 +3,9 @@ import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+import { GLASS_PILL, glassPillLabel } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { pillTone, type PillStatus } from './tones';
 
 type Status = PillStatus;
@@ -37,6 +40,7 @@ export function Pill({
   tone?: { fg: string; bg: string; border: string };
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
 
   // Caller supplied the palette outright — `status` is not consulted.
   const { fg, bg, border } = tone ?? pillTone(status, c);
@@ -49,14 +53,14 @@ export function Pill({
           backgroundColor: bg,
           borderColor: border,
         },
+        // Liquid Glass: the badge words in the system face, a little taller.
+        lg && GLASS_PILL,
         style,
       ]}
     >
-      {dot ? (
-        <View style={[styles.dot, { backgroundColor: fg }]} />
-      ) : null}
+      {dot ? <View style={[styles.dot, { backgroundColor: fg }]} /> : null}
       <Text
-        style={[styles.label, { color: fg }]}
+        style={[styles.label, { color: fg }, lg && glassPillLabel(lg)]}
         // Chrome cap: a 10.5pt label uncapped paints 21pt of glyph through a
         // 22pt border. Paired with the minHeight box below — the cap keeps
         // the pill from ballooning, the minHeight keeps the label inside it.

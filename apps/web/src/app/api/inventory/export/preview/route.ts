@@ -4,6 +4,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { getActiveWarehouseFilterFor } from '@/lib/warehouse-filter';
 import { countRowsWithImages } from '@/lib/exports/export-images';
+import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { inventoryExportPreviewRequestSchema } from '@/lib/exports/export-request';
 import {
   buildInventoryExportSourceRows,
@@ -38,7 +39,12 @@ export async function POST(request: NextRequest) {
     const ctx = await withApiContext(request);
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
     if (!can(ctx, 'items:export')) {
-      return NextResponse.json({ error: 'forbidden' }, { status: 403 });
+      // Words with the code (B68): the export dialog and a link opened in the
+      // browser say which permission to ask for, never "forbidden" alone.
+      return NextResponse.json(
+        { error: 'forbidden', message: EXPORT_FORBIDDEN_COPY },
+        { status: 403 },
+      );
     }
     const rl = await checkRateLimit(`export-preview:${ctx.userId}`, 120, 60 * 60 * 1000, 'open');
     if (!rl.allowed) {

@@ -192,7 +192,10 @@ export function KeyboardShortcutsProvider() {
     <Dialog open={open} onOpenChange={setOpen}>
       {/* p-0 at every width (the dialog pads itself from sm up): the header
           and the list carry their own 18px padding. */}
-      <DialogContent className="gap-0 overflow-hidden p-0 sm:max-w-[560px] sm:p-0">
+      <DialogContent
+        data-glass-role="shell-dialog"
+        className="gap-0 overflow-hidden p-0 sm:max-w-[560px] sm:p-0"
+      >
         <div className="border-border border-b px-[18px] py-3.5">
           <DialogTitle className="font-display text-[17px] font-medium tracking-[-0.01em]">
             Keyboard shortcuts

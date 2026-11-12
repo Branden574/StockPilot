@@ -4,6 +4,14 @@ import { AccessibilityInfo, ActivityIndicator, StyleSheet, TextInput, View } fro
 
 import { AuthShell } from '@/components/auth/auth-shell';
 import { Button } from '@/components/ui/button';
+import {
+  GLASS_AUTH,
+  GlassAuthPanelBackdrop,
+  glassCodeInput,
+  GLASS_STATE_GLYPH,
+  glassStateTile,
+} from '@/components/ui/glass/screens/auth';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
@@ -28,6 +36,10 @@ import { useTheme } from '@/lib/use-theme';
 export function MfaChallengeScreen() {
   const { verifyMfa, signOutToFallback } = useAuth();
   const { c } = useTheme();
+  // Liquid Glass: the Auth-SignIn MFA step in the shell's glass card (the
+  // shield in a 48pt well, the heading, the line, the 56pt code field, Verify
+  // and the way out); the same words, field, auto-submit and gate.
+  const lg = useGlass();
   const [code, setCode] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -62,18 +74,38 @@ export function MfaChallengeScreen() {
   }
 
   return (
-    <AuthShell>
-      <View style={styles.iconWrap}>
-        <View style={[styles.iconRing, { borderColor: c.hair2 }]}>
-          <ShieldCheck size={30} color={c.ink} strokeWidth={1.5} />
+    <AuthShell contentStyle={lg ? GLASS_AUTH.gatePanel : undefined}>
+      {lg ? <GlassAuthPanelBackdrop /> : null}
+      <View style={lg ? GLASS_AUTH.iconWrap : styles.iconWrap}>
+        <View
+          style={[
+            styles.iconRing,
+            { borderColor: c.hair2 },
+            lg && GLASS_AUTH.mfaTile,
+            lg && { backgroundColor: glassStateTile(lg, 'accent').fill },
+          ]}
+        >
+          <ShieldCheck
+            size={lg ? GLASS_STATE_GLYPH : 30}
+            color={lg ? glassStateTile(lg, 'accent').ink : c.ink}
+            strokeWidth={lg ? 1.8 : 1.5}
+          />
         </View>
       </View>
 
       <Eyebrow>TWO-FACTOR AUTHENTICATION</Eyebrow>
-      <Display size={28} style={{ marginTop: 10 }}>
-        Enter your <Em>code.</Em>
+      <Display
+        size={lg ? 26 : 28}
+        style={lg ? [GLASS_AUTH.h1, GLASS_AUTH.mfaHead] : { marginTop: 10 }}
+        accessibilityRole={lg ? 'header' : undefined}
+      >
+        Enter your {lg ? 'code.' : <Em>code.</Em>}
       </Display>
-      <Body muted style={{ marginTop: 8, marginBottom: 22 }}>
+      <Body
+        muted
+        color={lg ? lg.c.ink2 : undefined}
+        style={lg ? { marginTop: 6, marginBottom: 20 } : { marginTop: 8, marginBottom: 22 }}
+      >
         Open your authenticator app (Google Authenticator, 1Password, etc.)
         and enter the 6-digit code for StockPilot.
       </Body>
@@ -98,6 +130,7 @@ export function MfaChallengeScreen() {
         style={[
           styles.codeInput,
           { color: c.ink, borderColor: error ? c.critText : c.hair2, backgroundColor: c.card },
+          lg && glassCodeInput(lg, error != null && error !== ''),
         ]}
       />
 
@@ -107,7 +140,7 @@ export function MfaChallengeScreen() {
         </Body>
       ) : null}
 
-      <View style={styles.verify}>
+      <View style={lg ? { marginTop: 16 } : styles.verify}>
         <Button
           block
           onPress={() => void submit(code)}

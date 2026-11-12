@@ -67,7 +67,10 @@ describe('the order screen opens proof of delivery through a fresh link', () => 
 
   it('the tile awaits it, and the list records when it signed', () => {
     expect(ORDER).toContain('onPress={() => void openAttachment(a)}');
-    const load = between(ORDER, 'const loadAttachments = React.useCallback(', '}, [orgId, id]);');
+    // The list is read (and its links signed) by readAttachments, which the
+    // order's load and loadAttachments both use (S2 follow-up: only the newest
+    // load shows what it read).
+    const load = between(ORDER, 'const readAttachments = React.useCallback(', '}, [orgId, id]);');
     expect(load).toContain('const signedAt = Date.now();');
     expect(load.indexOf('const signedAt = Date.now();')).toBeLessThan(
       load.indexOf('.createSignedUrls('),

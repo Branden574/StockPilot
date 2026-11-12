@@ -107,6 +107,7 @@ export function GridCard({
   return (
     <div
       data-slot="grid-card"
+      data-glass="grid-card"
       data-selected={selected ? '' : undefined}
       className={cn(
         'group/card border-border bg-background has-[[data-slot=grid-card-name]_a:focus-visible]:ring-ring has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)] has-[[data-slot=grid-card-name]_a:focus-visible]:ring-2 has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-2',
@@ -161,8 +162,8 @@ export function GridCard({
           </div>
         ) : null}
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-2.5 p-3">
-        <div className="min-w-0">
+      <div className="flex min-w-0 flex-1 flex-col gap-2.5 p-3" data-glass="grid-card-body">
+        <div className="min-w-0" data-glass="grid-card-titles">
           <div
             data-slot="grid-card-name"
             className={cn(
@@ -190,7 +191,10 @@ export function GridCard({
           ) : null}
         </div>
         {quantity != null || placement != null ? (
-          <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+          <div
+            className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5"
+            data-glass="grid-card-figures"
+          >
             {quantity != null ? (
               <div data-slot="grid-card-quantity" className="flex min-w-0 items-baseline gap-1">
                 <span className="text-foreground text-[20px] font-medium tabular-nums leading-[30px] [font-family:var(--font-display)]">
@@ -214,9 +218,18 @@ export function GridCard({
           </div>
         ) : null}
         {quantityNote != null ? (
-          <div className="text-muted-foreground -mt-1.5 text-[11px] leading-4">{quantityNote}</div>
+          <div
+            className="text-muted-foreground -mt-1.5 text-[11px] leading-4"
+            data-glass="grid-card-notes"
+          >
+            {quantityNote}
+          </div>
         ) : null}
-        {footer != null ? <div className="relative z-10 mt-auto">{footer}</div> : null}
+        {footer != null ? (
+          <div className="relative z-10 mt-auto" data-glass="grid-card-foot">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );

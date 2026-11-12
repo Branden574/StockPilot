@@ -9,6 +9,7 @@ import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
 import { effectiveModules } from '@/lib/modules/effective-modules';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
+import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import type { ServiceContext } from '@/server/services/context';
 
 import {
@@ -18,7 +19,7 @@ import {
 } from '@/lib/auth/request-context-bundle';
 
 import type { Role, Database, ModuleId, Permission } from '@stockpilot/core';
-import { effectivePermissions, isAdminRole } from '@stockpilot/core';
+import { effectivePermissions, isAdminRole, stepUpOwed } from '@stockpilot/core';
 
 import { enforcedMfaPolicy, type MfaPolicy } from '@/lib/auth/mfa-policy';
 
@@ -50,6 +51,16 @@ export function aalFromJwt(token: string): 'aal1' | 'aal2' | null {
   }
 }
 
+/** A session's assurance level; null when it cannot be read, which counts as not aal2. */
+type SessionAal = 'aal1' | 'aal2' | null;
+
+/**
+ * The level of the session the request came with, read only when a rule needs
+ * it: the bearer token's own claim (aalFromJwt), or on the cookie path the
+ * level of the validated user's own session (cookieSessionLevel).
+ */
+type SessionLevelReader = () => Promise<SessionAal>;
+
 async function resolveApiMfaState(
   supabase: any,
   organizationId: string,
@@ -60,10 +71,9 @@ async function resolveApiMfaState(
   // must be satisfied regardless of org policy (HI-6), and it decides the
   // gate's error shape ('aal2_required' vs 'mfa_required').
   hasVerifiedFactor: boolean,
-  // When provided (bearer path), AAL is read from the token's verified `aal`
-  // claim instead of getAuthenticatorAssuranceLevel() (which needs a stored
-  // session the bearer client doesn't have). null = couldn't read → fail closed.
-  bearerAal?: 'aal1' | 'aal2' | null,
+  // The session's level, read only when MFA is required. Couldn't read
+  // (null, or a throw) → fail closed.
+  level: SessionLevelReader,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   let policy: MfaPolicy;
   try {
@@ -99,7 +109,7 @@ async function resolveApiMfaState(
     console.error('[resolveApiMfaState] failed:', err);
     return { mfaRequired: true, mfaSatisfied: false, mfaEnrolled: hasVerifiedFactor };
   }
-  return mfaFromPolicy(supabase, policy, role, hasVerifiedFactor, bearerAal);
+  return mfaFromPolicy(policy, role, hasVerifiedFactor, level);
 }
 
 /**
@@ -108,11 +118,10 @@ async function resolveApiMfaState(
  * straight over: it already came back with the membership.
  */
 async function mfaFromPolicy(
-  supabase: any,
   policy: MfaPolicy,
   role: Role,
   hasVerifiedFactor: boolean,
-  bearerAal?: 'aal1' | 'aal2' | null,
+  level: SessionLevelReader,
 ): Promise<{ mfaRequired: boolean; mfaSatisfied: boolean; mfaEnrolled: boolean }> {
   let mfaRequired = false;
   let mfaSatisfied = false;
@@ -125,17 +134,10 @@ async function mfaFromPolicy(
     // AAL1 untouched.
     mfaRequired = policyRequired || hasVerifiedFactor;
     if (mfaRequired) {
-      if (bearerAal !== undefined) {
-        // Bearer/API path: trust the verified token's own AAL claim.
-        mfaSatisfied = bearerAal === 'aal2';
-      } else {
-        // Cookie path: withApiContext() ran auth.getUser() on THIS client
-        // first, so the stored token decoded here is one the Auth server just
-        // accepted (the bearer path's rule), and auth-js does not log its
-        // insecure-user warning after a successful getUser().
-        const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-        mfaSatisfied = data?.currentLevel === 'aal2';
-      }
+      // The bearer token's own claim, or the validated cookie user's own
+      // level: never a level read from a session the request cannot tie to
+      // the user it validated (docket S43a, review round 1).
+      mfaSatisfied = (await level()) === 'aal2';
     } else {
       mfaSatisfied = true;
     }
@@ -292,6 +294,68 @@ function userHasVerifiedFactor(user: { factors?: Array<{ status?: string }> | nu
 }
 
 /**
+ * The assurance level of a COOKIE session, as the session of `userId`, the
+ * user getUser() just validated on this client: the `aal` of the access token
+ * the session holds once its signature checks out, and only when that token's
+ * subject is `userId` (readVerifiedSessionClaimsOf). Anything else is null,
+ * which every rule here counts as not aal2.
+ *
+ * WHY NOT getAuthenticatorAssuranceLevel() (docket S43a, review round 1). It
+ * LOADS the stored session again and decodes whatever that load returns, and a
+ * load refreshes the session, with the cookie's own refresh token, whenever the
+ * cookie's own `expires_at` says it is within 90 s of expiry (auth-js
+ * __loadSession). Whoever sends the cookie writes both fields: an enrolled
+ * member's aal1 access token (the password alone gives it), which getUser()
+ * validates, beside the refresh token of ANOTHER account's aal2 session, timed
+ * to pass the margin while GoTrue answers /user. The level then came from the
+ * other account's session, so the refusal below passed and the context was
+ * labelled satisfied. A refresh of the member's own session keeps its subject,
+ * so it still answers.
+ */
+async function cookieSessionLevel(supabase: any, userId: string): Promise<SessionAal> {
+  try {
+    return (await readVerifiedSessionClaimsOf(supabase, userId))?.aal ?? null;
+  } catch {
+    // Unreadable: null, which the rules count as not aal2.
+    return null;
+  }
+}
+
+/**
+ * core's stepUpOwed() over `factors`, with the level read only when it can
+ * matter: the rule owes nothing to an account with no verified factor at any
+ * level, so a caller who never enrolled pays no read.
+ */
+async function owesStepUp(
+  factors: Array<{ status?: string }> | null | undefined,
+  level: SessionLevelReader,
+): Promise<boolean> {
+  // Owed at no level at all means never owed: no verified factor, no read.
+  if (!stepUpOwed(factors, null)) return false;
+  return stepUpOwed(factors, await level());
+}
+
+/**
+ * Whether a COOKIE session still owes its authenticator code (docket S43a):
+ * core's stepUpOwed() over the user getUser() just returned and the level of
+ * THAT user's own session (cookieSessionLevel). An error, a throw, a missing
+ * level, or a session that now holds another account counts as not aal2
+ * (fail closed).
+ *
+ * Exported for the routes that build their own principal from the cookie
+ * session instead of calling withApiContext (the QuickBooks and Sage Intacct
+ * OAuth callbacks), so they ask the same question the same way
+ * (src/test/api-step-up.guard.test.ts holds them to it). Call it with the user
+ * getUser() returned on the same client.
+ */
+export async function cookieSessionOwesStepUp(
+  supabase: any,
+  user: { id: string; factors?: Array<{ status?: string }> | null },
+): Promise<boolean> {
+  return owesStepUp(user.factors, () => cookieSessionLevel(supabase, user.id));
+}
+
+/**
  * Mirror of the enabled-module query in withContext() (services/context.ts),
  * parameterized over an arbitrary Supabase client so both the cookie and
  * bearer API paths populate ctx.enabledModules and assertModuleEnabled()
@@ -434,6 +498,29 @@ function logRefusedCrossSiteWrite(req: Request): void {
 }
 
 /**
+ * One info line per request refused because its session still owes the
+ * authenticator code (docket S43a), so the refusal of a real person's phone or
+ * tab shows in the runtime logs. Info, not a report: a phone that is not
+ * updated yet makes a few of these a minute at its code screen, and that is
+ * the rule working, not a fault. The method, the path and which way the
+ * session came (bearer or cookie): never the query string, a token, a cookie
+ * or an address.
+ */
+function logStepUpRefused(req: Request | undefined, via: 'bearer' | 'cookie'): void {
+  let path = '(unreadable)';
+  try {
+    if (req) path = new URL(req.url).pathname;
+  } catch {
+    // Keep the placeholder.
+  }
+  console.info('[api-context] refused a session that still owes its authenticator code', {
+    method: req?.method ?? '(none)',
+    path,
+    via,
+  });
+}
+
+/**
  * Builds a ServiceContext for use inside an API route handler. Two paths:
  *
  *   1. Cookie-based (web fetches from the dashboard) — uses the SSR
@@ -454,8 +541,29 @@ function logRefusedCrossSiteWrite(req: Request): void {
  * Sec-Fetch-Site at all (docket S14, lib/auth/cross-site-request.ts). Pass the
  * request the route received, or one built from it with the same method, URL
  * and headers: the rule reads all three.
+ *
+ * Both paths return null, right after the identity check and before anything
+ * is read, for an account with a verified authenticator factor whose session
+ * is not aal2 (docket S43a, core stepUpOwed): a password alone reads nothing
+ * through the API. Before, the session was only labelled (mfaRequired,
+ * mfaSatisfied) and the refusal was left to assertPermission, which the
+ * snapshot, the order reads and the exports never call. Null, not a 403:
+ * every route answers it as its own 401, and phones already installed retry a
+ * 401 and keep their queued work, where a 403 would drop it. The level is the
+ * validated user's own: the bearer token's claim, or on the cookie path the
+ * verified token of a session whose subject is the user getUser() returned
+ * (cookieSessionLevel), so a cookie that refreshes into another account's
+ * session mid-request reads as not aal2, for the refusal and the label alike.
+ * `opts.allowStepUpPending` skips that one refusal, for a route that must
+ * answer before the code (AAL1_ROUTES in src/test/api-step-up.guard.test.ts,
+ * the only files allowed to pass it). Such a route gets the context as
+ * before, labelled mfaSatisfied false, so assertPermission still refuses it
+ * every permission.
  */
-export async function withApiContext(req?: Request): Promise<ServiceContext | null> {
+export async function withApiContext(
+  req?: Request,
+  opts?: { allowStepUpPending?: true },
+): Promise<ServiceContext | null> {
   const bearer = bearerTokenFrom(req);
 
   if (bearer) {
@@ -467,6 +575,20 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     );
     const { data: userRes, error } = await adminAuth.auth.getUser(bearer);
     if (error || !userRes.user) return null;
+
+    // THE AUTHENTICATOR CODE (docket S43a). The factors are GoTrue's answer for
+    // this token's user; the level is the token's own claim, safe to read now
+    // that GoTrue accepted the token. Refused before the client below exists,
+    // so nothing is read for it.
+    const bearerAal = aalFromJwt(bearer);
+    if (!opts?.allowStepUpPending && stepUpOwed(userRes.user.factors, bearerAal)) {
+      logStepUpRefused(req, 'bearer');
+      return null;
+    }
+    // The bearer client has no stored session, so the MFA label reads the
+    // level from the token itself too (already verified above by
+    // adminAuth.auth.getUser(bearer)).
+    const level: SessionLevelReader = async () => bearerAal;
 
     const supabase = createSupabaseClient<Database>(
       env.NEXT_PUBLIC_SUPABASE_URL,
@@ -496,13 +618,10 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
           permissions: fast.permissions,
           supabase,
           ...(await mfaFromPolicy(
-            supabase,
             fast.mfaPolicy,
             fast.role,
             userHasVerifiedFactor(userRes.user),
-            // The bearer client has no stored session, so read AAL from the token
-            // itself (already verified above by adminAuth.auth.getUser(bearer)).
-            aalFromJwt(bearer),
+            level,
           )),
           enabledModules: fast.enabledModules,
         },
@@ -534,9 +653,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
       member.organization_id as string,
       member.role as Role,
       userHasVerifiedFactor(userRes.user),
-      // The bearer client has no stored session, so read AAL from the token
-      // itself (already verified above by adminAuth.auth.getUser(bearer)).
-      aalFromJwt(bearer),
+      level,
     );
     const enabledModules = await resolveApiEnabledModules(
       supabase,
@@ -603,6 +720,19 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
   } = await supabase.auth.getUser();
   if (!user) return null;
 
+  // The level of THIS user's own session (cookieSessionLevel), read at most
+  // once and only when a rule needs it: the refusal below and the MFA label
+  // further down take the same answer.
+  let levelRead: Promise<SessionAal> | undefined;
+  const level: SessionLevelReader = () => (levelRead ??= cookieSessionLevel(supabase, user.id));
+
+  // The same rule as the bearer path, with this user's own level, before the
+  // context read below (docket S43a).
+  if (!opts?.allowStepUpPending && (await owesStepUp(user.factors, level))) {
+    logStepUpRefused(req, 'cookie');
+    return null;
+  }
+
   const requestedOrgId = req?.headers.get('x-organization-id') ?? null;
 
   // Same one round trip as the bearer branch above.
@@ -616,9 +746,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
         role: fast.role,
         permissions: fast.permissions,
         supabase,
-        // No bearer AAL on this path: the cookie client reads its own assurance
-        // level, exactly as it did before.
-        ...(await mfaFromPolicy(supabase, fast.mfaPolicy, fast.role, userHasVerifiedFactor(user))),
+        ...(await mfaFromPolicy(fast.mfaPolicy, fast.role, userHasVerifiedFactor(user), level)),
         enabledModules: fast.enabledModules,
       },
       fast.held,
@@ -639,6 +767,7 @@ export async function withApiContext(req?: Request): Promise<ServiceContext | nu
     member.organization_id as string,
     member.role as Role,
     userHasVerifiedFactor(user),
+    level,
   );
   const enabledModules = await resolveApiEnabledModules(supabase, member.organization_id as string);
   const permissions = await loadEffectivePermissions(

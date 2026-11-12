@@ -23,6 +23,8 @@ export function MaintenanceStatusBadge({ status }: { status: MaintenanceStatus }
     <Badge
       variant={TONES[status] ?? 'outline'}
       className={status === 'cancelled' ? 'line-through' : undefined}
+      data-glass-role="status"
+      data-glass-state={status}
     >
       {MAINTENANCE_STATUS_LABELS[status]}
     </Badge>

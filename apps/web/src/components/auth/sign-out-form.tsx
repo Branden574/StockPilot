@@ -1,6 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
+import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { signOutAction } from '@/server/actions/auth';
 
@@ -16,7 +17,13 @@ import { signOutAction } from '@/server/actions/auth';
  */
 export function SignOutForm() {
   return (
-    <form action={signOutAction} onSubmit={() => purgeInterruptedRuns()}>
+    <form
+      action={signOutAction}
+      onSubmit={() => {
+        purgeInterruptedRuns();
+        forgetAppearanceAccount();
+      }}
+    >
       <Button type="submit" variant="outline" className="h-11 w-full text-[14px]">
         Sign out
       </Button>

@@ -13,6 +13,7 @@ export function CategoriesGridSkeleton({ cards = 6 }: { cards?: number }) {
         <div
           key={i}
           className="border-border bg-card flex min-h-[76px] items-start gap-3 rounded-lg border p-4"
+          data-glass="card"
         >
           <Skeleton className="mt-1 h-2.5 w-2.5 rounded-full" />
           <div className="min-w-0 flex-1 space-y-2">
@@ -30,14 +31,16 @@ export function CategoriesPageSkeleton() {
   return (
     <div
       className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass="skeleton-page"
+      data-glass-width="wide"
       data-testid="categories-page-skeleton"
     >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex h-[42px] items-center">
+          <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
             <Skeleton className="h-[26px] w-40" />
           </div>
-          <div className="mt-0.5 flex h-5 items-center">
+          <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
             <Skeleton className="h-3 w-72 max-w-[70vw]" />
           </div>
         </div>

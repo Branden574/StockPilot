@@ -137,10 +137,11 @@ function bodyOf(src: string, file: string, name: string): string {
 }
 
 describe('the order screen: the needed-by card and Change', () => {
-  // Mutation caught: Change for a non-approver, a closed order, or Orders off.
-  it('Change is offered by the tested gate: orders:approve in the effective set, on an open order where Orders is on', () => {
+  // Mutation caught: Change for a non-approver, a closed order, or Orders off,
+  // or (security slice E, 0416) outside the order's warehouse.
+  it('Change is offered by the tested gate: orders:approve in the effective set, in the order’s warehouse, on an open order where Orders is on', () => {
     expect(screen).toMatch(
-      /const canChangeNeededBy =\s*order !== null &&\s*canOfferNeededByChange\(\{\s*status: order\.status,\s*role,\s*canApproveOrders: rpApprove,\s*ordersModuleEnabled: enabledModules\.has\('orders'\),?\s*\}\);/,
+      /const canChangeNeededBy =\s*order !== null &&\s*canOfferNeededByChange\(\{\s*status: order\.status,\s*role,\s*canApproveOrders: rpApprove && writesHere,\s*ordersModuleEnabled: enabledModules\.has\('orders'\),?\s*\}\);/,
     );
   });
 
@@ -176,13 +177,13 @@ describe('the order screen: the needed-by card and Change', () => {
   // delivery draft opened (or its handler run) after a save.
   it('after a save: core’s confirmation, the order read again, and nothing else (no email, no draft)', () => {
     const saved = bodyOf(screen, SCREEN_FILE, 'handleNeededBySaved');
-    expect(saved).toBe('{ setNeededBySheet(null); Alert.alert(title, message); await load(); }');
+    expect(saved).toBe('{ setNeededBySheet(null); Alert.alert(title, message); await reload(); }');
     expect(saved).not.toMatch(/Delivery|delivery|Linking|mail/i);
   });
 
   it('the sheet is mounted per open with what it opened on, knows when the phone is offline, and reloads behind itself', () => {
     expect(screen).toMatch(
-      /\{neededBySheet && orgId \? \(\s*<ReviseNeededBySheet\s+visible\s+orderId=\{neededBySheet\.orderId\}\s+organizationId=\{orgId\}\s+orderLabel=\{neededBySheet\.orderLabel\}\s+timeZone=\{neededBySheet\.timeZone\}\s+startNeededBy=\{neededBySheet\.startNeededBy\}\s+orderStatus=\{order\?\.status \?\? neededBySheet\.orderStatus\}\s+offline=\{offline\}\s+onClose=\{\(\) => setNeededBySheet\(null\)\}\s+onSaved=\{\(_outcome, title, message\) => void handleNeededBySaved\(title, message\)\}\s+onRefresh=\{\(\) => void load\(\)\}\s*\/>\s*\) : null\}/,
+      /\{neededBySheet && orgId \? \(\s*<ReviseNeededBySheet\s+visible\s+orderId=\{neededBySheet\.orderId\}\s+organizationId=\{orgId\}\s+orderLabel=\{neededBySheet\.orderLabel\}\s+timeZone=\{neededBySheet\.timeZone\}\s+startNeededBy=\{neededBySheet\.startNeededBy\}\s+orderStatus=\{order\?\.status \?\? neededBySheet\.orderStatus\}\s+offline=\{offline\}\s+onClose=\{\(\) => setNeededBySheet\(null\)\}\s+onSaved=\{\(_outcome, title, message\) => void handleNeededBySaved\(title, message\)\}\s+onRefresh=\{\(\) => void reload\(\)\}\s*\/>\s*\) : null\}/,
     );
   });
 
@@ -214,11 +215,13 @@ describe('the revise sheet', () => {
   it('imports no native date picker and nothing that opens mail', () => {
     const imports = [...sheetSrc.matchAll(/^import[\s\S]*?from '([^']+)';/gm)].map((m) => m[1]);
     // The redesign (P5.7a) added the shared button tones (a pure JS module):
-    // still no native date picker and nothing that opens mail.
+    // still no native date picker and nothing that opens mail. B44 added the
+    // shared Modal, which holds the phone update pop-up while it is open.
     expect(imports.sort()).toEqual(
       [
         '@/components/item-verification-card',
         '@/components/needed-by-picker',
+        '@/components/ui/modal',
         '@/components/ui/text',
         '@/components/ui/tones',
         '@/lib/exception-sheet-layout',

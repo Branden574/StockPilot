@@ -7,12 +7,19 @@
  * `imageUrl`, `lqip`, `warehouseId` or `itemType`. The tests added for PO-1
  * (the long availability form, the prepared catalog) are at the end.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { describe, expect, it } from 'vitest';
 
 import { cartTotals } from '../cart-totals';
+import { ORDER_MAX_UNITS_PER_LINE } from '../place-order';
 
 import type { StorefrontItem } from './item';
 import {
+  addAllState,
+  addAllTarget,
   availabilityLabel,
   availableOf,
   buildQtyMap,
@@ -505,5 +512,58 @@ describe('prepareCatalog / filterPreparedCatalog: the same rows as filterCatalog
   it('works out each status once, from the same rule', () => {
     expect(prepared.statuses).toEqual(rows.map((r) => statusOf(r)));
     expect(prepared.haystacks[3]).toBe('loose item loose-1 ');
+  });
+});
+
+// "Add all" on the New order page and the phone: one rule for both. The most
+// one press can ask for is everything available, and never more than one line
+// of an order may hold (the server refuses a line above that at submit).
+describe('addAllTarget', () => {
+  it('is everything available, in whole units, never below 0', () => {
+    expect(addAllTarget(0)).toBe(0);
+    expect(addAllTarget(1)).toBe(1);
+    expect(addAllTarget(67)).toBe(67);
+    expect(addAllTarget(67.9)).toBe(67);
+    expect(addAllTarget(-3)).toBe(0);
+  });
+
+  it('stops at the most one line of an order can hold', () => {
+    expect(ORDER_MAX_UNITS_PER_LINE).toBe(10_000);
+    expect(addAllTarget(ORDER_MAX_UNITS_PER_LINE)).toBe(ORDER_MAX_UNITS_PER_LINE);
+    expect(addAllTarget(ORDER_MAX_UNITS_PER_LINE + 1)).toBe(ORDER_MAX_UNITS_PER_LINE);
+    expect(addAllTarget(25_000)).toBe(ORDER_MAX_UNITS_PER_LINE);
+  });
+
+  it('is 0 for a number that is not finite', () => {
+    expect(addAllTarget(Number.NaN)).toBe(0);
+    expect(addAllTarget(Number.POSITIVE_INFINITY)).toBe(0);
+  });
+
+  it('reads the order limit by name, never a retyped number', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'logic.ts'), 'utf8');
+    expect(src).toMatch(/import \{ ORDER_MAX_UNITS_PER_LINE \} from '\.\.\/place-order';/);
+    const fn = src.slice(src.indexOf('export function addAllTarget('));
+    expect(fn.slice(0, fn.indexOf('\n}\n'))).toContain('ORDER_MAX_UNITS_PER_LINE');
+    expect(src).not.toMatch(/10[_,]?000/);
+  });
+});
+
+describe('addAllState', () => {
+  it.each([
+    [0, 0, 'hidden'],
+    [1, 0, 'hidden'],
+    [1, 1, 'hidden'],
+    [2, 0, 'offer'],
+    [67, 0, 'offer'],
+    [67, 5, 'offer'],
+    [67, 67, 'full'],
+    [67, 80, 'full'],
+    [Number.NaN, 0, 'hidden'],
+    [-3, 0, 'hidden'],
+    [25_000, 0, 'offer'],
+    [25_000, 9_999, 'offer'],
+    [25_000, 10_000, 'full'],
+  ] as const)('%d available with %d in the cart is %s', (available, inCart, state) => {
+    expect(addAllState(available, inCart)).toBe(state);
   });
 });

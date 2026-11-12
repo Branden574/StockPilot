@@ -17,6 +17,7 @@ const SheetOverlay = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
+    data-glass="scrim"
     ref={ref}
     className={cn(
       // No backdrop-blur — CPU-rendered per repaint without GPU acceleration.
@@ -71,6 +72,8 @@ export const SheetContent = React.forwardRef<
   <SheetPortal>
     <SheetOverlay />
     <DialogPrimitive.Content
+      data-glass="sheet"
+      data-glass-side={side}
       ref={ref}
       className={cn(sheetVariants({ side }), className)}
       {...props}

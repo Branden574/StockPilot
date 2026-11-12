@@ -33,7 +33,13 @@ export function CycleCountStatusBadge({ status }: { status: string }) {
   const words =
     status in TONE ? CYCLE_COUNT_STATUS_LABELS[status as CycleCountStatusValue] : status;
   return (
-    <Badge variant={cycleCountStatusTone(status)} look="wash" className="py-0">
+    <Badge
+      variant={cycleCountStatusTone(status)}
+      look="wash"
+      className="py-0"
+      data-glass-role="status"
+      data-glass-state={status}
+    >
       {words}
     </Badge>
   );

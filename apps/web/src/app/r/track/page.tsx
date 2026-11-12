@@ -1,5 +1,10 @@
 import { ExternalHeader, ExternalShell } from '@/components/auth/external-shell';
 import { TrackForm } from '@/components/orders/track-form';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root that app/r/layout.tsx draws and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,11 +64,7 @@ export default async function PublicOrderTrackPage({
         description="Enter the email and request ID from your confirmation email."
         className="mb-6"
       />
-      <TrackForm
-        initialToken={initialToken}
-        initialId={initialId}
-        initialEmail={initialEmail}
-      />
+      <TrackForm initialToken={initialToken} initialId={initialId} initialEmail={initialEmail} />
     </ExternalShell>
   );
 }

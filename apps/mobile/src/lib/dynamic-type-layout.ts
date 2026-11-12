@@ -233,3 +233,23 @@ export function fontScaleKey(fontScale: number | null | undefined): string {
     typeof fontScale === 'number' && Number.isFinite(fontScale) && fontScale > 0 ? fontScale : 1;
   return scale.toFixed(3);
 }
+
+/**
+ * fontScaleKey for a remount that must not happen until the text size really
+ * changes: undefined while the size is the one the app started at, the new
+ * size's key after a live change.
+ *
+ * WHY (A11Y-2, the same stale measurement as B10 above). The Appearance
+ * screen in Liquid Glass kept its rows at their old height, the text cut,
+ * after the text size changed while the app ran. Keying it on fontScaleKey
+ * alone would give Liquid Glass a key and Classic none, so every Design
+ * switch on that screen would remount it and lose its scroll and VoiceOver's
+ * place. With no key until a change, a Design switch remounts nothing.
+ */
+export function liveFontScaleKey(
+  launchFontScale: number | null | undefined,
+  fontScale: number | null | undefined,
+): string | undefined {
+  const now = fontScaleKey(fontScale);
+  return now === fontScaleKey(launchFontScale) ? undefined : now;
+}

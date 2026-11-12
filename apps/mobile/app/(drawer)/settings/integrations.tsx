@@ -20,6 +20,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
+import { GlassHeading, GlassSubline, GlassTile } from '@/components/ui/glass/parts';
+import { glassEyebrow, glassRowSub } from '@/components/ui/glass/primitive-styles';
+import { GLASS_PAGE } from '@/components/ui/glass/screens/admin';
+import { GLASS_LIST, GLASS_LIST_PANEL } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Field } from '@/components/ui/field';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
@@ -62,6 +68,10 @@ const PROVIDER = 'quickbooks';
  */
 export default function IntegrationsScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: the iOS grouped list): the scene, the glass nav
+  // and large title, the status, mapping and sync health as grouped cards
+  // under iOS headings; every field, button and message stays.
+  const lg = useGlass();
   const router = useRouter();
   const { isAdmin, loading: roleLoading } = useRole();
   const enabled = useEnabledModules();
@@ -194,9 +204,10 @@ export default function IntegrationsScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -210,11 +221,16 @@ export default function IntegrationsScreen() {
             <IconChip icon={RefreshCcw} onPress={refresh} accessibilityLabel="Refresh" minTap />
           ) : null}
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SETTINGS · INTEGRATIONS</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            QuickBooks<Em>.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {lg ? null : <Eyebrow>SETTINGS · INTEGRATIONS</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            QuickBooks{lg ? null : <Em>.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Settings · Integrations</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
@@ -238,7 +254,9 @@ export default function IntegrationsScreen() {
         />
       ) : (
         <ScrollView
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
+          contentContainerStyle={
+            lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
+          }
           showsVerticalScrollIndicator={false}
         >
           {error ? (
@@ -291,12 +309,17 @@ const STATUS_PILL: Record<ConnectionStatus, { label: string; status: 'ok' | 'war
 
 function StatusCard({ connection }: { connection: ConnectionView | null }) {
   const { c } = useTheme();
+  const lg = useGlass();
 
   if (!connection || connection.status === 'disconnected') {
     return (
       <Card padding={16} style={{ marginTop: 14 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Plug size={18} color={c.ink4} strokeWidth={1.5} />
+          {lg ? (
+            <GlassTile icon={Plug} fill={lg.c.ink4} />
+          ) : (
+            <Plug size={18} color={c.ink4} strokeWidth={1.5} />
+          )}
           <Pill>NOT CONNECTED</Pill>
         </View>
         <Body size={13.5} muted style={{ marginTop: 12 }}>
@@ -312,8 +335,12 @@ function StatusCard({ connection }: { connection: ConnectionView | null }) {
     <Card padding={16} style={{ marginTop: 14 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Plug size={18} color={c.ink} strokeWidth={1.5} />
-          <Body size={15.5} style={{ fontFamily: FONT.display }}>
+          {lg ? (
+            <GlassTile icon={Plug} fill={lg.g.okFill} />
+          ) : (
+            <Plug size={18} color={c.ink} strokeWidth={1.5} />
+          )}
+          <Body size={lg ? 17 : 15.5} style={{ fontFamily: FONT.display }}>
             QuickBooks Online
           </Body>
         </View>
@@ -326,7 +353,13 @@ function StatusCard({ connection }: { connection: ConnectionView | null }) {
       <DetailRow label="LAST SYNCED" value={formatDateTime(connection.lastSyncedAt)} />
       {connection.lastError ? (
         <View style={{ marginTop: 10 }}>
-          <Mono size={9.5} tracking={0.18} upper color={c.ink3}>
+          <Mono
+            size={9.5}
+            tracking={0.18}
+            upper
+            color={c.ink3}
+            style={lg ? glassEyebrow(lg) : undefined}
+          >
             LAST ERROR
           </Mono>
           <Body size={13} color={c.critText} style={{ marginTop: 4 }}>
@@ -340,6 +373,7 @@ function StatusCard({ connection }: { connection: ConnectionView | null }) {
 
 function DetailRow({ label, value }: { label: string; value: string }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   // REALM / LAST SYNCED against a realm id or a timestamp: `space-between`
   // gives neither side room, and the value is the half that was losing (it
@@ -361,8 +395,9 @@ function DetailRow({ label, value }: { label: string; value: string }) {
         upper
         color={c.ink3}
         // The label is a fixed micro-marker; the value it names is not capped.
-        maxFontSizeMultiplier={capTo(9.5, TYPE_CEILING.chrome)}
-        style={{ flexShrink: 1 }}
+        // The cap's base is the size drawn: 12 in Liquid Glass (glassEyebrow).
+        maxFontSizeMultiplier={capTo(lg ? 12 : 9.5, TYPE_CEILING.chrome)}
+        style={lg ? [glassEyebrow(lg), { flexShrink: 1 }] : { flexShrink: 1 }}
       >
         {label}
       </Mono>
@@ -398,10 +433,11 @@ function MappingForm({
   onSave: () => void;
   saving: boolean;
 }) {
+  const lg = useGlass();
   return (
-    <View style={{ marginTop: 24 }}>
-      <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-        <Eyebrow>ACCOUNT MAPPING</Eyebrow>
+    <View style={lg ? GLASS_PAGE.section : { marginTop: 24 }}>
+      <View style={lg ? GLASS_PAGE.sectionHead : { paddingHorizontal: 4, paddingBottom: 10 }}>
+        {lg ? <GlassHeading>Account mapping</GlassHeading> : <Eyebrow>ACCOUNT MAPPING</Eyebrow>}
       </View>
       <Card padding={16}>
         <Field
@@ -457,10 +493,11 @@ function healthColor(status: 'ok' | 'warn' | 'crit', c: Palette): string {
 
 function HealthList({ health }: { health: SyncHealthRow[] }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
-    <View style={{ marginTop: 24 }}>
-      <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-        <Eyebrow>SYNC HEALTH</Eyebrow>
+    <View style={lg ? GLASS_PAGE.section : { marginTop: 24 }}>
+      <View style={lg ? GLASS_PAGE.sectionHead : { paddingHorizontal: 4, paddingBottom: 10 }}>
+        {lg ? <GlassHeading>Sync health</GlassHeading> : <Eyebrow>SYNC HEALTH</Eyebrow>}
       </View>
       <Card padding={0}>
         {health.length === 0 ? (
@@ -482,7 +519,13 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
                     <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }} numberOfLines={2}>
                       {row.topic}
                     </Body>
-                    <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 2 }} numberOfLines={2}>
+                    <Mono
+                      size={10.5}
+                      tracking={0.04}
+                      color={c.ink3}
+                      style={lg ? glassRowSub(lg) : { marginTop: 2 }}
+                      numberOfLines={2}
+                    >
                       {row.externalId ? `${row.externalId} · ` : ''}
                       {row.attempts} attempt{row.attempts === 1 ? '' : 's'} · {formatDateTime(row.completedAt ?? row.createdAt)}
                     </Mono>
@@ -511,6 +554,7 @@ function HealthList({ health }: { health: SyncHealthRow[] }) {
 
 function EmptyState({ title, body }: { title: string; body: string }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View style={styles.center}>
       <View
@@ -522,9 +566,14 @@ function EmptyState({ title, body }: { title: string; body: string }) {
           borderColor: c.hair,
           alignItems: 'center',
           justifyContent: 'center',
+          ...(lg ? { borderWidth: 0, backgroundColor: lg.ios.fill } : null),
         }}
       >
-        <Plug size={24} color={c.ink4} strokeWidth={1.5} />
+        <Plug
+          size={lg ? GLASS_LIST_PANEL.glyph : 24}
+          color={lg ? c.ink3 : c.ink4}
+          strokeWidth={lg ? GLASS_LIST_PANEL.strokeWidth : 1.5}
+        />
       </View>
       <Body size={16} color={c.ink} style={{ marginTop: 16, fontFamily: FONT.display, textAlign: 'center' }}>
         {title}

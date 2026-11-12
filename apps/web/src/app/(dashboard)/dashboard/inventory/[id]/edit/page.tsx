@@ -8,10 +8,13 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { createClient } from '@/lib/supabase/server';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { CategoriesService } from '@/server/services/categories';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { CustomFieldsService } from '@/server/services/custom-fields';
+import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
+import { readCharterLabels } from '@/server/services/lib/unoffered-choices';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemGroupingService } from '@/server/services/item-grouping';
 import { LocationsService } from '@/server/services/locations';
@@ -39,6 +42,9 @@ export default async function EditItemPage({
   searchParams: Promise<{ return?: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it, and before the items:update redirect (B63).
+  notFoundUnlessUuid(id);
   const { return: returnParam } = await searchParams;
   const ctx = await requireOrgContext();
   // Viewers (or any role without items:update) can't edit existing items.
@@ -117,8 +123,24 @@ export default async function EditItemPage({
     customFieldsSvc.listDefinitions('item'),
   ]);
 
+  // The record's own charter when the active list lacks it (an archived or
+  // inactive charter keeps its links and the records that carry it): its name
+  // and status, so the form names it '(archived)' instead of showing its id
+  // (S44). Read only then; a failed read is reported and the form says
+  // "This record's charter". A label: the form keeps the charter either way.
+  const ownCharterId = (item.charter_id as string | null) ?? null;
+  const recordCharterRead =
+    ownCharterId && !charters.some((c) => c.id === ownCharterId)
+      ? readCharterLabels(
+          (ids) => chartersSvc.namesByIds(ids),
+          [ownCharterId],
+          'inventory.edit.record_charter',
+        ).then((rows) => rows[0] ?? null)
+      : Promise.resolve(null);
+
   const { enabled: lotSerialEnabled } = await checkModuleAccess('lot_serial');
   const skuSiblings = await skuSiblingsRead;
+  const recordCharter = await recordCharterRead;
 
   const terminology = resolveTerminology(
     (orgRow.data?.terminology as Partial<{
@@ -229,7 +251,12 @@ export default async function EditItemPage({
             initialTagIds={itemTags.map((t) => t.id)}
             warehouses={warehouses.map((w) => ({ id: w.id, name: w.name }))}
             charters={charters.map((c) => ({ id: c.id, name: c.name }))}
+            recordCharter={recordCharter}
             warehouseCharters={warehouseCharters}
+            // listPairs stops at LOOKUP_ROW_CEILING links (B47): at that many,
+            // a pair missing from the list may exist, so the form keeps the
+            // record's charter on a warehouse change and the save checks it.
+            warehouseChartersCapped={warehouseCharters.length >= LOOKUP_ROW_CEILING}
             forcedWarehouseId={forced}
             warehouseLabel={terminology.warehouse_singular}
             charterLabel={terminology.charter_singular}

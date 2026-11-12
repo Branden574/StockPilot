@@ -269,17 +269,6 @@ describe('create: the needed-by is the organization wall clock', () => {
     ]);
     expect(stub.rpcCalls).toEqual([]);
   });
-
-  it('the legacy branch passes its instant through unconverted', async () => {
-    const stub = stubWith(placed());
-    await svc(stub).create({
-      body: body(),
-      surface: 'web',
-      legacyNeededBy: '2026-10-05T17:00:00Z',
-    });
-    expect(rpcArgs(stub)?.p_request.needed_by).toBe('2026-10-05T17:00:00.000Z');
-    expect(stub.fromCalls).not.toContain('organizations');
-  });
 });
 
 describe('create: one call, the request as the database reads it', () => {

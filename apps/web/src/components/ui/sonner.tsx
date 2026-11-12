@@ -94,12 +94,24 @@ const TOAST_SHADOW =
 const BUTTON_FOCUS =
   'focus-visible:[box-shadow:0_0_0_2px_var(--normal-bg),0_0_0_4px_var(--normal-text)]!';
 
+/**
+ * The adapter between the appearance and sonner (Liquid Glass plan 1.2): sonner
+ * understands only light, dark and system. next-themes holds exactly those
+ * three today (Liquid Glass hands it `system`, plan D2), and anything else,
+ * now or later, becomes `system`, so the word 'liquid-glass' or a malformed
+ * stored value can never reach sonner as a theme. Glass toasts take their look
+ * from the glass tokens under :root[data-appearance="liquid-glass"].
+ */
+export function toSonnerTheme(theme: string | undefined): NonNullable<ToasterProps['theme']> {
+  return theme === 'light' || theme === 'dark' ? theme : 'system';
+}
+
 export function Toaster({ style, toastOptions, ...props }: ToasterProps) {
-  const { theme = 'system' } = useTheme();
+  const { theme } = useTheme();
 
   return (
     <Sonner
-      theme={theme as ToasterProps['theme']}
+      theme={toSonnerTheme(theme)}
       position="bottom-right"
       richColors
       closeButton

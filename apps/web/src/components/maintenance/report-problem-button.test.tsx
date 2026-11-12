@@ -64,4 +64,30 @@ describe('ReportProblemButton', () => {
     render(<ReportProblemButton moduleEnabled canSubmit prefill={{ itemId: 'i1' }} />);
     expect(screen.getByRole('link', { name: 'Report a problem' }).textContent?.trim()).toBe('Report a problem');
   });
+
+  // F14: a return has no related-record column on a maintenance request, so
+  // its launch point names the return in the subject and attaches the order.
+  it('adds a subject to the link when one is passed, and nothing else changes', () => {
+    render(
+      <ReportProblemButton
+        moduleEnabled
+        canSubmit
+        prefill={{ orderRequestId: 'o1', subject: 'Return RMA-20261110-AB12CD: ' }}
+      />,
+    );
+    const href = screen.getByRole('link', { name: 'Report a problem' }).getAttribute('href')!;
+    const url = new URL(href, 'http://localhost');
+    expect(url.pathname).toBe('/dashboard/maintenance/new');
+    expect([...url.searchParams.keys()]).toEqual(['orderRequestId', 'subject']);
+    expect(url.searchParams.get('orderRequestId')).toBe('o1');
+    expect(url.searchParams.get('subject')).toBe('Return RMA-20261110-AB12CD: ');
+  });
+
+  it('an empty subject adds no parameter', () => {
+    render(<ReportProblemButton moduleEnabled canSubmit prefill={{ orderRequestId: 'o1', subject: '' }} />);
+    expect(screen.getByRole('link', { name: 'Report a problem' })).toHaveAttribute(
+      'href',
+      '/dashboard/maintenance/new?orderRequestId=o1',
+    );
+  });
 });

@@ -34,6 +34,7 @@ function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: num
   return (
     <div
       className="bg-muted max-w-full shrink-0 animate-pulse"
+      data-glass="skeleton"
       style={{ width: typeof w === 'number' ? `${w}px` : w, height: h, borderRadius: radius }}
     />
   );
@@ -41,15 +42,15 @@ function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: num
 
 export default function RentalsLoading() {
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass="skeleton-page" data-glass-width="wide">
       {/* The header: a 28 px title on its 42 px line, the line under it, and
           the page's create button bottom-aligned on the right. */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex h-[42px] items-center">
+          <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
             <Bar w={150} h={26} />
           </div>
-          <div className="mt-0.5 flex h-5 items-center">
+          <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
             <Bar w={380} h={12} />
           </div>
           {/* A phone wraps that line onto a second one. */}
@@ -84,8 +85,11 @@ export default function RentalsLoading() {
           pad by var(--row-py) like the table's. The borrower is two lines
           tall, and four on a phone, where the table carries the hidden Items
           (below sm) and Checked out (below md) as lines under the name. */}
-      <div className="border-border bg-card overflow-hidden rounded-lg border">
-        <div className={`border-border grid h-[37px] items-center gap-3 border-b px-4 ${COLUMNS}`}>
+      <div className="border-border bg-card overflow-hidden rounded-lg border" data-glass="card">
+        <div
+          className={`border-border grid h-[37px] items-center gap-3 border-b px-4 ${COLUMNS}`}
+          data-glass-role="skeleton-table-head"
+        >
           <Bar w={64} h={8} />
           <div className="hidden sm:block">
             <Bar w={40} h={8} />
@@ -103,6 +107,7 @@ export default function RentalsLoading() {
           <div
             key={i}
             className={`border-border grid items-center gap-3 border-b px-4 last:border-0 ${COLUMNS}`}
+            data-glass-role="skeleton-table-row"
             style={{
               paddingTop: 'var(--row-py, 11px)',
               paddingBottom: 'var(--row-py, 11px)',

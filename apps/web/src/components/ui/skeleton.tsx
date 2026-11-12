@@ -5,6 +5,10 @@ import { cn } from '@/lib/utils';
  *  invisible on the dark card). */
 export function Skeleton({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={cn('animate-pulse rounded-md bg-[var(--ed-line)]', className)} {...props} />
+    <div
+      data-glass="skeleton"
+      className={cn('animate-pulse rounded-md bg-[var(--ed-line)]', className)}
+      {...props}
+    />
   );
 }

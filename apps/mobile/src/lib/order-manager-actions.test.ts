@@ -3,6 +3,8 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { deletedDriverHandOverLine } from '@stockpilot/core';
+
 import { orderManagerActions, type OrderManagerActionsInput } from './order-manager-actions';
 
 /**
@@ -15,6 +17,8 @@ const base: OrderManagerActionsInput = {
   status: 'pending_approval',
   fulfillmentType: 'delivery',
   canApproveOrders: false,
+  // Every case below is in the order's warehouse unless it says otherwise.
+  writesOrderWarehouse: true,
   canAssignDelivery: false,
   isManagerByRole: false,
   isAssignedDriver: false,
@@ -143,6 +147,82 @@ describe('orderManagerActions: Physical signature is a manager by role or the dr
   });
 });
 
+// Security slice E (0416): every approval-class action asks write access to
+// the order's warehouse (the six order functions since 0416; the pick slip,
+// packing slips, staging, delivery and the hand-over link before), so an
+// approver outside it is offered none of them; the assigned driver's own steps
+// ask no warehouse. Mutation caught: writesOrderWarehouse dropped from
+// `approves`.
+describe("orderManagerActions: an approver outside the order's warehouse (security slice E)", () => {
+  const outside = { ...grantedStaff, canAssignDelivery: true, machineOffersReopen: true, writesOrderWarehouse: false };
+
+  it('sees no section and no action at any status', () => {
+    for (const status of ['pending_approval', 'approved', 'picking_complete', 'packing_slip_generated', 'staged_for_delivery', 'staged_for_pickup', 'in_transit', 'backordered']) {
+      const a = at(outside, status, { hasAssignedDriver: true, machineOffersClosePartial: true, fulfillmentType: status === 'staged_for_pickup' ? 'pickup' : 'delivery' });
+      expect(a.showSection, status).toBe(false);
+      expect(Object.entries(a).filter(([, v]) => v === true).map(([k]) => k), status).toEqual([]);
+    }
+  });
+
+  it('in their own warehouse the same approver keeps every action', () => {
+    expect(at({ ...outside, writesOrderWarehouse: true }, 'pending_approval')).toMatchObject({ showSection: true, approve: true, approvePartial: true, deny: true });
+    expect(at({ ...outside, writesOrderWarehouse: true }, 'backordered', { machineOffersClosePartial: true })).toMatchObject({ backorderedActions: true, closePartial: true });
+  });
+
+  it("the assigned driver keeps the driver's own hand-over steps outside it, never Mark in transit", () => {
+    const driver = { ...outside, isAssignedDriver: true, hasAssignedDriver: true };
+    expect(at(driver, 'staged_for_delivery')).toMatchObject({ showSection: false, markInTransit: false, assignDelivery: false });
+    expect(at(driver, 'in_transit')).toMatchObject({ showSection: true, digitalSignature: true, physicalSignature: true, markInTransit: false });
+  });
+});
+
+// B23: 0393 clears the driver of an open order when the driver deletes their
+// account. The order stays in transit and an approver hands it over as
+// before; the section says who is left to do it, with the web panel's words.
+describe('orderManagerActions: an in-transit delivery whose driver deleted their account (B23)', () => {
+  const gone: Partial<OrderManagerActionsInput> = {
+    hasAssignedDriver: false,
+    isAssignedDriver: false,
+    driverDeleted: true,
+  };
+
+  it('a manager reads the line naming both hand-over buttons, and keeps both buttons', () => {
+    const a = at(manager, 'in_transit', gone);
+    expect(a.deletedDriverLine).toBe(deletedDriverHandOverLine({ offersPhysicalSignature: true }));
+    expect(a).toMatchObject({ showSection: true, digitalSignature: true, physicalSignature: true });
+  });
+
+  it('a granted staff approver reads the line naming only Collect signature (mutation: name the paper signature to everyone)', () => {
+    const a = at(grantedStaff, 'in_transit', gone);
+    expect(a.deletedDriverLine).toBe(deletedDriverHandOverLine({ offersPhysicalSignature: false }));
+    expect(a).toMatchObject({ digitalSignature: true, physicalSignature: false });
+  });
+
+  it('no line while the driver is named, at another status, for a viewer, or without orders:approve (mutation: drop a condition)', () => {
+    expect(at(manager, 'in_transit', { hasAssignedDriver: true }).deletedDriverLine).toBeNull();
+    expect(at(manager, 'in_transit').deletedDriverLine).toBeNull();
+    expect(at(manager, 'staged_for_delivery', gone).deletedDriverLine).toBeNull();
+    expect(at(manager, 'completed', gone).deletedDriverLine).toBeNull();
+    expect(at({ ...manager, isViewerRole: true }, 'in_transit', gone).deletedDriverLine).toBeNull();
+    expect(at(base, 'in_transit', gone).deletedDriverLine).toBeNull();
+    expect(at(revokedManager, 'in_transit', gone)).toMatchObject({
+      showSection: false,
+      deletedDriverLine: null,
+    });
+  });
+
+  // Merged with security slice E (0416): the screen now reads the viewer's
+  // warehouses, so a staff approver from another warehouse is offered no
+  // Collect signature there, and the line that sends them to it is not said
+  // either, as on the web panel (viewerMayHandOver). Mutation caught: the
+  // line decided on orders:approve alone, without the warehouse.
+  it("an approver outside the order's warehouse reads no line and is offered no hand-over button", () => {
+    const outside = at({ ...grantedStaff, writesOrderWarehouse: false }, 'in_transit', gone);
+    expect(outside).toMatchObject({ showSection: false, digitalSignature: false, physicalSignature: false, deletedDriverLine: null });
+    expect(at(grantedStaff, 'in_transit', gone).deletedDriverLine).toBe(deletedDriverHandOverLine({ offersPhysicalSignature: false }));
+  });
+});
+
 describe('orderManagerActions: never an empty or a wrong-status section', () => {
   it('terminal and picking statuses render nothing here', () => {
     for (const status of ['completed', 'cancelled', 'denied', 'pending_confirmation', 'pick_slip_generated', 'picking_in_progress', null, undefined]) {
@@ -163,7 +243,7 @@ describe('the order screen reads these gates (wiring pins)', () => {
   it('the section is the helper\'s answer, no longer role rank (mutation: restore `isManager &&`)', () => {
     expect(SCREEN).toContain('const hasPipelineActions = managerActions.showSection;');
     expect(SCREEN).not.toMatch(/const hasPipelineActions =\s*isManager/);
-    expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
+    expect(SCREEN).toMatch(/canApproveOrders: rpApprove,\s*writesOrderWarehouse: writesHere,\s*canAssignDelivery: role !== null && can\(\{ role: role as Role, permissions \}, 'orders:assign_delivery'\),\s*isManagerByRole: isManager,/);
   });
 
   // RX-2 review fix F-1: one ask of the shared machine, with the order's
@@ -181,10 +261,48 @@ describe('the order screen reads these gates (wiring pins)', () => {
     expect(SCREEN).toMatch(/machineOffersReopen: canReopenPicking,\s*isViewerRole: role === 'viewer',\s*\}\);/);
   });
 
+  // Security slice E: both also ask the order's warehouse, for the
+  // approver's steps and for Claim, the pick and Release (viewerCanPickHere).
   it('both calls to the shared machine pass the effective permission, so reopen follows orders:approve, as the web panel does (mutation: drop either)', () => {
     const calls = SCREEN.split('availableOrderActions({').slice(1).map((c) => c.slice(0, c.indexOf('})')));
     expect(calls).toHaveLength(2);
-    for (const call of calls) expect(call).toContain('canApproveOrders: rpApprove,');
+    for (const call of calls) {
+      expect(call).toContain('canApproveOrders: rpApprove && writesHere,');
+      expect(call).toContain('viewerCanPick: viewerCanPickHere,');
+    }
+  });
+
+  // Security slice E: the order's warehouse comes from the scope read with
+  // the order, through the tested helper (mutation: the helper bypassed, or
+  // the pick gate left without the warehouse). S2 follow-up: asked with the
+  // permissions the render gates with, the ones `load` asks the scope read
+  // with, so an order read under other permissions decides nothing.
+  it("the warehouse gates come from the scope read with the order (security slice E)", () => {
+    expect(SCREEN).toMatch(
+      /const orderAccess = orderWarehouseAccessAsShown\(\{\s*role,\s*warehouseId: order\?\.warehouseId \?\? null,\s*scope: order\?\.warehouseScope \?\? null,\s*status: order\?\.status \?\? null,\s*canApproveOrders: rpApprove === true,\s*canPick: rpItems === true,\s*\}\);/,
+    );
+    expect(SCREEN).not.toMatch(/\borderWarehouseAccess\(/);
+    expect(SCREEN).toContain('const writesHere = orderAccess.writes === true;');
+    expect(SCREEN).toContain('const viewerCanPickHere = viewerCanPick && writesHere;');
+    // Slice E review: the line edits ask read access of the requester too
+    // (loadEditableOrderHeader), so an approver's own order outside their
+    // warehouses offers no Add items or line edit (mutation: the requester
+    // term put back in front of the read, `ownOrderLines || ...`).
+    expect(SCREEN).toContain('const linesInScope = orderAccess.reads === true;');
+    expect(SCREEN).not.toMatch(/const linesInScope =[^;]*requesterUserId|const linesInScope =[^;]*ownOrderLines/);
+    expect(SCREEN).not.toContain('ownOrderLines');
+    expect(SCREEN).toMatch(/needsOrderWarehouseScope\(\{\s*role,\s*canApproveOrders: rpApprove,\s*canPick: rpItems,\s*status: \(headerForReadiness\.status as string \| null\) \?\? null,\s*\}\)\s*\? readOrderWarehouseScope\(supabase, \{ role, organizationId: orgId, userId \}\)\s*: null;/);
+    expect(SCREEN).toContain('const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;');
+    expect(SCREEN).toMatch(/replacement,\s*warehouseScope,\s*lines: rows\.map/);
+  });
+
+  it('B23: reads when the order went out and tells the helper when its driver deleted their account (mutation: drop the column or the fact)', () => {
+    expect(SCREEN).toMatch(/fulfillment_type, signature_token,\s*in_transit_at,/);
+    expect(SCREEN).toContain('inTransitAt: (r.in_transit_at as string | null) ?? null,');
+    expect(SCREEN).toMatch(
+      /hasAssignedDriver: !!order\?\.assignedDeliveryUserId,\s*driverDeleted: isDeliveryDriverDeleted\(\{\s*fulfillmentType: ft,\s*inTransitAt: order\?\.inTransitAt,\s*assignedDeliveryUserId: order\?\.assignedDeliveryUserId,\s*\}\),/,
+    );
+    expect(SCREEN).toMatch(/\{managerActions\.deletedDriverLine \?/);
   });
 
   it('each button reads its own gate', () => {

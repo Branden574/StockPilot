@@ -36,6 +36,21 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import {
+  glassChip,
+  glassChipLabel,
+  glassFieldBox,
+  glassFieldInput,
+  glassSearchBox,
+  glassSearchInput,
+  glassTintedStep,
+} from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
+import { GLASS_OPS, glassGrayCapsule, glassIconWell } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
@@ -123,6 +138,12 @@ export default function NewRental() {
   const { user } = useAuth();
   const { orgId, loading: workspaceLoading } = useOrg();
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Order-New.dc.html's request bar as
+  // a native grouped form): the scene, Back in the glass nav, the title block,
+  // each section on the grouped glass surface, the warehouses as iOS
+  // capsules, the search as the iOS search, the steppers tinted and the boxes
+  // as glass fields. Every field, gate and word stays.
+  const lg = useGlass();
   // The rentals list already hides its '+' for members without rentals:create
   // (src/screens/rentals.tsx), but this route is reachable directly. The real
   // gate now lives behind the route (RentalsService asserts the permission), so
@@ -460,16 +481,25 @@ export default function NewRental() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>RENTALS · NEW CHECKOUT</Eyebrow>
-          <Display size={32} style={{ marginTop: 12 }}>
-            Check <Em>out.</Em>
+        <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>RENTALS · NEW CHECKOUT</Eyebrow>}
+          <Display
+            size={lg ? 26 : 32}
+            style={lg ? GLASS_ITEM.name : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? glassListTitle('Check', 'out.') : 'Check '}
+            {lg ? null : <Em>out.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Rentals · New checkout</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
@@ -478,7 +508,7 @@ export default function NewRental() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40, gap: 14 }}
+          contentContainerStyle={{ paddingHorizontal: lg ? 16 : 20, paddingBottom: 40, gap: 14 }}
           keyboardShouldPersistTaps="handled"
         >
           <FormSection icon={Warehouse} label="WAREHOUSE">
@@ -520,12 +550,14 @@ export default function NewRental() {
                           backgroundColor: active ? c.ink : c.sunk,
                           opacity: pressed ? 0.85 : 1,
                         },
+                        // Liquid Glass: the iOS capsule (the chosen one in ink).
+                        lg && glassChip(lg, active),
                       ]}
                     >
                       <Body
-                        size={13}
+                        size={lg ? 15 : 13}
                         color={active ? c.paper : c.ink}
-                        style={{ fontFamily: FONT.display }}
+                        style={[{ fontFamily: FONT.display }, lg && glassChipLabel(lg, active)]}
                       >
                         {w.name}
                       </Body>
@@ -541,6 +573,8 @@ export default function NewRental() {
               style={[
                 styles.search,
                 { borderColor: searchFocused ? c.ink : c.hair2, backgroundColor: c.card },
+                // Liquid Glass: the iOS search field.
+                lg && glassSearchBox(lg),
               ]}
             >
               <Search size={14} color={c.ink3} strokeWidth={1.5} />
@@ -553,14 +587,17 @@ export default function NewRental() {
                 placeholderTextColor={c.ink3}
                 autoCapitalize="none"
                 accessibilityLabel="Search rental items"
-                style={{
-                  flex: 1,
-                  fontFamily: FONT.displayRegular,
-                  fontSize: 15,
-                  minHeight: 42,
-                  paddingVertical: 8,
-                  color: c.ink,
-                }}
+                style={[
+                  {
+                    flex: 1,
+                    fontFamily: FONT.displayRegular,
+                    fontSize: 15,
+                    minHeight: 42,
+                    paddingVertical: 8,
+                    color: c.ink,
+                  },
+                  lg && glassSearchInput(lg),
+                ]}
               />
             </View>
 
@@ -625,9 +662,11 @@ export default function NewRental() {
                             backgroundColor: c.card,
                             opacity: qty === 0 ? 0.35 : 1,
                           },
+                          // Liquid Glass: the tinted iOS stepper.
+                          lg && glassTintedStep(lg),
                         ]}
                       >
-                        <Minus size={16} color={c.ink} strokeWidth={2} />
+                        <Minus size={16} color={lg ? lg.g.accentText : c.ink} strokeWidth={2} />
                       </Pressable>
                       <Mono size={14} color={c.ink} style={{ minWidth: 22, textAlign: 'center' }}>
                         {qty}
@@ -645,9 +684,10 @@ export default function NewRental() {
                             backgroundColor: c.card,
                             opacity: qty >= avail ? 0.35 : 1,
                           },
+                          lg && glassTintedStep(lg),
                         ]}
                       >
-                        <Plus size={16} color={c.ink} strokeWidth={2} />
+                        <Plus size={16} color={lg ? lg.g.accentText : c.ink} strokeWidth={2} />
                       </Pressable>
                     </View>
                   );
@@ -836,6 +876,8 @@ function BorrowerSuggestions({
   onRetry: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: Try again as the iOS gray capsule, each suggestion on the iOS fill.
+  const lg = useGlass();
   if (search.status === 'failed') {
     return (
       <View style={{ gap: 8 }}>
@@ -854,6 +896,7 @@ function BorrowerSuggestions({
               backgroundColor: c.card,
               opacity: pressed ? 0.85 : 1,
             },
+            lg && glassGrayCapsule(lg),
           ]}
         >
           <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
@@ -891,6 +934,8 @@ function BorrowerSuggestions({
           style={({ pressed }) => [
             styles.suggestion,
             { borderColor: c.hair2, backgroundColor: pressed ? c.sunk : c.card },
+            // Liquid Glass: the iOS fill, the press shown as Movements shows it.
+            lg && [glassIconWell(lg), pressed && { opacity: 0.7 }],
           ]}
         >
           <UserCheck size={14} color={c.ink3} strokeWidth={1.5} />
@@ -922,6 +967,7 @@ function BorrowerSuggestions({
  */
 function ChangeBorrowerChip({ onPress, stacked = false }: { onPress: () => void; stacked?: boolean }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -935,6 +981,7 @@ function ChangeBorrowerChip({ onPress, stacked = false }: { onPress: () => void;
           opacity: pressed ? 0.85 : 1,
           alignSelf: stacked ? 'flex-start' : 'auto',
         },
+        lg && glassGrayCapsule(lg),
       ]}
     >
       <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
@@ -984,6 +1031,7 @@ function ReadFailure({
   onRetry: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View style={{ gap: 8 }}>
       <Body size={13} color={c.warnText}>
@@ -1007,6 +1055,7 @@ function ReadFailure({
             backgroundColor: c.card,
             opacity: retrying ? 0.5 : pressed ? 0.85 : 1,
           },
+          lg && glassGrayCapsule(lg),
         ]}
       >
         <Body size={13} color={c.ink2} style={{ fontFamily: FONT.display }}>
@@ -1025,6 +1074,8 @@ function Field({
   ...rest
 }: React.ComponentProps<typeof TextInput> & { label: string; multiline?: boolean }) {
   const { c } = useTheme();
+  // Liquid Glass: the glass field, the accent edge while focused.
+  const lg = useGlass();
   const [focused, setFocused] = React.useState(false);
   return (
     <View style={{ gap: 6 }}>
@@ -1044,19 +1095,22 @@ function Field({
         }}
         multiline={multiline}
         placeholderTextColor={c.ink3}
-        style={{
-          fontFamily: FONT.displayRegular,
-          fontSize: 15,
-          minHeight: multiline ? 80 : 48,
-          paddingHorizontal: 14,
-          paddingVertical: multiline ? 10 : 0,
-          borderWidth: 1,
-          borderColor: focused ? c.ink : c.hair2,
-          borderRadius: RADIUS.tile,
-          color: c.ink,
-          backgroundColor: c.card,
-          textAlignVertical: multiline ? 'top' : 'center',
-        }}
+        style={[
+          {
+            fontFamily: FONT.displayRegular,
+            fontSize: 15,
+            minHeight: multiline ? 80 : 48,
+            paddingHorizontal: 14,
+            paddingVertical: multiline ? 10 : 0,
+            borderWidth: 1,
+            borderColor: focused ? c.ink : c.hair2,
+            borderRadius: RADIUS.tile,
+            color: c.ink,
+            backgroundColor: c.card,
+            textAlignVertical: multiline ? 'top' : 'center',
+          },
+          lg && [glassFieldBox(lg, focused), glassFieldInput(lg)],
+        ]}
       />
     </View>
   );

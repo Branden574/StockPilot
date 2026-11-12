@@ -2,6 +2,14 @@ import 'server-only';
 
 import { unstable_cache } from 'next/cache';
 
+import {
+  hasPngSignature,
+  jpegPassesUnchanged,
+  pngFitInside,
+  pngPassesUnchanged,
+  withCappedImage,
+  type ImageKind,
+} from '@/lib/image-decode';
 import { fetchItemImage, itemImageFetchRoute } from '@/lib/item-image-fetch';
 
 /** How long one image or logo fetch may take before it is aborted. */
@@ -12,11 +20,63 @@ const DATA_URI_CACHE_TTL_SEC = 25 * 24 * 60 * 60; // 25 days
  *  the length cannot make a function buffer an unbounded body. */
 export const PDF_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
 
+/** The longest edge, in pixels, of a photo printed with no size of its own
+ *  (slips, report PDFs, the inventory snapshot): photo cells are 22 to 38 pt,
+ *  and the stored 200 px thumbnails pass as they are. */
+export const PDF_PHOTO_MAX_EDGE_PX = 400;
+/** The longest edge of a logo re-made for a branded header (drawn at 36 pt). */
+export const PDF_LOGO_MAX_EDGE_PX = 512;
+/** A PNG or JPEG logo up to this edge may print as it is. */
+const PDF_LOGO_UNCHANGED_MAX_EDGE_PX = 1024;
+/** The most bytes a PNG or JPEG may have to reach react-pdf as it is. */
+const PDF_UNCHANGED_MAX_BYTES = 1024 * 1024;
+
+/** Every JPEG this file makes: a fit-inside resize, then any transparency
+ *  flattened onto white, then JPEG. libvips paints a transparent pixel black
+ *  on a JPEG save (B62), so no JPEG may skip the flatten. The decode is the
+ *  capped decoder's (lib/image-decode.ts): only `kinds` are read, within
+ *  their pixel caps, with the EXIF orientation applied. */
+const PDF_JPEG_BACKGROUND = '#ffffff';
+async function jpegOnWhite(
+  rawBytes: Buffer,
+  kinds: readonly ImageKind[],
+  opts: { quality: number; maxEdgePx: number },
+): Promise<Buffer> {
+  return withCappedImage(rawBytes, kinds, (img) =>
+    img
+      .resize({
+        width: opts.maxEdgePx,
+        height: opts.maxEdgePx,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .flatten({ background: PDF_JPEG_BACKGROUND })
+      .jpeg({ quality: opts.quality, mozjpeg: true })
+      .toBuffer(),
+  );
+}
+
 /**
  * @react-pdf/image@3.x supports JPEG, PNG, and SVG ONLY — no WebP, no
  * AVIF, no GIF. The codebase stores item thumbnails as WebP (see
  * migration 0122), so for the PDF path we transcode unsupported
- * formats to JPEG using `sharp` (already in the dep graph via Next).
+ * formats to JPEG on white using `sharp` (already in the dep graph via
+ * Next): a see-through background prints white, never black.
+ *
+ * What reaches react-pdf (S45), at most PDF_PHOTO_MAX_EDGE_PX on its longest
+ * edge, never enlarged:
+ *   1. a PNG that pngPassesUnchanged allows (its structure checked, within
+ *      400 px and 1 MiB), unchanged: react-pdf keeps its transparency;
+ *   2. any other PNG, re-made as a PNG by the capped decoder, its
+ *      transparency kept;
+ *   3. a JPEG that jpegPassesUnchanged allows (no EXIF or XMP, every
+ *      segment read as react-pdf reads it and few enough to parse quickly,
+ *      within 400 px and 1 MiB), unchanged;
+ *   4. anything else the decoder reads (JPEG, WebP, AVIF, GIF), re-made as a
+ *      JPEG on white with its EXIF orientation applied.
+ * Other bytes (SVG, TIFF, HEIC, damaged files) and sizes over the decoder's
+ * caps are refused before sharp is called. Content-type headers from
+ * Supabase transformed URLs can lie, so the bytes decide.
  *
  * Bytes-in/bytes-out, no IO. Failure returns null so the consumer
  * falls back to a placeholder instead of crashing the document.
@@ -25,27 +85,28 @@ async function ensurePdfCompatibleBytes(
   rawBytes: Buffer,
   declaredContentType: string,
 ): Promise<{ bytes: Buffer; contentType: string } | null> {
-  // Sniff the leading magic bytes — content-type headers from
-  // Supabase transformed URLs can lie (return `image/webp` when the
-  // bytes are PNG, or vice versa).
-  const isPng =
-    rawBytes.length > 8 &&
-    rawBytes[0] === 0x89 &&
-    rawBytes[1] === 0x50 &&
-    rawBytes[2] === 0x4e &&
-    rawBytes[3] === 0x47;
-  const isJpeg = rawBytes.length > 2 && rawBytes[0] === 0xff && rawBytes[1] === 0xd8;
-  if (isPng) return { bytes: rawBytes, contentType: 'image/png' };
-  if (isJpeg) return { bytes: rawBytes, contentType: 'image/jpeg' };
-
-  // Anything else (WebP, AVIF, GIF, etc.) gets transcoded to JPEG.
+  const unchanged = { maxEdgePx: PDF_PHOTO_MAX_EDGE_PX, maxBytes: PDF_UNCHANGED_MAX_BYTES };
   try {
-    const { default: sharp } = await import('sharp');
-    const jpegBytes = await sharp(rawBytes).jpeg({ quality: 80, mozjpeg: true }).toBuffer();
+    if (await pngPassesUnchanged(rawBytes, unchanged)) {
+      return { bytes: rawBytes, contentType: 'image/png' };
+    }
+    // The decoder reads the header (for an AVIF, a walk of its boxes) once,
+    // in withCappedImage; here the signature is enough to choose the chain.
+    if (hasPngSignature(rawBytes)) {
+      const png = await pngFitInside(rawBytes, ['png'], PDF_PHOTO_MAX_EDGE_PX);
+      return { bytes: png, contentType: 'image/png' };
+    }
+    if (jpegPassesUnchanged(rawBytes, unchanged)) {
+      return { bytes: rawBytes, contentType: 'image/jpeg' };
+    }
+    const jpegBytes = await jpegOnWhite(rawBytes, ['jpeg', 'webp', 'avif', 'gif'], {
+      quality: 80,
+      maxEdgePx: PDF_PHOTO_MAX_EDGE_PX,
+    });
     return { bytes: jpegBytes, contentType: 'image/jpeg' };
   } catch (err) {
-    // sharp failed — log which format tripped it so a blank image in a PDF
-    // is diagnosable instead of silent. Caller treats null as "no image".
+    // A refusal or a sharp failure: log why, so a blank image in a PDF is
+    // diagnosable instead of silent. Caller treats null as "no image".
     console.warn(
       `[pdf-image] transcode failed (declaredContentType=${declaredContentType}): ${err instanceof Error ? err.message : String(err)}`,
     );
@@ -57,16 +118,17 @@ async function ensurePdfCompatibleBytes(
  * Downscale for a small PDF cell (the Book Order Totals covers): the longest
  * edge at most `maxEdgePx`, never enlarged, aspect kept (fit inside, so a
  * portrait cover is never cropped), transparency flattened to white, JPEG
- * q75. A 2048px master becomes a few KB instead of ~40-70 KB per row.
+ * q75 (jpegOnWhite, the same operations in the same order as before B62, so
+ * the bytes and the v6 cache entries are unchanged). A 2048px master becomes
+ * a few KB instead of ~40-70 KB per row. Every format goes through the capped
+ * decoder (S45), so what is stored is always sharp's own JPEG.
  */
 async function downscaleForPdf(rawBytes: Buffer, maxEdgePx: number): Promise<Buffer | null> {
   try {
-    const { default: sharp } = await import('sharp');
-    return await sharp(rawBytes)
-      .resize({ width: maxEdgePx, height: maxEdgePx, fit: 'inside', withoutEnlargement: true })
-      .flatten({ background: '#ffffff' })
-      .jpeg({ quality: 75, mozjpeg: true })
-      .toBuffer();
+    return await jpegOnWhite(rawBytes, ['png', 'jpeg', 'webp', 'avif', 'gif'], {
+      quality: 75,
+      maxEdgePx,
+    });
   } catch (err) {
     console.warn(
       `[pdf-image] downscale failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -160,22 +222,30 @@ async function fetchImageBody(url: string): Promise<{ body: Buffer; contentType:
   }
 }
 
-/** PNG or JPEG by the same signatures react-pdf's own decoder checks
- *  (@react-pdf/image: the 8-byte PNG signature, JPEG's FF D8). */
-function pngOrJpeg(bytes: Buffer): 'png' | 'jpeg' | null {
-  const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-  if (bytes.length >= 8 && PNG_SIGNATURE.every((b, i) => bytes[i] === b)) return 'png';
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xd8) return 'jpeg';
-  return null;
-}
-
-/** A logo's bytes as a data: URI, unchanged, when they are PNG or JPEG.
- *  Throws otherwise and on any fetch failure (see prefetchPdfLogo). */
+/**
+ * A logo's bytes as a data: URI. A PNG or JPEG within 1024 px and 1 MiB that
+ * pngPassesUnchanged or jpegPassesUnchanged allows is returned unchanged, so
+ * it prints exactly as it did. Any other PNG, JPEG, WebP or AVIF logo is
+ * re-made by the capped decoder as a PNG at most PDF_LOGO_MAX_EDGE_PX on its
+ * longest edge, never enlarged, its transparency kept and its EXIF
+ * orientation applied. Throws for anything else (SVG, GIF, HEIC, damaged
+ * files, AVIF over 4096 x 4096 and other formats over 50 million pixels) and
+ * on any fetch failure (see prefetchPdfLogo).
+ */
 async function fetchLogoAsDataUri(url: string): Promise<string> {
   const { body } = await fetchImageBody(url);
-  const kind = pngOrJpeg(body);
-  if (!kind) throw new Error('pdf-logo is not a PNG or JPEG');
-  return `data:image/${kind};base64,${body.toString('base64')}`;
+  const unchanged = {
+    maxEdgePx: PDF_LOGO_UNCHANGED_MAX_EDGE_PX,
+    maxBytes: PDF_UNCHANGED_MAX_BYTES,
+  };
+  if (await pngPassesUnchanged(body, unchanged)) {
+    return `data:image/png;base64,${body.toString('base64')}`;
+  }
+  if (jpegPassesUnchanged(body, unchanged)) {
+    return `data:image/jpeg;base64,${body.toString('base64')}`;
+  }
+  const png = await pngFitInside(body, ['png', 'jpeg', 'webp', 'avif'], PDF_LOGO_MAX_EDGE_PX);
+  return `data:image/png;base64,${png.toString('base64')}`;
 }
 
 /**
@@ -212,13 +282,18 @@ const getCachedImageDataUri = unstable_cache(
   // v5 (2026-06-02): bumped to evict 25-day-poisoned null entries from earlier
   // transient failures (the cause of "a lot of item images missing in PDFs"),
   // AND the fn now throws-instead-of-caching-null so this stops recurring.
-  // Kept at v5 for the unsized path so existing PDFs keep their warm cache.
-  ['pdf-image-data-uri-v5'],
+  // v7 (B62): data URIs stored before the flatten printed a see-through photo
+  // on a black square; v6 is the sized key.
+  // v8 (S45): v7 entries hold PNG and JPEG bytes exactly as they were
+  // fetched, before the structure checks and the 400 px limit, and would be
+  // served for up to 25 days.
+  ['pdf-image-data-uri-v8'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
 /** The downscaled variant. Its own key (v6) and the size as an argument, so
- *  a sized entry and an unsized one for the same URL never collide. */
+ *  a sized entry and an unsized one for the same URL never collide. Its
+ *  entries were always sharp's own JPEG, so the key stays. */
 const getCachedSizedImageDataUri = unstable_cache(
   async (url: string, maxEdgePx: number): Promise<string> => fetchImageAsDataUri(url, maxEdgePx),
   ['pdf-image-data-uri-v6'],
@@ -243,8 +318,9 @@ const getCachedSizedImageDataUri = unstable_cache(
  *
  * Caller passes `[key, signedUrl]` pairs; the key round-trips so the
  * consumer can map the result back to its row / item / whatever.
- * `opts.maxEdgePx` downscales every image (see downscaleForPdf); existing
- * callers pass nothing and get the bytes as before.
+ * `opts.maxEdgePx` downscales every image (see downscaleForPdf); callers
+ * that pass nothing get each image at its own size up to
+ * PDF_PHOTO_MAX_EDGE_PX (ensurePdfCompatibleBytes).
  */
 // Bound concurrent image fetches. A long report (now up to 1000 photos) must
 // not fire 1000 simultaneous storage requests on a cold render — that floods
@@ -299,9 +375,11 @@ export async function prefetchImagesAsDataUris<K>(
 // Throws on failure like the image caches above, so a failure is never stored.
 // Keyed by the URL, and a new upload is a new URL (org-logo-uploader.tsx puts a
 // timestamp in the path), so a changed logo is fetched afresh.
+// v2 (S45): v1 entries hold PNG and JPEG logos exactly as they were fetched,
+// before the structure checks, and would be served for up to 25 days.
 const getCachedLogoDataUri = unstable_cache(
   async (url: string): Promise<string> => fetchLogoAsDataUri(url),
-  ['pdf-logo-data-uri-v1'],
+  ['pdf-logo-data-uri-v2'],
   { revalidate: DATA_URI_CACHE_TTL_SEC, tags: ['pdf-image-data-uri'] },
 );
 
@@ -321,15 +399,19 @@ const getCachedLogoDataUri = unstable_cache(
  * It gets PDF_IMAGE_TIMEOUT_MS and the PDF_IMAGE_MAX_BYTES cap. BrandedHeader
  * draws nothing but such a data: URI.
  *
- * Only PNG and JPEG bytes are returned, unchanged, so a PNG or JPEG logo prints
- * exactly as it did. react-pdf could not read WebP or AVIF, so those never
- * printed. It did read SVG: an SVG logo, which the uploader accepted only from
+ * A PNG or JPEG logo within 1024 px and 1 MiB whose structure checks pass is
+ * returned unchanged, so it prints exactly as it did. Any other PNG, JPEG,
+ * WebP or AVIF logo is re-made by the capped decoder (lib/image-decode.ts) as
+ * a PNG at most 512 px, its transparency kept: react-pdf could not read WebP
+ * or AVIF, so those never printed before (S45). An AVIF over 4096 x 4096, any
+ * other logo over 50 million pixels, a GIF and a damaged file print no logo.
+ * react-pdf did read SVG: an SVG logo, which the uploader accepted only from
  * 2026-05-05 to 2026-05-09, printed before and prints no logo now, on purpose
  * (SVG was dropped as a logo format for carrying script, and this keeps
- * react-pdf's SVG parser off stored bytes). Any failure is no logo, never a
- * failed document, and the next document tries again. With no logo the header
- * starts the organization name at the left edge; before, a logo react-pdf
- * could not draw still left an empty 36 pt square there.
+ * react-pdf's and libvips' SVG parsers off stored bytes). Any failure is no
+ * logo, never a failed document, and the next document tries again. With no
+ * logo the header starts the organization name at the left edge; before, a
+ * logo react-pdf could not draw still left an empty 36 pt square there.
  */
 export async function prefetchPdfLogo(logoUrl: string | null | undefined): Promise<string | null> {
   const url = logoUrl?.trim();

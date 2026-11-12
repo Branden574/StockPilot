@@ -6,13 +6,17 @@ vi.mock('server-only', () => ({}));
 /** Every sharp(...) call's arguments, the real sharp doing the work. */
 const sharpCalls = vi.hoisted(() => [] as unknown[][]);
 vi.mock('sharp', async (importOriginal) => {
-  const real = (await importOriginal<{ default: (...a: unknown[]) => unknown }>()).default;
-  const wrapped = Object.assign((...args: unknown[]) => {
-    sharpCalls.push(args);
-    return real(...args);
-  }, real);
-  return { default: wrapped };
+  const { recordingSharp } = await import('@/test/image-decode-fixtures');
+  const real = (await importOriginal<{ default: (...a: never[]) => unknown }>()).default;
+  return { default: recordingSharp(real, sharpCalls) };
 });
+
+import {
+  AVIF_8192_CROPPED_TO_64,
+  IMAGE_LOOKALIKE_SVGS,
+  AVIFS_BEHIND_A_FIRST_META,
+  OVERSIZED_DERIVED_AVIFS,
+} from '@/test/image-decode-fixtures';
 
 import { IMAGE_VARIANTS } from './image-variants.config';
 import { makeItemPhotoThumbnail } from './item-photo-thumbnail';
@@ -104,8 +108,43 @@ describe('makeItemPhotoThumbnail', () => {
     sharpCalls.length = 0;
     await makeItemPhotoThumbnail(await photo(40, 30));
     const call = sharpCalls.find((args) => args[1] !== undefined);
-    expect(call?.[1]).toEqual({ limitInputPixels: 50_000_000 });
+    expect(call?.[1]).toEqual({ limitInputPixels: 50_000_000, autoOrient: true });
   });
+
+  // S45: the thumbnail is made by the capped decoder (lib/image-decode.ts),
+  // so it reads only PNG, JPEG, WebP and AVIF, AVIF up to 4096 x 4096.
+  it('answers null, without calling sharp, for SVG text the upload sniffer calls AVIF', async () => {
+    const lookalike = IMAGE_LOOKALIKE_SVGS['SVG after a comment holding ftypavif']!;
+    sharpCalls.length = 0;
+    expect(await makeItemPhotoThumbnail(new Uint8Array(lookalike))).toBeNull();
+    expect(sharpCalls).toEqual([]);
+  });
+
+  it('answers null, without calling sharp, for an AVIF over 4096 x 4096', async () => {
+    const avif = await sharp({
+      create: { width: 4096, height: 4097, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .avif({ effort: 0 })
+      .toBuffer();
+    sharpCalls.length = 0;
+    expect(await makeItemPhotoThumbnail(new Uint8Array(avif))).toBeNull();
+    expect(sharpCalls).toEqual([]);
+  }, 30_000);
+
+  it('answers null, without calling sharp, for an AVIF coded at 8192 x 8192 and cropped to 64 x 64', async () => {
+    sharpCalls.length = 0;
+    expect(await makeItemPhotoThumbnail(new Uint8Array(AVIF_8192_CROPPED_TO_64))).toBeNull();
+    expect(sharpCalls).toEqual([]);
+  });
+
+  it.each(Object.entries({ ...OVERSIZED_DERIVED_AVIFS, ...AVIFS_BEHIND_A_FIRST_META }))(
+    'answers null, without calling sharp, for an AVIF whose grid or overlay states more than its ispe, or behind a first meta: %s',
+    async (_label, bytes) => {
+      sharpCalls.length = 0;
+      expect(await makeItemPhotoThumbnail(new Uint8Array(bytes))).toBeNull();
+      expect(sharpCalls).toEqual([]);
+    },
+  );
 
   it('answers null for bytes that are not an image', async () => {
     expect(

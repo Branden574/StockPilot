@@ -100,7 +100,10 @@ export function Pagination({
     ) : null;
 
   return (
-    <div className={cn('text-muted-foreground flex items-center gap-3 text-[12.5px]', className)}>
+    <div
+      data-glass="pager"
+      className={cn('text-muted-foreground flex items-center gap-3 text-[12.5px]', className)}
+    >
       {range}
       <div className="flex items-center gap-2">
         <PageBtn

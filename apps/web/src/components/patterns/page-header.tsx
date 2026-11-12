@@ -94,7 +94,11 @@ export function PageHeader({
 }: PageHeaderProps) {
   const hasActions = Boolean(tour || actions || commitAction || primaryAction);
   return (
-    <div data-slot="page-header" className={cn('flex min-w-0 flex-col', className)}>
+    <div
+      data-slot="page-header"
+      data-glass="page-header"
+      className={cn('flex min-w-0 flex-col', className)}
+    >
       {back ? <div className="mb-2">{back}</div> : null}
       <div
         className={cn(

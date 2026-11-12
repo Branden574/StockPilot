@@ -5,6 +5,7 @@ import type { CountingUnit } from '@stockpilot/core';
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
 import { SIZE_SCAN_SIZES } from '@/lib/ai/size-scan';
 import { scanDocumentBytes, THREAT_MESSAGES } from '@/lib/document-threat-scan';
+import { reportError } from '@/lib/error-reporter';
 import {
   isSniffedKindAllowedInBucket,
   MIME_FOR_KIND,
@@ -377,9 +378,21 @@ export class SizeCountsService {
     }>;
     if (rows.length === 0) return [];
     const admin = createAdminClient();
-    const { data: signed } = await admin.storage
+    // sign-bound: one path a sample, and the read above is limited to at most
+    // 1,000 rows, the most one createSignedUrls call takes. (Its route has had
+    // no caller since the phone's size scanner screen was removed.)
+    const { data: signed, error: signErr } = await admin.storage
       .from('size-count-training')
       .createSignedUrls(rows.map((r) => r.image_storage_path), 3600);
+    // A failed call signed nothing. It is reported (B20a: it was ignored), and
+    // the samples still come back, each without a photo (url null).
+    if (signErr) {
+      void reportError(signErr, {
+        tag: 'size-counts.samples.sign',
+        organizationId: this.ctx.organizationId,
+        extra: { samples: rows.length },
+      });
+    }
     const urlByPath = new Map<string, string>();
     for (const s of signed ?? []) {
       if (s.path && s.signedUrl) urlByPath.set(s.path, s.signedUrl);

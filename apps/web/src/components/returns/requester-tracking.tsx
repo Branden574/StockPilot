@@ -4,15 +4,33 @@ import { ArrowRight, Undo2 } from 'lucide-react';
 import * as React from 'react';
 
 import { eyebrowClass } from '@/components/returns/returns-ui';
+import { SendReturnRequestButton } from '@/components/returns/send-return-request-button';
 import { useHydrated } from '@/lib/use-hydrated';
 import { cn } from '@/lib/utils';
 
 import {
   RETURNS_COPY,
   requesterTrackingLineWords,
+  returnRequestContentFromTracking,
+  type OrgEmailRoutingRecipientsDto,
   type RequesterTrackingLine,
   type RequesterTrackingReturn,
+  type ReturnRequestOrderFacts,
 } from '@stockpilot/core';
+
+/**
+ * What a member's own order page adds so each open request can be written
+ * about (F14, "Send return request"). Only that page passes it: the token
+ * page and the B2B portal have no signed-in member and no mailbox read, and
+ * render this section without it, so they show no new control.
+ */
+export interface RequesterTrackingReturnRequest {
+  orderId: string;
+  /** The organization's resolved delivery-request mailboxes (plain strings). */
+  recipients: OrgEmailRoutingRecipientsDto;
+  /** The order's facts for the draft, read by the page for this viewer. */
+  order: ReturnRequestOrderFacts;
+}
 
 /**
  * "Your requests on this order" (returns RX-3, brief 28): the requester's own
@@ -36,12 +54,15 @@ export function RequesterTracking({
   density = 'page',
   className,
   id,
+  returnRequest,
 }: {
   requests: readonly RequesterTrackingReturn[];
   headingLevel?: 2 | 3;
   density?: 'page' | 'compact';
   className?: string;
   id?: string;
+  /** A member's own order page only (see RequesterTrackingReturnRequest). */
+  returnRequest?: RequesterTrackingReturnRequest | null;
 }) {
   const hydrated = useHydrated();
   const fallbackId = React.useId();
@@ -114,6 +135,18 @@ export function RequesterTracking({
                   {r.replacementOrderNumber}
                 </span>
               </p>
+            ) : null}
+            {/* F14: write to the warehouse about this request. The button
+                decides for itself that the request is still open and has a
+                number; without `returnRequest` nothing is added here. */}
+            {returnRequest ? (
+              <SendReturnRequestButton
+                orderId={returnRequest.orderId}
+                surface="order"
+                size="sm"
+                content={returnRequestContentFromTracking(r, returnRequest.order)}
+                recipients={returnRequest.recipients}
+              />
             ) : null}
           </li>
         ))}

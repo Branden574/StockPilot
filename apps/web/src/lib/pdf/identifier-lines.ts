@@ -61,3 +61,30 @@ export function breakIdentifierLines(
   }
   return lines.join('\n');
 }
+
+/**
+ * Break only the words of `text` that are wider than `maxWidthPt` on their
+ * own, with breakIdentifierLines; every other word is left for react-pdf to
+ * wrap at its spaces. A text with no such word comes back unchanged.
+ *
+ * Why: textkit wraps at spaces and at English hyphenation points only. A word
+ * with neither, such as a model code or "Grade3/Grade4/Grade5", that is wider
+ * than its box stays on one line and is painted over the next column, because
+ * react-pdf does not clip Text. An English word is never this wide in a column
+ * a title or location is printed in, so it keeps textkit's own hyphenation.
+ */
+export function breakOverwideWords(
+  text: string,
+  maxWidthPt: number,
+  fontSizePt: number,
+  font: FontName = 'Helvetica',
+): string {
+  return text
+    .split(/([ \n]+)/)
+    .map((part) =>
+      part.trim() && safeWidth(part, font, fontSizePt) > maxWidthPt
+        ? breakIdentifierLines(part, maxWidthPt, fontSizePt, font)
+        : part,
+    )
+    .join('');
+}

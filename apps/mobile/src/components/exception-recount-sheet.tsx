@@ -1,6 +1,6 @@
 import { Circle, CircleDot, X } from 'lucide-react-native';
 import * as React from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
   RECOUNT_COUNTS_TOTAL_COPY,
@@ -13,7 +13,12 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { glassOptionRow } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import {
   describeRecountError,
   listExceptions,
@@ -142,6 +147,9 @@ function SheetContent({
   onResultShown: () => void;
 }) {
   const { c, mode: themeMode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [members, setMembers] = React.useState<Members>(orgId ? { kind: 'loading' } : { kind: 'failed' });
   const [membersNonce, setMembersNonce] = React.useState(0);
   const [assignee, setAssignee] = React.useState<string | null>(null);
@@ -270,9 +278,19 @@ function SheetContent({
         style={[
           StyleSheet.absoluteFill,
           { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+          lg && glassScrim(lg),
         ]}
       />
-      <View style={[styles.sheet, { backgroundColor: c.card }, SHADOW.sheet]}>
+      <View
+        style={[
+          styles.sheet,
+          { backgroundColor: c.card },
+          SHADOW.sheet,
+          lg && GLASS_SHEET_CARD,
+        ]}
+      >
+        {lg ? <GlassSheetBackdrop /> : null}
+        {lg ? <GlassSheetGrabber /> : null}
         <View style={styles.header}>
           <Body size={16} color={c.ink} style={{ fontFamily: FONT.display, flex: 1 }}>
             {summary ? 'Recount' : title}
@@ -456,6 +474,8 @@ function MemberOption({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS fill, the selection fill and the ink edge when chosen.
+  const lg = useGlass();
   // The chosen member: the ink border, the recessed fill (paper2 is the card
   // colour in dark, so the fill did not show there) and a filled radio mark,
   // so the choice never rests on a colour alone; the role is in the muted ink.
@@ -465,18 +485,21 @@ function MemberOption({
       onPress={onPress}
       accessibilityRole="radio"
       accessibilityState={{ selected }}
-      style={{
-        minHeight: 48,
-        paddingVertical: 10,
-        paddingHorizontal: 14,
-        borderRadius: 10,
-        borderWidth: 1,
-        borderColor: selected ? c.ink : c.hair2,
-        backgroundColor: selected ? c.sunk : 'transparent',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-      }}
+      style={[
+        {
+          minHeight: 48,
+          paddingVertical: 10,
+          paddingHorizontal: 14,
+          borderRadius: 10,
+          borderWidth: 1,
+          borderColor: selected ? c.ink : c.hair2,
+          backgroundColor: selected ? c.sunk : 'transparent',
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+        },
+        lg && glassOptionRow(lg, selected),
+      ]}
     >
       <Mark size={20} color={selected ? c.ink : c.ink3} strokeWidth={1.8} />
       <View style={{ flex: 1, minWidth: 0 }}>

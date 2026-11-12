@@ -31,7 +31,8 @@ import {
   showPlaceOrder,
 } from '@/lib/orders-list';
 import { orderExchangeChip } from '@/lib/returns-view';
-import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
+import { permissionsOnceRead, useEffectivePermissionsState } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
 import { profileFromEmbed, resolveRequesterLabel } from '@/lib/requester-label';
@@ -72,14 +73,23 @@ export default function OrdersScreen() {
   const { orgId } = useOrg();
   const { user } = useAuth();
   const { role } = useRole();
-  const permissions = useEffectivePermissions();
+  // The saved permission set, and whether it has been read yet.
+  const savedPermissions = useEffectivePermissionsState();
+  const permissions = savedPermissions.permissions;
+  const permissionsRead = savedPermissions.read === true;
   // Web parity (dashboard/orders/page.tsx): approvers see the whole org queue;
   // everyone else sees only the orders they placed. RLS still returns all rows
   // to any member, so — like web — this is a UX/privacy narrowing, not a hard
-  // guarantee. Default to own-only while role/permissions load so a
-  // non-approver never briefly sees the full queue (fallback role 'staff' has
-  // no orders:approve; widens to all only once an approver's set resolves).
-  const canApprove = can({ role: role ?? 'staff', permissions }, 'orders:approve');
+  // guarantee. Own-only while the role loads (fallback role 'staff' has no
+  // orders:approve; widens to all only once an approver's role or set is
+  // known), and decided from the saved set only: until it is read nothing is
+  // granted and the list reads nothing (`load` waits), never the static role
+  // defaults, which leave out a staff approver's per-user grant and keep a
+  // revoked manager's orders:approve (review of the S2 follow-up, F6).
+  const canApprove = can(
+    { role: role ?? 'staff', permissions: permissionsOnceRead(savedPermissions) },
+    'orders:approve',
+  );
   const userId = user?.id ?? null;
   const router = useRouter();
   const enabledModules = useEnabledModules();
@@ -107,6 +117,12 @@ export default function OrdersScreen() {
   const [failed, setFailed] = React.useState(false);
   // Order requests sent from this phone and not confirmed yet.
   const [unconfirmed, setUnconfirmed] = React.useState(0);
+  // Every read of the list is numbered (the sequence guard the returns list
+  // uses): only the newest one started changes the list. Reads overlap when
+  // the role or the saved set changes under it (a grant or a revoke of
+  // orders:approve changes which orders it reads) and on a pull to refresh;
+  // the older one finishing last used to win.
+  const [loads] = React.useState(() => createSequenceGuard());
 
   const load = React.useCallback(async () => {
     // No organization or no signed-in user: read nothing. After a sign-out the
@@ -114,6 +130,11 @@ export default function OrdersScreen() {
     // (L107). It also keeps a non-approver, who must be scoped to their own
     // requests, from ever reading the full queue.
     if (!orgId || !userId) return;
+    // Which orders are read follows the saved set: nothing is read before it
+    // is (milliseconds; `permissionsRead` is a dependency, so the focus
+    // effect runs this again then).
+    if (!permissionsRead) return;
+    const seq = loads.next();
     let query = supabase
       .from('order_requests')
       .select(
@@ -135,6 +156,8 @@ export default function OrdersScreen() {
       query.order('created_at', { ascending: false }).limit(100),
       userId ? unsettledSendsOnDevice(userId, orgId) : Promise.resolve(0),
     ]);
+    // A newer read started meanwhile: it decides what the list shows.
+    if (!loads.isCurrent(seq)) return;
     setUnconfirmed(unsettled);
     if (error) {
       // Keep what was shown before; say the read failed when there is none.
@@ -166,6 +189,7 @@ export default function OrdersScreen() {
         overviewByReturn.set(o.id, { replacementOrderId: o.replacement_order_id, exchangeStatus: o.exchange_status });
       }
     }
+    if (!loads.isCurrent(seq)) return;
     setRows(
       (data ?? []).map((row) => {
         const r = row as Record<string, unknown>;
@@ -199,7 +223,7 @@ export default function OrdersScreen() {
       }),
     );
     setLoading(false);
-  }, [orgId, canApprove, userId]);
+  }, [orgId, canApprove, userId, permissionsRead, loads]);
 
   // Read on every focus, not only on mount (D5): an order just placed, or
   // changed on another screen, shows when the person comes back.

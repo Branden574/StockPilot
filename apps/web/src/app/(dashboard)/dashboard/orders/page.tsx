@@ -2,7 +2,12 @@ import type { Metadata } from 'next';
 import { Package, ShoppingCart, Truck } from 'lucide-react';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
-import { formatOrderNumber, ORDER_ITEMS_MANAGE_BUTTON_COPY, RETURNS_COPY } from '@stockpilot/core';
+import {
+  deliveryDriverLabel,
+  formatOrderNumber,
+  ORDER_ITEMS_MANAGE_BUTTON_COPY,
+  RETURNS_COPY,
+} from '@stockpilot/core';
 
 export const metadata: Metadata = { title: 'Orders' };
 
@@ -10,6 +15,7 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { OrderStatusBadge } from '@/components/orders/status-badge';
 import { OrdersExportMenu } from '@/components/orders/orders-export-menu';
+import { OrderPhoneCards } from '@/components/orders/order-phone-cards';
 import { summaryRequesterLabel } from '@/components/orders/requester-label';
 import { PageHeader } from '@/components/patterns/page-header';
 import { StatePanel } from '@/components/patterns/state-panel';
@@ -33,6 +39,8 @@ import { formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PerfUseful } from '@/components/perf/perf-useful';
 import { ORDERS_TOUR } from '@/lib/onboarding/tours';
+// Liquid Glass's composition of this page (scoped to the glass root; plan 4.1).
+import '@/styles/liquid-glass/pages/orders.css';
 import {
   ORDER_EXPORT_STATUS_TABS as TAB_FILTERS,
   ORDER_EXPORT_TAB_LABELS as TAB_LABELS,
@@ -143,7 +151,7 @@ export default async function OrdersPage({
   const pager = canApprove ? <OrdersPager tab={tab} page={page} hasNext={hasNext} /> : null;
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass-page="orders">
       {/* Performance marker. This page has no Suspense split: by the time any
           of it renders, the order rows above have been awaited, so the page
           itself IS the real data (its skeleton is drawn elsewhere and never
@@ -212,7 +220,10 @@ export default async function OrdersPage({
       {/* A filter that is not a tab (the dashboard's "waiting for signature"
           card, L88): say what the list shows, and the way back. */}
       {canApprove && !TAB_ORDER.includes(tab) && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+        <div
+          data-glass="orders-filter-note"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]"
+        >
           <span className="border-line-strong bg-sunk text-foreground inline-flex h-7 items-center whitespace-nowrap rounded-full border px-2.5 text-[12.5px] font-medium">
             {TAB_LABELS[tab]}
           </span>
@@ -262,67 +273,82 @@ export default async function OrdersPage({
           />
         )
       ) : (
-        // The table card (DESIGN-SPEC 6.9): every column kept, the table at
-        // least 860 px wide (the reference's Orders minimum) and scrolling
-        // sideways inside the card, never the page, when the content area is
-        // narrower than its columns. At 1440 every column fits (DESIGN-SPEC
-        // 8): picker and driver names wrap, the requester's floor is 8rem and
-        // an exchange's state wraps beside its pill. With those on one line
-        // the table needed 1320 px of the 1146 px card on All active (FX3).
-        <div className="border-border bg-card overflow-hidden rounded-lg border">
-          <Table scrollLabelledBy="orders-title" className="min-w-[860px]">
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="whitespace-nowrap">Order #</TableHead>
-                <TableHead>Requester</TableHead>
-                <TableHead>Warehouse</TableHead>
-                <TableHead className="text-right">Lines</TableHead>
-                <TableHead className="whitespace-nowrap text-right">Total qty</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Picker</TableHead>
-                <TableHead>Driver</TableHead>
-                <TableHead>Requested</TableHead>
-                <TableHead className="whitespace-nowrap text-right">Last update</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visible.map((r) => (
-                <TableRow key={r.id}>
-                  <TableCell className="whitespace-nowrap">
-                    <Link
-                      href={`/dashboard/orders/${r.id}`}
-                      className="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline"
-                    >
-                      {formatOrderNumber(r.orderNumber) ?? '—'}
-                    </Link>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex min-w-32 items-start gap-2">
+        <>
+          {/* Liquid Glass on a phone (Orders.dc.html, 760 px and under): the
+              rows as cards, with every column's words, then the pager below
+              them. Glass-only and stateless (links to the rows' own
+              targets); not rendered at all under the `off` rollout. It sits
+              BEFORE the table card, never inside it: between two Classic
+              siblings no Classic element's :first-child, :last-child,
+              :only-child or :empty changes (the table's scroll wrapper keeps
+              its last:rounded-b-[inherit] corners), and in the DOM the cards
+              come before the pager, the order a phone shows them. */}
+          <OrderPhoneCards rows={visible} />
+          {/* The table card (DESIGN-SPEC 6.9): every column kept, the table at
+              least 860 px wide (the reference's Orders minimum) and scrolling
+              sideways inside the card, never the page, when the content area
+              is narrower than its columns. At 1440 every column fits
+              (DESIGN-SPEC 8): picker and driver names wrap, the requester's
+              floor is 8rem and an exchange's state wraps beside its pill. With
+              those on one line the table needed 1320 px of the 1146 px card on
+              All active (FX3). */}
+          <div
+            data-glass="card"
+            className="border-border bg-card overflow-hidden rounded-lg border"
+          >
+            <Table scrollLabelledBy="orders-title" className="min-w-[860px]">
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="whitespace-nowrap">Order #</TableHead>
+                  <TableHead>Requester</TableHead>
+                  <TableHead>Warehouse</TableHead>
+                  <TableHead className="text-right">Lines</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Total qty</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Picker</TableHead>
+                  <TableHead>Driver</TableHead>
+                  <TableHead>Requested</TableHead>
+                  <TableHead className="whitespace-nowrap text-right">Last update</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {visible.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="whitespace-nowrap">
                       <Link
                         href={`/dashboard/orders/${r.id}`}
-                        className="text-foreground min-w-0 underline-offset-2 hover:underline"
+                        className="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline"
                       >
-                        <RequesterLabel row={r} />
+                        {formatOrderNumber(r.orderNumber) ?? '—'}
                       </Link>
-                      {r.source === 'public_link' && (
-                        <Badge variant="outline" className="shrink-0">
-                          Public
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-ink-2">{r.warehouseName ?? '—'}</TableCell>
-                  <TableCell className="text-right font-mono text-[13.5px] tabular-nums">
-                    {formatNumber(r.lineCount)}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-[13.5px] tabular-nums">
-                    {formatNumber(r.totalQuantity)}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <OrderStatusBadge status={r.status} fulfillmentType={r.fulfillmentType} />
-                      {/* Returns RX-2: the Exchange chip from the order's own
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex min-w-32 items-start gap-2">
+                        <Link
+                          href={`/dashboard/orders/${r.id}`}
+                          className="text-foreground min-w-0 underline-offset-2 hover:underline"
+                        >
+                          <RequesterLabel row={r} />
+                        </Link>
+                        {r.source === 'public_link' && (
+                          <Badge variant="outline" className="shrink-0">
+                            Public
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-ink-2">{r.warehouseName ?? '—'}</TableCell>
+                    <TableCell className="text-right font-mono text-[13.5px] tabular-nums">
+                      {formatNumber(r.lineCount)}
+                    </TableCell>
+                    <TableCell className="text-right font-mono text-[13.5px] tabular-nums">
+                      {formatNumber(r.totalQuantity)}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <OrderStatusBadge status={r.status} fulfillmentType={r.fulfillmentType} />
+                        {/* Returns RX-2: the Exchange chip from the order's own
                           column; the gate's words from the page's one batched
                           return_overview read (no read per row). The pill
                           holds "Exchange" and the state follows it as text
@@ -332,58 +358,70 @@ export default async function OrdersPage({
                           the text and screen readers only: the state usually
                           wraps under the pill, where a leading dot read as a
                           list bullet. */}
-                      {r.replacementForReturnId ? (
-                        <div
-                          data-testid="order-exchange-chip"
-                          className="inline-flex min-w-0 flex-wrap items-center gap-x-1"
-                        >
-                          <Badge variant="outline">{RETURNS_COPY.typeExchange}</Badge>
-                          {r.exchange?.state ? (
-                            <span className="text-muted-foreground text-[12px]">
-                              <span className="sr-only">{' · '}</span>
-                              {r.exchange.state}
-                            </span>
-                          ) : null}
-                        </div>
-                      ) : null}
-                    </div>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <span className="text-ink-2 inline-flex items-center gap-1.5">
-                      {r.fulfillmentType === 'pickup' ? (
-                        <>
-                          <Package className="text-muted-foreground size-3.5 shrink-0" />
-                          Pickup
-                        </>
-                      ) : (
-                        <>
-                          <Truck className="text-muted-foreground size-3.5 shrink-0" />
-                          Delivery
-                        </>
-                      )}
-                    </span>
-                  </TableCell>
-                  {/* Picker and driver names wrap (FX3). */}
-                  <TableCell>
-                    <PersonName name={r.assignedPickerName} />
-                  </TableCell>
-                  <TableCell>
-                    <PersonName
-                      name={r.fulfillmentType === 'delivery' ? r.assignedDeliveryUserName : null}
-                    />
-                  </TableCell>
-                  <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
-                    {formatRelative(r.createdAt)}
-                  </TableCell>
-                  <TableCell className="text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
-                    {formatRelative(r.updatedAt)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {pager ? <div className="border-border border-t px-4 py-2.5">{pager}</div> : null}
-        </div>
+                        {r.replacementForReturnId ? (
+                          <div
+                            data-testid="order-exchange-chip"
+                            className="inline-flex min-w-0 flex-wrap items-center gap-x-1"
+                          >
+                            <Badge variant="outline">{RETURNS_COPY.typeExchange}</Badge>
+                            {r.exchange?.state ? (
+                              <span className="text-muted-foreground text-[12px]">
+                                <span className="sr-only">{' · '}</span>
+                                {r.exchange.state}
+                              </span>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <span className="text-ink-2 inline-flex items-center gap-1.5">
+                        {r.fulfillmentType === 'pickup' ? (
+                          <>
+                            <Package className="text-muted-foreground size-3.5 shrink-0" />
+                            Pickup
+                          </>
+                        ) : (
+                          <>
+                            <Truck className="text-muted-foreground size-3.5 shrink-0" />
+                            Delivery
+                          </>
+                        )}
+                      </span>
+                    </TableCell>
+                    {/* Picker and driver names wrap (FX3). */}
+                    <TableCell>
+                      <PersonName name={r.assignedPickerName} />
+                    </TableCell>
+                    <TableCell>
+                      {/* B23: a delivery that went out and names no driver
+                        reads "Deleted user" (the driver deleted their account). */}
+                      <PersonName
+                        name={deliveryDriverLabel({
+                          fulfillmentType: r.fulfillmentType,
+                          inTransitAt: r.inTransitAt,
+                          assignedDeliveryUserId: r.assignedDeliveryUserId,
+                          driverName: r.assignedDeliveryUserName,
+                        })}
+                      />
+                    </TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap text-[12.5px]">
+                      {formatRelative(r.createdAt)}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+                      {formatRelative(r.updatedAt)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {pager ? (
+              <div data-glass="orders-pager" className="border-border border-t px-4 py-2.5">
+                {pager}
+              </div>
+            ) : null}
+          </div>
+        </>
       )}
       {!showTable && pager}
     </div>
@@ -438,7 +476,10 @@ const PAGER_DISABLED =
  */
 function OrdersPager({ tab, page, hasNext }: { tab: StatusTab; page: number; hasNext: boolean }) {
   return (
-    <div className="text-muted-foreground flex items-center justify-end gap-2 text-[12.5px]">
+    <div
+      data-glass="orders-pager-row"
+      className="text-muted-foreground flex items-center justify-end gap-2 text-[12.5px]"
+    >
       <PagerControl href={page <= 1 ? null : `/dashboard/orders?status=${tab}&page=${page - 1}`}>
         ← Newer
       </PagerControl>

@@ -1,0 +1,540 @@
+<div>
+<div class="flex flex-col gap-4">
+<div class="flex flex-wrap items-center justify-between gap-3">
+<div class="flex min-w-0 max-w-full flex-wrap items-center gap-2">
+<div role="tablist" aria-label="Filter by stock" data-slot="segmented-tabs" class="border-border bg-sunk inline-flex w-fit max-w-full items-center overflow-x-auto border [scrollbar-width:thin] gap-0.5 rounded-lg p-[3px]">
+<a href="/dashboard/inventory" data-state="active" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&amp;_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]" role="tab" aria-selected="true">
+<span>All items</span>
+</a>
+<a href="/dashboard/inventory?stock=low" data-state="inactive" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&amp;_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" role="tab" aria-selected="false">
+<span>Low + critical</span>
+</a>
+<a href="/dashboard/inventory?stock=out" data-state="inactive" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&amp;_svg]:shrink-0 h-7 gap-1.5 rounded-[5px] px-2.5 text-[13px] before:-inset-y-[3px] text-muted-foreground hover:text-foreground" role="tab" aria-selected="false">
+<span>Out of stock</span>
+</a>
+</div>
+<a href="/dashboard/inventory?expected=1" aria-pressed="false" title="Items created from purchase orders that haven't received any stock yet" class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border transition-colors max-sm:min-h-11 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] h-7 px-2.5 text-[12.5px] hover:bg-muted border-[var(--ed-line-strong)] bg-transparent text-[var(--ed-ink-2)] hover:text-foreground">Expected<span class="font-mono text-[11px] font-medium tabular-nums text-muted-foreground">2</span>
+</a>
+<span class="group/view inline-flex h-7 items-center gap-0.5 rounded-full border pl-2.5 pr-1 text-[12.5px] transition-colors max-sm:min-h-11 hover:bg-muted border-[var(--ed-line-strong)] text-[var(--ed-ink-2)]">
+<button type="button" class="inline-flex min-h-7 items-center gap-1.5 rounded-full pr-1 max-sm:min-h-11" aria-label="Apply view Low uniforms">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-pin h-3 w-3" aria-hidden="true">
+<path d="M12 17v5">
+</path>
+<path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z">
+</path>
+</svg>
+<span class="max-w-[120px] truncate">Low uniforms</span>
+</button>
+<button type="button" aria-label="Share view Low uniforms with team" class="grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 [.group\/view:focus-within_&amp;]:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100 hover:bg-foreground/10">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-users h-2.5 w-2.5 opacity-50" aria-hidden="true">
+<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2">
+</path>
+<path d="M16 3.128a4 4 0 0 1 0 7.744">
+</path>
+<path d="M22 21v-2a4 4 0 0 0-3-3.87">
+</path>
+<circle cx="9" cy="7" r="4">
+</circle>
+</svg>
+</button>
+<button type="button" aria-label="Delete view Low uniforms" class="grid size-5 shrink-0 place-items-center rounded-full opacity-0 transition-opacity group-hover/view:opacity-100 [.group\/view:focus-within_&amp;]:opacity-100 focus-visible:opacity-100 pointer-coarse:size-8 pointer-coarse:opacity-100 max-sm:size-8 max-sm:opacity-100 hover:bg-foreground/10">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x h-2.5 w-2.5" aria-hidden="true">
+<path d="M18 6 6 18">
+</path>
+<path d="m6 6 12 12">
+</path>
+</svg>
+</button>
+</span>
+<button type="button" class="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border transition-colors max-sm:min-h-11 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] h-7 px-2.5 text-[12.5px] hover:bg-muted border-[var(--ed-line-strong)] bg-transparent text-[var(--ed-ink-2)] hover:text-foreground border-dashed" aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-plus h-3 w-3" aria-hidden="true">
+<path d="M5 12h14">
+</path>
+<path d="M12 5v14">
+</path>
+</svg> Save view</button>
+</div>
+<div role="tablist" aria-label="Show as" data-slot="segmented-tabs" class="border-border bg-sunk inline-flex w-fit max-w-full items-center overflow-x-auto border [scrollbar-width:thin] gap-0.5 rounded-md p-0.5 ml-auto">
+<button type="button" data-state="inactive" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&amp;_svg]:shrink-0 h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&amp;_svg]:h-3.5 [&amp;_svg]:w-3.5 text-muted-foreground hover:text-foreground" role="tab" aria-selected="false">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-list" aria-hidden="true">
+<path d="M3 5h.01">
+</path>
+<path d="M3 12h.01">
+</path>
+<path d="M3 19h.01">
+</path>
+<path d="M8 5h13">
+</path>
+<path d="M8 12h13">
+</path>
+<path d="M8 19h13">
+</path>
+</svg>
+<span>Table</span>
+</button>
+<button type="button" data-state="active" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&amp;_svg]:shrink-0 h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&amp;_svg]:h-3.5 [&amp;_svg]:w-3.5 bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]" role="tab" aria-selected="true">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-layout-grid" aria-hidden="true">
+<rect width="7" height="7" x="3" y="3" rx="1">
+</rect>
+<rect width="7" height="7" x="14" y="3" rx="1">
+</rect>
+<rect width="7" height="7" x="14" y="14" rx="1">
+</rect>
+<rect width="7" height="7" x="3" y="14" rx="1">
+</rect>
+</svg>
+<span>Grid</span>
+</button>
+</div>
+</div>
+<div class="grid">
+<div class="col-start-1 row-start-1 flex flex-wrap content-start items-center gap-x-1.5 gap-y-2">
+<div class="relative w-full sm:w-[240px]">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" aria-hidden="true">
+<path d="m21 21-4.34-4.34">
+</path>
+<circle cx="11" cy="11" r="8">
+</circle>
+</svg>
+<input class="bg-card flex w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base h-8 pl-8 text-[13px]" placeholder="Search name, SKU, barcode…" aria-label="Search items" value="">
+</div>
+<button type="button" data-slot="filter-trigger" class="border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&amp;_svg]:shrink-0 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']" aria-label="Sort by Last updated (newest)" aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+<span class="text-muted-foreground">Sort:</span>
+<span class="text-foreground min-w-0 truncate font-medium">Last updated (newest)</span>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down text-muted-foreground h-[11px] w-[11px]" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" data-slot="filter-trigger" class="border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&amp;_svg]:shrink-0 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']" aria-label="Filter by Category" aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+<span class="min-w-0 truncate">Category</span>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down text-muted-foreground h-[11px] w-[11px]" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" data-slot="filter-trigger" class="border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&amp;_svg]:shrink-0 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']" aria-label="Filter by Location" aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+<span class="min-w-0 truncate">Location</span>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down text-muted-foreground h-[11px] w-[11px]" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" data-slot="filter-trigger" class="border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&amp;_svg]:shrink-0 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']" aria-label="Filter by Charter" aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+<span class="min-w-0 truncate">Charter</span>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down text-muted-foreground h-[11px] w-[11px]" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+<button type="button" data-slot="filter-trigger" class="border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&amp;_svg]:shrink-0 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']" aria-label="Toggle on-hand view" title="Switch between total on-hand and placed-only">
+<span class="min-w-0 truncate">On hand: total</span>
+</button>
+<button type="button" data-slot="filter-trigger" class="border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&amp;_svg]:shrink-0 relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-['']" aria-label="Export" aria-haspopup="dialog" aria-expanded="false" data-state="closed">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-download h-3.5 w-3.5" aria-hidden="true">
+<path d="M12 15V3">
+</path>
+<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+</path>
+<path d="m7 10 5 5 5-5">
+</path>
+</svg>
+<span class="min-w-0 truncate">Export</span>
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-down text-muted-foreground h-[11px] w-[11px]" aria-hidden="true">
+<path d="m6 9 6 6 6-6">
+</path>
+</svg>
+</button>
+</div>
+<div class="col-start-1 row-start-1 flex min-w-0 flex-col justify-center invisible">
+<div class="border-border bg-card flex min-h-9 flex-wrap items-center gap-1 rounded-lg border px-3 py-1 pointer-coarse:gap-2 max-sm:gap-2 max-sm:py-2">
+<button title="Unselect all" type="button" role="checkbox" aria-checked="true" aria-label="Unselect all 0 selected items" data-state="checked" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 mr-1">
+<span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-foreground bg-foreground">
+<span aria-hidden="true" class="border-background h-[11px] w-[6px] -translate-y-px rotate-45 border-b-2 border-r-2">
+</span>
+</span>
+</button>
+<span class="text-foreground mr-1 font-mono text-[12.5px] tabular-nums">0 selected</span>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-7 px-2.5 text-[13px] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-shopping-cart" aria-hidden="true">
+<path d="m2.05 2.05 1.099-.028a1 1 0 0 1 1.008.815l2.69 14.347A1 1 0 0 0 7.83 18H18">
+</path>
+<path d="M4.563 5h16.435a1 1 0 0 1 .981 1.204l-1.026 6.226A2 2 0 0 1 18.962 14H6.25">
+</path>
+<circle cx="18" cy="20" r="2">
+</circle>
+<circle cx="8" cy="20" r="2">
+</circle>
+</svg> Start an order</button>
+<a href="/dashboard/inventory/labels" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-printer" aria-hidden="true">
+<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2">
+</path>
+<path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6">
+</path>
+<rect x="6" y="14" width="12" height="8" rx="1">
+</rect>
+</svg> Print labels</a>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-download" aria-hidden="true">
+<path d="M12 15V3">
+</path>
+<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+</path>
+<path d="m7 10 5 5 5-5">
+</path>
+</svg> Export</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-clipboard-check" aria-hidden="true">
+<rect width="8" height="4" x="8" y="2" rx="1" ry="1">
+</rect>
+<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2">
+</path>
+<path d="m9 14 2 2 4-4">
+</path>
+</svg> Cycle count</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-folder-tree" aria-hidden="true">
+<path d="M20 10a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1h-2.5a1 1 0 0 1-.8-.4l-.9-1.2A1 1 0 0 0 15 3h-2a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1Z">
+</path>
+<path d="M20 21a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1h-2.9a1 1 0 0 1-.88-.55l-.42-.85a1 1 0 0 0-.92-.6H13a1 1 0 0 0-1 1v5a1 1 0 0 0 1 1Z">
+</path>
+<path d="M3 5a2 2 0 0 0 2 2h3">
+</path>
+<path d="M3 3v13a2 2 0 0 0 2 2h3">
+</path>
+</svg> Set category</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-truck" aria-hidden="true">
+<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2">
+</path>
+<path d="M15 18H9">
+</path>
+<path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14">
+</path>
+<circle cx="17" cy="18" r="2">
+</circle>
+<circle cx="7" cy="18" r="2">
+</circle>
+</svg> Set supplier</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-globe" aria-hidden="true">
+<circle cx="12" cy="12" r="10">
+</circle>
+<path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20">
+</path>
+<path d="M2 12h20">
+</path>
+</svg> Set public visibility</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tags" aria-hidden="true">
+<path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z">
+</path>
+<path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193">
+</path>
+<circle cx="10.5" cy="6.5" r=".5" fill="currentColor">
+</circle>
+</svg> Add tags</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tags" aria-hidden="true">
+<path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1z">
+</path>
+<path d="M2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193">
+</path>
+<circle cx="10.5" cy="6.5" r=".5" fill="currentColor">
+</circle>
+</svg> Remove tags</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-map-pin" aria-hidden="true">
+<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0">
+</path>
+<circle cx="12" cy="10" r="3">
+</circle>
+</svg> Set location</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-layers lucide-layers-3" aria-hidden="true">
+<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z">
+</path>
+<path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12">
+</path>
+<path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17">
+</path>
+</svg> Set rack</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal text-[var(--ed-ink-2)] [&amp;_svg]:size-3.5" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-clipboard-list" aria-hidden="true">
+<rect width="8" height="4" x="8" y="2" rx="1" ry="1">
+</rect>
+<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2">
+</path>
+<path d="M12 11h4">
+</path>
+<path d="M12 16h4">
+</path>
+<path d="M8 11h.01">
+</path>
+<path d="M8 16h.01">
+</path>
+</svg> Create draft POs</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted h-7 px-2 text-[13px] font-normal [&amp;_svg]:size-3.5 text-destructive hover:text-destructive" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-archive" aria-hidden="true">
+<rect width="20" height="5" x="2" y="3" rx="1">
+</rect>
+<path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8">
+</path>
+<path d="M10 12h4">
+</path>
+</svg> Archive</button>
+<button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground h-7 px-2 text-[13px] font-normal [&amp;_svg]:size-3.5 text-muted-foreground ml-auto" type="button">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x" aria-hidden="true">
+<path d="M18 6 6 18">
+</path>
+<path d="m6 6 12 12">
+</path>
+</svg> Clear</button>
+</div>
+</div>
+</div>
+<div class="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+<p class="text-muted-foreground flex items-center gap-1.5 font-mono text-[12px] tabular-nums">45 items · $1,234.50 on hand</p>
+<div class="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]">
+<span>Showing <span class="text-foreground">1</span>–<span class="text-foreground">30</span> of <span class="text-foreground">45</span>
+</span>
+<div class="flex items-center gap-2">
+<span aria-disabled="true" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] h-7 px-2.5 text-[12.5px] font-normal border-border bg-transparent text-[var(--ed-ink-4)] hover:bg-transparent pointer-events-none" disabled="">← Prev</span>
+<button type="button" aria-label="Jump to page" class="relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors" aria-haspopup="dialog" aria-expanded="false" data-state="closed">Page 1 of 2</button>
+<a href="/dashboard/inventory?page=2" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] font-normal">Next →</a>
+</div>
+</div>
+</div>
+<div aria-busy="false" class="border-border bg-card overflow-hidden rounded-lg border transition-opacity">
+<div data-slot="inventory-grid">
+<div class="border-border flex min-h-[37px] items-center border-b px-4 py-1.5">
+<button type="button" role="checkbox" aria-checked="false" data-state="unchecked" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-muted-foreground hover:text-foreground min-h-7 text-[12.5px] max-sm:min-h-11">
+<span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-[var(--ed-ink-4)] bg-card group-hover:border-[var(--ed-ink-3)]">
+</span>Select all rows on this page</button>
+</div>
+<ul role="list" data-slot="card-grid" class="grid grid-cols-[repeat(auto-fill,minmax(min(100%,210px),1fr))] gap-3 max-sm:grid-cols-2 max-sm:gap-2 p-4 max-sm:p-3">
+<li data-slot="card-grid-item" class="min-w-0">
+<div data-slot="grid-card" class="group/card border-border bg-background has-[[data-slot=grid-card-name]_a:focus-visible]:ring-ring has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)] has-[[data-slot=grid-card-name]_a:focus-visible]:ring-2 has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-2" data-row-key="a" data-card-kind="record">
+<div data-slot="grid-card-media" class="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b">
+<span aria-hidden="true" data-slot="missing-photo" class="block h-full w-full absolute inset-0" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+</span>
+<div data-slot="grid-card-checkbox" class="border-border bg-card absolute left-2 top-2 z-10 grid size-7 place-items-center rounded-md border transition-opacity pointer-coarse:[&amp;>[role=checkbox]]:before:-inset-[9px] [&amp;>[role=checkbox]]:before:absolute [&amp;>[role=checkbox]]:before:-inset-px [&amp;>[role=checkbox]]:before:content-[''] max-sm:[&amp;>[role=checkbox]]:before:-inset-[9px] pointer-coarse:opacity-100 opacity-0 group-hover/card:opacity-100 [.group\/card:focus-within_&amp;]:opacity-100">
+<button type="button" role="checkbox" aria-checked="false" aria-label="Select Red tee" data-state="unchecked" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+<span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-[var(--ed-ink-4)] bg-card group-hover:border-[var(--ed-ink-3)]">
+</span>
+</button>
+</div>
+<div data-slot="grid-card-status" class="bg-card absolute bottom-2 left-2 z-10 flex rounded-full">
+<div class="inline-flex gap-1.5 whitespace-nowrap rounded-full px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning border-0 items-baseline">
+<span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+</span>Low stock</div>
+</div>
+</div>
+<div class="flex min-w-0 flex-1 flex-col gap-2.5 p-3">
+<div class="min-w-0">
+<div data-slot="grid-card-name" class="text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere] supports-[overflow:clip]:overflow-clip [&amp;_a:focus-visible]:ring-0 [&amp;_a:focus-visible]:ring-offset-0">
+<a href="/dashboard/inventory/a?return=%2Fdashboard%2Finventory" class="text-foreground hover:underline" title="Red tee">Red tee</a>
+</div>
+<div data-slot="grid-card-sku" class="text-muted-foreground relative z-10 mt-0.5 cursor-text select-text truncate font-mono text-[11.5px] leading-[17.25px]">TEE-RED</div>
+<div data-slot="grid-card-meta" class="text-muted-foreground mt-0.5 text-[12px] leading-[18px] [overflow-wrap:anywhere]">
+<span data-slot="meta-line" class="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5">
+<span class="inline-flex items-center gap-1.5">
+<span class="text-ink-2 inline-flex items-center gap-1.5">
+<span aria-hidden="true" class="h-1.5 w-1.5 shrink-0 rounded-full" style="background-color: #2f7d6d;">
+</span>Uniforms</span>
+<span aria-hidden="true" class="text-muted-foreground">·</span>
+</span>
+<span class="inline-flex items-center gap-1.5">
+<span class="text-[var(--ed-ink-2)]" title="Example Charter">EXC</span>
+</span>
+</span>
+</div>
+</div>
+<div class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+<div data-slot="grid-card-quantity" class="flex min-w-0 items-baseline gap-1">
+<span class="text-foreground text-[20px] font-medium tabular-nums leading-[30px] [font-family:var(--font-display)]">3</span>
+<span class="text-muted-foreground text-[12px]">on hand</span>
+</div>
+<div data-slot="grid-card-placement" class="text-muted-foreground relative z-10 min-w-0 cursor-text select-text truncate whitespace-nowrap font-mono text-[11.5px]">Rack 12-B</div>
+</div>
+<div class="relative z-10 mt-auto">
+<div class="flex flex-col gap-2">
+<dl class="flex flex-col gap-0.5 text-[12px] leading-[18px]">
+<div class="flex min-w-0 items-baseline justify-between gap-2">
+<dt class="text-muted-foreground shrink-0">Rack</dt>
+<dd class="min-w-0 text-right text-[var(--ed-ink-2)] [overflow-wrap:anywhere]">
+<span class="text-muted-foreground">—</span>
+</dd>
+</div>
+</dl>
+<div class="flex items-center">
+<span class="inline-block overflow-hidden rounded-[2px] bg-[var(--ed-line-strong)] align-middle !w-full" style="width: 72px; height: 4px;">
+<span class="block h-full bg-[hsl(var(--warning))]" style="width: 12.5%;">
+</span>
+</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</li>
+<li data-slot="card-grid-item" class="min-w-0">
+<div data-slot="grid-card" class="group/card border-border has-[[data-slot=grid-card-name]_a:focus-visible]:ring-ring has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)] has-[[data-slot=grid-card-name]_a:focus-visible]:ring-2 has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-2 bg-sunk" data-card-kind="group" data-group-key="display-group:g1">
+<div data-slot="grid-card-media" class="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b">
+<span aria-hidden="true" data-slot="missing-photo" class="block h-full w-full absolute inset-0" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+</span>
+<div data-slot="grid-card-status" class="bg-card absolute bottom-2 left-2 z-10 flex rounded-full">
+<div class="inline-flex gap-1.5 whitespace-nowrap rounded-full px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success border-0 items-baseline">
+<span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+</span>In stock</div>
+</div>
+</div>
+<div class="flex min-w-0 flex-1 flex-col gap-2.5 p-3">
+<div class="min-w-0">
+<div data-slot="grid-card-name" class="text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere] supports-[overflow:clip]:overflow-clip [&amp;_a:focus-visible]:ring-0 [&amp;_a:focus-visible]:ring-offset-0">
+<span title="Polo XL">Polo XL</span>
+</div>
+<div data-slot="grid-card-sku" class="text-muted-foreground relative z-10 mt-0.5 cursor-text select-text truncate font-mono text-[11.5px] leading-[17.25px]">
+<span class="text-muted-foreground font-sans text-[12px] italic" title="These records keep their own SKUs — expand to see each">Multiple</span>
+</div>
+<div data-slot="grid-card-meta" class="text-muted-foreground mt-0.5 text-[12px] leading-[18px] [overflow-wrap:anywhere]">
+<span data-slot="meta-line" class="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5">
+<span class="inline-flex items-center gap-1.5">
+<span class="text-[var(--ed-ink-2)]">2 records</span>
+<span aria-hidden="true" class="text-muted-foreground">·</span>
+</span>
+<span class="inline-flex items-center gap-1.5">
+<span class="text-muted-foreground">—</span>
+<span aria-hidden="true" class="text-muted-foreground">·</span>
+</span>
+<span class="inline-flex items-center gap-1.5">
+<span class="text-muted-foreground text-[12px] italic" title="Generic stock — any charter serviced by this warehouse can use it">Generic</span>
+</span>
+</span>
+</div>
+</div>
+<div class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+<div data-slot="grid-card-quantity" class="flex min-w-0 items-baseline gap-1">
+<span class="text-foreground text-[20px] font-medium tabular-nums leading-[30px] [font-family:var(--font-display)]">
+<span title="This total only counts records on the current page — other pages may hold more of this group.">14</span>
+<span aria-hidden="true" class="text-muted-foreground ml-0.5">*</span>
+</span>
+<span class="text-muted-foreground text-[12px]">on hand</span>
+</div>
+<div data-slot="grid-card-placement" class="text-muted-foreground relative z-10 min-w-0 cursor-text select-text truncate whitespace-nowrap font-mono text-[11.5px]">—</div>
+</div>
+<div class="relative z-10 mt-auto">
+<div class="flex flex-col gap-2">
+<div data-slot="grid-card-actions" class="flex flex-wrap items-center gap-x-3 gap-y-1 max-sm:gap-y-3.5 pointer-coarse:gap-y-3.5">
+<button type="button" aria-label="Rename group Polo XL" class="relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] text-muted-foreground hover:text-foreground text-[12px] underline-offset-2 transition-colors hover:underline">Rename group</button>
+<button type="button" aria-label="Remove from group Polo XL" class="relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] text-muted-foreground hover:text-foreground text-[12px] underline-offset-2 transition-colors hover:underline">Remove from group</button>
+</div>
+<dl class="flex flex-col gap-0.5 text-[12px] leading-[18px]">
+<div class="flex min-w-0 items-baseline justify-between gap-2">
+<dt class="text-muted-foreground shrink-0">Rack</dt>
+<dd class="min-w-0 text-right text-[var(--ed-ink-2)] [overflow-wrap:anywhere]">
+<span class="text-muted-foreground">—</span>
+</dd>
+</div>
+</dl>
+<div class="flex items-center">
+<span class="inline-block overflow-hidden rounded-[2px] bg-[var(--ed-line-strong)] align-middle !w-full" style="width: 72px; height: 4px;">
+<span class="block h-full bg-[hsl(var(--accent))]" style="width: 43.75%;">
+</span>
+</span>
+</div>
+<button class="relative inline-flex items-center whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] w-full justify-start gap-1.5" type="button" aria-expanded="false" aria-label="Expand group Polo XL (2 records)">
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-chevron-right transition-transform" aria-hidden="true">
+<path d="m9 18 6-6-6-6">
+</path>
+</svg>
+<span class="min-w-0 truncate">2 records</span>
+</button>
+</div>
+</div>
+</div>
+</div>
+</li>
+<li data-slot="card-grid-item" class="min-w-0">
+<div data-slot="grid-card" class="group/card border-border bg-background has-[[data-slot=grid-card-name]_a:focus-visible]:ring-ring has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-background relative isolate flex h-full min-w-0 flex-col overflow-hidden rounded-lg border transition-colors focus-within:border-[var(--ed-ink-4)] hover:border-[var(--ed-ink-4)] has-[[data-slot=grid-card-name]_a:focus-visible]:ring-2 has-[[data-slot=grid-card-name]_a:focus-visible]:ring-offset-2" data-row-key="d" data-card-kind="record">
+<div data-slot="grid-card-media" class="border-border relative aspect-square w-full shrink-0 overflow-hidden border-b">
+<span aria-hidden="true" data-slot="missing-photo" class="block h-full w-full absolute inset-0" style="background: var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk) var(--ed-bg-sunk); background-position: var(--ed-bg-sunk);">
+</span>
+<div data-slot="grid-card-checkbox" class="border-border bg-card absolute left-2 top-2 z-10 grid size-7 place-items-center rounded-md border transition-opacity pointer-coarse:[&amp;>[role=checkbox]]:before:-inset-[9px] [&amp;>[role=checkbox]]:before:absolute [&amp;>[role=checkbox]]:before:-inset-px [&amp;>[role=checkbox]]:before:content-[''] max-sm:[&amp;>[role=checkbox]]:before:-inset-[9px] pointer-coarse:opacity-100 opacity-0 group-hover/card:opacity-100 [.group\/card:focus-within_&amp;]:opacity-100">
+<button type="button" role="checkbox" aria-checked="false" aria-label="Select Cap" data-state="unchecked" class="group inline-flex shrink-0 items-center gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50">
+<span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-[var(--ed-ink-4)] bg-card group-hover:border-[var(--ed-ink-3)]">
+</span>
+</button>
+</div>
+<div data-slot="grid-card-status" class="bg-card absolute bottom-2 left-2 z-10 flex rounded-full">
+<div class="inline-flex items-center gap-1">
+<div class="inline-flex gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground items-baseline">
+<span aria-hidden="true" class="size-[5px] shrink-0 self-center rounded-full bg-current">
+</span>Archived</div>
+</div>
+</div>
+</div>
+<div class="flex min-w-0 flex-1 flex-col gap-2.5 p-3">
+<div class="min-w-0">
+<div data-slot="grid-card-name" class="text-foreground line-clamp-2 min-h-[2.7em] text-[13.5px] font-medium leading-[1.35] [overflow-wrap:anywhere] supports-[overflow:clip]:overflow-clip [&amp;_a:focus-visible]:ring-0 [&amp;_a:focus-visible]:ring-offset-0">
+<a href="/dashboard/inventory/d?return=%2Fdashboard%2Finventory" class="text-foreground hover:underline" title="Cap">Cap</a>
+</div>
+<div data-slot="grid-card-sku" class="text-muted-foreground relative z-10 mt-0.5 cursor-text select-text truncate font-mono text-[11.5px] leading-[17.25px]">CAP-01</div>
+<div data-slot="grid-card-meta" class="text-muted-foreground mt-0.5 text-[12px] leading-[18px] [overflow-wrap:anywhere]">
+<span data-slot="meta-line" class="inline-flex min-w-0 max-w-full flex-wrap items-center gap-x-1.5">
+<span class="inline-flex items-center gap-1.5">
+<span class="text-muted-foreground">—</span>
+<span aria-hidden="true" class="text-muted-foreground">·</span>
+</span>
+<span class="inline-flex items-center gap-1.5">
+<span class="text-muted-foreground text-[12px] italic" title="Generic stock — any charter serviced by this warehouse can use it">Generic</span>
+</span>
+</span>
+</div>
+</div>
+<div class="flex min-w-0 flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5">
+<div data-slot="grid-card-quantity" class="flex min-w-0 items-baseline gap-1">
+<span class="text-foreground text-[20px] font-medium tabular-nums leading-[30px] [font-family:var(--font-display)]">14</span>
+<span class="text-muted-foreground text-[12px]">on hand</span>
+</div>
+<div data-slot="grid-card-placement" class="text-muted-foreground relative z-10 min-w-0 cursor-text select-text truncate whitespace-nowrap font-mono text-[11.5px]">—</div>
+</div>
+<div class="relative z-10 mt-auto">
+<div class="flex flex-col gap-2">
+<dl class="flex flex-col gap-0.5 text-[12px] leading-[18px]">
+<div class="flex min-w-0 items-baseline justify-between gap-2">
+<dt class="text-muted-foreground shrink-0">Rack</dt>
+<dd class="min-w-0 text-right text-[var(--ed-ink-2)] [overflow-wrap:anywhere]">
+<span class="text-muted-foreground">—</span>
+</dd>
+</div>
+</dl>
+<div class="flex items-center">
+<span class="inline-block overflow-hidden rounded-[2px] bg-[var(--ed-line-strong)] align-middle !w-full" style="width: 72px; height: 4px;">
+<span class="block h-full bg-[hsl(var(--accent))]" style="width: 66.66666666666666%;">
+</span>
+</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</li>
+</ul>
+</div>
+<div class="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5">
+<div class="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]">
+<span>Showing <span class="text-foreground">1</span>–<span class="text-foreground">30</span> of <span class="text-foreground">45</span>
+</span>
+<div class="flex items-center gap-2">
+<span aria-disabled="true" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] h-7 px-2.5 text-[12.5px] font-normal border-border bg-transparent text-[var(--ed-ink-4)] hover:bg-transparent pointer-events-none" disabled="">← Prev</span>
+<button type="button" aria-label="Jump to page" class="relative before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] text-muted-foreground hover:bg-muted hover:text-foreground inline-flex h-7 cursor-pointer items-center rounded-md px-2 text-[12.5px] tabular-nums transition-colors" aria-haspopup="dialog" aria-expanded="false" data-state="closed">Page 1 of 2</button>
+<a href="/dashboard/inventory?page=2" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] font-normal">Next →</a>
+</div>
+</div>
+<a href="/dashboard/inventory/new" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg]:size-4 [&amp;_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-accent text-accent-ink hover:bg-accent/90 h-8 px-3.5 text-[13px]">+ New item</a>
+</div>
+</div>
+</div>
+</div>

@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activeRecountCopy,
+  COUNT_START_MANAGER_ONLY_COPY,
   COUNT_THIS_ITEM_LABEL,
   countStartAllowed,
+  countStartManagerOnly,
   describeTimelineEvent,
   isCountableItem,
   parseRecountOutcome,
@@ -419,6 +421,45 @@ describe('countStartAllowed', () => {
   it('falls back to the role defaults while the effective set is unknown', () => {
     expect(countStartAllowed({ role: 'manager', cycleCountsEnabled: true })).toBe(true);
     expect(countStartAllowed({ role: 'staff', cycleCountsEnabled: true })).toBe(false);
+  });
+});
+
+// B42: staff hold stock:adjust, so the web and the phone offered them a start
+// the server always refused, with the raw words "Missing permission:
+// cycle_counts:assign". The refusal and the Start a count screens now say why
+// in plain words, the recount sentence's twin.
+describe('COUNT_START_MANAGER_ONLY_COPY and countStartManagerOnly', () => {
+  const all = new Set(['cycle_counts:assign', 'stock:adjust'] as const);
+
+  it("says who may start a count, in the recount sentence's words, and never a permission key", () => {
+    expect(COUNT_START_MANAGER_ONLY_COPY).toBe(
+      'Only a manager with permission to assign counts and adjust stock can start a count.',
+    );
+    expect(RECOUNT_MANAGER_ONLY_COPY.replace('a recount', 'a count')).toBe(
+      COUNT_START_MANAGER_ONLY_COPY,
+    );
+    expect(COUNT_START_MANAGER_ONLY_COPY).not.toMatch(/[a-z_]+:[a-z_]+/);
+  });
+
+  it('is the role and permission half of countStartAllowed: the module is left to the server', () => {
+    // Staff by default (stock:adjust, no cycle_counts:assign), a manager whose
+    // cycle_counts:assign was taken away, and staff granted both by override.
+    expect(countStartManagerOnly({ role: 'staff' })).toBe(true);
+    expect(countStartManagerOnly({ role: 'viewer' })).toBe(true);
+    expect(
+      countStartManagerOnly({ role: 'manager', permissions: new Set(['stock:adjust'] as const) }),
+    ).toBe(true);
+    expect(countStartManagerOnly({ role: 'staff', permissions: new Set(all) })).toBe(true);
+    // Whoever may start one is never told otherwise, whatever the module.
+    for (const role of ['manager', 'admin', 'owner'] as const) {
+      expect(countStartManagerOnly({ role }), role).toBe(false);
+      expect(countStartManagerOnly({ role, permissions: new Set(all) }), role).toBe(false);
+    }
+  });
+
+  it('says nothing while the role is unknown: the server decides', () => {
+    expect(countStartManagerOnly({ role: null })).toBe(false);
+    expect(countStartManagerOnly({ role: undefined, permissions: new Set() })).toBe(false);
   });
 });
 

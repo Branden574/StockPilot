@@ -18,7 +18,31 @@ import {
   type PlanId,
 } from '@stockpilot/core';
 
-export default async function BillingSettingsPage() {
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
+/**
+ * What Stripe's checkout comes back with: BillingService.createCheckoutSession
+ * returns the person here with ?status=success or ?status=cancelled. The plan
+ * itself changes only when Stripe's webhook confirms the payment, so success
+ * says the plan shows once that happens. Anything else says nothing (B92).
+ */
+const CHECKOUT_RETURN_LINE: Record<'success' | 'cancelled', string> = {
+  success:
+    'Checkout complete. Your plan shows here once Stripe confirms the payment; reload the page if it has not changed yet.',
+  cancelled: 'Checkout cancelled. Nothing was charged, and your plan has not changed.',
+};
+
+export default async function BillingSettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string | string[] }>;
+}) {
+  const { status } = await searchParams;
+  const checkoutLine =
+    status === 'success' || status === 'cancelled' ? CHECKOUT_RETURN_LINE[status] : null;
   const ctx = await requireOrgContext();
   if (!can(ctx, 'billing:read')) {
     notFound();
@@ -50,6 +74,11 @@ export default async function BillingSettingsPage() {
   return (
     <SettingsPage>
       <PageHeader title="Billing" subline="Plan, usage, and payment method." />
+      {checkoutLine ? (
+        <p role="status" className="bg-sunk rounded-lg border px-4 py-3 text-[13px]">
+          {checkoutLine}
+        </p>
+      ) : null}
 
       <SettingsPanel
         title={

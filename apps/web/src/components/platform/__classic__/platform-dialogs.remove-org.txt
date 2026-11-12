@@ -1,0 +1,61 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div aria-hidden="true" data-aria-hidden="true">
+  <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-destructive text-destructive-foreground hover:bg-destructive/90 h-8 px-3.5 text-[13px] max-sm:h-11" type="button">
+    <svg aria-hidden="true" class="lucide lucide-trash lucide-trash-2 h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M10 11v6">
+      <path d="M14 11v6">
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6">
+      <path d="M3 6h18">
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2">
+    "Remove organization"
+<div aria-hidden="true" class="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" data-aria-hidden="true" data-state="open" style="pointer-events: auto;">
+<div aria-describedby="radix-«id3»" aria-labelledby="radix-«id2»" class="bg-card text-card-foreground fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-1rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 sm:p-6 max-h-[calc(100dvh-1rem)] overflow-y-auto sm:max-h-[calc(100dvh-2rem)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]" data-state="open" id="radix-«id1»" role="dialog" style="pointer-events: auto;" tabindex="-1">
+  <div class="flex flex-col space-y-1.5 text-center sm:text-left">
+    <h2 class="font-display text-lg font-medium leading-tight tracking-[-0.02em] flex items-center gap-2" id="radix-«id2»">
+      <svg aria-hidden="true" class="lucide lucide-triangle-alert lucide-alert-triangle text-destructive h-5 w-5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+        <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+        <path d="M12 9v4">
+        <path d="M12 17h.01">
+      "Remove “"
+      "Example Schools"
+      "”"
+    <p class="text-muted-foreground text-[13px]" id="radix-«id3»">
+      "This permanently deletes the organization and its database records — items, orders, movements, members, and so on. This cannot be undone. (Uploaded files in storage are not swept and may remain as orphaned objects.)"
+  <div class="space-y-4">
+    <div class="space-y-1.5">
+      <label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="remove-org-name">
+        "Type the organization name to confirm"
+      <input autocomplete="off" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base" id="remove-org-name" placeholder="Example Schools" value="">
+      <p class="text-muted-foreground text-[12px]">
+        "Must exactly match "
+        <span class="text-foreground font-medium">
+          "Example Schools"
+        "."
+    <div class="space-y-1.5">
+      <label class="text-[13px] font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70" for="remove-org-passphrase">
+        "Deletion passphrase"
+      <div class="relative">
+        <input autocomplete="off" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base pr-10" id="remove-org-passphrase" placeholder="Global org-deletion passphrase" type="password" value="">
+        <button aria-label="Show password" aria-pressed="false" class="text-muted-foreground hover:bg-muted hover:text-foreground absolute right-2 top-1/2 grid h-7 w-7 -translate-y-1/2 place-items-center rounded-md transition-colors" tabindex="-1" type="button">
+          <svg aria-hidden="true" class="lucide lucide-eye h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0">
+            <circle cx="12" cy="12" r="3">
+    <button aria-checked="false" class="group inline-flex shrink-0 gap-2 rounded-[5px] text-left align-middle focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 text-[13px] items-start max-sm:min-h-11" data-state="unchecked" role="checkbox" type="button">
+      <span aria-hidden="true" class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-[5px] border transition-colors border-[var(--ed-ink-4)] bg-card group-hover:border-[var(--ed-ink-3)]">
+      <span class="leading-5">
+        "Also delete member accounts that belong "
+        <span class="font-medium">
+          "only"
+        " to this org (their sign-in is removed too)."
+  <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" type="button">
+      "Cancel"
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-destructive text-destructive-foreground hover:bg-destructive/90 h-8 px-3.5 text-[13px]" disabled="" type="button">
+      "Permanently delete"
+  <button class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none" type="button">
+    <svg aria-hidden="true" class="lucide lucide-x h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M18 6 6 18">
+      <path d="m6 6 12 12">
+    <span class="sr-only">
+      "Close"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

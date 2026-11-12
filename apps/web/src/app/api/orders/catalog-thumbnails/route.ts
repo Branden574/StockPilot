@@ -1,12 +1,12 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { rentalItemsPredicate } from '@stockpilot/core';
+import { can, rentalItemsPredicate } from '@stockpilot/core';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { CATALOG_ROW_CEILING } from '@/server/loaders/orders-new-catalog';
-import { ServiceError, type ServiceContext } from '@/server/services/context';
+import { isModuleEnabled, ServiceError, type ServiceContext } from '@/server/services/context';
 import { ItemImagesService } from '@/server/services/item-images';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 
@@ -55,6 +55,14 @@ export const dynamic = 'force-dynamic';
  * ordering: rentalsOnly=1 repeats that page's read, which has no visibility
  * filter.
  *
+ * WHO (B20a): the New rental page's own gates, the Rentals module and
+ * rentals:create (rentals/new/page.tsx), checked right after the session and
+ * before the parameters, the rate limit and any read, so a refused caller
+ * spends none of the limit (api/orders/export.csv's rule). Before, a member
+ * without either could still sign the rental photos of any warehouse they
+ * read. The page's hook retries a failure three times; a 403 here costs
+ * nothing.
+ *
  * RATE LIMIT: 60 requests a minute per user (`catalog-thumbnails:user:<id>`),
  * checked before any read. The page asks once per warehouse it shows, and its
  * hook (lib/use-catalog-thumbnails.ts) retries a failure three times with
@@ -67,6 +75,13 @@ export async function GET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+  // New rental's own gates, first (see WHO above).
+  if (!isModuleEnabled(ctx, 'rentals')) {
+    return NextResponse.json({ error: 'module_disabled' }, { status: 403 });
+  }
+  if (!can(ctx, 'rentals:create')) {
+    return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   }
 
   const url = new URL(req.url);

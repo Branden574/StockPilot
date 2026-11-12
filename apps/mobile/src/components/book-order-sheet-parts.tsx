@@ -6,6 +6,9 @@ import { BOOK_REPORT_OPTIONS_ERROR, BOOK_REPORT_UI } from '@stockpilot/core';
 import { Button } from '@/components/ui/button';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { Body, Eyebrow } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 
@@ -23,9 +26,15 @@ import { useTheme } from '@/lib/use-theme';
 export const SHEET_MIN_TAP = 44;
 
 export function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  // Liquid Glass: the section's words as the iOS heading.
+  const lg = useGlass();
   return (
     <View>
-      <Eyebrow accessibilityRole="header">{label}</Eyebrow>
+      {lg ? (
+        <GlassHeading>{sentenceCase(label)}</GlassHeading>
+      ) : (
+        <Eyebrow accessibilityRole="header">{label}</Eyebrow>
+      )}
       <View style={{ marginTop: 8, gap: 2 }}>{children}</View>
     </View>
   );

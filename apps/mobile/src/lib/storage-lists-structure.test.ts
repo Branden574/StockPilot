@@ -14,6 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { RADIUS, palette, type Palette } from './theme';
 
 /**
@@ -426,8 +427,15 @@ describe('Movements: the ledger is one surface of hairline rows (M-SG-08)', () =
       expect(row, decl).toContain(decl);
     }
     expect(row).not.toMatch(/\bheight:/);
+    // Classic, read through the classic projection: unchanged.
+    expect(classicFlat(sourceOf(MOVEMENTS), MOVEMENTS)).toContain(
+      flatNorm(
+        'style={({ pressed }) => [ styles.row, { backgroundColor: pressed ? c.sunk : c.card, borderColor: c.hair, borderTopWidth: first ? 1 : 0, borderTopLeftRadius: first ? LIST_RADIUS : 0, borderTopRightRadius: first ? LIST_RADIUS : 0, borderBottomLeftRadius: last ? LIST_RADIUS : 0, borderBottomRightRadius: last ? LIST_RADIUS : 0, marginBottom: last ? 0 : -LIST_GAP, }, ]}',
+      ),
+    );
+    // Liquid Glass: one grouped glass surface, a --line-2 hairline between rows.
     expect(code).toContain(
-      'style={({ pressed }) => [ styles.row, { backgroundColor: pressed ? c.sunk : c.card, borderColor: c.hair, borderTopWidth: first ? 1 : 0, borderTopLeftRadius: first ? LIST_RADIUS : 0, borderTopRightRadius: first ? LIST_RADIUS : 0, borderBottomLeftRadius: last ? LIST_RADIUS : 0, borderBottomRightRadius: last ? LIST_RADIUS : 0, marginBottom: last ? 0 : -LIST_GAP, }, ]}',
+      'lg && [ glassOpsGroupRow(lg, first, last), !last && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: lg.g.line2 }, pressed && { opacity: 0.7 }, ],',
     );
     // The surface's corners: 14, the reference's phone list.
     expect(code).toContain('const LIST_RADIUS = RADIUS.cardHero;');
@@ -435,12 +443,17 @@ describe('Movements: the ledger is one surface of hairline rows (M-SG-08)', () =
   });
 
   // The rows meet only while LIST_GAP is the gap DataListScreen sets between
-  // a list's rows. Mutation caught: either number changed alone (rows drawn
-  // over each other, or apart again with open edges).
+  // a list's rows, in Classic and in Liquid Glass (the frame's glass list,
+  // components/ui/glass/screens/list.tsx). Mutation caught: any of the
+  // numbers changed alone (rows drawn over each other, or apart again with
+  // open edges).
   it("the rows meet: each but the last takes back DataListScreen's list gap", () => {
     expect(code).toContain('const LIST_GAP = 10;');
     const shared = 'src/components/data-list-screen.tsx';
     expect(styleBlockOf(sourceOf(shared), 'list', shared)).toMatch(/\bgap: 10,/);
+    const glass = 'src/components/ui/glass/screens/list.tsx';
+    expect(styleBlockOf(sourceOf(glass), 'list', glass)).toMatch(/\bgap: 10\b/);
+    expect(sourceOf(shared)).toContain('lg ? GLASS_LIST.list : styles.list,');
   });
 });
 

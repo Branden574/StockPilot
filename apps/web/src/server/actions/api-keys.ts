@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 import { API_SCOPES } from '@/lib/auth/api-key';
 import { rethrowControlFlow } from '@/lib/control-flow';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import { ApiKeysService } from '@/server/services/api-keys';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
@@ -14,8 +14,7 @@ const REVALIDATE = '/dashboard/settings/integrations';
 
 function fail(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
-  if (e instanceof ServiceError) return err(e.code as Parameters<typeof err>[0], e.message);
-  return err('internal_error', e instanceof Error ? e.message : 'Something went wrong.');
+  return actionErrorResult(e, 'actions.api_keys');
 }
 
 const createSchema = z.object({

@@ -53,6 +53,7 @@ vi.mock('@/server/services/returns', () => ({
   pendingReturnQuantitiesByLine: vi.fn(async () => new Map<string, number>()),
 }));
 
+import { ServiceError } from './context';
 import {
   portalCatalog,
   portalSubmitOrder,
@@ -759,5 +760,66 @@ describe('portal and items hidden from new ordering', () => {
     });
     const lines = admin.inserts.find((i) => i.table === 'order_request_lines')?.rows ?? [];
     expect(lines.map((l) => l.item_id)).toEqual([ITEM_A, ITEM_B]);
+  });
+});
+
+// S31: the action answers a ServiceError's words and the fixed sentence for
+// anything else. Checkout's sentences were plain Errors, and a cart the schema
+// refuses threw a ZodError (its whole issue list as text); both are
+// validation ServiceErrors now, with the same words.
+describe("portalSubmitOrder: checkout's refusals are ServiceErrors with their words (S31)", () => {
+  async function refusal(run: () => Promise<unknown>): Promise<ServiceError> {
+    try {
+      await run();
+    } catch (e) {
+      expect(e).toBeInstanceOf(ServiceError);
+      return e as ServiceError;
+    }
+    throw new Error('expected a refusal');
+  }
+
+  it('a quantity over the schema limit is a validation error with the schema message', async () => {
+    const e = await refusal(() =>
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 100_001 }] }),
+    );
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toMatch(/100000/);
+    expect(e.message).not.toMatch(/ZodError|\[|"code"/);
+    expect(admin.rpcCalls).toEqual([]);
+  });
+
+  it.each([
+    [
+      'an item off the allowlist',
+      () => portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_NOT_ALLOWED, quantity: 1 }] }),
+      'One of the items is no longer available to order.',
+    ],
+    [
+      'a line over 10,000 units',
+      () => portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 10_001 }] }),
+      'A line can have at most 10,000 units.',
+    ],
+  ])('%s', async (_label, run, words) => {
+    const e = await refusal(run);
+    expect(e.code).toBe('validation_error');
+    expect(e.message).toBe(words);
+  });
+
+  it('a write that fails for another reason: the generic sentence, as a ServiceError', async () => {
+    admin = makeAdmin(makeDb(), {}, {}, {
+      insert_order_request_with_lines: { message: 'connection reset', code: '08006' },
+    });
+    adminRef.current = admin.client;
+    const e = await refusal(() =>
+      portalSubmitOrder(ctxNoCharge, { lines: [{ itemId: ITEM_A, quantity: 1 }] }),
+    );
+    expect(e.message).toBe('Order could not be submitted. Please try again.');
+  });
+
+  it('a catalog that could not be read: its sentence, as a ServiceError', async () => {
+    admin = makeAdmin(makeDb(), { customer_catalog: 'permission denied for table customer_catalog' });
+    adminRef.current = admin.client;
+    const e = await refusal(() => portalCatalog(ctxNoCharge));
+    expect(e.message).toBe('Catalog could not be loaded. Please try again.');
   });
 });

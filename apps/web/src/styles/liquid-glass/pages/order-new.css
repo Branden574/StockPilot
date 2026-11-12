@@ -1,0 +1,137 @@
+/* Liquid Glass, Place an order (Order-New.dc.html), stage 3 orders lane: the
+   layered half. Imported only by app/(dashboard)/dashboard/orders/new/page.tsx,
+   never globally (plan 4.1). The route's loading state (the storefront
+   skeleton) draws only sf-* parts, which the unlayered companion styles, so
+   it needs nothing from this file.
+
+   The storefront's own sf-* rules are unlayered (storefront.css), so their
+   glass twins live in the unlayered companion styles/liquid-glass/
+   storefront.glass.css. This file restyles what Tailwind draws on the route
+   (layered): the shared page header inside the storefront (.sf-page-head)
+   and the route's own frame when no warehouse is set up. Both roots carry
+   the inert page hook data-glass-page="order-new" (the storefront's
+   .sp-storefront, and the frame, which also carries data-glass=
+   "order-new-frame"). Same DOM as Classic (plan M1); every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen and names its
+   page root, so it reaches nothing else after a client navigation. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The page head (.page-h .titles: back link, Large title 26/32,
+         the subline in sm muted; 4 px apart) ───────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='page-header']
+      > div:first-child:has(> a) {
+      margin-bottom: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='page-header']
+      > div:first-child
+      > a {
+      gap: 4px;
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='page-header']
+      > div:first-child
+      > a:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='page-header']
+      div:has(> h1)
+      + div {
+      margin-top: 4px;
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    /* The steps sit at the bottom right of the head, as drawn. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='page-header']
+      [data-slot='page-header-actions'] {
+      gap: 12px;
+    }
+
+    /* ── No warehouse yet: the route's own frame (the page box) and the
+         empty state (.card.empty; the storefront's no-match panel too) ─── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new'][data-glass='order-new-frame'] {
+      max-width: 1480px;
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='order-new'] [data-glass='state-panel'] {
+      gap: 10px;
+      padding: 56px 24px;
+      border-color: var(--lg-card-line);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-slot='state-panel-icon'] {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-slot='state-panel-icon']
+      svg {
+      width: 26px;
+      height: 26px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='state-panel']
+      > :is(h1, h2, h3, p):not([data-slot]) {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 20px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='order-new']
+      [data-glass='state-panel']
+      > :is(h1, h2, h3, p)
+      + div {
+      max-width: 420px;
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+
+    /* ── The phone (760 px): Large title 24/30; the page box 4 / 16 / 96 ── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-new']
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='order-new'][data-glass='order-new-frame'] {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+    }
+  }
+}

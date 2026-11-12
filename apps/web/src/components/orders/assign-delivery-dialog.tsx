@@ -37,12 +37,7 @@ interface Props {
   trigger: React.ReactNode;
 }
 
-export function AssignDeliveryDialog({
-  orderId,
-  drivers,
-  currentDriverId,
-  trigger,
-}: Props) {
+export function AssignDeliveryDialog({ orderId, drivers, currentDriverId, trigger }: Props) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<string>(currentDriverId ?? '');
@@ -72,14 +67,14 @@ export function AssignDeliveryDialog({
       </span>
       <Dialog open={open} onOpenChange={(v) => !pending && setOpen(v)}>
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Assign delivery</DialogTitle>
             <DialogDescription>
-              Pick the staff member who&apos;ll drive this order. They&apos;ll be
-              able to mark it in-transit and collect the signature.
+              Pick the staff member who&apos;ll drive this order. They&apos;ll be able to mark it
+              in-transit and collect the signature.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="space-y-2" data-glass="dialog-body">
             <Label htmlFor="driver">Driver</Label>
             <Select value={selected} onValueChange={setSelected}>
               <SelectTrigger id="driver">
@@ -95,7 +90,7 @@ export function AssignDeliveryDialog({
               </SelectContent>
             </Select>
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button variant="outline" onClick={() => setOpen(false)} disabled={pending}>
               Cancel
             </Button>

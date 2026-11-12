@@ -79,6 +79,10 @@ const REVIEWED: Record<string, string> = {
 const BROWSER_ONLY: Record<string, string> = {
   'components/marketing/landing/film.ts':
     "the landing page's film, drawn on a canvas by cinema.tsx",
+  'components/theme/appearance-cookie.ts':
+    "the appearance's device records and Design cookie (document.cookie, localStorage, sessionStorage) and the POST that asks the server to re-issue the cookie, for the appearance provider, the selectors and the sign-out paths",
+  'components/theme/appearance-recovery-plain.ts':
+    'Use classic design on the error pages (global-error.tsx and the error boundaries), in the browser after an error',
   'lib/analytics.ts': 'the PostHog wrapper: posthog-js runs in the browser',
   'lib/notifications/live-toast.ts':
     "the bell's desktop notifications and sound (Notification, AudioContext, Web Locks)",

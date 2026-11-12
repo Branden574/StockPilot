@@ -34,8 +34,9 @@ export default function SignUpPage() {
           <Mail className="text-muted-foreground mt-0.5 h-4 w-4 shrink-0" aria-hidden />
           <p>
             If you&apos;re expecting access, your administrator will email you an invite link. Open
-            that email and click <span className="font-medium text-foreground">Accept invite</span>{' '}
-            to set up your account.
+            that email and click{' '}
+            <span className="text-foreground font-medium">Accept invitation</span> to set up your
+            account.
           </p>
         </div>
         <p className="text-muted-foreground text-[12.5px]">

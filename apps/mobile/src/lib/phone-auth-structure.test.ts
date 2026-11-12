@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm, printClassic } from './__fixtures__/classic-projection';
 import { TYPE_CEILING, capTo, palette, type Palette } from './theme';
 
 /**
@@ -78,6 +79,15 @@ function flat(src: string): string {
 /** A file's code, comments dropped and whitespace flattened. */
 function code(file: string): string {
   return flat(codeOnly(sourceOf(file)));
+}
+
+/**
+ * The code Classic runs (every Liquid Glass branch folded to Classic), in
+ * one spelling (flatNorm): a pin on Classic's exact text reads this, so a
+ * glass branch beside a Classic value neither hides it nor breaks the pin.
+ */
+function classicCode(file: string): string {
+  return classicFlat(sourceOf(file), file);
 }
 
 /** A `name: {...}` entry of a file's StyleSheet.create (2-space indent). */
@@ -145,16 +155,22 @@ it('the auth group is still the headerless stack named (auth), on the page colou
 describe('the auth shell: the brand on a flat ground', () => {
   it('the mint wash is gone (MintWash painted nothing), the lockup and gutters stay', () => {
     const shell = code(SHELL);
+    const classic = classicCode(SHELL);
     expect(shell).not.toContain('MintWash');
     expect(shell).not.toContain('mint-wash');
     expect(shell).toContain('<BrandLockup size={26} />');
     expect(shell).toContain(
       'paddingTop: Math.max(insets.top, 24) + 16, paddingHorizontal: 24, paddingBottom: 12,',
     );
-    expect(shell).toContain('<View style={[styles.root, { backgroundColor: c.paper }]}>');
-    expect(shell).toContain(
-      '<View style={[styles.content, { paddingBottom: insets.bottom }, contentStyle]}>',
+    expect(classic).toContain(
+      flatNorm('<View style={[styles.root, { backgroundColor: c.paper }]}>'),
     );
+    expect(classic).toContain(
+      flatNorm('<View style={[styles.content, { paddingBottom: insets.bottom }, contentStyle]}>'),
+    );
+    // Liquid Glass: the scene behind the shell, the ground clear over it.
+    expect(shell).toContain('{lg ? <SceneBackground /> : null}');
+    expect(shell).toContain("backgroundColor: lg ? 'transparent' : c.paper");
   });
 });
 
@@ -208,7 +224,15 @@ describe('Welcome: every word, the way in, the muted words readable', () => {
     expect(els).toHaveLength(1);
     expect(attrText(els[0]!.el, 'accessibilityRole', sf)).toBe('button');
     expect(attrText(els[0]!.el, 'hitSlop', sf)).toBeUndefined();
-    expect(attrText(els[0]!.el, 'style', sf)).toBe('styles.signInFrame');
+    // Classic's frame is the frame alone; Liquid Glass lays the pill over it.
+    expect(classicCode(WELCOME)).toContain(
+      flatNorm(
+        'onPress={() => router.push(\'/(auth)/sign-in\')} accessibilityRole="button" style={styles.signInFrame}',
+      ),
+    );
+    expect(flat(attrText(els[0]!.el, 'style', sf) ?? '')).toMatch(
+      /^\[ ?styles\.signInFrame, lg && GLASS_AUTH\.pill,/,
+    );
     const frame = styleBlock(WELCOME, 'signInFrame');
     // 44pt each way: the words alone are about 39pt wide (32pt at the
     // smallest text size), and at base hitSlop made the target about 59pt.
@@ -394,10 +418,15 @@ describe('Sign in: every control, word and path', () => {
   });
 
   it('the invite line and the divider word read in the muted ink', () => {
+    const classic = classicCode(SIGN_IN);
     expect(signIn).toContain('<Mono size={10.5} tracking={0.18} upper color={c.ink3}> or </Mono>');
-    expect(signIn).toContain(
-      "<Body size={13} color={c.ink3} style={{ textAlign: 'center' }}> New to StockPilot?",
+    expect(classic).toContain(
+      flatNorm(
+        "<Body size={13} color={c.ink3} style={{ textAlign: 'center' }}> New to StockPilot?",
+      ),
     );
+    // Liquid Glass reads the invite line in ink-2 on the card (AA there too).
+    expect(signIn).toContain('color={lg ? lg.c.ink2 : c.ink3}');
   });
 });
 
@@ -410,12 +439,37 @@ describe('the account-disabled gate', () => {
     expect(screen).toContain('{ACCOUNT_DISABLED_MESSAGE}');
     expect(screen).not.toContain(ACCOUNT_DISABLED_TITLE);
     expect(screen).not.toContain(ACCOUNT_DISABLED_MESSAGE);
-    expect(screen).toContain('<Display size={28} accessibilityRole="header">');
-    expect(screen).toContain(
-      '<Button block variant="outline" onPress={() => void onSignOut()} disabled={busy}> Sign out </Button>',
+    const classic = classicCode(DISABLED);
+    expect(classic).toContain(flatNorm('<Display size={28} accessibilityRole="header">'));
+    expect(classic).toContain(
+      flatNorm(
+        '<Button block variant="outline" onPress={() => void onSignOut()} disabled={busy}> Sign out </Button>',
+      ),
     );
     expect(screen).toContain('const ended = await signOutToFallback();');
-    expect(screen).toContain('<View style={[styles.iconRing, { borderColor: c.hair2 }]}>');
+    expect(classic).toContain(
+      flatNorm('<View style={[styles.iconRing, { borderColor: c.hair2 }]}>'),
+    );
+    // Liquid Glass keeps the same header, words and the one Sign out button.
+    expect(screen).toContain('accessibilityRole="header"');
+    expect((screen.match(/<Button\b/g) ?? []).length).toBe(1);
+  });
+});
+
+describe('the gates in Liquid Glass keep the boards tiles and rhythm', () => {
+  it('account disabled: the danger tile at the .empty-ic glyph, the line 14 from the heading and Sign out', () => {
+    const disabled = code(DISABLED);
+    expect(disabled).toContain('size={GLASS_STATE_GLYPH}');
+    expect(disabled).toContain(
+      'lg ? [styles.message, GLASS_AUTH.centredText, GLASS_AUTH.gateLine] : styles.message',
+    );
+  });
+
+  it('MFA: the shield on the accent wash in accent text at the .empty-ic glyph', () => {
+    const mfa = code(MFA);
+    expect(mfa).toContain("lg && { backgroundColor: glassStateTile(lg, 'accent').fill }");
+    expect(mfa).toContain('size={lg ? GLASS_STATE_GLYPH : 30}');
+    expect(mfa).toContain("color={lg ? glassStateTile(lg, 'accent').ink : c.ink}");
   });
 });
 
@@ -495,8 +549,15 @@ describe('the biometric lock', () => {
     expect(lock).toContain('if (splashActive) return;');
     expect(lock).toContain('if (attempted) return;');
     expect(lock).toContain('void tryUnlock();');
+    // Classic's ghost button; Liquid Glass draws the board's .ios-btn.gray
+    // (iOS-NotifyFlow step 2), which is the outline variant's glass look.
+    expect(classicCode(LOCK)).toContain(
+      flatNorm(
+        '<Button block variant="ghost" onPress={signOutToFallback}> Use password instead </Button>',
+      ),
+    );
     expect(lock).toContain(
-      '<Button block variant="ghost" onPress={signOutToFallback}> Use password instead </Button>',
+      "<Button block variant={lg ? 'outline' : 'ghost'} onPress={signOutToFallback}> Use password instead </Button>",
     );
   });
 
@@ -606,7 +667,14 @@ describe('the Face ID opt-in sheet', () => {
   });
 
   it('the grabber is the faint ink token, the pip the accent, the settings path in the body face', () => {
-    expect(sheet).toContain('<View style={[styles.grabber, { backgroundColor: c.ink5 }]} />');
+    // Classic's grabber, read off the Classic projection (Liquid Glass draws
+    // it in --ios-sep in its own branch).
+    expect(flat(printClassic(sourceOf(OPT_IN), OPT_IN))).toMatch(
+      /<View style=\{\[styles\.grabber, \{ backgroundColor: c\.ink5 \}\]\}\s*\/>/,
+    );
+    expect(sheet).toContain(
+      '<View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />',
+    );
     expect(sheet).toContain('<View style={[styles.pip, { backgroundColor: c.accent }]} />');
     expect(sheet).toContain(
       '<Body color={c.ink} style={{ fontFamily: FONT.display }}> Settings · Security </Body>',
