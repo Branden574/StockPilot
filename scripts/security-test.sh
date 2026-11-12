@@ -825,7 +825,7 @@ PGTAP_TESTS=(
   # own preflight is replayed from the recorded statements. The lock footprint
   # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
   supabase/tests/0417_recovery_codes_need_aal2.test.sql
-  # Cycle count release (0418, docket item S42): release_cycle_count refuses
+  # Cycle count release (0419, docket item S42): release_cycle_count refuses
   # everyone but a manager of the count's organization on a count with no
   # assignee (the old check was NULL there and refused no one: any signed-in
   # account of any organization that knew the id released the count and got
@@ -839,9 +839,9 @@ PGTAP_TESTS=(
   # viewer granted stock:adjust releases their own count, as the app
   # allows). The restated body is production's with its two added blocks
   # removed, and taking each block out lets the refused calls through. The
-  # two-session proof is scripts/db-concurrency/0418_release_race.sh; the
-  # lock footprint is scripts/db-concurrency/0418_migration_lock_footprint.sh.
-  supabase/tests/0418_release_cycle_count_assignee_check.test.sql
+  # two-session proof is scripts/db-concurrency/0419_release_race.sh; the
+  # lock footprint is scripts/db-concurrency/0419_migration_lock_footprint.sh.
+  supabase/tests/0419_release_cycle_count_assignee_check.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
