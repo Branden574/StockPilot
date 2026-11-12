@@ -40,9 +40,13 @@
  *
  * Fail-safe: the button stays enabled in the markup, so a browser where this
  * does not run posts as before, and the pointer can arm a page whose browser
- * never reports focus. What it does not stop: a person talked into stopping
- * on the page and pressing again later (every line of every address it names
- * has then been on screen for at least a second), INV-E5.
+ * never reports focus. A window that the page opening it has barred from
+ * running scripts is not shown the page at all: the app sends its opener
+ * policy with it (next.config.ts), and a browser then refuses to load it
+ * there (security-headers.test.ts holds the header to this path). What it
+ * does not stop: a person talked into stopping on the page and pressing again
+ * later (every line of every address it names has then been on screen for at
+ * least a second), INV-E5.
  *
  * Plain ES5 with no dependency: the CSP allows inline scripts
  * (next.config.ts), and nothing from the request is ever written into it.

@@ -100,6 +100,31 @@ describe('COOP / CORP / COEP (MED-28)', () => {
     expect(values).toEqual(['same-origin-allow-popups']);
   });
 
+  // The emailed-link page (app/auth/confirm, docket S25) counts on this
+  // header as well. Its one script, the press gate, holds a press back until
+  // the account the link is for has been on screen, and its button is left
+  // enabled in the markup on purpose. While the header is sent, a browser
+  // refuses to open the page in a window that the page opening it has barred
+  // from running scripts, so the page is not shown there without its gate.
+  // Before this header stops reaching that path, or says unsafe-none there,
+  // give the page its own answer for such a window.
+  it('sends COOP on the emailed-link page, whose press gate counts on it', async () => {
+    const all = await rules();
+    const coopRules = all.filter((r) =>
+      r.headers.some((h) => h.key.toLowerCase() === 'cross-origin-opener-policy'),
+    );
+    const covering = coopRules.filter((r) =>
+      new RegExp(`^${r.source.replace(/\/:path\+$/, '/.+').replace(/\/:path\*$/, '/.*')}$`).test(
+        '/auth/confirm',
+      ),
+    );
+    // Exactly one rule, so the page gets one value: two would not parse.
+    expect(covering).toHaveLength(1);
+    const values = headerValues(covering, 'Cross-Origin-Opener-Policy');
+    expect(values).toHaveLength(1);
+    expect(values[0]).toMatch(/^same-origin(?:-allow-popups)?$/);
+  });
+
   it('does not set COEP', async () => {
     expect(headerValues(await rules(), 'Cross-Origin-Embedder-Policy')).toEqual([]);
   });
