@@ -9,6 +9,9 @@ import { isLiquidGlassEnabled } from '@/components/theme/appearance-flag';
  * Liquid Glass only: holds the Movements card's bars at their start while the
  * card is outside the window, and lets them grow the first time about a third
  * of the card is inside it (styles/liquid-glass/shell.css, its last block).
+ * Where a third cannot fit (a very short window, a very tall card) they grow
+ * when the card fills half of the room there is: held bars must never sit in
+ * front of the reader.
  *
  * It renders nothing, so the card's markup is the same with and without it,
  * in both designs. All it ever does is put `data-glass-grow="wait"` on the
@@ -41,10 +44,36 @@ export const GROW_ATTRIBUTE = 'data-glass-grow';
 export const GROW_WAIT = 'wait';
 /** "About a third" of the card inside the window. */
 export const GROW_IN_VIEW_RATIO = 0.33;
+/**
+ * Or this share of the room the card can be seen in, whichever comes first.
+ * The Overview scrolls inside `main`, which is the window less the header: in
+ * a window about 200 px tall the 386 px card never shows a third of itself.
+ */
+export const GROW_ROOM_SHARE = 0.5;
+/**
+ * The observer reports each hundredth of the card up to the third, so the
+ * half-the-room mark is heard wherever it falls.
+ */
+export const GROW_THRESHOLDS: number[] = Array.from({ length: 34 }, (_, i) => i / 100);
 
 /** How many pixels of a box are inside the window, top to bottom. */
 function visibleHeight(rect: DOMRect): number {
   return Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+}
+
+/** The overflow values that cut a box's content off at its edge. */
+const CLIPS = /^(auto|scroll|hidden|clip)$/;
+
+/**
+ * The height the card can be seen in: the window, or a shorter box around the
+ * card that clips it (the Overview's scrolling `main`).
+ */
+function roomFor(card: Element): number {
+  let room = window.innerHeight;
+  for (let box = card.parentElement; box && box !== document.body; box = box.parentElement) {
+    if (CLIPS.test(getComputedStyle(box).overflowY)) room = Math.min(room, box.clientHeight);
+  }
+  return room;
 }
 
 export function MovementsBreakdownGlassGrow() {
@@ -71,15 +100,15 @@ export function MovementsBreakdownGlassGrow() {
         (entries) => {
           for (const entry of entries) {
             if (!entry.isIntersecting) continue;
-            // A card more than three windows tall can never show a third of itself.
-            const tooTall = entry.boundingClientRect.height > window.innerHeight * 3;
-            if (entry.intersectionRatio >= GROW_IN_VIEW_RATIO || tooTall) {
+            // A short window or a very tall card can never show a third of the card.
+            const fillsRoom = entry.intersectionRect.height >= roomFor(card) * GROW_ROOM_SHARE;
+            if (entry.intersectionRatio >= GROW_IN_VIEW_RATIO || fillsRoom) {
               start();
               return;
             }
           }
         },
-        { threshold: [0, GROW_IN_VIEW_RATIO] },
+        { threshold: GROW_THRESHOLDS },
       );
       card.setAttribute(GROW_ATTRIBUTE, GROW_WAIT);
       observer.observe(card);

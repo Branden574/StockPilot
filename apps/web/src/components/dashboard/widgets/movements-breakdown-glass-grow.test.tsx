@@ -9,6 +9,8 @@ import { renderDashboardWidgets } from './index';
 import {
   GROW_ATTRIBUTE,
   GROW_IN_VIEW_RATIO,
+  GROW_ROOM_SHARE,
+  GROW_THRESHOLDS,
   GROW_WAIT,
   MOVEMENTS_CARD_SELECTOR,
   MovementsBreakdownGlassGrow,
@@ -29,6 +31,10 @@ import type { DashboardWidgetProps } from './types';
  *   - a card wholly outside the window waits, starts at a third, starts once,
  *     and nothing after that (a refresh of the data, a Day/Night switch,
  *     scrolling away and back) writes the attribute again;
+ *   - where a third of the card cannot fit (a very short window, a short
+ *     scrolling area around the card, a very tall card) it starts when the
+ *     card fills half of the room there is, so the bars are never left at
+ *     nothing in front of the reader;
  *   - leaving the page while it waits takes the attribute off.
  */
 
@@ -60,6 +66,7 @@ class FakeObserver {
     const entry = {
       isIntersecting: ratio > 0,
       intersectionRatio: ratio,
+      intersectionRect: { height: ratio * height },
       boundingClientRect: { height },
       target: this.observed[0],
     } as unknown as IntersectionObserverEntry;
@@ -151,7 +158,12 @@ describe("the Movements card's grow-in trigger", () => {
     expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
     expect(FakeObserver.made).toHaveLength(1);
     expect(observer!.observed).toEqual([card]);
-    expect(observer!.options).toEqual({ threshold: [0, GROW_IN_VIEW_RATIO] });
+    expect(observer!.options).toEqual({ threshold: GROW_THRESHOLDS });
+    // Every hundredth from nothing up to the third, so a short window hears about the card too.
+    expect(GROW_THRESHOLDS).toHaveLength(34);
+    expect(GROW_THRESHOLDS[0]).toBe(0);
+    expect(GROW_THRESHOLDS[33]).toBe(GROW_IN_VIEW_RATIO);
+    GROW_THRESHOLDS.forEach((t, i) => expect(t).toBeCloseTo(i / 100, 10));
     expect(GROW_IN_VIEW_RATIO).toBeGreaterThanOrEqual(0.3);
     expect(GROW_IN_VIEW_RATIO).toBeLessThanOrEqual(0.34);
     // Nothing else on the page carries the attribute.
@@ -214,12 +226,59 @@ describe("the Movements card's grow-in trigger", () => {
     expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
   });
 
-  it('a card more than three windows tall starts as soon as any of it is inside', () => {
+  it('a window too short to show a third of the card: starts when the card fills half of it', () => {
+    // The lab's finding: a 200 px window never showed the bars at all.
+    vi.stubGlobal('innerHeight', 200);
+    cardTop = 300;
+    const { card, observer } = mount();
+    expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
+    expect(GROW_ROOM_SHARE).toBe(0.5);
+    observer!.report(0.01); // 4 px
+    observer!.report(0.24); // 96 px: under half of 200
+    expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
+    observer!.report(0.25); // 100 px: half the window, still under a third of the card
+    expect(card.hasAttribute(GROW_ATTRIBUTE)).toBe(false);
+    expect(observer!.disconnected).toBe(true);
+  });
+
+  it('a short scrolling area around the card counts as the room, not the window', () => {
+    // The Overview scrolls inside `main`, which is shorter than the window.
+    const scroller = document.createElement('main');
+    scroller.style.overflowY = 'auto';
+    Object.defineProperty(scroller, 'clientHeight', { value: 112 });
+    document.body.appendChild(scroller);
+    const view = render(widget(), { container: scroller });
+    const card = view.container.querySelector(MOVEMENTS_CARD_SELECTOR)!;
+    const observer = FakeObserver.made[0]!;
+    expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
+    observer.report(0.13); // 52 px: under half of 112
+    expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
+    observer.report(0.14); // 56 px: half of the scrolling area
+    expect(card.hasAttribute(GROW_ATTRIBUTE)).toBe(false);
+    view.unmount();
+    scroller.remove();
+  });
+
+  it('a wrapper that does not clip is not the room', () => {
+    const wrapper = document.createElement('div'); // overflow visible
+    Object.defineProperty(wrapper, 'clientHeight', { value: 40 });
+    document.body.appendChild(wrapper);
+    const view = render(widget(), { container: wrapper });
+    const card = view.container.querySelector(MOVEMENTS_CARD_SELECTOR)!;
+    FakeObserver.made[0]!.report(0.3); // 120 px: far more than half of 40
+    expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
+    view.unmount();
+    wrapper.remove();
+  });
+
+  it('a card more than three windows tall starts when it fills half the window', () => {
     cardHeight = WINDOW_HEIGHT * 3 + 1;
     const { card, observer } = mount();
     observer!.report(0, cardHeight);
+    observer!.report(0.01, cardHeight); // 23 px
+    observer!.report(0.16, cardHeight); // 369 px: under half of 768
     expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
-    observer!.report(0.01, cardHeight);
+    observer!.report(0.17, cardHeight); // 392 px
     expect(card.hasAttribute(GROW_ATTRIBUTE)).toBe(false);
   });
 
