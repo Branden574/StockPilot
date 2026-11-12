@@ -161,8 +161,10 @@ export const RETURN_REQUEST_COPY = {
   manualLabel: 'Return request text to copy manually',
   eyebrow: 'RETURN REQUEST',
   timelineLabel: 'Return request drafted',
-  noRoutingAdminHint:
-    'Email routing for delivery requests is not configured for this organization, so the return request email is hidden. Set it in Settings → Email routing.',
+  /** Followed on each screen by "Set it in Settings → Email routing." (a link on the website). */
+  noRoutingAdminLead:
+    'Email routing for delivery requests is not configured for this organization, so the return request email is hidden.',
+  noRoutingAdminWhere: 'Set it in Settings → Email routing.',
 } as const;
 
 /** "Return request copied. Create a new email to …, CC …, and paste the copied details." */
