@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 
+import { chatField, type ChatChannel } from '@/lib/chat-text';
 import { reportError } from '@/lib/error-reporter';
 import { isSsrfRefusal, safeFetch, SsrfBlockedError } from '@/lib/ssrf-guard';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -156,8 +157,23 @@ interface DeliveryRow {
 type Admin = ReturnType<typeof createAdminClient>;
 
 // ── Event → human-readable copy (for Slack/Teams cards) ─────────────────────
-export function describeEvent(eventType: string, data: Record<string, unknown>): { title: string; summary: string } {
-  const s = (k: string) => (typeof data[k] === 'string' ? (data[k] as string) : undefined);
+/**
+ * The card's words. Titles are fixed. Every text field of the event's data is
+ * read through `s`, which hands it to chatField (lib/chat-text.ts): on one
+ * line, at most 300 characters, and escaped for `channel`, so Slack and Teams
+ * show it as text. A field with nothing left to show reads as missing, so the
+ * card's fallback words apply. Every present and future field is covered: a
+ * template can only reach the data's text through `s`.
+ */
+export function describeEvent(
+  eventType: string,
+  data: Record<string, unknown>,
+  channel: ChatChannel = 'plain',
+): { title: string; summary: string } {
+  const s = (k: string) => {
+    const value = data[k];
+    return typeof value === 'string' ? chatField(value, channel) || undefined : undefined;
+  };
   const n = (k: string) => (typeof data[k] === 'number' ? (data[k] as number) : undefined);
   switch (eventType) {
     case 'stock.low':
@@ -253,7 +269,7 @@ export function describeEvent(eventType: string, data: Record<string, unknown>):
     case 'test.ping':
       return { title: '✅ StockPilot test', summary: 'Your alerts are connected — this is a test event.' };
     default:
-      return { title: 'StockPilot event', summary: eventType };
+      return { title: 'StockPilot event', summary: chatField(eventType, channel) };
   }
 }
 
@@ -265,12 +281,18 @@ export function buildRequest(
 ): { body: string; headers: Record<string, string> } {
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   if (endpoint.type === 'slack' || endpoint.type === 'teams') {
-    const { title, summary } = describeEvent(eventType, (envelope.data as Record<string, unknown>) ?? {});
+    const { title, summary } = describeEvent(
+      eventType,
+      (envelope.data as Record<string, unknown>) ?? {},
+      endpoint.type,
+    );
     // Slack: `text` renders mrkdwn. Teams: incoming webhook also accepts `{text}`
-    // (markdown-ish). Keep it one shape that both accept.
+    // (markdown-ish). Keep it one shape that both accept. The event's text in
+    // the summary is escaped for its channel (lib/chat-text.ts); the bold
+    // asterisks around the fixed title are added here, after it.
     return { body: JSON.stringify({ text: `*${title}*\n${summary}` }), headers };
   }
-  // Generic webhook: full signed JSON envelope.
+  // Generic webhook: full signed JSON envelope, the data as it was sent.
   const body = JSON.stringify(envelope);
   if (endpoint.secret) {
     const ts = Math.floor(Date.now() / 1000);

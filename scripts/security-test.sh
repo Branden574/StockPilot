@@ -924,6 +924,17 @@ WEB_TESTS=(
   # other than http or https, a Slack or Teams URL on another host) is final
   # and never sent, while a failed lookup of the host is retried with backoff.
   src/server/services/integration-events.delivery-lookup.test.ts
+  # Slack and Teams show an event's text as text (docket S56): every text field
+  # of every alert card type, and the operator's error report, is escaped for
+  # its channel by one rule (lib/chat-text.ts); a card field is also put on one
+  # line and capped, a report keeps its lines and its length, and the generic
+  # webhook body is the data as it was sent. A web sign-in's device is named in
+  # the organization's alerts by browser and system, from fixed words
+  # (login-device.test.ts, listed with the sign-in notes).
+  src/lib/chat-text.test.ts
+  src/server/services/integration-events.chat-text.test.ts
+  src/lib/error-reporter.chat-text.test.ts
+  src/lib/auth/user-agent.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a

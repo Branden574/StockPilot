@@ -41,6 +41,7 @@
  * (reportedMessage); the stack is the error's own, so it keeps the throw site.
  */
 
+import { chatBlock, chatCode, chatField, type ChatChannel } from './chat-text';
 import { asReportableError, reportedMessage } from './error-text';
 import { redactTokens, redactTokensDeep } from './redact-urls';
 
@@ -148,14 +149,24 @@ export async function reportError(err: unknown, context: ErrorContext): Promise<
   // unknown fields) — they want `{text}`. Detect them so pointing
   // ERROR_WEBHOOK_URL at a #alerts channel "just works"; any other endpoint
   // gets the full structured payload.
-  const isChatWebhook = url.includes('hooks.slack.com') || url.includes('webhook.office.com');
-  const body = isChatWebhook
+  //
+  // The chat text is escaped for its channel (chat-text.ts), so Slack or Teams
+  // shows a report's words as text: the tag on the header's one line; the
+  // message whole, with its line breaks and its length (some alerts are a
+  // list, one entry per line); the digest and the first 1500 characters of the
+  // stack as code, which their text cannot end.
+  const chat: ChatChannel | null = url.includes('hooks.slack.com')
+    ? 'slack'
+    : url.includes('webhook.office.com')
+      ? 'teams'
+      : null;
+  const body = chat
     ? JSON.stringify({
         text:
-          `*${payload.level.toUpperCase()} — ${payload.tag}* (${payload.env})\n` +
-          `${payload.message}` +
-          (payload.digest ? `\ndigest: \`${payload.digest}\`` : '') +
-          (payload.stack ? `\n\`\`\`${payload.stack.slice(0, 1500)}\`\`\`` : ''),
+          `*${payload.level.toUpperCase()} — ${chatField(payload.tag, chat, 200)}* (${payload.env})\n` +
+          chatBlock(payload.message, chat) +
+          (payload.digest ? `\ndigest: \`${chatCode(payload.digest, chat)}\`` : '') +
+          (payload.stack ? `\n\`\`\`${chatCode(payload.stack.slice(0, 1500), chat)}\`\`\`` : ''),
       })
     : JSON.stringify(payload);
 
