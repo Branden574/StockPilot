@@ -35,7 +35,19 @@
      presented the /auth/confirm login CSRF as closed for browsers that send
      Fetch Metadata. Both corrected, with the defences added for them and the
      section 8 row updated. The GET list was read from the route files on
-     that date; it is not a sweep. -->
+     that date; it is not a sweep.
+
+     AMENDED 2026-11-12 (docket T23): the "Tested at" fields of INV-B3,
+     INV-B4 and INV-D2 were rewritten for the detectors as they now stand
+     (INV-15/16 bind a CHECK to its column by conkey; INV-26 and INV-31 share
+     one allowlist audit that follows calls; INV-27 sweeps public and ledger),
+     INV-B5 was added, and the five-column storage-path gap that 0326 closed
+     was taken out of INV-D2 and section 10. The figures in those entries
+     (14 allowlist-E entries and one allowlist-F entry, 16 path columns, 18
+     ledger functions of which one is on allowlist J) were read on a local
+     Postgres with migrations 0001-0418 applied; the assertion count in
+     section 10 was re-derived from `select plan(47)`. The 38 and 56 file
+     counts beside it were not re-derived. -->
 
 # Security invariants
 
@@ -364,16 +376,38 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   migrations re-states its `grant execute ... to authenticated, service_role`
   unchanged and puts the entire fix in the body.
 - **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
-  stale entry, and no entry whose body has grown a write: `INSERT INTO`,
-  `MERGE INTO [ONLY]`, `UPDATE [ONLY]` of any table, unqualified or quoted, or
-  `DELETE FROM [ONLY]`; one detector shared with INV-30 and INV-31 since 0395,
-  which also caught the forms the old `update public.` pattern missed), with
-  INV-29, INV-30 and INV-30b as the controls (INV-30b plants one probe per
-  write form and two reads that must not match). INV-29 and INV-30 plant their own probes
+  stale entry, and no entry that writes), with INV-29, INV-30, INV-30b and
+  INV-30c as the controls. What INV-26 judges:
+  - the entry's own body **and every first-party function it reaches through
+    calls**, followed until no new function appears (first-party: a
+    non-extension function in `public` or `ledger`). A call is a name followed
+    by `(` in the body with comments and quoted text removed; a bare name
+    resolves through the caller's own pinned `search_path`;
+  - the write forms `INSERT INTO`, `MERGE INTO [ONLY]`, `UPDATE [ONLY]` of a
+    table in any schema, quoted or not, `DELETE FROM [ONLY]` and `TRUNCATE`,
+    read from the raw body so a write inside a `format()` string counts, plus
+    `EXECUTE`;
+  - a reached function with **no first-party body** (another schema, or an
+    extension member anywhere) cannot be read, so it must carry a reasoned row
+    in **allowlist K** (`_sec_inv_external_callee_allow`; one row today,
+    `auth.uid`). A K row whose function is gone, or that no entry reaches any
+    more, fails as stale.
+
+  The audit is one view, read by INV-26, INV-30, INV-30c, INV-31 and INV-32.
+  INV-30b plants one probe per write form and reads that must not match.
+  INV-30c plants entries whose own bodies write nothing and that reach a
+  writer one, two and three calls down, a function that runs `EXECUTE`, an
+  extension function in another schema, and a bare extension function through
+  a callee's own `search_path`; each must be named. INV-29 and INV-30 plant
+  their own probes
   inside the rolled-back transaction — an ungated definer function granted to
   `authenticated`, a stale allowlist row, and an allowlist row naming a
   function known to write — so INV-25 and INV-26 are proven able to fail on
-  *every* run rather than once at review time. Per-function posture is pinned
+  *every* run rather than once at review time. Not seen by the audit, as for
+  every text census in that file: a call made through dynamic SQL (refused
+  separately: `EXECUTE` in an entry or in a callee withdraws the exemption),
+  an operator, a cast or a trigger; `pg_catalog` functions are not judged.
+  Per-function posture is pinned
   in
   [`0346_gate_secdef_stock_helpers.test.sql`](../../supabase/tests/0346_gate_secdef_stock_helpers.test.sql)
   and
@@ -392,8 +426,9 @@ boolean about a caller-supplied uuid — `assert_location_in_org` returns void a
 raises instead, which is the same answer with a different calling convention —
 and the single exception, `org_effective_tier`, returns the org's plan-tier
 string, which is not tenant data. **None writes**, and that is the property the
-exemption is bought with: INV-26 withdraws it the day one of them grows a write,
-and INV-30 proves INV-26 can still see that happen.
+exemption is bought with: INV-26 withdraws it the day one of them grows a write
+or starts calling something that writes, and INV-30 and INV-30c prove INV-26
+can still see that happen.
 
 **An attribute-returning entry is a smell, not a category.**
 `_cycle_count_location_facts` was the single allowlist-E entry that returned
@@ -437,12 +472,53 @@ select p.proname,
   manager+ or `caller_can_write_location`. The one allowlisted entry,
   `ledger.cycle_count_line_superseded` (0369), returns a boolean, writes
   nothing, and answers only inside a ledger transaction.
-- **Tested at**: INV-31 (the sweep, plus allowlist F's own audit: no stale
-  entry, no entry whose body writes) and INV-32 (plants an ungated definer
-  probe in `ledger` and a stale allowlist row; both must be caught). The
+- **Tested at**: INV-31 (the sweep, plus allowlist F's own audit, which is
+  the view INV-26 reads: no stale entry, and no entry that writes, runs
+  `EXECUTE`, reaches a writer, or reaches a function with no first-party body
+  that allowlist K does not list) and INV-32 (plants an ungated definer
+  probe in `ledger` and a stale allowlist row; both must be caught). INV-30c
+  plants an allowlist-F entry that reaches a writer. The
   helper's gate is pinned line by line in
   [`0371_holdings_staff_scope.test.sql`](../../supabase/tests/0371_holdings_staff_scope.test.sql)
   (section F), each line killed by its own live mutation.
+
+### INV-B5 — every first-party function pins `search_path`
+
+- **Invariant**: every non-extension function in `public` and `ledger` sets
+  `search_path` in its own definition, unless **allowlist J**
+  (`_sec_inv_search_path_allow`) lists its exact signature with a reason and
+  the function is `SECURITY INVOKER` with no `EXECUTE` for `anon`,
+  `authenticated` or `service_role`. Every first-party function (non-extension,
+  owned by `postgres`) lives in `public` or `ledger`, and none there has an
+  SQL-standard body (`BEGIN ATOMIC`, or `RETURN` with no `AS` string).
+- **Why it matters**: an unpinned function resolves unqualified names through
+  its caller's `search_path`. Under `SECURITY DEFINER` that is a
+  privilege-escalation primitive; under `SECURITY INVOKER` it is a correctness
+  hazard. `ledger` is first-party: `authenticated` holds `USAGE` and `EXECUTE`
+  there. A first-party function in a schema the sweep does not read would go
+  unjudged, and a trigger function fires for a role with no `USAGE` on its
+  schema, so `USAGE` is not the test. An SQL-standard body stores an empty
+  `prosrc`, which every text census in the invariant test reads.
+- **Enforced by**: the `SET` clause in each function's definition (0329, and
+  0350 for the stragglers). Extension members are never altered: an
+  `ALTER FUNCTION` on one is undone by the next `ALTER EXTENSION ... UPDATE`.
+  The one exemption is `ledger._seal`
+  ([`0373`](../../supabase/migrations/0373_draw_provenance.sql)): it runs only
+  under its one caller, the pinned `SECURITY DEFINER` draw engine, every name
+  in its body is schema-qualified, no API role may execute it, and a `SET`
+  would cost a setting save and restore per recorded draw.
+- **Tested at**: INV-27 (the sweep, naming offenders, plus allowlist J's own
+  audit: an entry whose function is gone or pinned now, or that is
+  `SECURITY DEFINER` or executable by an API role, fails), INV-27b (the
+  first-party census), INV-28 (the population is not empty in either schema,
+  and the unpinned detector still fires on the excluded extension members) and
+  INV-28b (plants an unpinned `ledger` function, an unpinned second overload
+  of the allowlisted name, three bad allowlist-J rows, a function in a new
+  schema and an SQL-standard body; each must be named). Allowlist J is keyed
+  on the full signature, so a new overload earns its own exemption. `_seal`'s
+  posture is pinned in
+  [`0373_draw_provenance.test.sql`](../../supabase/tests/0373_draw_provenance.test.sql)
+  (A13).
 
 ---
 
@@ -1250,8 +1326,19 @@ legitimate path looks like, and `..`, `%2e%2e`, `%252e%252e`, a leading `/`, a
   purpose. A `CHECK` that calls a function is only as immutable as that function:
   a later `create or replace` silently changes what every constraint means with
   no re-validation.
-- **Tested at**: INV-15 (sweep with a known-gap allowlist), INV-16 (no stale gap
-  entry), INV-17 and INV-18 (controls, in both directions).
+- **Tested at**: INV-15 (sweep with a known-gap allowlist, over ordinary and
+  partitioned tables), INV-16 (no stale gap entry), INV-17 and INV-18
+  (controls, in both directions), INV-18b and INV-18c (a planted table). A
+  `CHECK` counts for a column only when the constraint **covers that column**
+  (the column is in its `conkey`) and its text refuses both `..` and `%`; the
+  column's name appearing in a sibling's constraint does not count. INV-16
+  reads the same binding, so a gap row is stale only when the column's own
+  `CHECK` carries the whole floor. INV-18b plants a column whose only
+  traversal `CHECK` covers a sibling and one whose `CHECK` refuses `..` alone;
+  both must be named unguarded, and INV-18c keeps both on the gap list.
+  Residual: a multi-column `CHECK` that covers a column but tests only its
+  sibling would still pass; none exists (each floor `CHECK` covers exactly its
+  own column).
 
 The constraints are `NOT VALID` deliberately. Production was verified clean
 before the change — 1,001 rows across the seven columns, zero `..`, zero `%`,
@@ -1265,12 +1352,15 @@ threat is a hostile write and not a legacy row. Promoting them with `validate
 constraint` is a separate, safe owner step (`SHARE UPDATE EXCLUSIVE`, no read or
 write block) and the re-check query is in 0323's header.
 
-**Known gap, recorded rather than omitted.** Five path columns do not yet carry
-the floor: `item_attachments.storage_path`, `cycle_count_ai_scans.photo_storage_path`,
+**A known gap is recorded rather than omitted.** The gap list in the invariant
+test is empty today: the five columns 0323 left without the floor
+(`item_attachments.storage_path`, `cycle_count_ai_scans.photo_storage_path`,
 `import_jobs.storage_path`, `size_count_training_samples.image_storage_path`,
-`support_tickets.attachment_path`. They are listed in the invariant test's gap
-allowlist so the exposure is visible in CI output, and so a _new_ path column
-still fails INV-15 rather than joining the gap silently. Closing one means
+`support_tickets.attachment_path`) were constrained by migration
+[`0326`](../../supabase/migrations/0326_storage_path_floor_completion.sql),
+which deleted their rows in the same change. The list stays as the place a
+future gap is recorded, so the exposure is visible in CI output and a _new_ path
+column still fails INV-15 rather than joining a gap silently. Closing one means
 deleting its row from the allowlist in the same change as the constraint
 migration; INV-16 fails if that is forgotten.
 
@@ -1915,16 +2005,13 @@ checked.
   permanent: the sweep that would have caught it did not exist on the day the
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 36 class-wide assertions in
+  invariants**: 47 class-wide assertions in
   `supabase/tests/security_invariants.test.sql`, plus 38 security-focused pgTAP
   files and 56 security-focused vitest files, gated together as
   `pnpm security:test` and wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a
   stated prerequisite and a pgTAP pin.
-- **One known gap is recorded**: five storage-path columns lack the database
-  traversal floor (INV-D2). They are in the test's allowlist, so they are visible
-  in every CI run rather than forgotten.
-- **One more known gap is recorded (0371)**: `purchase_orders_write` is a
+- **One known gap is recorded (0371)**: `purchase_orders_write` is a
   `FOR ALL` policy on a warehouse-scoped table, so a member holding
   `purchase_orders:manage` reads every warehouse's POs (INV-C4). It is on
   allowlist G as deferred to 0372, so it too is visible in every run.
@@ -1934,7 +2021,9 @@ checked.
   are in the test header. INV-25 and INV-26, added later, do not rely on that
   one-off exercise: INV-29 and INV-30 plant the violating probes themselves, so
   those two assertions are mutation-checked on every run. INV-31, INV-33 and
-  INV-35 (0371) follow the same pattern through INV-32, INV-34 and INV-36.
+  INV-35 (0371) follow the same pattern through INV-32, INV-34 and INV-36, and
+  so do INV-15 and INV-16 (through INV-18b and INV-18c), INV-27 and INV-27b
+  (through INV-28b) and the call walk of INV-26 and INV-31 (through INV-30c).
 - **What this does not establish**: no third-party penetration test has been
   performed, there is no SOC 2 or ISO 27001 process, and there is no bug bounty
   (`SECURITY.md`, "Things we haven't done"). Coverage of the invariants above is

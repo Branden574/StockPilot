@@ -51,14 +51,16 @@
 --   * INV-25 create a SECURITY DEFINER function in public, grant EXECUTE to
 --            `authenticated`, and write a body with no auth.uid()/has_org_role/
 --            has_permission/is_org_member in it (this is the 0342 shape).
---   * INV-27 create a function in public without `set search_path = public`
+--   * INV-27 create a function in public or ledger without `set search_path`
 --            (or `alter function ... reset search_path` on an existing one).
 --
 -- INV-29 and INV-30 need no hand recipe: they plant their own probes and are
 -- the standing proof that INV-25/26 can still fail. The same holds for
 -- INV-32, INV-34 and INV-36 (0371), the controls for INV-31, INV-33 and
 -- INV-35, for INV-39 (0373), the control for INV-37 and INV-38, and for
--- INV-41 (0373), the control for INV-40.
+-- INV-41 (0373), the control for INV-40, and for
+-- INV-18b, INV-18c, INV-28b and INV-30c (T23), the controls for INV-15, INV-16,
+-- INV-27 and INV-27b, and the allowlist audit INV-26 and INV-31 share.
 --
 -- Pure catalog introspection — no fixtures, no seeded rows, no roles switched.
 -- `begin`/`rollback` for house consistency and so the temporary allowlist
@@ -67,7 +69,7 @@
 
 begin;
 
-select plan(42);
+select plan(47);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -143,7 +145,8 @@ insert into _sec_inv_anon_secdef_allow (proname, why) values
 -- functions evaluate AS THE USER, so `authenticated` must keep EXECUTE, and
 -- each exposes at most a BOOLEAN about a caller-supplied uuid. None writes.
 -- Adding a name here must be defended in `why`; a function that WRITES must
--- never appear.
+-- never appear, nor one that reaches a write through what it calls (INV-26
+-- follows its calls, T23).
 --
 -- _cycle_count_location_facts was the one entry that exposed ATTRIBUTES rather
 -- than a boolean (org, warehouse, kind, deleted_at for any location uuid) and
@@ -208,13 +211,24 @@ create temporary table _sec_inv_path_check_gap (relname text, attname text, why 
 -- An allowlisted entry must never write. Until 0395 the detector was
 -- \m(insert\s+into|update\s+public\.|delete\s+from)\M, which missed MERGE INTO,
 -- UPDATE ONLY, an unqualified UPDATE and a quoted "public". It is now 0387's
--- writer forms, for any table: INSERT INTO, MERGE INTO [ONLY], DELETE FROM
--- [ONLY], and UPDATE [ONLY] [schema-qualified or quoted] <table> [alias] SET
--- (the SET keeps "for update of" and "on update cascade" out). INV-26, INV-30
--- and INV-31 read this one row, and INV-30b plants a probe per form.
+-- writer forms: INSERT INTO, MERGE INTO [ONLY], DELETE FROM [ONLY], and
+-- UPDATE [ONLY] <table> [alias] SET (the SET keeps "for update of" and "on
+-- update cascade" out). The UPDATE arm takes a table in ANY schema, quoted
+-- or not ("update ledger.t set" and "update auth.users set" count as much as
+-- "update public.t set"), and TRUNCATE counts (T23). The writer census of the
+-- allowlist audit (INV-26, INV-30, INV-30c, INV-31) reads this one row, and
+-- INV-30b plants a probe per form.
 create temporary table _sec_inv_writer_re (re text not null);
 insert into _sec_inv_writer_re (re) values
-  ($re$\m(insert\s+into|merge\s+into|delete\s+from)\M|\mupdate\s+(only\s+)?("?public"?\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(\s+(as\s+)?"?[a-z_][a-z0-9_$]*"?)?\s+set\M$re$);
+  ($re$\m(insert\s+into|merge\s+into|delete\s+from|truncate)\M|\mupdate\s+(only\s+)?("?[a-z_][a-z0-9_$]*"?\s*\.\s*)?"?[a-z_][a-z0-9_$]*"?(\s+(as\s+)?"?[a-z_][a-z0-9_$]*"?)?\s+set\M$re$);
+
+-- Comments and single-quoted literals, removed in one left-to-right pass
+-- (T23). The allowlist audit reads calls and EXECUTE from the stripped body,
+-- so a name in a comment or a message is not a call; writes are read from the
+-- raw body, so a write inside a format() string still counts.
+create temporary table _sec_inv_strip_re (re text not null);
+insert into _sec_inv_strip_re (re) values
+  ($re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$);
 
 -- ── F. SECURITY DEFINER functions in `ledger` that `authenticated` may execute
 --       WITHOUT an authorization token in their own body (0371) ──────────────
@@ -272,6 +286,35 @@ insert into _sec_inv_engine_caller_allow (fn, rec_args, why) values
   ('ledger.distribute_bundle',          'true, v_user', 'the pre-assembled kit drain and each component draw'),
   ('ledger.assemble_bundle',            'true, v_user', 'each component draw and the kit''s Staging landing'),
   ('ledger.process_return_disposition', 'true, v_user', 'the restock landing and the scrap draw, each written into its own leg''s row');
+
+
+-- ── J. First-party functions deliberately left without a search_path pin
+--       (T23) ────────────────────────────────────────────────────────────────
+--
+-- Keyed on the full signature (to_regprocedure text), not on the name: a new
+-- overload must earn its own exemption, unlike allowlist A, whose name key is
+-- safe because INV-2 re-checks every overload's body. INV-27 refuses an entry
+-- whose function is gone or pinned now, and one that no longer meets the terms
+-- that make an unpinned function harmless here: SECURITY INVOKER, and no API
+-- role (anon, authenticated, service_role) may execute it.
+create temporary table _sec_inv_search_path_allow (sig text primary key, why text not null);
+insert into _sec_inv_search_path_allow (sig, why) values
+  ('ledger._seal(uuid,uuid,uuid,text,public.stock_draw_holding[],uuid[])',
+   'SECURITY INVOKER with no EXECUTE for any API role (0373:544-545); runs only under its one caller, the SECURITY DEFINER engine ledger.apply_level_delta_for, pinned to search_path = public; every name in its body is schema-qualified; a SET would cost a GUC save and restore per recorded draw (0373:417-421); 0373 A13 pins its proconfig NULL');
+
+-- ── K. Functions with no first-party body that an allowlist E or F entry may
+--       reach (T23) ─────────────────────────────────────────────────────────
+--
+-- The allowlist audit reads first-party SQL and PL/pgSQL bodies in public and
+-- ledger. A function anywhere else, or an extension member anywhere (a C
+-- function, net.http_post), has no body the audit can judge and may still
+-- write, so an entry that reaches one loses its exemption unless it is listed
+-- here with its reason. Keyed on schema.name (these are not our functions;
+-- an overload would be the platform's). INV-26 refuses a stale row: the
+-- function is gone, or no entry reaches it any more.
+create temporary table _sec_inv_external_callee_allow (fn text primary key, why text not null);
+insert into _sec_inv_external_callee_allow (fn, why) values
+  ('auth.uid', 'reads the caller''s JWT subject and writes nothing (module_enabled calls it, and is_org_member under it)');
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -588,26 +631,55 @@ select ok(
 -- fail. strpos has no metacharacters.
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- INV-15. Every path-bearing column in public carries the traversal floor
--- unless it is on the recorded known-gap list.
+-- The binding (T23). A column is guarded when a CHECK constraint on its table
+-- COVERS it (its attnum is in the constraint's conkey) and refuses both '..'
+-- and '%'. Coverage, not the name: a column called path is not guarded by a
+-- sibling photo_storage_path's CHECK because its name sits inside the
+-- sibling's. INV-16 asks for the same whole floor as INV-15, so the two
+-- agree about every column: a gap column with a '..'-only CHECK is still a
+-- gap. INV-15 to INV-18c all read this one function. Residual: a
+-- multi-column CHECK that covers a column but tests only its sibling still
+-- passes; none exists (every floor CHECK covers exactly its own column).
+create function pg_temp.sec_inv_path_guarded(p_rel oid, p_att int2) returns boolean
+  language sql stable as $f$
+  select exists (
+    select 1 from pg_constraint k
+     where k.conrelid = p_rel and k.contype = 'c'
+       and p_att = any(k.conkey)
+       and strpos(pg_get_constraintdef(k.oid), '''..''') > 0
+       and strpos(pg_get_constraintdef(k.oid), '''%''') > 0)
+$f$;
+
+-- The two sweeps' detector (T23), one view so INV-18b and INV-18c exercise
+-- the very same text: an unguarded path column that is not a recorded gap
+-- (INV-15), and a gap row whose column is gone or guarded now (INV-16).
+create temporary view _sec_inv_path_violations as
+  select 'unguarded: ' || c.relname || '.' || a.attname as x, 'unguarded'::text as kind,
+         c.relname::text as relname, a.attname::text as attname
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+   where n.nspname = 'public' and c.relkind in ('r', 'p')
+     and a.attname like '%path%'
+     and not pg_temp.sec_inv_path_guarded(c.oid, a.attnum)
+     and not exists (select 1 from _sec_inv_path_check_gap g
+                      where g.relname = c.relname and g.attname = a.attname)
+  union all
+  select 'stale gap entry: ' || g.relname || '.' || g.attname, 'stale', g.relname, g.attname
+    from _sec_inv_path_check_gap g
+   where not exists (
+     select 1 from pg_class c
+       join pg_namespace n on n.oid = c.relnamespace
+       join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
+      where n.nspname = 'public' and c.relname = g.relname and a.attname = g.attname
+        and not pg_temp.sec_inv_path_guarded(c.oid, a.attnum));
+
+-- INV-15. Every path-bearing column in public carries the traversal floor of
+-- its own, unless it is on the recorded known-gap list. Offenders are named.
 select is(
-  (select count(*)::int
-     from pg_class c
-     join pg_namespace n on n.oid = c.relnamespace
-     join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-    where n.nspname = 'public' and c.relkind = 'r'
-      and a.attname like '%path%'
-      and not exists (
-        select 1 from pg_constraint k
-         where k.conrelid = c.oid and k.contype = 'c'
-           and strpos(pg_get_constraintdef(k.oid), a.attname) > 0
-           and strpos(pg_get_constraintdef(k.oid), '''..''') > 0
-           and strpos(pg_get_constraintdef(k.oid), '''%''') > 0)
-      and not exists (
-        select 1 from _sec_inv_path_check_gap g
-         where g.relname = c.relname and g.attname = a.attname)),
-  0,
-  'INV-15: every path-bearing column in public has a traversal-refusing CHECK, or a recorded gap'
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_path_violations v where v.kind = 'unguarded'),
+  '',
+  'INV-15: every path-bearing column in public has a traversal-refusing CHECK of its own, or a recorded gap'
 );
 
 -- INV-16. No stale gap entry. When a gap is closed, its row here must go in
@@ -615,31 +687,17 @@ select is(
 -- the next reader trusts it. (This is how the original five 0323 gaps left:
 -- 0326 constrained them and deleted their rows in one diff.)
 select is(
-  (select count(*)::int
-     from _sec_inv_path_check_gap g
-    where not exists (
-      select 1 from pg_class c
-        join pg_namespace n on n.oid = c.relnamespace
-        join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
-       where n.nspname = 'public' and c.relname = g.relname and a.attname = g.attname
-         and not exists (
-           select 1 from pg_constraint k
-            where k.conrelid = c.oid and k.contype = 'c'
-              and strpos(pg_get_constraintdef(k.oid), a.attname) > 0
-              and strpos(pg_get_constraintdef(k.oid), '''..''') > 0))),
-  0,
-  'INV-16: no stale entry in the storage-path known-gap list (column gone, or now constrained)'
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_path_violations v where v.kind = 'stale'),
+  '',
+  'INV-16: no stale entry in the storage-path known-gap list (column gone, or now guarded by a CHECK of its own)'
 );
 
 -- INV-17. VACUITY CONTROL — the constraint detector fires on a column 0323
 -- constrained. If it silently stopped matching, INV-15 would pass by finding
 -- nothing to complain about.
 select ok(
-  exists (
-    select 1 from pg_constraint k
-     where k.conrelid = 'public.item_images'::regclass and k.contype = 'c'
-       and strpos(pg_get_constraintdef(k.oid), 'storage_path') > 0
-       and strpos(pg_get_constraintdef(k.oid), '''..''') > 0),
+  (select pg_temp.sec_inv_path_guarded(a.attrelid, a.attnum) from pg_attribute a
+    where a.attrelid = 'public.item_images'::regclass and a.attname = 'storage_path'),
   'INV-17 control: the traversal-CHECK detector finds the constraint 0323 put on item_images.storage_path'
 );
 
@@ -648,13 +706,45 @@ select ok(
 -- never legitimately acquire a traversal CHECK, so this control cannot become a
 -- false failure the way pointing it at a known gap would.
 select ok(
-  not exists (
-    select 1 from pg_constraint k
-     where k.conrelid = 'public.inventory_items'::regclass and k.contype = 'c'
-       and strpos(pg_get_constraintdef(k.oid), 'name') > 0
-       and strpos(pg_get_constraintdef(k.oid), '''..''') > 0),
+  (select not pg_temp.sec_inv_path_guarded(a.attrelid, a.attnum) from pg_attribute a
+    where a.attrelid = 'public.inventory_items'::regclass and a.attname = 'name'),
   'INV-18 control: the traversal-CHECK detector does not fire on an unconstrained column'
 );
+
+-- INV-18b. MUTATION CONTROL for INV-15's binding (T23). A probe table carries
+-- the full floor on photo_storage_path, a '..'-only CHECK on thumb_path, and a
+-- column called path with no CHECK at all. path and thumb_path are unguarded
+-- and must both be named: path's name sits inside photo_storage_path, and a
+-- binding by name would count the sibling's CHECK for it.
+create table public._sec_inv_probe_path_cols (
+  id int primary key,
+  photo_storage_path text check (position('..' in photo_storage_path) = 0 and position('%' in photo_storage_path) = 0),
+  thumb_path text check (position('..' in thumb_path) = 0),
+  path text);
+alter table public._sec_inv_probe_path_cols enable row level security;
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_path_violations v where v.relname = '_sec_inv_probe_path_cols'),
+  'unguarded: _sec_inv_probe_path_cols.path | unguarded: _sec_inv_probe_path_cols.thumb_path',
+  'INV-18b control: a path column whose only traversal CHECK covers a sibling, and one whose CHECK lacks the percent clause, are both unguarded'
+);
+
+-- INV-18c. MUTATION CONTROL for INV-16's binding (T23): with all three probe
+-- columns on the gap list, only photo_storage_path's row is stale. path's
+-- row (no CHECK of its own) and thumb_path's ('..' only) are real gaps and
+-- must not be called closed.
+insert into _sec_inv_path_check_gap (relname, attname, why) values
+  ('_sec_inv_probe_path_cols', 'photo_storage_path', 'control probe: guarded by its own CHECK, so stale; deleted below'),
+  ('_sec_inv_probe_path_cols', 'thumb_path',         'control probe: a ''..''-only CHECK is a real gap; deleted below'),
+  ('_sec_inv_probe_path_cols', 'path',               'control probe: no CHECK of its own is a real gap; deleted below');
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_path_violations v where v.relname = '_sec_inv_probe_path_cols'),
+  'stale gap entry: _sec_inv_probe_path_cols.photo_storage_path',
+  'INV-18c control: the gap audit calls a row stale only when the column''s own CHECK carries the whole floor'
+);
+delete from _sec_inv_path_check_gap where why like 'control probe:%';
+drop table public._sec_inv_probe_path_cols;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -804,20 +894,117 @@ select is(
   'INV-25: every authenticated-EXECUTE SECURITY DEFINER function in public gates in its body or is an allowlisted read-only predicate'
 );
 
--- INV-26. No stale entry in allowlist E, and no entry that WRITES. A predicate
--- that grows an INSERT/UPDATE/DELETE must lose its exemption the same day.
+-- The allowlist audit (T23), read by INV-26 (allowlists E and K), INV-30,
+-- INV-30c, INV-31 and INV-32 (allowlist F). An entry loses its exemption when
+-- it is stale (no SECURITY DEFINER function of that name in its schema), when
+-- its own body writes (the writer forms above, read from the raw text so a
+-- write in a format() string counts) or runs EXECUTE, when a first-party
+-- function it reaches through calls does, or when it reaches a function with
+-- no first-party body that is not on allowlist K.
+--   * A call is a name followed by "(" in the body with comments and quoted
+--     text removed. A qualified name resolves to that schema; a bare name to
+--     every schema on the CALLER's own pinned search_path (public when it
+--     pins none), pg_catalog left out, every overload counted (this reads
+--     text: it over-reports, never under-reports).
+--   * The walk follows first-party callees (non-extension functions in public
+--     and ledger) until no new one appears: no depth limit.
+--   * Anything else reached (another schema, an extension member anywhere, or
+--     a qualified call into another schema that names no function yet) must
+--     be on allowlist K.
+--   * The writer census is the non-extension functions whose raw body has a
+--     writer form or whose stripped body runs EXECUTE.
+-- Not seen, as for every text census in this file: calls made through
+-- dynamic SQL (EXECUTE in an entry is refused by 0359 test 73, and in a
+-- callee by the census), operators, casts and triggers; pg_catalog functions
+-- are not judged.
+create temporary view _sec_inv_fn_scope as
+  select p.oid, n.nspname::text as nspname, p.proname::text as proname,
+         n.nspname || '.' || p.proname as fn, p.prosecdef,
+         exists (select 1 from pg_depend d
+                  where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e') as ext,
+         p.prosrc as raw,
+         regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), ' ', 'g') as s,
+         case when exists (select 1 from unnest(p.proconfig) c where c like 'search_path=%')
+              then coalesce((select array_agg(x)
+                               from unnest(p.proconfig) c,
+                                    unnest(string_to_array(regexp_replace(substr(c, 13), '[\s"]', '', 'g'), ',')) x
+                              where c like 'search_path=%' and x not in ('', '$user', 'pg_temp', 'pg_catalog')), '{}')
+              else array['public'] end as path
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname not in ('pg_catalog', 'information_schema')
+     and n.nspname !~ '^pg_(toast_)?temp_';
+
+create temporary view _sec_inv_writer_census as
+  select f.oid, f.fn from _sec_inv_fn_scope f
+   where not f.ext
+     and (f.raw ~* (select re from _sec_inv_writer_re) or f.s ~* '\mexecute\M');
+
+create temporary view _sec_inv_call_edges as
+  with calls as (
+    select f.oid as caller, lower(coalesce(m[1], '')) as qual, lower(m[2]) as nm, f.path
+      from _sec_inv_fn_scope f
+      cross join lateral regexp_matches(f.s, $re$(?:"?([a-z_][a-z0-9_$]*)"?\s*\.\s*)?"?\m([a-z_][a-z0-9_$]*)"?\s*\($re$, 'gi') m
+     where f.nspname in ('public', 'ledger') and not f.ext)
+  select c.caller, t.oid as callee, t.fn, (t.nspname in ('public', 'ledger') and not t.ext) as first_party
+    from calls c
+    join _sec_inv_fn_scope t on t.proname = c.nm
+     and ((c.qual <> '' and t.nspname = c.qual) or (c.qual = '' and t.nspname = any(c.path)))
+  union
+  select c.caller, null, c.qual || '.' || c.nm, false
+    from calls c
+   where c.qual not in ('', 'public', 'ledger', 'pg_catalog')
+     and not exists (select 1 from _sec_inv_fn_scope t where t.nspname = c.qual and t.proname = c.nm);
+
+create temporary view _sec_inv_allowlist_audit as
+  with recursive
+  listed as (
+    select 'E'::text as list, a.proname::text as entry, 'public'::text as nsp from _sec_inv_auth_secdef_nogate_allow a
+    union all
+    select 'F', a.proname::text, 'ledger' from _sec_inv_ledger_secdef_nogate_allow a),
+  reach(list, entry, root, oid) as (
+    select l.list, l.entry, f.oid, f.oid
+      from listed l join _sec_inv_fn_scope f
+        on f.nspname = l.nsp and f.proname = l.entry and f.prosecdef and not f.ext
+    union
+    select w.list, w.entry, w.root, e.callee
+      from reach w join _sec_inv_call_edges e on e.caller = w.oid
+     where e.first_party),
+  outside as (
+    select distinct w.list, w.entry, e.fn
+      from reach w join _sec_inv_call_edges e on e.caller = w.oid
+     where not e.first_party)
+  select distinct v.list, v.entry, v.x from (
+    select l.list, l.entry, 'stale allowlist-' || l.list || ' entry: ' || l.entry as x
+      from listed l
+     where not exists (select 1 from _sec_inv_fn_scope f
+                        where f.nspname = l.nsp and f.proname = l.entry and f.prosecdef and not f.ext)
+    union all
+    select w.list, w.entry, 'allowlist-' || w.list || ' entry writes or runs EXECUTE: ' || f.fn
+      from reach w join _sec_inv_fn_scope f on f.oid = w.oid
+     where w.oid = w.root and w.oid in (select c.oid from _sec_inv_writer_census c)
+    union all
+    select w.list, w.entry, 'allowlist-' || w.list || ' entry ' || w.entry || ' reaches a writer: ' || f.fn
+      from reach w join _sec_inv_fn_scope f on f.oid = w.oid
+     where w.oid <> w.root and w.oid in (select c.oid from _sec_inv_writer_census c)
+    union all
+    select o.list, o.entry, 'allowlist-' || o.list || ' entry ' || o.entry || ' reaches a function with no first-party body, not on allowlist K: ' || o.fn
+      from outside o
+     where o.fn not in (select k.fn from _sec_inv_external_callee_allow k)
+    union all
+    select 'K', k.fn, 'stale allowlist-K entry: ' || k.fn
+      from _sec_inv_external_callee_allow k
+     where not exists (select 1 from _sec_inv_fn_scope f where f.fn = k.fn)
+        or k.fn not in (select o.fn from outside o)) v;
+
+-- INV-26. No stale entry in allowlist E, and no entry that WRITES, in its own
+-- body or through what it calls (T23); and no stale entry in allowlist K. A
+-- predicate that grows a write must lose its exemption the same day.
+-- Offenders are named.
 select is(
-  (select count(*)::int
-     from _sec_inv_auth_secdef_nogate_allow a
-    where not exists (
-      select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.proname = a.proname and p.prosecdef)
-       or exists (
-      select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-       where n.nspname = 'public' and p.proname = a.proname and p.prosecdef
-         and p.prosrc ~* (select re from _sec_inv_writer_re))),
-  0,
-  'INV-26: allowlist E has no stale entry and no entry whose body writes'
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '')
+     from _sec_inv_allowlist_audit v where v.list in ('E', 'K')),
+  '',
+  'INV-26: allowlist E has no stale entry and no entry that writes, runs EXECUTE, reaches a writer, or reaches a function with no first-party body that allowlist K does not list; allowlist K has no stale entry'
 );
 
 
@@ -842,18 +1029,79 @@ select is(
 -- (0329's header states this; its test #42 pins it from the other side).
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- INV-27. The sweep.
+-- The sweep's detector (T23): first-party functions in public and ledger
+-- (ledger, 0359, is ours: authenticated holds USAGE and EXECUTE there), less
+-- extension members, with no search_path in proconfig, less allowlist J; and
+-- allowlist J's own audit.
+create temporary view _sec_inv_search_path_violations as
+  with fp as (
+    select p.oid, p.oid::regprocedure::text as sig, p.prosecdef,
+           exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c where c like 'search_path=%') as pinned
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname in ('public', 'ledger')
+       and not exists (select 1 from pg_depend d
+                        where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')),
+  j as (select a.sig, to_regprocedure(a.sig) as oid from _sec_inv_search_path_allow a)
+  select 'unpinned: ' || fp.sig as x, fp.sig
+    from fp
+   where not fp.pinned
+     and fp.oid not in (select j.oid from j where j.oid is not null)
+  union all
+  select 'stale allowlist-J entry (no such first-party function, or pinned now): ' || j.sig, j.sig
+    from j
+   where not exists (select 1 from fp where fp.oid = j.oid and not fp.pinned)
+  union all
+  select 'allowlist-J entry outside its terms (SECURITY DEFINER, or an API role may execute it): ' || j.sig, j.sig
+    from j join fp on fp.oid = j.oid
+   where not fp.pinned
+     and (fp.prosecdef
+      or has_function_privilege('anon', fp.oid, 'execute')
+      or has_function_privilege('authenticated', fp.oid, 'execute')
+      or has_function_privilege('service_role', fp.oid, 'execute'));
+
+-- The first-party census (T23). Every migration runs as postgres and none
+-- hands a function to another owner, so a first-party function is a
+-- non-extension function owned by postgres; the platform's own functions
+-- (auth, storage, realtime, extensions) belong to its own roles, and all of
+-- net and cron are pg_net and pg_cron members. Two things are refused:
+--   * a first-party function in a schema INV-27 does not sweep (a new schema
+--     forces the decision here). USAGE is not the test: a trigger function
+--     fires for a role with no USAGE on its schema, under that role's
+--     search_path;
+--   * a first-party function in public or ledger with an SQL-standard body
+--     (BEGIN ATOMIC, or RETURN with no AS string): its prosrc is empty, and
+--     every text census in this suite reads prosrc, so such a body would be
+--     invisible to all of them.
+create temporary view _sec_inv_first_party_census as
+  select 'unswept schema: ' || n.nspname as x, n.nspname::text as nspname
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where pg_get_userbyid(p.proowner) = 'postgres'
+     and n.nspname not in ('public', 'ledger')
+     and n.nspname !~ '^pg_(toast_)?temp_'
+     and not exists (select 1 from pg_depend d
+                      where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+   group by n.nspname
+  union all
+  select 'sql-standard body: ' || p.oid::regprocedure::text, n.nspname::text
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname in ('public', 'ledger')
+     and p.prosqlbody is not null
+     and not exists (select 1 from pg_depend d
+                      where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e');
+
+-- INV-27. The sweep. Offenders are named.
 select is(
-  (select count(*)::int
-     from pg_proc p
-     join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'public'
-      and not exists (select 1 from pg_depend d
-                       where d.objid = p.oid and d.deptype = 'e')
-      and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c
-                       where c like 'search_path=%')),
-  0,
-  'INV-27: every first-party function in public pins search_path'
+  (select coalesce(string_agg(v.x, ', ' order by v.x collate "C"), '') from _sec_inv_search_path_violations v),
+  '',
+  'INV-27: every first-party function in public and ledger pins search_path, or is on allowlist J and within its terms'
+);
+
+-- INV-27b. The census (T23): every first-party function lives in a schema
+-- INV-27 sweeps, and none in public or ledger hides its body from prosrc.
+select is(
+  (select coalesce(string_agg(c.x, ', ' order by c.x collate "C"), '') from _sec_inv_first_party_census c),
+  '',
+  'INV-27b: every first-party function (non-extension, owned by postgres) lives in public or ledger, and none there has an SQL-standard body'
 );
 
 -- INV-28. VACUITY CONTROL, both halves of the detector.
@@ -873,13 +1121,85 @@ select ok(
   and
   (select count(*)
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'ledger'
+      and not exists (select 1 from pg_depend d
+                       where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')) > 0
+  and
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and pg_get_userbyid(p.proowner) = 'postgres'
+      and not exists (select 1 from pg_depend d
+                       where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')) > 20
+  and
+  (select count(*)
+     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public'
       and exists (select 1 from pg_depend d
                    where d.objid = p.oid and d.deptype = 'e')
       and not exists (select 1 from unnest(coalesce(p.proconfig, '{}'::text[])) c
                        where c like 'search_path=%')) > 0,
-  'INV-28 control: the search_path sweep has first-party functions to judge, and its unpinned detector still fires on the (excluded) extension members'
+  'INV-28 control: the search_path sweep has first-party functions to judge in public and ledger, the census''s owner test sees them, and the unpinned detector still fires on the (excluded) extension members'
 );
+
+-- INV-28b. MUTATION CONTROL for INV-27 and INV-27b (T23). Planted: a ledger
+-- function with no SET clause; a second, unpinned overload of the allowlisted
+-- ledger._seal (the signature key must not exempt it); allowlist-J rows for a
+-- missing function, for a pinned one, and for an unpinned SECURITY DEFINER
+-- function authenticated may execute; a first-party function in a new schema;
+-- and a pinned ledger function with an SQL-standard body. Each must be named.
+-- Everything planted is removed straight after.
+create function ledger._sec_inv_probe_unpinned() returns int
+  language sql
+  as $probe$ select 1 $probe$;
+create function ledger._seal(p_probe integer) returns int
+  language sql
+  as $probe$ select 1 $probe$;
+create function ledger._sec_inv_probe_unpinned_definer() returns int
+  language sql
+  security definer
+  as $probe$ select 1 $probe$;
+create function ledger._sec_inv_probe_atomic() returns int
+  language sql
+  set search_path = public
+  begin atomic
+    select 1;
+  end;
+revoke all on function ledger._sec_inv_probe_unpinned(), ledger._seal(integer), ledger._sec_inv_probe_atomic(),
+  ledger._sec_inv_probe_unpinned_definer() from public, anon;
+grant execute on function ledger._sec_inv_probe_unpinned_definer() to authenticated;
+insert into _sec_inv_search_path_allow (sig, why) values
+  ('ledger._sec_inv_probe_absent()',           'control probe: stale, no such function; deleted below'),
+  ('ledger.active()',                          'control probe: stale, the function is pinned; deleted below'),
+  ('ledger._sec_inv_probe_unpinned_definer()', 'control probe: outside the terms (DEFINER, authenticated EXECUTE); deleted below');
+create schema _sec_inv_probe_schema;
+create function _sec_inv_probe_schema.f() returns int
+  language sql
+  set search_path = public
+  as $probe$ select 1 $probe$;
+
+select is(
+  (select coalesce(string_agg(q.x, ' | ' order by q.x collate "C"), '') from (
+     select v.x from _sec_inv_search_path_violations v
+      where v.sig like '%\_sec\_inv\_probe\_%' or v.sig in ('ledger._seal(integer)', 'ledger.active()')
+     union all
+     select c.x from _sec_inv_first_party_census c where c.x like '%\_sec\_inv\_probe\_%') q),
+  'allowlist-J entry outside its terms (SECURITY DEFINER, or an API role may execute it): ledger._sec_inv_probe_unpinned_definer() | '
+  'sql-standard body: ledger._sec_inv_probe_atomic() | '
+  'stale allowlist-J entry (no such first-party function, or pinned now): ledger._sec_inv_probe_absent() | '
+  'stale allowlist-J entry (no such first-party function, or pinned now): ledger.active() | '
+  'unpinned: ledger._seal(integer) | '
+  'unpinned: ledger._sec_inv_probe_unpinned() | '
+  'unswept schema: _sec_inv_probe_schema',
+  'INV-28b control: the search_path sweep reaches ledger and keys allowlist J on the signature, J''s audit names a missing, a pinned and an out-of-terms entry, and the census names a planted schema and an SQL-standard body'
+);
+
+delete from _sec_inv_search_path_allow where why like 'control probe:%';
+drop function ledger._sec_inv_probe_unpinned();
+drop function ledger._seal(integer);
+drop function ledger._sec_inv_probe_unpinned_definer();
+drop function ledger._sec_inv_probe_atomic();
+drop function _sec_inv_probe_schema.f();
+drop schema _sec_inv_probe_schema;
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -895,10 +1215,11 @@ select ok(
 -- POST /rest/v1/rpc/ for twelve migrations while 55 green per-migration tests
 -- and `pnpm security:test` reported success.
 --
--- Both controls RESTATE the predicate they exercise instead of sharing one
--- expression with the assertion above, matching what INV-28 does for INV-27: a
--- control that reads the same object as the thing it controls cannot notice
--- that object being deleted.
+-- INV-29 RESTATES the predicate it exercises instead of sharing one expression
+-- with INV-25. INV-30 and INV-30c read the allowlist audit view INV-26 reads
+-- (T23), the way section 14's controls read its detector views: each plants
+-- probes and expects their exact lines, so a view that stopped discriminating
+-- fails here, and the call walk exists once instead of in copies that drift.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- INV-29. VACUITY + MUTATION CONTROL for INV-25, both halves of the detector.
@@ -960,18 +1281,11 @@ insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
   ('apply_cycle_count_location_delta', 'control probe: allowlisted body that WRITES; deleted two statements below');
 
 select is(
-  (select count(*)::int
-     from _sec_inv_auth_secdef_nogate_allow a
-    where a.proname in ('_sec_inv_probe_absent_function', 'apply_cycle_count_location_delta')
-      and (
-        not exists (
-          select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.proname = a.proname and p.prosecdef)
-        or exists (
-          select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-           where n.nspname = 'public' and p.proname = a.proname and p.prosecdef
-             and p.prosrc ~* (select re from _sec_inv_writer_re)))),
-  2,
+  (select string_agg(v.x, ' | ' order by v.x collate "C")
+     from _sec_inv_allowlist_audit v
+    where v.entry in ('_sec_inv_probe_absent_function', 'apply_cycle_count_location_delta')
+      and (v.x like 'stale %' or v.x like '% entry writes or runs EXECUTE: %')),
+  'allowlist-E entry writes or runs EXECUTE: public.apply_cycle_count_location_delta | stale allowlist-E entry: _sec_inv_probe_absent_function',
   'INV-30 control: the allowlist-E audit still catches both a stale entry and an entry whose body writes'
 );
 
@@ -993,11 +1307,115 @@ select is(
        (7, 'update quoted alias',  $s$update "public"."t" as x set a = 1;$s$),
        (8, 'delete from only',     $s$delete from only public.t where a = 1;$s$),
        (9, 'read: for update of',  $s$select a from public.t x where a = 1 for update of x;$s$),
-       (10, 'read: on update',     $s$select 1 where 'on update cascade' is not null;$s$)) v(n, form, src)),
+       (10, 'read: on update',     $s$select 1 where 'on update cascade' is not null;$s$),
+       (11, 'update ledger',       $s$update ledger.t set a = 1;$s$),
+       (12, 'update auth',         $s$update auth.users set a = 1;$s$),
+       (13, 'update only quoted ledger alias', $s$update only "ledger"."t" as x set a = 1;$s$),
+       (14, 'insert into ledger',  $s$insert into ledger.t (a) values (1);$s$),
+       (15, 'delete from auth',    $s$delete from auth.users where false;$s$),
+       (16, 'truncate',            $s$truncate public.t;$s$),
+       (17, 'truncate table only', $s$truncate table only ledger.t restart identity;$s$),
+       (18, 'read: for no key update', $s$select a from ledger.t for no key update skip locked;$s$),
+       (19, 'read: date_trunc',    $s$select date_trunc('day', now());$s$),
+       (20, 'read: truncated column', $s$select x.truncated, trunc(1.5) from public.t x;$s$)) v(n, form, src)),
   'insert into=true, merge into=true, merge into only=true, update public=true, update only=true, '
-  'update unqualified=true, update quoted alias=true, delete from only=true, read: for update of=false, read: on update=false',
-  'INV-30b control: the writer detector INV-26, INV-30 and INV-31 share catches every write form (INSERT, MERGE [ONLY], UPDATE [ONLY], unqualified or quoted, DELETE FROM [ONLY]) and no read'
+  'update unqualified=true, update quoted alias=true, delete from only=true, read: for update of=false, read: on update=false, '
+  'update ledger=true, update auth=true, update only quoted ledger alias=true, insert into ledger=true, delete from auth=true, '
+  'truncate=true, truncate table only=true, read: for no key update=false, read: date_trunc=false, read: truncated column=false',
+  'INV-30b control: the writer detector catches every write form (INSERT, MERGE [ONLY], UPDATE [ONLY] of a table in any schema, quoted or not, DELETE FROM [ONLY], TRUNCATE) and no read'
 );
+
+-- INV-30c. MUTATION CONTROL for the walk (T23). Seven planted entries write
+-- nothing in their own bodies, and each reaches something it must not: a
+-- writer by a direct call (an UPDATE of a ledger table), a writer two calls
+-- down and three calls down (the walk has no depth limit), a function that
+-- runs EXECUTE, net.http_post (an extension member, no body to read), and,
+-- through a callee pinned to search_path = public, extensions, a bare
+-- extensions function; one is an allowlist-F entry. A planted allowlist-K
+-- row naming no function is stale. Each must be named. Everything planted
+-- is removed straight after (the enclosing rollback is the second belt).
+create function public._sec_inv_probe_writer() returns void
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin update ledger._sec_inv_probe_absent_table set a = 1 where false; end; $probe$;
+create function public._sec_inv_probe_reader() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin perform public._sec_inv_probe_writer(); return true; end; $probe$;
+create function public._sec_inv_probe_relay() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin return _sec_inv_probe_reader(); end; $probe$;
+create function public._sec_inv_probe_dynamic() returns boolean
+  language plpgsql security invoker set search_path = public
+  as $probe$ begin execute 'select 1'; return true; end; $probe$;
+create function public._sec_inv_probe_ext_path() returns boolean
+  language plpgsql security invoker set search_path = public, extensions
+  as $probe$ begin perform gen_random_bytes(1); return true; end; $probe$;
+create function public._sec_inv_probe_calls_writer() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin perform public._sec_inv_probe_writer(); return true; end; $probe$;
+create function public._sec_inv_probe_calls_reader() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin return _sec_inv_probe_reader(); end; $probe$;
+create function public._sec_inv_probe_calls_relay() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin return public._sec_inv_probe_relay(); end; $probe$;
+create function public._sec_inv_probe_calls_dynamic() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin return public._sec_inv_probe_dynamic(); end; $probe$;
+create function public._sec_inv_probe_calls_external() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin perform net.http_post('http://127.0.0.1/'); return true; end; $probe$;
+create function public._sec_inv_probe_calls_ext_path() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin return public._sec_inv_probe_ext_path(); end; $probe$;
+create function ledger._sec_inv_probe_calls_writer() returns boolean
+  language plpgsql security definer set search_path = public
+  as $probe$ begin perform public._sec_inv_probe_writer(); return true; end; $probe$;
+revoke all on function public._sec_inv_probe_writer(), public._sec_inv_probe_reader(), public._sec_inv_probe_relay(),
+  public._sec_inv_probe_dynamic(), public._sec_inv_probe_ext_path(), public._sec_inv_probe_calls_writer(),
+  public._sec_inv_probe_calls_reader(), public._sec_inv_probe_calls_relay(), public._sec_inv_probe_calls_dynamic(),
+  public._sec_inv_probe_calls_external(), public._sec_inv_probe_calls_ext_path(), ledger._sec_inv_probe_calls_writer()
+  from public, anon;
+insert into _sec_inv_auth_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_calls_writer',   'control probe: reaches a writer by a direct call; deleted below'),
+  ('_sec_inv_probe_calls_reader',   'control probe: reaches a writer two calls down; deleted below'),
+  ('_sec_inv_probe_calls_relay',    'control probe: reaches a writer three calls down; deleted below'),
+  ('_sec_inv_probe_calls_dynamic',  'control probe: reaches a function that runs EXECUTE; deleted below'),
+  ('_sec_inv_probe_calls_external', 'control probe: calls an extension member in another schema; deleted below'),
+  ('_sec_inv_probe_calls_ext_path', 'control probe: reaches a bare extensions function; deleted below');
+insert into _sec_inv_ledger_secdef_nogate_allow (proname, why) values
+  ('_sec_inv_probe_calls_writer', 'control probe: allowlist-F entry reaching a writer; deleted below');
+insert into _sec_inv_external_callee_allow (fn, why) values
+  ('auth._sec_inv_probe_absent', 'control probe: stale, no such function; deleted below');
+
+select is(
+  (select coalesce(string_agg(v.x, ' | ' order by v.x collate "C"), '')
+     from _sec_inv_allowlist_audit v where v.entry like '%\_sec\_inv\_probe\_%'),
+  'allowlist-E entry _sec_inv_probe_calls_dynamic reaches a writer: public._sec_inv_probe_dynamic | '
+  'allowlist-E entry _sec_inv_probe_calls_ext_path reaches a function with no first-party body, not on allowlist K: extensions.gen_random_bytes | '
+  'allowlist-E entry _sec_inv_probe_calls_external reaches a function with no first-party body, not on allowlist K: net.http_post | '
+  'allowlist-E entry _sec_inv_probe_calls_reader reaches a writer: public._sec_inv_probe_writer | '
+  'allowlist-E entry _sec_inv_probe_calls_relay reaches a writer: public._sec_inv_probe_writer | '
+  'allowlist-E entry _sec_inv_probe_calls_writer reaches a writer: public._sec_inv_probe_writer | '
+  'allowlist-F entry _sec_inv_probe_calls_writer reaches a writer: public._sec_inv_probe_writer | '
+  'stale allowlist-K entry: auth._sec_inv_probe_absent',
+  'INV-30c control: the allowlist audit follows calls to any depth and through a callee''s own search_path, names writers, EXECUTE and functions with no first-party body, for allowlists E and F, and names a stale allowlist-K row'
+);
+
+delete from _sec_inv_auth_secdef_nogate_allow where why like 'control probe:%';
+delete from _sec_inv_ledger_secdef_nogate_allow where why like 'control probe:%';
+delete from _sec_inv_external_callee_allow where why like 'control probe:%';
+drop function public._sec_inv_probe_calls_writer();
+drop function public._sec_inv_probe_calls_reader();
+drop function public._sec_inv_probe_calls_relay();
+drop function public._sec_inv_probe_calls_dynamic();
+drop function public._sec_inv_probe_calls_external();
+drop function public._sec_inv_probe_calls_ext_path();
+drop function ledger._sec_inv_probe_calls_writer();
+drop function public._sec_inv_probe_relay();
+drop function public._sec_inv_probe_reader();
+drop function public._sec_inv_probe_dynamic();
+drop function public._sec_inv_probe_ext_path();
+drop function public._sec_inv_probe_writer();
 
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1012,8 +1430,10 @@ select is(
 -- sweep is what keeps the next one honest.
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- INV-31. The sweep, plus allowlist F's own audit (no stale entry, no entry
--- whose body writes). Offenders are named in the failure output.
+-- INV-31. The sweep, plus allowlist F's own audit (the view INV-26 reads: no
+-- stale entry, and no entry that writes, runs EXECUTE, reaches a writer, or
+-- reaches a function with no first-party body that allowlist K does not
+-- list). Offenders are named in the failure output.
 select is(
   (select coalesce(string_agg(x, ', ' order by x collate "C"), '') from (
      select 'ungated: ledger.' || p.proname as x
@@ -1025,15 +1445,7 @@ select is(
         and p.prosrc !~* '(auth\.uid|has_org_role|has_permission|is_org_member)'
         and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
      union all
-     select 'stale or writing allowlist-F entry: ' || a.proname
-       from _sec_inv_ledger_secdef_nogate_allow a
-      where not exists (
-              select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-               where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef)
-         or exists (
-              select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-               where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef
-                 and p.prosrc ~* (select re from _sec_inv_writer_re))) v),
+     select a.x from _sec_inv_allowlist_audit a where a.list = 'F') v),
   '',
   'INV-31: every authenticated-EXECUTE SECURITY DEFINER function in ledger gates in its body or is an allowlisted read-only predicate'
 );
@@ -1072,11 +1484,9 @@ select ok(
       and p.proname = '_sec_inv_probe_ungated_ledger_secdef') = 1
   and
   (select count(*)::int
-     from _sec_inv_ledger_secdef_nogate_allow a
-    where a.proname = '_sec_inv_probe_absent_ledger_function'
-      and not exists (
-            select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-             where n.nspname = 'ledger' and p.proname = a.proname and p.prosecdef)) = 1,
+     from _sec_inv_allowlist_audit v
+    where v.list = 'F' and v.entry = '_sec_inv_probe_absent_ledger_function'
+      and v.x = 'stale allowlist-F entry: _sec_inv_probe_absent_ledger_function') = 1,
   'INV-32 control: the ledger sweep has definer functions to judge, its ungated detector fires on a planted probe, and its allowlist audit fires on a stale entry'
 );
 
