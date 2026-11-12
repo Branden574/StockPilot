@@ -36,6 +36,11 @@ describe('orderTimelineMarker', () => {
       tone: 'info',
       icon: 'mail',
     });
+    // F14: a return request draft is the same kind of entry.
+    expect(orderTimelineMarker('order.return_request_drafted', null)).toEqual({
+      tone: 'info',
+      icon: 'mail',
+    });
   });
 
   it('marks a paper hand-over, and no other status change', () => {
