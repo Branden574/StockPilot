@@ -99,7 +99,10 @@ export const RELEASES: Release[] = [
     // that same minute. Move it again whenever a release is published below this draft.
     // Moved again by docs/whatsnew-returns-1112 (2026-11-12; was: '2026-11-10T21:50:00Z'): the returns release
     // below is dated 2026-11-12T08:42:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-12T08:42:00Z',
+    // Moved again by docs/whatsnew-phone-1112 (2026-11-12; was: '2026-11-12T08:42:00Z'): the phone appearance and
+    // returns release below is dated 2026-11-12T19:25:00Z, so the placeholder is that same minute. If the
+    // integrator moves that release's minute, move this one with it.
+    publishedAt: '2026-11-12T19:25:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -147,6 +150,11 @@ export const RELEASES: Release[] = [
       },
       // The two phone entries are true only once phones have the G3 update: publish this release after the iOS
       // launches show (G5). For a web-first publish use registry-release-web-only.ts instead.
+      // RECHECK at G5: partly announced in 'phone-appearance-returns-2026-11' on 2026-11-12 (the opt-in phone
+      // update: Liquid Glass is in the app as a choice, Classic unless chosen, and a Design chosen on the website
+      // is used by the app). Reword this entry at G5 so it tells only what the default rollout changes (the app
+      // opens in Liquid Glass for people who chose nothing, the Home card), and does not announce again what
+      // that release already told.
       {
         id: 'liquid-glass-mobile-app',
         category: 'new',
@@ -163,6 +171,10 @@ export const RELEASES: Release[] = [
         whatToDo:
           'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To use the previous look, open Settings, Appearance and choose Classic.',
       },
+      // RECHECK at G5: partly announced in 'phone-appearance-returns-2026-11' on 2026-11-12 (its entry
+      // app-appearance-design-theme told every member that Settings, Appearance replaces the Theme row, with
+      // Design and Theme, saved to the account and shared with the website). Reword this entry at G5 (or fold it
+      // into liquid-glass-mobile-app) so it does not announce that page as new a second time.
       {
         id: 'mobile-appearance-settings',
         category: 'new',
@@ -174,6 +186,230 @@ export const RELEASES: Release[] = [
           "Before, the app always followed your phone's light or dark setting, with no way to choose.",
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-appearance-returns-2026-11',
+    revision: 1,
+    // The phone update of 2026-11-12 and two web fixes live the same day.
+    // - Phone: one over-the-air update for runtime 1.4.0 (app.config.ts:38
+    //   version '1.4.0', runtimeVersion policy appVersion :51-53), EAS update
+    //   group 181611cd, published about 19:22Z from main dd2c349b8 with
+    //   EXPO_PUBLIC_LIQUID_GLASS=opt-in. The group, the minute and the flag
+    //   value are the integrator's facts, not readable from the code. It
+    //   carries #498's phone half (Send return request), which the release
+    //   'returns-request-email-names-2026-11' said the mobile app gets with
+    //   its next update: announced here, that release's revision is not
+    //   bumped. It also turns on the phone's Settings, Appearance (#486,
+    //   switched off until now: every earlier phone bundle was built without
+    //   the flag, so 'off').
+    // - Web, live since 19:18Z: #504 (Liquid Glass toasts bottom right) and
+    //   #502 (one draft per double click on Email return request).
+    // DATED 19:25Z PROVISIONALLY: the integrator moves this to the whole
+    // minute at or after the first iOS launches of the update show in EAS
+    // insights, and moves the Liquid Glass draft's placeholder above with it.
+    // If the phone update is rolled back while the web stays, the phone
+    // entries are no longer true: withdraw this release or correct it.
+    // Claims checked against the code at dd2c349b8 (web paths under
+    // apps/web/src, phone paths under apps/mobile, core under
+    // packages/core/src):
+    // - Phone button words: the section's button is RETURN_REQUEST_COPY.primary
+    //   "Email return request" (core returns/return-request-email.ts:147;
+    //   src/components/return-request-section.tsx:134-144) under the heading
+    //   "RETURN REQUEST" (core :169). The website's "Send return request" is
+    //   RETURN_REQUEST_COPY.title (core :144), the button that opens its
+    //   dialog, whose own button is also "Email return request"
+    //   (components/returns/return-request-action.tsx:214-216). So the phone
+    //   is said to have Email return request, "as Send return request does on
+    //   the website".
+    // - Own order: app/order/[id].tsx:3841-3862, under each request of
+    //   "Your requests on this order" (RETURNS_COPY.requesterYourRequests,
+    //   :3843); the requester gate is the web order page's rule (own order,
+    //   Returns on, no returns:manage: requesterReturnGate :808-815, with
+    //   canManageReturns :757-758), so "If you manage returns, use the button
+    //   on the return screen". Mailboxes and facts from the server
+    //   (:846-865, getReturnRequestEmailForOrder).
+    // - "while the return is still open", "only when your organization has
+    //   set its delivery request mailboxes": returnRequestContentForTracking
+    //   and returnRequestContentForWorkbench return null unless
+    //   canSendReturnRequest (src/lib/return-request-actions.ts:156-172), and
+    //   the section renders only with recipients (order/[id].tsx:3852,
+    //   src/components/return-workbench-view.tsx:673).
+    // - Return screen: return-workbench-view.tsx:667-705, Email return
+    //   request (:673-687) and Report a problem (:688-705, RETURN_PROBLEM_LABEL
+    //   return-request-actions.ts:257) for maintenance_requests:submit where
+    //   Maintenance is on (:152-158); the order attached and "Return <number>: "
+    //   as the subject (returnProblemLaunchParams :260-267; app/maintenance/
+    //   new.tsx:245, :257). The phone's return screens open for returns:read
+    //   or returns:manage where Returns is on (app/(drawer)/returns.tsx:65-66,
+    //   :113). The phone shows no mailbox note for admins (no noRoutingAdmin
+    //   in apps/mobile), so the words say only where the mailboxes are set
+    //   (the website's Settings, Email routing,
+    //   /dashboard/settings/email-routing).
+    // - "Outlook or your email app": openReturnRequestDraft opens through
+    //   openMeasuredDraft('outlook', ...) (return-request-actions.ts:196-202),
+    //   native Outlook when installed, else the mail link
+    //   (src/lib/outlook-transport.ts:217-258); the success line names which
+    //   opened (return-request-actions.ts:229-231).
+    // - "StockPilot does not send it ... press Send yourself", no ticket:
+    //   RETURN_REQUEST_COPY.honesty (core :150-151), shown in the section
+    //   (return-request-section.tsx:150-152).
+    // - "Copy details shows the whole message to select and copy": the copy
+    //   button opens a read-only box of prepared.clipboardText with "Press and
+    //   hold inside the box to select and copy." (return-request-section.tsx:
+    //   185-206; core :148, :167). No clipboard module on the phone.
+    // - Settings, Appearance replaces the Theme row: app/(drawer)/settings.tsx
+    //   :478-503 (Appearance row when glassEnabled, else the old "Theme /
+    //   Auto" alert); glassEnabled is rollout !== 'off'
+    //   (src/lib/appearance/controller.ts:162, :209), and opt-in is not 'off'
+    //   (src/lib/appearance/flag.ts:11-12; core appearance/parse.ts:48-50).
+    // - Design and Theme words: src/lib/appearance/labels.ts:31-44 (Liquid
+    //   Glass, Classic; Light, Dark, System); the screen
+    //   app/(drawer)/settings/appearance.tsx:114-153.
+    // - "Classic unless you choose Liquid Glass": defaultStyle is Classic for
+    //   every rollout but 'default' (core appearance/types.ts:45-47), the
+    //   checked Design (appearance.tsx:73) and what is drawn (core
+    //   parse.ts:60-67).
+    // - No Home card under opt-in: introVisible needs rollout === 'default'
+    //   (controller.ts:210-215), so the card (src/components/
+    //   appearance-intro-notice.tsx; INTRO_NOTICE labels.ts:108) is not
+    //   mentioned.
+    // - "Light and Dark keep the app light or dark whatever your phone is set
+    //   to ... System follows your phone": labels.ts:41-43; src/lib/
+    //   use-theme.ts:17-24, :35; src/lib/appearance/os-scheme.ts:26-28.
+    // - Saved to the account and shared with the website: the phone reads and
+    //   upserts public.user_appearance, style and theme
+    //   (src/lib/appearance/account.ts:42-80); the website's Theme and Design
+    //   menus save through the provider's chooseTheme and chooseStyle
+    //   (web components/theme/theme-toggle.tsx:58, :89-97;
+    //   components/dashboard/user-menu.tsx:103), the same row
+    //   (server/actions/appearance.ts). A row value is adopted on a device that
+    //   never synced with this person (core appearance/reconcile.ts:61-62,
+    //   rule 4c), which every phone is at its first start of this update (the
+    //   layer was 'off' before and wrote nothing, controller.ts:41-43). The
+    //   first start waits for the row within the 4 s cap (controller.ts:50-58),
+    //   hence "usually as it opens"; a Design adopted later waits for a calm
+    //   moment (controller.ts:60-66).
+    // - "since 11 November": the website saves a Theme to the account only
+    //   while its rollout is not 'off' (web appearance-provider.tsx, inert
+    //   under 'off', :395-396), and the web opt-in went live 2026-11-11
+    //   21:01Z (integrator's record, not readable from the code). A Theme
+    //   chosen on the website before then stayed in that browser (rule 4d,
+    //   reconcile.ts:63-64), so the words name the date instead of "if you
+    //   chose Light or Dark on the website".
+    // - The line under the choices and Try again: syncLine (labels.ts:63-84;
+    //   appearance.tsx:155-169).
+    // - Reduce Transparency: the provider reads it (src/lib/appearance/
+    //   provider.tsx:51) and selectMaterial returns opaque with it
+    //   (src/lib/appearance/material.ts:47). Reduce Motion is NOT said: the
+    //   Appearance footnote names it (labels.ts:88-89), but no glass component
+    //   reads the shared useReduceMotion hook (src/lib/appearance/
+    //   use-reduce-motion.ts has no caller at dd2c349b8).
+    // - Update words: the B44 Update ready message with Restart now, the
+    //   words every phone release since 2026-11-02 uses.
+    // - Web toasts: styles/liquid-glass/globals.glass.css:33-50 at dd2c349b8
+    //   (#504): the rule that centred the toaster from 601 px wide is gone, so
+    //   sonner's bottom right placement holds in both looks; Classic unchanged
+    //   (glass CSS only).
+    // - Web one draft: components/returns/return-request-action.tsx:51-62
+    //   (RETURN_REQUEST_PRESS_BURST_MS = 1000), :128 (a second click in that
+    //   time opens nothing), :214 (the button disabled meanwhile) (#502). The
+    //   duplicate warning still shows after one draft (RETURN_REQUEST_COPY.
+    //   duplicate, core :154-155).
+    // Left out: #503's five Liquid Glass phone fixes (the Scan tab bar,
+    // VoiceOver buttons, the typeface on switch, "1 item", the Appearance
+    // re-measure): no phone had Liquid Glass before this update, so nobody
+    // saw what they fix. #502's mailbox HTML and lower-case order id changes
+    // (nothing a member sees). Not said: any look of Liquid Glass on the
+    // phone beyond its name (the draft release holds those words, with
+    // RECHECKs), any speed, any number of people.
+    // Who is told: the two phone returns entries as the model release's two
+    // (own order: orders:request where Returns is on; return screen:
+    // returns:read or returns:manage where Returns is on, the gate of the
+    // linked page, returns/page.tsx:75, :80); the Appearance entry and the
+    // toast fix have no audience (a personal setting every member has, and a
+    // look any member may choose); the one-draft fix reaches whoever sees
+    // either button (the union of the two returns audiences).
+    status: 'published',
+    title:
+      'In the mobile app, email a return request, and choose your Design and Theme in Settings, Appearance',
+    summary:
+      'In the mobile app, after the latest update, an open return has an Email return request button on your own order and on the return screen. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. Settings, Appearance now has Design (Classic, or Liquid Glass if you choose it) and Theme, saved to your account and shared with the website. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-12T19:25:00Z',
+    entries: [
+      {
+        id: 'app-return-request-own-order',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'In the mobile app, email a return request from your own order',
+        whatChanged:
+          'In the mobile app, after the latest update, on an order you placed, each open request under Your requests on this order has an Email return request button, as Send return request does on the website. It opens an email to the mailboxes your organization set for delivery requests, already filled in with the return number, the order and the items.',
+        whyItMatters:
+          'The button was on the website only, so on a phone you had to write the email yourself and copy the details in.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, you check it and press Send yourself, and StockPilot does not create a ticket. If the email does not open, Copy details shows the whole message to select and copy. The button shows while the return is still open, and only when your organization has set its delivery request mailboxes. If you manage returns, use the button on the return screen.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'app-return-request-return-screen',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'In the mobile app, Email return request and Report a problem on a return',
+        whatChanged:
+          'In the mobile app, after the latest update, the return screen has Email return request while the return is still open. It opens the same prefilled email about that return. Report a problem is there too if you can send maintenance requests: it opens a new maintenance request with the order attached and the return number in its subject.',
+        whyItMatters:
+          'Writing to another team about a return from a phone meant starting an email or a request from nothing.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, and you press Send yourself. If your organization has not set its delivery request mailboxes, the button is not shown; they are set on the website in Settings, Email routing.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'app-appearance-design-theme',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Settings in the mobile app has an Appearance page with Design and Theme',
+        whatChanged:
+          'In the mobile app, after the latest update, Settings, Appearance replaces the Theme row. It has Design, Liquid Glass or Classic, and Theme, Light, Dark or System. The app stays in Classic unless you choose Liquid Glass, as on the website. Light and Dark keep the app light or dark whatever your phone is set to, and System follows your phone, as the app did before.',
+        whyItMatters:
+          "Before, the app followed your phone's light or dark setting with no way to choose, and Liquid Glass was on the website only.",
+        howItAffectsYou:
+          'Your choices are saved to your account and shared with the website: a Design or Theme chosen on one is used on the other. If you chose Liquid Glass, Light or Dark on the website since 11 November, the app now uses that choice too, once it has read your account, usually as it opens. The line under the choices says whether they were saved to your account or on this phone only, with Try again when a save did not go through. With Reduce Transparency on in iOS Settings, Accessibility, Liquid Glass is solid.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To change your Design or Theme in the app, open Settings, Appearance.',
+      },
+      {
+        id: 'web-return-request-one-draft',
+        category: 'fixed',
+        area: 'Returns',
+        title: 'A double click on Email return request opens one email, not two',
+        whatChanged:
+          'On the website, a double click on Email return request now opens one email draft, not two. After a press, the button rests for a second.',
+        whyItMatters:
+          'A double click opened two drafts, and sending both would give the warehouse the same request twice.',
+        howItAffectsYou:
+          'To open another draft on purpose, press the button again after a moment. The note that you have already opened a draft for this return still shows.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['orders:request', 'returns:read', 'returns:manage'],
+          modules: ['returns'],
+        },
+      },
+      {
+        id: 'web-glass-messages-bottom-right',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'In Liquid Glass on the website, pop-up messages are back in the bottom right corner',
+        whatChanged:
+          'On the website, in Liquid Glass, the short messages that pop up after an action now appear in the bottom right corner, where Classic shows them. In wider windows they had appeared near the bottom centre of the page.',
+        whyItMatters: 'Messages should appear in the same place whichever design you use.',
+        howItAffectsYou: 'Nothing changes in Classic.',
         whatToDo: 'No action needed.',
       },
     ],
