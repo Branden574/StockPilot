@@ -36,7 +36,12 @@ import type { DashboardWidgetProps } from './types';
  *   - it runs once (no iteration count, no direction), on the glass motion
  *     tokens, left to right, and all of it is over within 900 ms;
  *   - no Classic stylesheet and no component names the keyframes, and the
- *     chart stays a Server Component with no class or attribute for this.
+ *     chart stays a Server Component with no class or attribute for this;
+ *   - while the card carries data-glass-grow="wait" (set by
+ *     movements-breakdown-glass-grow.tsx when the card is outside the window;
+ *     its own test holds the trigger) two more rules hold the same bars at
+ *     the keyframes' start with no animation, so taking the attribute off
+ *     starts the motion; without the attribute they match nothing.
  */
 
 const SHELL = 'shell.css';
@@ -61,10 +66,17 @@ function renderCard(overrides: Partial<DashboardWidgetProps> = {}) {
   );
 }
 
+const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
+
 /** The rules of shell.css that set an animation property naming one of the two keyframes, or a delay for one. */
 const all: CssRule[] = cssRules(SHELL);
 const isGrowSelector = (s: string) => s.includes("[data-widget='movements-breakdown']");
-const growRules = all.filter((r) => r.selectors.some(isGrowSelector));
+const cardRules = all.filter((r) => r.selectors.some(isGrowSelector));
+const WAIT = "[data-slot='chart-card'][data-glass-grow='wait']";
+/** The two rules that hold the bars while the card waits to come into view. */
+const waitRules = cardRules.filter((r) => r.selectors.every((s) => flat(s).includes(WAIT)));
+/** The rules of the motion itself. */
+const growRules = cardRules.filter((r) => !waitRules.includes(r));
 const barRules = growRules.filter((r) =>
   r.selectors.every((s) => /div\[aria-hidden='true'\]/.test(s)),
 );
@@ -72,7 +84,6 @@ const shareRules = growRules.filter((r) =>
   r.selectors.every((s) => /span\[aria-hidden='true'\]/.test(s)),
 );
 
-const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
 const matching = (rules: CssRule[]) =>
   new Set(
     rules.flatMap((r) => r.selectors.flatMap((s) => [...document.querySelectorAll(flat(s))])),
@@ -141,10 +152,12 @@ describe("the Movements card's grow-in (Liquid Glass only)", () => {
     expect(barRules).toHaveLength(31);
     expect(shareRules).toHaveLength(5);
     expect(growRules).toHaveLength(36);
+    expect(waitRules).toHaveLength(2);
+    expect(cardRules).toHaveLength(38);
   });
 
   it('every rule starts with the glass root and sits inside @media screen and the motion-allowed condition', () => {
-    for (const r of growRules) {
+    for (const r of cardRules) {
       for (const s of r.selectors) expect(flat(s)).toMatch(GLASS_ROOT);
       // cssRules leaves `screen` out of .media; what remains is the motion condition alone.
       expect(r.media).toEqual([`(${MOTION_OK})`]);
@@ -160,7 +173,7 @@ describe("the Movements card's grow-in (Liquid Glass only)", () => {
       expect(around).toContain(`@media (${MOTION_OK})`);
       expect(around).toContain('@layer lg');
     });
-    expect(seen).toBe(36);
+    expect(seen).toBe(38);
   });
 
   it('under the glass root the rules match the thirty bars and the five share bars, and nothing else', () => {
@@ -182,15 +195,63 @@ describe("the Movements card's grow-in (Liquid Glass only)", () => {
     expect(
       container.querySelectorAll('[data-slot="chart-card"] div[aria-hidden="true"] > div'),
     ).toHaveLength(30);
-    expect(matching(growRules).size).toBe(0);
+    expect(matching(cardRules).size).toBe(0);
     document.documentElement.setAttribute('data-appearance', 'classic');
-    expect(matching(growRules).size).toBe(0);
+    expect(matching(cardRules).size).toBe(0);
+    // Nor with the trigger's attribute on the card (it is never set in Classic; were it, nothing reads it).
+    container.querySelector('[data-slot="chart-card"]')!.setAttribute('data-glass-grow', 'wait');
+    expect(matching(cardRules).size).toBe(0);
+  });
+
+  it('while the card waits, two rules hold the same bars at the keyframes’ start with no animation; without the attribute they match nothing', () => {
+    document.documentElement.setAttribute('data-appearance', 'liquid-glass');
+    const { container } = renderCard();
+    const card = container.querySelector('[data-slot="chart-card"]')!;
+    expect(matching(waitRules).size).toBe(0);
+
+    card.setAttribute('data-glass-grow', 'wait');
+    expect(matching(waitRules)).toEqual(matching(growRules));
+    expect(matching(waitRules).size).toBe(35);
+
+    // The start each keyframe names is the transform the hold sets, so the
+    // motion begins exactly where the hold left the bar.
+    const starts: Record<string, string> = {};
+    parse(readFileSync(join(GLASS_DIR, SHELL), 'utf8'), SHELL).walkAtRules(
+      'keyframes',
+      (at: AtRule) => {
+        at.walkDecls('transform', (d: Declaration) => {
+          starts[at.params] = d.value;
+        });
+      },
+    );
+    const [bars, shares] = waitRules;
+    expect(bars!.decls).toEqual({ animation: 'none', transform: starts['lg-bar-rise'] });
+    expect(shares!.decls).toEqual({ animation: 'none', transform: starts['lg-share-grow'] });
+    expect(starts).toEqual({ 'lg-bar-rise': 'scaleY(0)', 'lg-share-grow': 'scaleX(0)' });
+
+    // The hold wins over the motion on the same element: one more attribute, so a higher specificity.
+    for (const r of waitRules) {
+      for (const s of r.selectors) {
+        expect(flat(s).replace(WAIT, "[data-slot='chart-card']")).toBe(
+          flat((r === bars ? barRules : shareRules)[0]!.selectors[0]!),
+        );
+      }
+    }
+
+    // Any other value, or the attribute anywhere but on the card, holds nothing.
+    card.setAttribute('data-glass-grow', 'go');
+    expect(matching(waitRules).size).toBe(0);
+    card.removeAttribute('data-glass-grow');
+    container
+      .querySelector('[data-widget="movements-breakdown"]')!
+      .setAttribute('data-glass-grow', 'wait');
+    expect(matching(waitRules).size).toBe(0);
   });
 
   it('an empty chart and an empty list give the rules nothing to move', () => {
     document.documentElement.setAttribute('data-appearance', 'liquid-glass');
     renderCard({ barValues: [], breakdownRows: [] });
-    expect(matching(growRules).size).toBe(0);
+    expect(matching(cardRules).size).toBe(0);
   });
 
   it('the bars start left to right on the motion tokens, run once, and all is over within 900 ms', () => {
@@ -228,6 +289,9 @@ describe("the Movements card's grow-in (Liquid Glass only)", () => {
   it('the rules set nothing but the animation and its origin, and the keyframes move transform and opacity from a start only', () => {
     const props = new Set(growRules.flatMap((r) => Object.keys(r.decls)));
     expect([...props].sort()).toEqual(['animation', 'animation-delay', 'transform-origin']);
+    // The hold adds transform alone: no size, no place, no display, no opacity.
+    const held = new Set(waitRules.flatMap((r) => Object.keys(r.decls)));
+    expect([...held].sort()).toEqual(['animation', 'transform']);
 
     const found: Record<string, { steps: string[]; props: string[] }> = {};
     parse(readFileSync(join(GLASS_DIR, SHELL), 'utf8'), SHELL).walkAtRules(
@@ -261,7 +325,7 @@ describe("the Movements card's grow-in (Liquid Glass only)", () => {
     expect(readFileSync(join(SRC, 'app', 'globals.css'), 'utf8')).not.toMatch(names);
   });
 
-  it('the chart and the card carry nothing for it: still a Server Component, no class, no animation in the markup', () => {
+  it('the chart and the card carry nothing for it: still Server Components, no class, no attribute, no animation in the markup', () => {
     for (const file of [
       'components/dashboard/mini-bar-chart.tsx',
       'components/dashboard/widgets/movements-breakdown.tsx',

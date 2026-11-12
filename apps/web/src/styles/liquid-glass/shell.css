@@ -1256,9 +1256,9 @@
 }
 
 /* ── The Overview's Movements card: its bars grow in once, when the card
-   appears (the owner's request, 2026-11-11). The Overview has no page sheet:
-   it is drawn by the global glass sheets, and this is the dashboard's. No
-   markup changes and no hook: the rules reach today's markup
+   comes into view (the owner's request, 2026-11-11). The Overview has no page
+   sheet: it is drawn by the global glass sheets, and this is the dashboard's.
+   No markup changes: the rules reach today's markup
    (components/dashboard/widgets/index.tsx sets data-widget on the card's
    cell, charts/chart-card.tsx the data-slot, mini-bar-chart.tsx the
    aria-hidden flex row of thirty plain divs, widgets/movements-breakdown.tsx
@@ -1289,6 +1289,21 @@
    load, the card streaming in, a move to the Overview) and does not start
    again on a re-render, a refresh of the data or a Day/Night switch, because
    React keeps the same elements and animation-name does not change.
+
+   When the card is in view. On the Overview the card sits below the window
+   when the page loads, so a start at load would end unseen. A small client
+   file (components/dashboard/widgets/movements-breakdown-glass-grow.tsx,
+   which renders nothing) puts data-glass-grow="wait" on the card when the
+   card is wholly outside the window as it mounts, and takes it off the first
+   time about a third of the card is inside. The last two rules below hold
+   the bars at the start of the motion while the attribute is there
+   (animation none, the keyframes' own start transform); taking it off brings
+   the animation back, which starts it, once. Without the attribute (the
+   card on screen as it appears, no JavaScript, an error, no
+   IntersectionObserver) the rules above are all there is: the bars grow as
+   the card appears and end at full size, so nothing can leave them at
+   nothing. Transform only again, so holding moves no box. The hold needs no
+   opacity: a bar scaled to nothing paints nothing.
 
    Only when motion is allowed. Under "reduce motion" the rules are not in
    the cascade at all (the app-wide rule in app/globals.css shortens every
@@ -1563,6 +1578,24 @@
         > span[aria-hidden='true']
         > span {
         animation-delay: calc(var(--lg-d-2) + var(--lg-d-1) * 3 / 3);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-widget='movements-breakdown']
+        [data-slot='chart-card'][data-glass-grow='wait']
+        div[aria-hidden='true']
+        > div {
+        animation: none;
+        transform: scaleY(0);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-widget='movements-breakdown']
+        [data-slot='chart-card'][data-glass-grow='wait']
+        div
+        > div
+        > span[aria-hidden='true']
+        > span {
+        animation: none;
+        transform: scaleX(0);
       }
     }
   }
