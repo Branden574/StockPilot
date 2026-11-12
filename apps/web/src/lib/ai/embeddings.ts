@@ -4,6 +4,8 @@ import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from '@google/genera
 
 import { env } from '@/lib/env';
 
+import { geminiRefusedKey } from './errors';
+
 /**
  * Embedding model + dimension. We use Gemini's gemini-embedding-001 at
  * outputDimensionality=1536 to match the `inventory_items.embedding`
@@ -290,16 +292,6 @@ export const GEMINI_FAILURES_IN_A_ROW = 3;
  *  itself (400 API_KEY_INVALID: revoked, expired or mistyped), or failed
  *  GEMINI_FAILURES_IN_A_ROW times in a row. */
 export type EmbedBatchStop = 'gemini_rate_limited' | 'gemini_key_invalid' | 'gemini_failing';
-
-/**
- * Gemini refused the API key, not the item. It answers a revoked, expired or
- * mistyped key with a 400 INVALID_ARGUMENT, as it answers a bad item, and
- * names the reason in an ErrorInfo detail (API_KEY_INVALID), which the SDK
- * hands on as errorDetails. Read from there, not from the message text.
- */
-function geminiRefusedKey(e: GoogleGenerativeAIFetchError): boolean {
-  return (e.errorDetails ?? []).some((d) => d?.reason === 'API_KEY_INVALID');
-}
 
 /** What one embedItemsBatch run did. */
 export interface EmbedBatchResult {

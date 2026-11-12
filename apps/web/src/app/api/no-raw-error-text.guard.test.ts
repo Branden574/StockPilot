@@ -68,10 +68,12 @@ import { describe, expect, it } from 'vitest';
  *                                   that is returned, thrown or passed to err()
  *                                   or ok(), and as err()'s message; in every
  *                                   scope, as the words of a ServiceError other
- *                                   than internal_error or of a ForbiddenError
+ *                                   than internal_error, of a ForbiddenError
  *                                   (actions and routes answer those as they
- *                                   are); a name that holds an error counts
- *                                   there too (S31 review)
+ *                                   are) or of a ToolRefusal (the AI chat's
+ *                                   model reads those as they are, S30); a
+ *                                   name that holds an error counts there too
+ *                                   (S31 review)
  *   .catch(nonErrorText), .map(rawErrorText), const d = rawErrorText
  *                                   an error-to-text helper used as a value,
  *                                   not called (S31 review)
@@ -86,8 +88,9 @@ import { describe, expect, it } from 'vitest';
  * `console.*(...)`; tested with `.includes()`, `.startsWith()`, a RegExp's
  * `.test()`, `===`, `.length`, `!` or `typeof`, or as a condition (`if`,
  * `while`, the test of `?:`); read after `instanceof ServiceError`,
- * `instanceof ForbiddenError`, `instanceof PermissionsUnavailableError` or
- * `instanceof AccountStatusUnavailableError` (the app wrote those words); or
+ * `instanceof ForbiddenError`, `instanceof PermissionsUnavailableError`,
+ * `instanceof AccountStatusUnavailableError` or `instanceof ToolRefusal` (the
+ * app wrote those words); or
  * held in a const (or a destructured name) whose every use is one of these.
  * The left side of `=` is a write, never a read.
  *
@@ -127,10 +130,6 @@ const ALLOWED: Record<string, { lines: number; why: string }> = {
   'lib/ai/embeddings.ts': {
     lines: 5,
     why: "errorText's body and its three callers, read here through the AI tools (S31 review): the text feeds console lines and a batch's firstError, which only the hourly sweep cron answers (to the CRON_SECRET holder); the backfill tool answers counts only, and a failed query embedding is reported, never handed to the model",
-  },
-  'lib/ai/chat.ts': {
-    lines: 1,
-    why: "classifyToolErrorMessage: what a failed AI tool call tells the model (not an API answer): a fixed sentence, except a validation message (a ServiceError or the tool's own argument check), passed on at most 200 characters",
   },
   'lib/auth/public-api.ts': {
     lines: 1,
@@ -481,14 +480,18 @@ const ERROR_NAME = /^(?:e|err|error|ex)$|(?:Err|Error|err|error)$/;
 const TEXT_PROPERTIES = new Set(['message', 'stack']);
 /**
  * Classes whose message the app wrote (ServiceError: generic for internal_error,
- * S13). The last two pass one fixed sentence to super and take no argument
- * (pinned below).
+ * S13). PermissionsUnavailableError and AccountStatusUnavailableError pass one
+ * fixed sentence to super and take no argument (pinned below). ToolRefusal
+ * (lib/ai/tool-errors.ts, S30) is an AI chat tool's refusal in the tool's own
+ * words, which the model reads: it is built only under lib/ai (pinned below),
+ * and its words are held to the same rule as a ServiceError's.
  */
 const APP_ERRORS = new Set([
   'ServiceError',
   'ForbiddenError',
   'PermissionsUnavailableError',
   'AccountStatusUnavailableError',
+  'ToolRefusal',
 ]);
 const BUILTIN_ERRORS = new Set(['Error', 'TypeError', 'RangeError', 'SyntaxError']);
 /**
@@ -1174,6 +1177,8 @@ function hitsIn(fileName: string, source: string, scope: Scope = 'api'): Hit[] {
     if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.arguments) {
       const [first, second] = node.arguments;
       if (node.expression.text === 'ForbiddenError' && first) field(first);
+      // An AI chat tool's refusal is read by the model as it is (S30).
+      if (node.expression.text === 'ToolRefusal' && first) field(first);
       if (
         node.expression.text === 'ServiceError' &&
         second &&
@@ -1681,6 +1686,98 @@ describe("Server Actions and services never answer an error's own text (S31)", (
       expect(superCalls.length, name).toBe(1);
       expect(superCalls[0]!.arguments.length, name).toBe(1);
       expect(ts.isStringLiteralLike(superCalls[0]!.arguments[0]!), name).toBe(true);
+    }
+  });
+});
+
+describe("an AI chat tool's refusal is the tool's own words (S30)", () => {
+  /** `body` as a tool's execute, one statement per line from line 2. */
+  const inTool = (body: string[]) =>
+    ['async function execute(args, ctx) { try { await work(); } catch (e) {', ...body, '} }'].join(
+      '\n',
+    );
+
+  it("a refusal built from an error's text or an error field counts (control: one per line)", () => {
+    const sample = inTool([
+      'throw new ToolRefusal(e.message);',
+      'throw new ToolRefusal(`not saved: ${e}`);',
+      'throw new ToolRefusal(String(e));',
+      "throw new ToolRefusal(write.error ?? 'not saved');",
+      'throw new ToolRefusal(rawErrorText(e));',
+    ]);
+    expect(hitsIn('sample.ts', sample).map((hit) => hit.line)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it("fixed words, a refusal's own message once it is proved one, and a cause kept for the report do not count (control)", () => {
+    const sample = inTool([
+      "throw new ToolRefusal('itemId is required');",
+      "throw new ToolRefusal('That image address is not allowed.', { cause: e });",
+      "throw new ToolUnavailableError('identifyFromPhoto', 'unavailable', { cause: e });",
+      "throw new ToolUnavailableError('searchInventorySemantic', 'failed', { cause: res.error });",
+      'if (e instanceof ToolRefusal) return e.message;',
+      'const words = e instanceof ToolRefusal ? e.message.slice(0, 200) : TOOL_FAILED_MESSAGE; return words;',
+    ]);
+    expect(hitsIn('sample.ts', sample)).toEqual([]);
+    // Any other typed failure's message is not proved the app's words here.
+    expect(
+      hitsIn('sample.ts', inTool(['if (e instanceof ToolUnavailableError) return e.message;'])).map(
+        (hit) => hit.line,
+      ),
+    ).toEqual([2]);
+  });
+
+  it('a ToolRefusal is built only under lib/ai, which the API census reads (why APP_ERRORS lists it)', () => {
+    const read = new Set(scope());
+    const builders = files(SRC).filter((file) => {
+      const source = readFileSync(file, 'utf8');
+      if (!source.includes('ToolRefusal(')) return false;
+      let builds = false;
+      const visit = (node: ts.Node) => {
+        if (builds) return;
+        if (
+          ts.isNewExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 'ToolRefusal'
+        ) {
+          builds = true;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(parse(file, source));
+      return builds;
+    });
+    expect(builders.length).toBeGreaterThan(0);
+    for (const file of builders) {
+      const rel = path.relative(SRC, file);
+      expect(rel.startsWith('lib/ai/'), rel).toBe(true);
+      expect(read.has(file), rel).toBe(true);
+    }
+    expect(scope().map((file) => path.relative(SRC, file))).toContain('lib/ai/tool-errors.ts');
+  });
+
+  it('every fixed tool failure sentence is a string literal', () => {
+    const file = path.join(AI, 'tool-errors.ts');
+    const sf = parse(file, readFileSync(file, 'utf8'));
+    const sentences: ts.Expression[] = [];
+    const collect = (node: ts.Node, inTable: boolean) => {
+      const here =
+        inTable ||
+        (ts.isVariableDeclaration(node) &&
+          ts.isIdentifier(node.name) &&
+          node.name.text === 'TOOL_FAILURE_SENTENCES');
+      if (
+        inTable &&
+        ts.isPropertyAssignment(node) &&
+        !ts.isObjectLiteralExpression(node.initializer)
+      ) {
+        sentences.push(node.initializer);
+      }
+      ts.forEachChild(node, (child) => collect(child, here));
+    };
+    collect(sf, false);
+    expect(sentences.length).toBe(9);
+    for (const sentence of sentences) {
+      expect(ts.isStringLiteral(sentence), sentence.getText(sf)).toBe(true);
     }
   });
 });

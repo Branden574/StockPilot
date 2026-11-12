@@ -1,5 +1,19 @@
 import 'server-only';
 
+import type { GoogleGenerativeAIFetchError } from '@google/generative-ai';
+
+/**
+ * Gemini refused the API key, not the request. It answers a revoked, expired
+ * or mistyped key with a 400 INVALID_ARGUMENT, as it answers a bad request,
+ * and names the reason in an ErrorInfo detail (API_KEY_INVALID), which the SDK
+ * hands on as errorDetails. Read from there, not from the message text. One
+ * copy for the embedding batch (embeddings.ts) and the AI chat tools
+ * (tool-errors.ts).
+ */
+export function geminiRefusedKey(e: GoogleGenerativeAIFetchError): boolean {
+  return (e.errorDetails ?? []).some((d) => d?.reason === 'API_KEY_INVALID');
+}
+
 /**
  * Classify a Google Generative AI / network error into a small set of
  * user-facing codes. The point is: never show users the raw URL-laden

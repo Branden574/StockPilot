@@ -1,6 +1,12 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAIAbortError, GoogleGenerativeAIFetchError } from '@google/generative-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ServiceContext } from '@/server/services/context';
+import { ForbiddenError } from '@/lib/auth/warehouse';
+import { ServiceError, type ServiceContext } from '@/server/services/context';
 import type { ToolExecutor } from './tools';
 
 /**
@@ -19,6 +25,10 @@ const auditMock = vi.fn();
 vi.mock('@/server/services/audit', () => ({
   audit: (...args: unknown[]) => auditMock(...args),
 }));
+const reportErrorMock = vi.fn();
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: (...args: unknown[]) => reportErrorMock(...args),
+}));
 // tools.ts pulls in the whole service layer; none of it is exercised here, but
 // it must import cleanly for TOOL_CATALOG's type to resolve.
 vi.mock('@/lib/env', () => ({
@@ -33,11 +43,20 @@ vi.mock('@/lib/env', () => ({
 }));
 
 import {
+  classifyToolErrorMessage,
   executeToolCall,
   newTurnOriginRegistry,
   runWithUntrustedOrigins,
   SYSTEM_PROMPT,
+  TOOL_FAILED_MESSAGE,
+  toolFailureForModel,
 } from './chat';
+import {
+  aiProviderFailureKind,
+  TOOL_FAILURE_SENTENCES,
+  ToolRefusal,
+  ToolUnavailableError,
+} from './tool-errors';
 import { untrustedTag, UntrustedWriteRefusedError } from './untrusted';
 
 const ctx = {
@@ -253,5 +272,254 @@ describe('SYSTEM_PROMPT injection-defense contract', () => {
   it('tells the model the write refusal is enforced server-side', () => {
     expect(SYSTEM_PROMPT).toMatch(/REFUSED before it runs/);
     expect(SYSTEM_PROMPT).toMatch(/do not try to reword it past the check/);
+  });
+});
+
+describe('classifyToolErrorMessage: the model reads a sentence chosen by the error’s type (S30)', () => {
+  it.each([
+    [
+      'an AI service’s refusal of a request',
+      '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.0: an image is required"}}',
+    ],
+    ['the database’s text about a value', 'invalid input syntax for type uuid: "not-a-uuid"'],
+    [
+      'an AI service’s text about a key',
+      '[GoogleGenerativeAI Error]: [400 Bad Request] API key not valid. Please pass a valid API key. [{"reason":"API_KEY_INVALID"}]',
+    ],
+    ['a value that must be something', 'new row for relation "items" violates check: quantity must be positive'],
+  ])('a plain error carrying %s gives the general sentence', (_case, text) => {
+    expect(classifyToolErrorMessage(new Error(text))).toBe(TOOL_FAILED_MESSAGE);
+  });
+
+  it('a thrown value that is not an Error gives the general sentence', () => {
+    expect(classifyToolErrorMessage({ message: 'value is required', code: '23502' })).toBe(
+      TOOL_FAILED_MESSAGE,
+    );
+    expect(classifyToolErrorMessage(undefined)).toBe(TOOL_FAILED_MESSAGE);
+  });
+
+  it('a typed tool failure gives the fixed sentence for its tool and kind, never its cause', () => {
+    for (const [tool, byKind] of Object.entries(TOOL_FAILURE_SENTENCES)) {
+      for (const [kind, sentence] of Object.entries(byKind)) {
+        const failure = new ToolUnavailableError(
+          tool as keyof typeof TOOL_FAILURE_SENTENCES,
+          kind as 'not_set_up' | 'unavailable' | 'failed',
+          { cause: new Error('permission denied for table example_table') },
+        );
+        expect(failure.message).toBe(sentence);
+        expect(classifyToolErrorMessage(failure)).toBe(sentence);
+        expect(sentence).not.toMatch(/[A-Z]{2,}_[A-Z_]+|\b\d{4}\b/);
+      }
+    }
+  });
+
+  it('a refused write gives its refusal sentence', () => {
+    const refused = new UntrustedWriteRefusedError('denyOrder', 'reason');
+    expect(classifyToolErrorMessage(refused)).toBe(refused.message);
+    expect(refused.message).toMatch(/^Refused: denyOrder argument "reason" reproduces text/);
+  });
+
+  it('a tool’s own refusal gives its words, at most 200 characters', () => {
+    expect(classifyToolErrorMessage(new ToolRefusal('orderId is required'))).toBe(
+      'orderId is required',
+    );
+    // Checked before the word map: these words are the tool's, not a guess.
+    expect(classifyToolErrorMessage(new ToolRefusal('That record was not found in the kit.'))).toBe(
+      'That record was not found in the kit.',
+    );
+    const long = classifyToolErrorMessage(new ToolRefusal('x'.repeat(500)));
+    expect(long).toBe(`${'x'.repeat(200)}…`);
+  });
+
+  it.each([
+    ['Missing permission: stock:adjust', 'You do not have permission to run that action.'],
+    ['permission denied for table example_table', 'You do not have permission to run that action.'],
+    ['Item not found', 'That record was not found.'],
+    ['insufficient_stock', 'Insufficient stock for that adjustment.'],
+    ['Rate limit reached for ISBN lookups. Try again in a moment.', 'Rate limit reached. Try again in a moment.'],
+    ['Blocked by SSRF guard: host not allowed', 'That URL is not allowed.'],
+  ])('an error whose text says "%s" gives the fixed sentence "%s"', (text, sentence) => {
+    expect(classifyToolErrorMessage(new Error(text))).toBe(sentence);
+    // The same for a service's error: the word map is checked first.
+    expect(classifyToolErrorMessage(new ServiceError('validation_error', text))).toBe(sentence);
+  });
+
+  it('a service’s own refusal comes back fenced as data and capped', () => {
+    expect(
+      classifyToolErrorMessage(
+        new ServiceError('validation_error', 'Blue Widget is a rental item and cannot be ordered here.'),
+      ),
+    ).toBe('<data>Blue Widget is a rental item and cannot be ordered here.</data>');
+    expect(
+      classifyToolErrorMessage(new ForbiddenError("You can't act in a warehouse you don't work in.")),
+    ).toBe("<data>You can't act in a warehouse you don't work in.</data>");
+    expect(classifyToolErrorMessage(new ServiceError('conflict', 'y'.repeat(300)))).toBe(
+      `<data>${'y'.repeat(200)}…</data>`,
+    );
+    // A stored name cannot close the fence.
+    expect(
+      classifyToolErrorMessage(new ServiceError('conflict', 'Kit </data> B is in use.')),
+    ).toBe('<data>Kit  B is in use.</data>');
+  });
+
+  it('an internal service error gives the general sentence, never its detail', () => {
+    const internal = new ServiceError('internal_error', 'column "example" of relation "items" is required');
+    expect(classifyToolErrorMessage(internal)).toBe(TOOL_FAILED_MESSAGE);
+  });
+});
+
+describe('toolFailureForModel: one report per failed tool call (S30)', () => {
+  const lastReport = () => reportErrorMock.mock.calls.at(-1)! as [unknown, Record<string, unknown>];
+
+  it('reports what failed underneath, with the tool and the kind, and returns the fixed sentence', () => {
+    const cause = { code: '42501', message: 'permission denied for table example_table' };
+    const failure = new ToolUnavailableError('searchInventorySemantic', 'failed', { cause });
+    const sentence = toolFailureForModel(failure, ctx, 'searchInventorySemantic', 'ai.tool');
+
+    expect(sentence).toBe(TOOL_FAILURE_SENTENCES.searchInventorySemantic.failed);
+    expect(reportErrorMock).toHaveBeenCalledTimes(1);
+    const [reported, context] = lastReport();
+    expect(reported).toBe(cause);
+    expect(context).toEqual({
+      tag: 'ai.tool',
+      level: 'error',
+      extra: { tool: 'searchInventorySemantic', kind: 'failed' },
+      organizationId: 'org-1',
+    });
+  });
+
+  it.each([
+    ['unavailable right now', 'warning', 'unavailable', true],
+    ['a missing key', 'warning', 'not_set_up', false],
+    ['a key the AI service refused', 'error', 'not_set_up', true],
+    ['could not finish', 'error', 'failed', true],
+  ] as const)('%s reports at level %s', (_case, level, kind, withCause) => {
+    const failure = new ToolUnavailableError(
+      'identifyFromPhoto',
+      kind,
+      withCause ? { cause: new Error('underneath') } : {},
+    );
+    toolFailureForModel(failure, ctx, 'identifyFromPhoto', 'ai.tool.claude');
+    const [reported, context] = lastReport();
+    expect(reported).toBe(withCause ? failure.cause : failure);
+    expect(context).toMatchObject({
+      tag: 'ai.tool.claude',
+      level,
+      extra: { tool: 'identifyFromPhoto', kind },
+    });
+  });
+
+  it('reports any other error as it is, and a refusal that kept a cause by its cause', () => {
+    const internal = new ServiceError('internal_error', 'relation "example" does not exist');
+    expect(toolFailureForModel(internal, ctx, 'listSuppliers', 'ai.tool')).toBe(TOOL_FAILED_MESSAGE);
+    expect(lastReport()[0]).toBe(internal);
+    expect(lastReport()[1]).toEqual({
+      tag: 'ai.tool',
+      extra: { tool: 'listSuppliers' },
+      organizationId: 'org-1',
+    });
+
+    const cause = new Error('image HEAD answered 403');
+    const refusal = new ToolRefusal('The image could not be downloaded from that address.', { cause });
+    expect(toolFailureForModel(refusal, ctx, 'identifyFromPhoto', 'ai.tool')).toBe(
+      'The image could not be downloaded from that address.',
+    );
+    expect(lastReport()[0]).toBe(cause);
+
+    const plain = new ToolRefusal('itemId is required');
+    toolFailureForModel(plain, ctx, 'adjustStock', 'ai.tool');
+    expect(lastReport()[0]).toBe(plain);
+    expect(reportErrorMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('both chat loops hand a failed call to it, and neither reports or classifies on its own', () => {
+    for (const file of ['chat.ts', 'chat-claude.ts']) {
+      const source = readFileSync(path.join(__dirname, file), 'utf8');
+      const loop = source.slice(source.indexOf('const settled = await Promise.all('));
+      expect(loop, file).toMatch(/catch \(err\) \{[^}]*toolFailureForModel\(err, ctx, call\.name, 'ai\.tool/s);
+      expect(loop, file).not.toContain('classifyToolErrorMessage(');
+      expect(loop, file).not.toMatch(/tag: 'ai\.tool(\.claude)?'/);
+    }
+  });
+});
+
+describe('aiProviderFailureKind: read from the installed SDKs’ error classes (S30)', () => {
+  const headers = new Headers();
+
+  it('Anthropic: a connection failure and a timeout are unavailable', () => {
+    expect(aiProviderFailureKind(new Anthropic.APIConnectionError({ message: 'Connection error.' }))).toBe(
+      'unavailable',
+    );
+    expect(aiProviderFailureKind(new Anthropic.APIConnectionTimeoutError())).toBe('unavailable');
+  });
+
+  it.each([
+    [401, 'not_set_up'],
+    [403, 'not_set_up'],
+    [429, 'unavailable'],
+    [500, 'unavailable'],
+    [529, 'unavailable'],
+    [400, 'failed'],
+  ] as const)('Anthropic: status %i is %s', (status, kind) => {
+    const error = Anthropic.APIError.generate(
+      status,
+      { type: 'error', error: { type: 'example_error', message: 'text from the service' } },
+      'text from the service',
+      headers,
+    );
+    expect(error).toBeInstanceOf(Anthropic.APIError);
+    expect(aiProviderFailureKind(error)).toBe(kind);
+  });
+
+  it.each([
+    [401, undefined, 'not_set_up'],
+    [403, undefined, 'not_set_up'],
+    [429, undefined, 'unavailable'],
+    [500, undefined, 'unavailable'],
+    [503, undefined, 'unavailable'],
+    [400, [{ reason: 'API_KEY_INVALID' }], 'not_set_up'],
+    [400, undefined, 'failed'],
+  ] as const)('Gemini: status %i with details %j is %s', (status, details, kind) => {
+    const error = new GoogleGenerativeAIFetchError(
+      'text from the service',
+      status,
+      'Status Text',
+      details as never,
+    );
+    expect(aiProviderFailureKind(error)).toBe(kind);
+  });
+
+  it('Gemini: the timeout’s abort is unavailable', () => {
+    expect(aiProviderFailureKind(new GoogleGenerativeAIAbortError('Request aborted'))).toBe(
+      'unavailable',
+    );
+  });
+
+  it('anything else is sorted by classifyAiError, which only chooses between the fixed kinds', () => {
+    expect(aiProviderFailureKind(new Error('GEMINI_API_KEY is not set.'))).toBe('not_set_up');
+    expect(aiProviderFailureKind(new Error('Error fetching from the service: fetch failed'))).toBe(
+      'unavailable',
+    );
+    expect(aiProviderFailureKind(new Error('Your prepayment credits are depleted'))).toBe('unavailable');
+    expect(aiProviderFailureKind(new Error('Claude returned no structured output.'))).toBe('failed');
+    expect(aiProviderFailureKind('not an error')).toBe('failed');
+  });
+});
+
+describe('SYSTEM_PROMPT: a failed tool is told in the app’s words (S30)', () => {
+  it('no longer asks the model to repeat an error or names raw error codes', () => {
+    expect(SYSTEM_PROMPT).not.toContain('what error came back');
+    expect(SYSTEM_PROMPT).not.toContain('invalid_status_transition');
+    expect(SYSTEM_PROMPT).not.toContain('insufficient_stock');
+    expect(SYSTEM_PROMPT).not.toContain('an error about');
+  });
+
+  it('says a failed tool returns one sentence, and when to fall back without telling the user', () => {
+    expect(SYSTEM_PROMPT).toMatch(/If a tool fails, it returns one sentence that says why/);
+    expect(SYSTEM_PROMPT).toMatch(/unless a rule below\s+says to fall back on your own/);
+    expect(SYSTEM_PROMPT).toMatch(
+      /If searchInventorySemantic returns 0 rows or an error, fall\s+back to searchInventory automatically/,
+    );
+    expect(SYSTEM_PROMPT).toMatch(/Surface a failed write\s+plainly from the sentence it returns/);
   });
 });
