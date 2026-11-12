@@ -7,8 +7,9 @@
                               panels and wells inside it do NOT blur (they read
                               on the pane's frost);
      2 floating glass         sidebar, top-bar controls: 58% / blur 26 / sat 170%;
-     3 overlay glass          menus, popovers, dialogs, sheets: 74% / blur 30 /
-                              sat 160%; the scrim tints and is never blurred.
+     3 overlay glass          menus, popovers, dialogs, sheets and the
+                              product-update card: 74% / blur 30 / sat 160%;
+                              the scrim tints and is never blurred.
    Rows, chips and buttons never blur (the artifact's rule). Material rules
    set only material properties (background, border colour, radius, shadow,
    backdrop-filter), so every caller's layout utilities still apply.
@@ -52,14 +53,22 @@
         var(--lg-glass-shadow);
     }
 
-    /* ── Overlay glass: menus, popovers, select lists, dialogs, sheets ── */
+    /* ── Overlay glass: menus, popovers, select lists, dialogs, sheets ──
+       And the product-update card (components/updates/update-card.tsx: the
+       What's New notice, the refresh notice, its unsaved-work question and
+       the did-not-load notice), which floats over whatever page is open. It
+       is named by the attribute it already carries, [data-update-notice]. Its
+       classic fill is bg-card, which glass draws as the 46% content fill for
+       cards that sit on the pane's frost; with nothing frosted behind it the
+       page's words showed through the card's own. */
     :root[data-appearance='liquid-glass']
       :is(
         [data-glass='menu'],
         [data-glass='popover'],
         [data-glass='dialog'],
         [data-glass='sheet'],
-        [data-glass='navsheet']
+        [data-glass='navsheet'],
+        [data-update-notice]
       ) {
       background-color: var(--lg-glass-strong);
       -webkit-backdrop-filter: blur(30px) saturate(160%);
@@ -83,7 +92,8 @@
           [data-glass='popover'],
           [data-glass='dialog'],
           [data-glass='sheet'],
-          [data-glass='navsheet']
+          [data-glass='navsheet'],
+          [data-update-notice]
         ) {
         -webkit-backdrop-filter: none;
         backdrop-filter: none;
@@ -101,7 +111,8 @@
         [data-glass='popover'],
         [data-glass='dialog'],
         [data-glass='sheet'],
-        [data-glass='navsheet']
+        [data-glass='navsheet'],
+        [data-update-notice]
       ) {
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
@@ -116,7 +127,8 @@
           [data-glass='popover'],
           [data-glass='dialog'],
           [data-glass='sheet'],
-          [data-glass='navsheet']
+          [data-glass='navsheet'],
+          [data-update-notice]
         ) {
         background: Canvas;
         border: 1px solid CanvasText;

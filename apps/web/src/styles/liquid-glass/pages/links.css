@@ -37,6 +37,136 @@
       color: var(--lg-ink);
     }
 
+    /* ── The page's sheet: no words on the bare picture (R11) ─────────────
+       With the ground gone, everything a page prints outside a card sat on
+       the picture: the title block (the eyebrow in ink 3, the line under
+       the title in ink 2), the maintenance request's header and closing
+       note, the item page's title and small print, the portal's brand row.
+       Over the picture files themselves ink 3 falls to 2.2:1 and ink 2 to
+       3.6:1 where a centred title block rests in Day, and to 2:1 and 3:1
+       over the lamp in Night (links-scene-contrast.test.ts). So the column
+       every link page shares (the external frame's data-slot=
+       "external-column") is one sheet, as the sign-in column is a glass
+       holder around its card (auth.glass.css): the overlay material's fill,
+       ring and shadow at the card radius, the same sheet the public order
+       page takes (below), and for the same reasons no blur.
+       Cards keep their own surface on it.
+       A page that draws the whole frame: the sheet floats 12 px clear of
+       the window's top and of the line under it and is as tall as its
+       content (in Classic the column stretches to push the footer down;
+       the footer pill now follows the sheet). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='links'] [data-slot='external-column'] {
+      border-radius: 24px;
+      background-color: var(--lg-glass-strong);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-sh-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      > [data-slot='external-column'] {
+      flex-grow: 0;
+      /* 8 px of picture on each side of the sheet in a window narrower
+         than the column (its max-width still caps it in a wider one). */
+      width: calc(100% - 16px);
+      margin-top: 12px;
+      margin-bottom: 12px;
+    }
+    /* /r/track and /r/confirm draw only their column, inside the /r layout's
+       main, with no side padding of its own. The sheet reaches 12 px past
+       the words on each side, into main's gutter in a narrow window, and
+       the column is that much wider, so the words keep the width they have
+       in Classic at every window size (28rem is the column's max-w-md). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      > main
+      > [data-slot='external-column'] {
+      width: min(100% + 24px, 28rem + 24px);
+      max-width: none;
+      margin-right: max(-12px, calc((100% - 28rem - 24px) / 2));
+      margin-left: max(-12px, calc((100% - 28rem - 24px) / 2));
+      padding-right: 12px;
+      padding-left: 12px;
+    }
+    /* ── The public order page (/r/<token>): a sheet under its words ─────
+       The open page is not a card: it is the storefront (.sp-storefront
+       .sf-public), which Classic draws on the page colour. With the ground
+       gone it had no surface at all, so its brand row, heading, intro line,
+       list of facts and section titles sat on the bare picture: "Powered by
+       StockPilot" measured 1.31:1 over the plant in the picture's top right
+       corner and the intro line 4.06:1 (Day, 1440 px).
+       The sheet is the overlay material's fill, ring and shadow at the link
+       cards' radius: the only fill under which the page's quietest words
+       (ink 3) hold 4.5:1 over every part of both pictures, Day and Night
+       (links-scene-contrast.test.ts measures the picture files). It does not
+       blur: the picture is already out of focus, and a backdrop-filter here
+       would make this element the containing block of the page's fixed
+       overlays (the quick view, the review sheet and the phone cart bar are
+       fixed inside it). The sheet reaches 12 px past the words on every
+       side: the negative margin and the padding cancel, so nothing on the
+       page moves.
+       !important on the fill, and only there: the classic rule that clears
+       this element's background (public-orders.css, .sp-storefront
+       .sf-public) is unlayered, which no normal declaration in a layer can
+       beat; a layered !important does. The rule lives here, in the sheet
+       this page already loads, so the page takes no other stylesheet. Under
+       Reduce Transparency, Increase Contrast and the low-power material the
+       token is opaque; forced colours draw the system ground. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='links'] .sp-storefront.sf-public {
+      margin: -12px;
+      padding: 12px;
+      border-radius: 24px;
+      background-color: var(--lg-glass-strong) !important;
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-sh-3);
+    }
+    /* "View all N" beside a section title is the accent as words. On the
+       sheet over the picture the Day accent measured 4.34:1 (5.06:1 on
+       Classic's page colour); the glass token for accent-coloured words is
+       --lg-accent-text, which the signed-in order page already uses for
+       this link (storefront.glass.css). !important for the same reason as
+       above (storefront.css is unlayered); :not(:hover) leaves the classic
+       hover colour (the ink) in place. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      .sp-storefront.sf-public
+      .sf-sec-head
+      .see:not(:hover) {
+      color: var(--lg-accent-text) !important;
+    }
+    /* The public order page's closed card sits in a column inside that
+       page's own sheet (above): no second sheet. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      .sf-public
+      [data-slot='external-column'] {
+      border-radius: 0;
+      background-color: transparent;
+      box-shadow: none;
+    }
+
+    /* The way back to Classic (the appearance menu in the page's top right
+       corner, R13) is an icon on the picture too: 2.6:1 over the plant in
+       Day at 1440 px. It takes the floating glass, as the top bar's
+       controls do (materials.css, tb-btn). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='links']
+      [data-slot='external-appearance']
+      > button {
+      border-color: transparent;
+      background-color: var(--lg-glass);
+      color: var(--lg-ink);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+    }
+
     /* ── The title block (.h1 26/32 at 650; .eyebrow 12/16 at 600, +0.06em,
        capitals, ink 3; the line under it .sm in ink 2) ─────────────────── */
     :root[data-appearance='liquid-glass']
@@ -186,11 +316,29 @@
       line-height: 18px;
     }
 
-    /* "Powered by StockPilot" and the pages' own small print (.xs in ink 3). */
+    /* "Powered by StockPilot" under the page: a glass pill, as the sign-in
+       page's line under its card is (auth.glass.css, .auth-panel-foot p: the
+       floating glass, 6 x 14, radius 16, ink 2, the inner light and the
+       ring), so the words never sit on the bare picture (R11). On a phone
+       this is the only place the public order page prints the line. Ink 2,
+       not the .xs ink 3: on the floating glass ink 3 falls under 4.5:1 over
+       the picture's darkest parts (links-scene-contrast.test.ts). The pill
+       and the 28 px under it are the 56 px the line and its 40 px foot take
+       in Classic, so the page is as tall as it was. */
     :root[data-appearance='liquid-glass'] [data-glass-page='links'] [data-slot='external-footer'] {
-      color: var(--lg-ink-3);
+      width: fit-content;
+      margin-bottom: 28px;
+      padding: 6px 14px;
+      border-radius: 16px;
+      background-color: var(--lg-glass);
+      color: var(--lg-ink-2);
       font-size: 12px;
       line-height: 16px;
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
     }
 
     /* ── The public item page (/p/items/<id>) ───────────────────────────
@@ -367,6 +515,8 @@
         :is(
           [data-slot='external-card'],
           [data-slot='external-status-card'],
+          [data-slot='external-footer'],
+          [data-slot='external-appearance'] > button,
           .bg-card.rounded-lg.border,
           div.bg-card.fixed.inset-x-0.bottom-0.border-t
         ) {
@@ -381,6 +531,8 @@
       :is(
         [data-slot='external-card'],
         [data-slot='external-status-card'],
+        [data-slot='external-footer'],
+        [data-slot='external-appearance'] > button,
         .bg-card.rounded-lg.border,
         div.bg-card.fixed.inset-x-0.bottom-0.border-t
       ) {
@@ -395,6 +547,8 @@
         :is(
           [data-slot='external-card'],
           [data-slot='external-status-card'],
+          [data-slot='external-footer'],
+          [data-slot='external-appearance'] > button,
           .bg-card.rounded-lg.border,
           div.bg-card.fixed.inset-x-0.bottom-0.border-t
         ) {

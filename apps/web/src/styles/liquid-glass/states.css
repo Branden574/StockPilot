@@ -123,6 +123,13 @@
       grid-template-rows: repeat(4, auto);
       place-content: center;
       justify-items: stretch;
+      /* The frame's classic class centres its items (items-center), which
+         a grid reads too: the card behind the words (::before, ::after)
+         then takes its own height, which is nothing, and showed as a 2 px
+         line with the words on the bare picture. Stretched, it spans the
+         rows it is placed on. The words keep their place: each sits in a
+         row of its own height. */
+      align-items: stretch;
       gap: 0;
       padding: 64px 42px;
       background-color: transparent;
