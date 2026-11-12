@@ -227,6 +227,14 @@ function markerSpellings(files: Map<string, string>): string[] {
   return found;
 }
 
+/**
+ * The test that parses every phone source file takes under a second alone on
+ * a quiet machine. While other suites ran on the same machine it took 4.3 s
+ * alone and 6.6 s inside the full suite, past vitest's 5 s default, so it has
+ * the limit this suite's other whole-tree scans have.
+ */
+const SCAN = { timeout: 60_000 };
+
 describe('the phone reads the marker only through core (one predicate, no copies)', () => {
   const FILES = phoneSources();
 
@@ -252,7 +260,7 @@ describe('the phone reads the marker only through core (one predicate, no copies
     }
   });
 
-  it("no non-test phone code spells the marker's code, reason or flag", () => {
+  it("no non-test phone code spells the marker's code, reason or flag", SCAN, () => {
     expect(markerSpellings(FILES)).toEqual([]);
   });
 
