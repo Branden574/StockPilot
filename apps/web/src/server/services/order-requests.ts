@@ -457,17 +457,23 @@ export interface OrderSubmissionScope {
  * event completed; cancelled/denied order → event cancelled. Only touches
  * events still open (scheduled/in_progress); manual terminal states win.
  * Admin client + fire-and-forget: never blocks or fails the order flow.
+ *
+ * `organizationId` is the order's organization, which every caller has from
+ * the order it read. The admin client is held by no row rule, so the update
+ * names the organization itself, as bringOrderEventInStep's reads of the same
+ * entry do: an entry is closed only in the organization its order is in.
  */
 export async function syncOrderScheduleEvent(
   orderId: string,
   outcome: 'completed' | 'cancelled',
-  organizationId?: string,
+  organizationId: string,
 ): Promise<void> {
   try {
     const admin = createAdminClient();
     const { error } = await admin
       .from('schedule_events')
       .update({ status: outcome })
+      .eq('organization_id', organizationId)
       .eq('order_request_id', orderId)
       .in('status', ['scheduled', 'in_progress']);
     // supabase-js answers a failed UPDATE with { error }; it does not throw.
@@ -477,7 +483,7 @@ export async function syncOrderScheduleEvent(
   } catch (e) {
     void reportSrvError(e, {
       tag: 'orders.auto-schedule.sync',
-      organizationId: organizationId ?? null,
+      organizationId,
       extra: { orderId, outcome },
     });
   }

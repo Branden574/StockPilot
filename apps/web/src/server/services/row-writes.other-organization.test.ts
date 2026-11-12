@@ -20,12 +20,14 @@ vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => makeSupabaseSt
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => undefined) }));
 vi.mock('./lib/defer', () => ({ defer: vi.fn() }));
 
+import { ApiKeysService } from './api-keys';
 import { audit } from './audit';
 import { BundlesService } from './bundles';
 import { ChartersService } from './charters';
 import { CustomersService } from './customers';
 import { CycleCountsService } from './cycle-counts';
 import { DeliveryTrackingService } from './delivery-tracking';
+import { dispatchEvent } from './integration-events';
 import { OrderRequestsService } from './order-requests';
 import { ScheduleService } from './schedule';
 import { TagsService } from './tags';
@@ -59,8 +61,8 @@ const B_ROW = { id: ROW_ID, organization_id: 'org-B' };
 
 /**
  * A write answered as PostgREST answers one: only the rows the chain's own
- * `eq` filters keep are written, and they come back only when the chain asks
- * for them with `.select()`.
+ * `eq` and `is` filters keep are written, and they come back only when the
+ * chain asks for them with `.select()`.
  */
 function writtenLikePostgrest(
   rows: ReadonlyArray<Record<string, unknown>>,
@@ -68,9 +70,9 @@ function writtenLikePostgrest(
   return (call) => {
     let out = [...rows];
     call.methods.forEach((method, i) => {
-      if (method !== 'eq') return;
       const [col, value] = (call.args[i] ?? []) as [string, unknown];
-      out = out.filter((r) => r[col] === value);
+      if (method === 'eq') out = out.filter((r) => r[col] === value);
+      if (method === 'is') out = out.filter((r) => (r[col] ?? null) === value);
     });
     return { data: call.methods.includes('select') ? out : null, error: null };
   };
@@ -198,6 +200,14 @@ describe('a write that changed no row answers not_found and leaves no audit row'
       run: (stub, org) => new TeamService(ctxFor(stub, org)).revokeInvite(ROW_ID),
       message: 'Invite not found',
     },
+    {
+      name: 'revoking an API key',
+      write: 'api_keys.update',
+      read: 'api_keys.select',
+      row: { ...B_ROW, name: 'Example key', revoked_at: null },
+      run: (stub, org) => new ApiKeysService(ctxFor(stub, org)).revoke(ROW_ID),
+      message: 'API key not found',
+    },
   ];
 
   function stubFor(c: Case) {
@@ -311,6 +321,161 @@ describe('a write that changed no row answers not_found and leaves no audit row'
 
     expect(stub.chainsAll.get('warehouse_charters.insert')).toHaveLength(1);
     expectRecordedIn('org-B', 'warehouse_charters.updated');
+  });
+});
+
+describe('a write that follows a read of its row still proves the row it changed', () => {
+  // The read finds the row; the write then changes none (the row went between
+  // the two, or the table's own rule kept the write out). Each case has its
+  // control: the same call when the write answers with its row.
+  const CHARTER_ID = '33333333-3333-4333-8333-333333333333';
+  const IN_B = { ...B_ROW, title: 'Example event', status: 'scheduled', warehouse_id: null };
+
+  function warehouseStub(written: ReadonlyArray<Record<string, unknown>>) {
+    return makeSupabaseStub({
+      'warehouses.select': servedLikePostgrest([B_ROW]),
+      'warehouses.update': { data: [...written], error: null },
+      'warehouse_charters.select': { data: [], error: null },
+      'warehouse_charters.insert': { data: null, error: null },
+    });
+  }
+  const editWarehouse = (stub: ReturnType<typeof makeSupabaseStub>) =>
+    new WarehousesService(ctxFor(stub, 'org-B')).update(ROW_ID, {
+      name: 'Example warehouse',
+      charterIds: [CHARTER_ID],
+    });
+
+  it('a warehouse edit whose write changed no row is not found: no charter link is written and nothing is recorded', async () => {
+    const stub = warehouseStub([]);
+
+    await expect(editWarehouse(stub)).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'Warehouse not found.',
+    });
+
+    // The write was sent, filtered to the organization, and asked its row back.
+    expect(stub.chainsAll.get('warehouses.update')).toEqual([['update', 'eq', 'eq', 'select']]);
+    expect(filtersOf(stub, 'warehouses.update')).toEqual([
+      ['organization_id', 'org-B'],
+      ['id', ROW_ID],
+    ]);
+    expect(stub.chainsAll.get('warehouse_charters.insert')).toBeUndefined();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('the same warehouse edit, when the write answers with its row, writes the charter link and is recorded', async () => {
+    const stub = warehouseStub([B_ROW]);
+
+    await editWarehouse(stub);
+
+    expect(stub.chainsAll.get('warehouse_charters.insert')).toHaveLength(1);
+    expectRecordedIn('org-B', 'warehouse_charters.updated');
+    expectRecordedIn('org-B', 'warehouse.updated');
+  });
+
+  function eventStub(deleted: ReadonlyArray<Record<string, unknown>>) {
+    return makeSupabaseStub({
+      'schedule_events.select': servedLikePostgrest([IN_B]),
+      'schedule_events.delete': { data: [...deleted], error: null },
+    });
+  }
+
+  it('a schedule event delete that removed no row is not found, and nothing is recorded', async () => {
+    const stub = eventStub([]);
+
+    await expect(new ScheduleService(ctxFor(stub, 'org-B')).delete(ROW_ID)).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'Event not found',
+    });
+
+    expect(stub.chainsAll.get('schedule_events.delete')).toEqual([
+      ['delete', 'eq', 'eq', 'select'],
+    ]);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('the same schedule event delete, when it answers with its row, is recorded', async () => {
+    const stub = eventStub([IN_B]);
+
+    await new ScheduleService(ctxFor(stub, 'org-B')).delete(ROW_ID);
+
+    expectRecordedIn('org-B', 'schedule.deleted');
+  });
+});
+
+describe('revoking an API key answers for the key it changed', () => {
+  const LIVE = { ...B_ROW, name: 'Example key', revoked_at: null };
+  const REVOKED = { ...LIVE, revoked_at: '2026-01-05T10:00:00.000Z' };
+
+  function keyStub(rows: ReadonlyArray<Record<string, unknown>>) {
+    return makeSupabaseStub({
+      'api_keys.update': writtenLikePostgrest(rows),
+      'api_keys.select': servedLikePostgrest(rows),
+    });
+  }
+  const revoke = (stub: ReturnType<typeof makeSupabaseStub>, org: string) =>
+    new ApiKeysService(ctxFor(stub, org)).revoke(ROW_ID);
+
+  it('a key that is not in A is not found, and no revocation is announced', async () => {
+    const stub = keyStub([LIVE]);
+
+    await expect(revoke(stub, 'org-A')).rejects.toMatchObject({
+      code: 'not_found',
+      message: 'API key not found',
+    });
+
+    expect(dispatchEvent).not.toHaveBeenCalled();
+    // The look after the miss is filtered to A as well.
+    expect(filtersOf(stub, 'api_keys.select')).toEqual([
+      ['organization_id', 'org-A'],
+      ['id', ROW_ID],
+    ]);
+  });
+
+  it('working in B, the key is revoked and the revocation is announced in B', async () => {
+    const stub = keyStub([LIVE]);
+
+    await expect(revoke(stub, 'org-B')).resolves.toBeUndefined();
+
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(dispatchEvent).toHaveBeenCalledWith('org-B', 'security.api_key_revoked', {
+      name: 'Example key',
+    });
+    // The write answered with its row, so nothing is read after it.
+    expect(stub.chainsAll.get('api_keys.select')).toBeUndefined();
+  });
+
+  it('a key that is already revoked stays a quiet success: nothing is announced a second time', async () => {
+    const stub = keyStub([REVOKED]);
+
+    await expect(revoke(stub, 'org-B')).resolves.toBeUndefined();
+
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('a key that is still live after a write that changed no row is not answered as revoked', async () => {
+    const stub = makeSupabaseStub({
+      'api_keys.update': { data: [], error: null },
+      'api_keys.select': servedLikePostgrest([LIVE]),
+    });
+
+    await expect(revoke(stub, 'org-B')).rejects.toMatchObject({
+      code: 'conflict',
+      message: 'This API key was not revoked and is still active. Try again.',
+    });
+
+    expect(dispatchEvent).not.toHaveBeenCalled();
+  });
+
+  it('a failed look after a miss is an error, never done and never not found', async () => {
+    const stub = makeSupabaseStub({
+      'api_keys.update': { data: [], error: null },
+      'api_keys.select': { data: null, error: { message: 'timeout' } },
+    });
+
+    await expect(revoke(stub, 'org-B')).rejects.toMatchObject({ code: 'internal_error' });
+
+    expect(dispatchEvent).not.toHaveBeenCalled();
   });
 });
 
