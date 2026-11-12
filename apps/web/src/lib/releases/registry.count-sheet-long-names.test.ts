@@ -42,6 +42,8 @@ const S2_ID = 'approver-controls-own-warehouses-2026-11';
 // Added by feat/order-add-all (2026-11-10): the Add all release, published later, at the top,
 // above this one. It reaches whoever may place orders where Orders is on.
 const ADD_ALL_ID = 'order-add-all-2026-11';
+// Added by docs/whatsnew-returns-1112 (2026-11-12): the returns request and names release, published at the top, above the Add all release.
+const RETURNS_REQUEST_ID = 'returns-request-email-names-2026-11';
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = () => release().entries.find((e) => e.id === ENTRY_ID)!;
 
@@ -112,12 +114,15 @@ describe('the count sheet release: order, status and date', () => {
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
-    expect(RELEASES[2]?.id).toBe(ID);
-    expect(RELEASES[3]?.id).toBe(S2_ID);
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe(S2_ID);
     // Re-pinned by feat/order-add-all (2026-11-10; was: this release at 0, the newest published): the Add all release is published later, at the top.
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
-    expect(RELEASES[1]?.id).toBe(ADD_ALL_ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ADD_ALL_ID);
+    expect(RELEASES[2]?.id).toBe(ADD_ALL_ID);
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ADD_ALL_ID, the newest published): the returns request and names release is published later, at the top, directly above the Add all release.
+    expect(RELEASES[1]?.id).toBe(RETURNS_REQUEST_ID);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(RETURNS_REQUEST_ID);
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
     ]);
@@ -135,7 +140,8 @@ describe('the count sheet release: order, status and date', () => {
     expect(at).toBeGreaterThan(Date.parse('2026-11-10T19:41:00Z'));
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -235,10 +241,23 @@ describe('the count sheet release: who is told', () => {
       opened_at: '2026-11-10T22:00:00Z',
       read_at: '2026-11-10T22:00:00Z',
     };
-    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(ADD_ALL_ID);
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: the Add all release first for an owner, and only its read or seen stamp below): the returns request and names release is published later, at the top, and reaches an owner with every permission and module, so it is the owner's first notice and is read or seen with the Add all release; for a reader it does not reach, its read changes nothing.
+    const returnsRead = { ...addAllRead, release_id: RETURNS_REQUEST_ID };
+    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+      RETURNS_REQUEST_ID,
+    );
+    expect(buildReleaseList(RELEASES, everyone, [returnsRead], null).latestUnread?.id).toBe(
+      ADD_ALL_ID,
+    );
     for (const v of [everyone, countReader, stockAdjuster]) {
-      expect(buildReleaseList(RELEASES, v, [addAllRead], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, { [ADD_ALL_ID]: true })[0], v.role).toEqual({
+      expect(
+        buildReleaseList(RELEASES, v, [returnsRead, addAllRead], null).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
+      expect(
+        legacyAnnouncementsFor(RELEASES, v, { [RETURNS_REQUEST_ID]: true, [ADD_ALL_ID]: true })[0],
+        v.role,
+      ).toEqual({
         id: ID,
         date: release().publishedAt.slice(0, 10),
         title: release().title,

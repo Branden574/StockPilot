@@ -60,6 +60,8 @@ const COUNT_SHEET_ID = 'count-sheet-long-names-2026-11';
 // the top, above the count sheet release. It reaches whoever may place orders
 // (orders:request) where Orders is on.
 const ADD_ALL_ID = 'order-add-all-2026-11';
+// Added by docs/whatsnew-returns-1112 (2026-11-12): the returns request and names release, published at the top, above the Add all release.
+const RETURNS_REQUEST_ID = 'returns-request-email-names-2026-11';
 const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
 const entry = (releaseId: string, entryId: string) =>
   byId(releaseId).entries.find((e) => e.id === entryId)!;
@@ -204,11 +206,13 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
     // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
-    expect(RELEASES.slice(4, 9).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(5, 10).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
     // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ADD_ALL_ID);
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ADD_ALL_ID): the returns request and names release is published after it, at the top, the newest published release.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(RETURNS_REQUEST_ID);
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
     ]);
@@ -234,7 +238,8 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
       // Re-pinned by feat/order-add-all (2026-11-10; was: i + 3): the Add all release is published at the top, so every position below it moves down by one.
       // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one.
-      for (const r of RELEASES.slice(i + 5)) {
+      // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: i + 5): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+      for (const r of RELEASES.slice(i + 6)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -260,6 +265,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
   });
 
   it('is the notice in date order for an owner, and the three that reach every member come first for a member', () => {
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: each read set without it): the returns request and names release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before. It does not reach a member with no permission, whose first notice is unchanged.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: each read set without it): the S2 release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: each read set without it): the count sheet release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
     // Re-pinned by feat/order-add-all (2026-11-10; was: each read set without it): the Add all release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before. It does not reach a member with no permission, whose first notice is unchanged.
@@ -267,7 +273,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID)],
+        [read(RETURNS_REQUEST_ID), read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID)],
         null,
       ).latestUnread?.id,
     ).toBe(EXPORT_ID);
@@ -275,7 +281,13 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID)],
+        [
+          read(RETURNS_REQUEST_ID),
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+          read(EXPORT_ID),
+        ],
         null,
       ).latestUnread?.id,
     ).toBe(PHONE_ID);
@@ -283,7 +295,14 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(ADD_ALL_ID), read(COUNT_SHEET_ID), read(S2_ID), read(EXPORT_ID), read(PHONE_ID)],
+        [
+          read(RETURNS_REQUEST_ID),
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+          read(EXPORT_ID),
+          read(PHONE_ID),
+        ],
         null,
       ).latestUnread?.id,
     ).toBe(MESSAGES_ID);
@@ -292,6 +311,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
         RELEASES,
         everyone,
         [
+          read(RETURNS_REQUEST_ID),
           read(ADD_ALL_ID),
           read(COUNT_SHEET_ID),
           read(S2_ID),
@@ -306,7 +326,7 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       buildReleaseList(
         RELEASES,
         everyone,
-        [ADD_ALL_ID, COUNT_SHEET_ID, S2_ID, ...NEW_IDS].map(read),
+        [RETURNS_REQUEST_ID, ADD_ALL_ID, COUNT_SHEET_ID, S2_ID, ...NEW_IDS].map(read),
         null,
       ).latestUnread?.id,
     ).toBe(WEB_FIXES_ID);
