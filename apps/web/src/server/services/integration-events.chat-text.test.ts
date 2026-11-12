@@ -1,3 +1,7 @@
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import path from 'node:path';
+
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 import { buildRequest, describeEvent, INTEGRATION_EVENT_TYPES } from './integration-events';
@@ -175,5 +179,36 @@ describe('what does not change', () => {
     expect(
       describeEvent('order.created', { orderNumber: 'ORD-9', requester: 'R & D <team>' }).summary,
     ).toBe('Order ORD-9 was created by R & D <team>.');
+  });
+
+  it('every call of describeEvent outside the tests names its channel', () => {
+    // Without a channel a field is left as it was typed, which is for words
+    // that are not posted to a chat. A card's words are, so its caller says
+    // which chat they go to.
+    const src = path.resolve(__dirname, '../..');
+    const sources = (dir: string): string[] =>
+      readdirSync(dir).flatMap((name) => {
+        const full = path.join(dir, name);
+        if (statSync(full).isDirectory()) return name === '__tests__' ? [] : sources(full);
+        return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : [];
+      });
+    const calls: string[] = [];
+    for (const file of sources(src)) {
+      const text = readFileSync(file, 'utf8');
+      if (!text.includes('describeEvent(')) continue;
+      const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isCallExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 'describeEvent'
+        ) {
+          calls.push(`${path.relative(src, file)}: ${node.arguments.length} arguments`);
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    expect(calls).toEqual(['server/services/integration-events.ts: 3 arguments']);
   });
 });
