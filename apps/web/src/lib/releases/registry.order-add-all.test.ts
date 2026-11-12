@@ -107,12 +107,14 @@ describe('the Add all release: order, status and date', () => {
     expect(release().withdrawnNote).toBeUndefined();
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    expect(RELEASES[2]?.id).toBe(ID);
-    expect(RELEASES[3]?.id).toBe(COUNT_SHEET_ID);
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[3]?.id).toBe(ID);
+    expect(RELEASES[4]?.id).toBe(COUNT_SHEET_ID);
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ID, the newest published): the returns request and names release is published later, directly above this one.
-    expect(RELEASES[1]?.id).toBe('returns-request-email-names-2026-11');
+    expect(RELEASES[2]?.id).toBe('returns-request-email-names-2026-11');
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'returns-request-email-names-2026-11',
+      // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
+      'phone-appearance-returns-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -129,7 +131,8 @@ describe('the Add all release: order, status and date', () => {
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
-    for (const r of RELEASES.slice(3)) {
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(4)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -209,13 +212,26 @@ describe('the Add all release: who is told', () => {
       opened_at: '2026-11-12T09:00:00Z',
       read_at: '2026-11-12T09:00:00Z',
     };
-    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release first for an owner with nothing read, and only its read or seen stamp below): the phone appearance and returns release is published later, at the top, and reaches every member, so it is every reader's first notice here and is read or seen with the returns release; for the requester here, whom the returns release does not reach, that read changes nothing.
+    const phoneRead = { ...returnsRead, release_id: 'phone-appearance-returns-2026-11' };
+    for (const v of [everyone, requester, member]) {
+      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(
+        'phone-appearance-returns-2026-11',
+      );
+    }
+    expect(buildReleaseList(RELEASES, everyone, [phoneRead], null).latestUnread?.id).toBe(
       'returns-request-email-names-2026-11',
     );
     for (const v of [everyone, requester]) {
-      expect(buildReleaseList(RELEASES, v, [returnsRead], null).latestUnread?.id, v.role).toBe(ID);
       expect(
-        legacyAnnouncementsFor(RELEASES, v, { 'returns-request-email-names-2026-11': true })[0],
+        buildReleaseList(RELEASES, v, [phoneRead, returnsRead], null).latestUnread?.id,
+        v.role,
+      ).toBe(ID);
+      expect(
+        legacyAnnouncementsFor(RELEASES, v, {
+          'phone-appearance-returns-2026-11': true,
+          'returns-request-email-names-2026-11': true,
+        })[0],
         v.role,
       ).toEqual({
         id: ID,
@@ -225,7 +241,7 @@ describe('the Add all release: who is told', () => {
         cta: { href: '/dashboard/orders/new', label: 'Place an order' },
       });
     }
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).not.toBe(ID);
+    expect(buildReleaseList(RELEASES, member, [phoneRead], null).latestUnread?.id).not.toBe(ID);
     expect(legacyAnnouncementsFor(RELEASES, member, {}).map((a) => a.id)).not.toContain(ID);
   });
 });
