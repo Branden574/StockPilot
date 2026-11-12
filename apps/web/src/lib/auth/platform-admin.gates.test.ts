@@ -70,7 +70,7 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
-import { checkPlatformAdmin, requirePlatformAdmin } from './platform-admin';
+import { checkPlatformAdmin, currentUserIsPlatformAdmin, requirePlatformAdmin } from './platform-admin';
 
 let projectKey: SigningKey;
 let server: FakeAuthServer;
@@ -138,6 +138,69 @@ describe('platform gates, real session reads', () => {
     await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 60, expiresIn: -120 }));
     const check = await checkPlatformAdmin({ requireStepUp: true });
     expect(check.ok).toBe(false);
+  });
+});
+
+/**
+ * Security invariant (docket S43c): an allowlisted account that has an
+ * authenticator is a platform admin only on a session that has entered its
+ * code. That holds for the gates that ask no fresh step-up too:
+ * checkPlatformAdmin() with no option (sending a member a password reset), and
+ * currentUserIsPlatformAdmin(), the gate of the two platform pages under
+ * /dashboard/admin, of the support-ticket triage action and of "stop acting
+ * as". An allowlisted account with no authenticator is unchanged: the console
+ * itself and every dangerous action still ask for aal2 outright.
+ *
+ * The fixture's Auth server lists a verified TOTP factor for every account
+ * unless it is named in `unenrolledUsers`.
+ */
+describe('an allowlisted account that owes its authenticator code is not served', () => {
+  it('with an authenticator, at aal1: not a platform admin, and the action is refused with aal2_required', async () => {
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(false);
+    await expect(checkPlatformAdmin()).resolves.toEqual({ ok: false, reason: 'aal2_required' });
+  });
+
+  it('with an authenticator, at aal2 (however long ago the code was entered): served', async () => {
+    await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 20 * 60 }));
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(true);
+    await expect(checkPlatformAdmin()).resolves.toMatchObject({ ok: true });
+    expect(insecureWarnings()).toBe(0);
+  });
+
+  it('a token edited to claim aal2 is not aal2', async () => {
+    const real = await signAccessToken(projectKey, sessionClaims({ aal: 'aal1' }));
+    const forged = sessionClaims({ aal: 'aal2', totpAgeSeconds: 10 });
+    await signIn(forged, withEditedPayload(real, forged));
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(false);
+    await expect(checkPlatformAdmin()).resolves.toMatchObject({ ok: false });
+  });
+
+  it('with no authenticator, at aal1: served as before, and no level is read', async () => {
+    server.unenrolledUsers.add(FIXTURE_USER_ID);
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(true);
+    await expect(checkPlatformAdmin()).resolves.toMatchObject({ ok: true });
+    // One Auth call per gate (the verified email, which lists the factors).
+    expect(server.calls['/user']).toBe(2);
+  });
+
+  it('with no authenticator, the console and the dangerous actions still ask for aal2', async () => {
+    server.unenrolledUsers.add(FIXTURE_USER_ID);
+    await signIn(sessionClaims({ aal: 'aal1' }));
+    await expect(requirePlatformAdmin()).rejects.toThrow('NOT_FOUND');
+    await expect(checkPlatformAdmin({ requireStepUp: true })).resolves.toEqual({
+      ok: false,
+      reason: 'aal2_required',
+    });
+  });
+
+  it('signed out, or not on the allowlist: not a platform admin', async () => {
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(false);
+    await expect(checkPlatformAdmin()).resolves.toEqual({ ok: false, reason: 'forbidden' });
+    await signIn(sessionClaims({ aal: 'aal2', totpAgeSeconds: 60, email: 'someone@example.test' }));
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(false);
+    await expect(checkPlatformAdmin()).resolves.toEqual({ ok: false, reason: 'forbidden' });
   });
 });
 
