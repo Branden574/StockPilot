@@ -24,13 +24,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *      a reviewed change. Over that closure, read on the syntax tree (a comment
  *      or a string never counts), there is no `.insert(`, `.update(` or
  *      `.upsert(` call, no `.delete(` but the three reviewed ones (a Set and two
- *      Headers), no `.rpc(` but the context read itself, no `auth.admin`, and no
- *      `fetch` that can write but the error webhook.
+ *      Headers), no `.rpc(` but the context read itself, no `auth.admin`,
+ *      nothing done with a client's auth object but calling one of its three
+ *      reads, no other part of a client (storage, functions, realtime, a
+ *      channel), and no `fetch` that can write but the error webhook. This half
+ *      is the only one that reads the lines no request below runs.
  *   2. BEHAVIOUR. withApiContext runs on both paths, for every way the one
  *      round trip falls back to the separate reads, into both refusals and the
  *      owner's path, for a member with no authenticator and for one whose
- *      session has its code, against a client that records every call:
- *      nothing but reads, and no other RPC.
+ *      session has its code, and for every way the cookie session's level read
+ *      can end, against a client that records every call: nothing but reads,
+ *      and no other RPC.
  * Plants prove the static half can fail.
  */
 
@@ -99,6 +103,22 @@ const ALLOWED_DELETES = new Set([
   'requestHeaders.delete(SESSION_HEADER_USER_ID)',
   'requestHeaders.delete(SESSION_HEADER_USER_EMAIL)',
 ]);
+
+/**
+ * The reads the context makes on a client's auth object: who the request is
+ * (getUser) and, for a cookie session, its assurance level (getSession, then
+ * getClaims, then getUser(token) when the token cannot be checked on the
+ * server itself: lib/auth/verified-claims.ts). Every other member of that
+ * object can change an account or a session.
+ */
+const AUTH_READS = ['getUser', 'getSession', 'getClaims'];
+
+/**
+ * The other parts of a Supabase client. An upload, a function call and a
+ * broadcast are none of the methods the rules below name, so reaching one of
+ * these parts at all is the finding. Nothing the context loads does.
+ */
+const OTHER_CLIENT_PARTS = ['storage', 'functions', 'realtime', 'channel'];
 
 /** The error webhook, which writes to no database (lib/error-reporter-core.ts). */
 const WEBHOOK_FILE = 'lib/error-reporter-core.ts';
@@ -213,14 +233,18 @@ function valueImportClosure(
   return { files: [...seen].sort(), unreadable };
 }
 
-/** The method a call names: `x.m(...)` or `x['m'](...)`. */
-function calledMethod(call: ts.CallExpression): string | null {
-  const callee = call.expression;
-  if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
-  if (ts.isElementAccessExpression(callee) && ts.isStringLiteralLike(callee.argumentExpression)) {
-    return callee.argumentExpression.text;
+/** The member an access names: `x.m` or `x['m']`. Null for anything else, a computed name included. */
+function memberName(n: ts.Node): string | null {
+  if (ts.isPropertyAccessExpression(n)) return n.name.text;
+  if (ts.isElementAccessExpression(n) && ts.isStringLiteralLike(n.argumentExpression)) {
+    return n.argumentExpression.text;
   }
   return null;
+}
+
+/** The method a call names: `x.m(...)` or `x['m'](...)`. */
+function calledMethod(call: ts.CallExpression): string | null {
+  return memberName(call.expression);
 }
 
 /** `rpc('get_request_context', undefined, { get: true })`: the context read, as a GET. */
@@ -279,6 +303,39 @@ function isAuthAdmin(n: ts.Node): boolean {
   return false;
 }
 
+/**
+ * What is done with a client's auth object where it is reached (`<x>.auth` or
+ * `<x>['auth']`), when that is anything but calling one of AUTH_READS on it:
+ * another member, a member under a computed name, a read that is taken and
+ * not called, or the object itself kept or handed on. Null for a call of a
+ * read. `auth.admin` is the rule above.
+ */
+function authUse(n: ts.Node): string | null {
+  if (memberName(n) !== 'auth') return null;
+  const use = n.parent;
+  const takesMember =
+    (ts.isPropertyAccessExpression(use) || ts.isElementAccessExpression(use)) &&
+    use.expression === n;
+  if (!takesMember) return 'an auth object kept or handed on, not called for one of its reads';
+  const member = memberName(use);
+  if (member === null) return 'a member of an auth object under a computed name';
+  if (member === 'admin') return null;
+  if (!AUTH_READS.includes(member)) {
+    return `auth.${member}, not one of the reads (${AUTH_READS.join(', ')})`;
+  }
+  const called = ts.isCallExpression(use.parent) && use.parent.expression === use;
+  return called ? null : `auth.${member} taken and not called`;
+}
+
+/** A part of a client taken out of an object by name in a binding: `{ auth }`, `{ storage: files }`. */
+function partTakenOut(n: ts.Node): string | null {
+  if (!ts.isBindingElement(n) || !ts.isObjectBindingPattern(n.parent)) return null;
+  if (n.dotDotDotToken) return null; // `{ ...rest }` names what is left, not a member
+  const key = n.propertyName ?? n.name;
+  if (!ts.isIdentifier(key) && !ts.isStringLiteralLike(key)) return null;
+  return key.text === 'auth' || OTHER_CLIENT_PARTS.includes(key.text) ? key.text : null;
+}
+
 /** Everything in one file that could write, other than what is reviewed above. */
 function writeFindings(fileName: string, source: string): string[] {
   const sf = parse(fileName, source);
@@ -302,6 +359,13 @@ function writeFindings(fileName: string, source: string): string[] {
       }
     }
     if (isAuthAdmin(n)) at(n, 'auth.admin');
+    const onAuth = authUse(n);
+    if (onAuth) at(n, onAuth);
+    const part = memberName(n);
+    if (part !== null && OTHER_CLIENT_PARTS.includes(part))
+      at(n, `.${part}, a part of a client the context does not use`);
+    const taken = partTakenOut(n);
+    if (taken) at(n, `{ ${taken} } taken out of an object by name`);
     ts.forEachChild(n, visit);
   };
   visit(sf);
@@ -318,7 +382,7 @@ describe('withApiContext writes nothing: what it loads (static)', () => {
     expect(closure.files).toEqual(REVIEWED_CLOSURE);
   });
 
-  it('none of them inserts, updates, upserts, deletes, calls another RPC, reaches auth.admin or fetches a write', () => {
+  it("none of them inserts, updates, upserts, deletes, calls another RPC, reaches auth.admin, does anything with a client's auth object but call its reads, reaches another part of a client or fetches a write", () => {
     expect(closure.files.flatMap((file) => writeFindings(file, readWeb(file)))).toEqual([]);
   });
 
@@ -335,6 +399,10 @@ describe('withApiContext writes nothing: what it loads (static)', () => {
       );
     expect(all(/\.delete\(/)).toHaveLength(3);
     expect(all(/\.rpc\('get_request_context', undefined, \{ get: true \}\)/)).toHaveLength(2);
+    // Every read on the auth list is one these modules really make.
+    for (const read of AUTH_READS) {
+      expect(all(new RegExp(`\\.auth\\.${read}\\(`)), read).not.toEqual([]);
+    }
     expect(readWeb(WEBHOOK_FILE)).toMatch(/await fetch\(url, \{\s*method: 'POST'/);
     expect(readWeb(CLIENT_TRANSPORT.file)).toContain('return fetch(input, init);');
   });
@@ -353,13 +421,31 @@ describe('self-test: the static reading fails on a write', () => {
     ["supabase.rpc('get_request_context')", ".rpc( call supabase.rpc('get_request_context')"],
     ["supabase.rpc('get_request_context', undefined, { get: false })", '.rpc( call'],
     ['supabase.auth.admin.deleteUser(id)', 'auth.admin'],
+    [
+      'supabase.auth.signOut()',
+      'auth.signOut, not one of the reads (getUser, getSession, getClaims)',
+    ],
+    ['(supabase as any).auth.refreshSession()', 'auth.refreshSession, not one of the reads'],
+    ['supabase.auth.updateUser({ data: {} })', 'auth.updateUser, not one of the reads'],
+    ['supabase.auth.mfa.unenroll({ factorId: id })', 'auth.mfa, not one of the reads'],
+    ["supabase['auth'].signOut()", 'auth.signOut, not one of the reads'],
+    ["supabase.auth['setSession'](x)", 'auth.setSession, not one of the reads'],
+    ['supabase.auth[name]()', 'a member of an auth object under a computed name'],
+    ['x(supabase.auth)', 'an auth object kept or handed on'],
+    ['x(supabase.auth.getUser)', 'auth.getUser taken and not called'],
+    ['(({ auth }: any) => auth.signOut())(supabase)', '{ auth } taken out of an object by name'],
+    ["supabase.storage.from('item-images').upload('p', 'x')", '.storage, a part of a client'],
+    ["supabase.functions.invoke('notify')", '.functions, a part of a client'],
+    ["supabase.channel('org').send({ type: 'broadcast', event: 'e' })", '.channel, a part of'],
+    ['supabase.realtime.setAuth()', '.realtime, a part of a client'],
+    ['(({ storage: files }: any) => files)(supabase)', '{ storage } taken out of an object'],
     ["fetch(url, { method: 'POST', body: '{}' })", 'fetch with a write method'],
     ["globalThis.fetch(url, { method: 'delete' })", 'fetch with a write method'],
     ['fetch(url, init)', 'fetch with an init this guard cannot read'],
   ])('%s is a finding', (code, finding) => {
     const found = writeFindings(
       FILE,
-      `export async function f(supabase: any, x: any, url: string, id: string, init: any) { await ${code}; }`,
+      `export async function f(supabase: any, x: any, url: string, id: string, init: any, name: string) { await ${code}; }`,
     );
     expect(found).toHaveLength(1);
     expect(found[0]).toContain(finding);
@@ -372,8 +458,20 @@ describe('self-test: the static reading fails on a write', () => {
     ["supabase.from('x').select('a').eq('id', 1).maybeSingle()"],
     ['fetch(url)'],
     ["fetch(url, { method: 'GET' })"],
+    ['supabase.auth.getUser()'],
+    ['adminAuth.auth.getUser(bearer)'],
+    ['supabase.auth.getSession()'],
+    ['supabase.auth.getClaims(token)'],
+    // A string that happens to be named auth (lib/auth/cross-site-request.ts).
+    ['auth?.match(/^Bearer/)'],
+    // A client's own settings (lib/auth/api-context.ts).
+    ['createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })'],
     ["// supabase.from('x').insert({})"],
     ["'.insert( and auth.admin in a string'"],
+    ["// supabase.auth.signOut(); supabase.storage.from('x')"],
+    ["'supabase.auth.signOut() and .storage in a string'"],
+    // What is left of an object under the name auth, not its auth member.
+    ['(({ id, ...auth }: any) => auth)(x)'],
   ])('%s is not', (code) => {
     expect(
       writeFindings(
@@ -449,12 +547,24 @@ describe('self-test: the static reading fails on a write', () => {
 /* ──────────────────────────── 2. the behavioural half ──────────────────────────── */
 
 const USER = '99999999-9999-4999-8999-999999999999';
+const OTHER_USER = '88888888-8888-4888-8888-888888888888';
 const ORG = 'aaaaaaaa-1111-4111-8111-111111111111';
 
 /** How the one round trip fails over to the separate reads. */
 type Trigger = 'off' | 'error' | 'junk' | 'no profile' | 'hidden organization' | 'throw';
 /** Where the separate reads end. */
 type Ending = 'permissions refused' | 'status refused' | 'owner served';
+/** The cookie session as the client has it stored (auth.getSession). */
+type StoredSession = 'held' | 'none' | 'unreadable';
+/**
+ * How the check of the cookie session's token on the server itself goes
+ * (auth.getClaims): it passes, it passes for a token of another account, it
+ * refuses the token, or it cannot be made (the key set cannot be read, as an
+ * answer or as a throw).
+ */
+type LocalCheck = 'passes' | 'another account' | 'refuses' | 'cannot be made' | 'throws';
+/** What the Auth server says about a token it is handed (auth.getUser(token)). */
+type AuthServerAnswer = 'accepts' | 'another account' | 'refuses' | 'throws';
 
 const world = {
   trigger: 'error' as Trigger,
@@ -465,6 +575,10 @@ const world = {
   enrolled: false,
   /** The level of the session the request comes with (the token's claim, or the cookie session's). */
   aal: 'aal1' as 'aal1' | 'aal2',
+  /** How the cookie session's level read goes: the plain way unless a case sets one of these. */
+  session: 'held' as StoredSession,
+  localCheck: 'passes' as LocalCheck,
+  authServer: 'accepts' as AuthServerAnswer,
   calls: [] as string[],
 };
 
@@ -613,9 +727,20 @@ function recordingClient(): unknown {
         get(_target, prop) {
           if (typeof prop === 'symbol' || prop === 'then') return undefined;
           if (prop === 'getUser') {
-            return async () => {
+            return async (token?: string) => {
               world.calls.push('auth.getUser');
               const factors = world.enrolled ? [{ status: 'verified' }] : [];
+              // Handed a token, the Auth server answers about that token:
+              // the Bearer path's identity read, and the cookie session's
+              // level read when the token could not be checked on the server
+              // itself. Only the cases about that level read change the answer.
+              if (token !== undefined && world.authServer !== 'accepts') {
+                if (world.authServer === 'throws') throw new Error('socket closed');
+                if (world.authServer === 'refuses') {
+                  return { data: { user: null }, error: { name: 'AuthApiError', status: 401 } };
+                }
+                return { data: { user: { id: OTHER_USER, factors } }, error: null };
+              }
               return { data: { user: { id: USER, factors } }, error: null };
             };
           }
@@ -624,13 +749,23 @@ function recordingClient(): unknown {
           if (prop === 'getSession') {
             return async () => {
               world.calls.push('auth.getSession');
+              if (world.session === 'unreadable') throw new Error('the cookie would not parse');
+              if (world.session === 'none') return { data: { session: null }, error: null };
               return { data: { session: { access_token: tokenWith(world.aal) } }, error: null };
             };
           }
           if (prop === 'getClaims') {
             return async () => {
               world.calls.push('auth.getClaims');
-              return { data: { claims: { sub: USER, aal: world.aal } }, error: null };
+              if (world.localCheck === 'throws') throw new Error('the key would not import');
+              if (world.localCheck === 'cannot be made') {
+                return { data: null, error: { name: 'AuthRetryableFetchError', status: 503 } };
+              }
+              if (world.localCheck === 'refuses') {
+                return { data: null, error: { name: 'AuthInvalidJwtError', status: 400 } };
+              }
+              const sub = world.localCheck === 'another account' ? OTHER_USER : USER;
+              return { data: { claims: { sub, aal: world.aal } }, error: null };
             };
           }
           world.calls.push(`auth.${prop}`);
@@ -688,6 +823,77 @@ const PATHS = [
   ['cookie', cookie],
 ] as const;
 
+/**
+ * Every way the cookie session's level read (lib/auth/verified-claims.ts) can
+ * end other than the plain one the cases above take (the token checks out on
+ * the server itself): what is set, the auth calls the read then makes after
+ * the identity read, and whether it answers the session's level or nothing.
+ * No answer counts as not verified, and a member with an authenticator gets
+ * no context for it.
+ */
+interface LevelRead {
+  name: string;
+  set: { session?: StoredSession; localCheck?: LocalCheck; authServer?: AuthServerAnswer };
+  asks: string[];
+  answers: boolean;
+}
+const LEVEL_READS: LevelRead[] = [
+  {
+    name: 'the server cannot check the token, and the Auth server accepts it',
+    set: { localCheck: 'cannot be made' },
+    asks: ['auth.getSession', 'auth.getClaims', 'auth.getUser'],
+    answers: true,
+  },
+  {
+    name: 'the check of the token throws, and the Auth server accepts it',
+    set: { localCheck: 'throws' },
+    asks: ['auth.getSession', 'auth.getClaims', 'auth.getUser'],
+    answers: true,
+  },
+  {
+    name: 'the server cannot check the token, and the Auth server refuses it',
+    set: { localCheck: 'cannot be made', authServer: 'refuses' },
+    asks: ['auth.getSession', 'auth.getClaims', 'auth.getUser'],
+    answers: false,
+  },
+  {
+    name: 'the server cannot check the token, and the Auth server answers for another account',
+    set: { localCheck: 'cannot be made', authServer: 'another account' },
+    asks: ['auth.getSession', 'auth.getClaims', 'auth.getUser'],
+    answers: false,
+  },
+  {
+    name: 'the check of the token throws, and the Auth server cannot be reached',
+    set: { localCheck: 'throws', authServer: 'throws' },
+    asks: ['auth.getSession', 'auth.getClaims', 'auth.getUser'],
+    answers: false,
+  },
+  {
+    name: 'the server refuses the token itself',
+    set: { localCheck: 'refuses' },
+    asks: ['auth.getSession', 'auth.getClaims'],
+    answers: false,
+  },
+  {
+    name: 'the token is of another account',
+    set: { localCheck: 'another account' },
+    asks: ['auth.getSession', 'auth.getClaims'],
+    answers: false,
+  },
+  {
+    name: 'no session is stored',
+    set: { session: 'none' },
+    asks: ['auth.getSession'],
+    answers: false,
+  },
+  {
+    name: 'the stored session cannot be read',
+    set: { session: 'unreadable' },
+    asks: ['auth.getSession'],
+    answers: false,
+  },
+];
+
 describe('withApiContext writes nothing: what it does (behaviour)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -702,6 +908,9 @@ describe('withApiContext writes nothing: what it does (behaviour)', () => {
     delete process.env.REQUEST_CONTEXT_RPC;
     world.enrolled = false;
     world.aal = 'aal1';
+    world.session = 'held';
+    world.localCheck = 'passes';
+    world.authServer = 'accepts';
     world.calls = [];
     refs.client = recordingClient();
   });
@@ -798,18 +1007,70 @@ describe('withApiContext writes nothing: what it does (behaviour)', () => {
     },
   );
 
+  // The cookie session's level read, every other way it can end, for a member
+  // with an authenticator whose session has its code. The Bearer path never
+  // makes this read: its level is the token's own claim.
+  const levelCases = LEVEL_READS.flatMap(
+    (read): Array<[string, Ending | 'no context', LevelRead]> =>
+      read.answers
+        ? ENDINGS.map((ending) => [read.name, ending, read])
+        : [[read.name, 'no context', read]],
+  );
+
+  it.each(levelCases)(
+    "the cookie session's level read, when %s, %s: reads only",
+    async (_name, ending, read) => {
+      vi.spyOn(console, 'info').mockImplementation(() => {});
+      world.enrolled = true;
+      world.aal = 'aal2';
+      Object.assign(world, read.set);
+      world.trigger = 'error';
+      world.role = ending === 'owner served' ? 'owner' : 'staff';
+      world.statusReadFails = ending === 'status refused';
+      world.overrideReadFails = ending !== 'status refused';
+
+      const outcome = await withApiContext(cookie()).then(
+        (ctx) => ({ ctx }),
+        (error: unknown) => ({ error }),
+      );
+
+      const database = world.calls.filter((c) => c.startsWith('from:') || c.startsWith('rpc:'));
+      if (ending === 'no context') {
+        // Not verified: no context, and nothing was read from the database for it.
+        expect(outcome).toEqual({ ctx: null });
+        expect(database).toEqual([]);
+      } else if (ending === 'permissions refused') {
+        expect(outcome).toEqual({ error: expect.any(PermissionsUnavailableError) });
+      } else if (ending === 'status refused') {
+        expect(outcome).toEqual({ error: expect.any(AccountStatusUnavailableError) });
+      } else {
+        expect('ctx' in outcome && outcome.ctx?.role).toBe('owner');
+        expect('ctx' in outcome && outcome.ctx?.mfaSatisfied).toBe(true);
+      }
+      if (ending !== 'no context') expect(database).toContain('from:user_profiles');
+      // It really took this way through the read: the identity, then exactly these.
+      expect(world.calls.filter((c) => c.startsWith('auth.'))).toEqual([
+        'auth.getUser',
+        ...read.asks,
+      ]);
+      expect(writesIn(world.calls)).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
   it('the recording client does record a write, so the rule above can fail', async () => {
     world.trigger = 'error';
     const client = recordingClient() as {
       from: (t: string) => { insert: (r: unknown) => unknown };
       rpc: (n: string) => Promise<unknown>;
       storage: { from: (b: string) => { upload: () => unknown } };
-      auth: { admin: { deleteUser: (id: string) => unknown } };
+      auth: { admin: { deleteUser: (id: string) => unknown }; signOut: () => unknown };
     };
     client.from('stock_movements').insert({});
     await client.rpc('adjust_stock');
     client.storage.from('item-images').upload();
     client.auth.admin.deleteUser(USER);
+    client.auth.signOut();
     expect(writesIn(world.calls)).toEqual([
       'stock_movements.insert',
       'rpc:adjust_stock null null',
@@ -821,6 +1082,8 @@ describe('withApiContext writes nothing: what it does (behaviour)', () => {
       'auth.admin',
       'auth.admin.deleteUser',
       'auth.admin.deleteUser()',
+      'auth.signOut',
+      'auth.signOut()',
     ]);
   });
 });
