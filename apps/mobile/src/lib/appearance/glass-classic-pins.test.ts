@@ -38,7 +38,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
   'app/cycle-count/[id].tsx': '225237c617095b0e9b0857ca262bbefdb109bc9524436b38f1d34309b31e731e',
   'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
-  'app/order/[id].tsx': 'fe0632b2ab978336d25fd87fcca26c0b30931d8cef06edd4216aeda13304ce6f',
+  // Re-pinned for F14 (Classic is meant to change: the RETURN REQUEST section
+  // under each of the requester's own open requests). Before F14 the
+  // projection was fe0632b2…04ce6f, the pin it had; the difference is that
+  // section and its read, nothing else.
+  'app/order/[id].tsx': 'f7b165096c9d4fc39093b1d99f19c9c7a53926906bb95ebeaba1a8802bd9cb90',
   'app/po/[id].tsx': 'ae76a1de33a4ed14e77b401349006835bb401d9c8f8c77f036f384a989496e74',
   'src/components/biometric-optin-sheet.tsx':
     '2a1823f24f727ab701e3f4383bd35b5be640ee2076cb8f683d8ea2dcb902b30e',
@@ -171,8 +175,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '3362738fd397318103cbc206abd417a888f9505b3bfbfbf31aa7838dd83a1569',
   'src/components/return-action-sheet.tsx':
     '56f1685cf889104f4adbb856c15c02e5c80dd647fdd6c2d847a4cb0b6b7ef0a4',
+  // Re-pinned for F14 (Classic is meant to change: the RETURN REQUEST section
+  // and Report a problem above History). Before F14 the projection was
+  // f8b2d3c8…b3932e, the pin it had.
   'src/components/return-workbench-view.tsx':
-    'f8b2d3c8c57b2e070ba709b1ac77663cfaecf187ef394f396013b8ee2eb3932e',
+    '8e20550ba2815eb5d2b893f8b26716c42a0c5809dfda6d7334ea51208774c908',
   'src/screens/categories.tsx': '3c31c776ea56b481cb1619c33088457d8ef01a64c121b896aaecf27f55baa9d6',
   'src/screens/locations.tsx': '1555608ee36096b69974e2e8d4267699bdb2736337cd36bc0f294ff8f9d21389',
   'src/screens/movements.tsx': '432d5df04a0e1e16e12d774f5385bee77b1ea15830fbb80fb98bd6d665524a52',

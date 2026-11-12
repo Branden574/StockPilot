@@ -44,6 +44,8 @@ import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOfflineState } from '@/lib/exceptions-api';
 import {
+  RETURN_PROBLEM_LABEL,
+  RETURN_REQUEST_COPY,
   returnProblemLaunchParams,
   returnRequestContentForWorkbench,
   returnRequestEmailFromWorkbench,
@@ -133,11 +135,20 @@ export function ReturnWorkbenchView({
   const [notice, setNotice] = React.useState<string | null>(null);
   // F14: the mailboxes and the link for "Email return request", as the
   // workbench READ answered them (GET /api/v1/returns/[id]
-  // `returnRequestEmail`). Kept apart from `wb` because an action's answer
-  // (the steps route) is a workbench without that field, and adopting it
-  // must not take the section away. An older server sends no field: no
+  // `returnRequestEmail`). Remembered apart from `wb` because an action's
+  // answer (the steps route) is a workbench without that field, and adopting
+  // it must not take the section away: the last answer that carried the
+  // field stays, adjusted during render like the returnId reset below (no
+  // effect, no cascading render). An older server sends no field: no
   // mailboxes, no section (lib/return-request-actions.ts).
-  const [requestEmail, setRequestEmail] = React.useState<ReturnRequestEmailForReturn>(NO_REQUEST_EMAIL);
+  const [requestEmailSource, setRequestEmailSource] = React.useState<unknown>(undefined);
+  if (wb && wb.returnRequestEmail !== undefined && wb.returnRequestEmail !== requestEmailSource) {
+    setRequestEmailSource(wb.returnRequestEmail);
+  }
+  const requestEmail = React.useMemo<ReturnRequestEmailForReturn>(
+    () => returnRequestEmailFromWorkbench(requestEmailSource),
+    [requestEmailSource],
+  );
   // F14, "Report a problem": the item screen's two-part gate (the maintenance
   // module on, and maintenance_requests:submit). Cosmetic: the form and the
   // server check both again.
@@ -156,10 +167,7 @@ export function ReturnWorkbenchView({
     setLoadError(null);
     try {
       const next = await getReturnWorkbench(returnId);
-      if (reads.isCurrent(seq)) {
-        setWb(next);
-        setRequestEmail(returnRequestEmailFromWorkbench(next.returnRequestEmail));
-      }
+      if (reads.isCurrent(seq)) setWb(next);
     } catch (e) {
       if (reads.isCurrent(seq)) setLoadError(describeReturnError(e));
     } finally {
@@ -183,7 +191,7 @@ export function ReturnWorkbenchView({
     setWb(null);
     setSheet(null);
     setNotice(null);
-    setRequestEmail(NO_REQUEST_EMAIL);
+    setRequestEmailSource(undefined);
   }
 
   React.useEffect(() => {
@@ -668,11 +676,19 @@ export function ReturnWorkbenchView({
             surface="return"
             content={requestContent}
             recipients={requestEmail.recipients}
+            heading={
+              lg ? (
+                <GlassHeading>{sentenceCase(RETURN_REQUEST_COPY.eyebrow)}</GlassHeading>
+              ) : (
+                <Eyebrow accessibilityRole="header">{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>
+              )
+            }
           />
         ) : null}
         {canReportProblem ? (
           <Button
             block
+            wrap
             variant="outline"
             onPress={() =>
               router.push({
@@ -684,7 +700,7 @@ export function ReturnWorkbenchView({
             }
             leading={<Wrench size={16} color={c.ink} strokeWidth={1.5} />}
           >
-            Report a problem
+            {RETURN_PROBLEM_LABEL}
           </Button>
         ) : null}
 
@@ -735,8 +751,6 @@ export function ReturnWorkbenchView({
     </>
   );
 }
-
-const NO_REQUEST_EMAIL: ReturnRequestEmailForReturn = { recipients: null, link: null };
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32, gap: 14 },

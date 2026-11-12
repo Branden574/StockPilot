@@ -249,6 +249,7 @@ import {
 } from '@/lib/delivery-request-actions';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
 import {
+  RETURN_REQUEST_COPY,
   anyReturnRequestSendable,
   getReturnRequestEmailForOrder,
   returnRequestContentForTracking,
@@ -3854,6 +3855,7 @@ export default function OrderDetail() {
                             surface="order"
                             content={content}
                             recipients={returnRequestEmail.recipients}
+                            heading={<Eyebrow>{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>}
                           />
                         ) : null}
                       </React.Fragment>

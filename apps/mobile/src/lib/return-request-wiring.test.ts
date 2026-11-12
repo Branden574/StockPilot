@@ -66,24 +66,36 @@ describe('the RETURN REQUEST section', () => {
     expect(section).not.toMatch(/>\s*[^<{]*\b(sent|ticket)\b/i);
   });
 
-  it('draws for Classic and Liquid Glass: the glass heading under glass, the eyebrow otherwise', () => {
-    expect(section).toContain('useGlass()');
-    expect(section).toMatch(/lg \? \(\s*<GlassHeading>\{sentenceCase\(RETURN_REQUEST_COPY\.eyebrow\)\}<\/GlassHeading>/);
-    expect(section).toContain('<Eyebrow accessibilityRole="header">{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>');
+  it('branches on neither design itself: the screen passes its own heading', () => {
+    expect(section).not.toContain('useGlass');
+    expect(section).toContain('{heading}');
+    // The return screen: the glass heading under Liquid Glass, the eyebrow
+    // under Classic, as its other sections. The order screen: its eyebrow.
+    expect(workbench).toMatch(
+      /heading=\{\s*lg \? \(\s*<GlassHeading>\{sentenceCase\(RETURN_REQUEST_COPY\.eyebrow\)\}<\/GlassHeading>\s*\) : \(\s*<Eyebrow accessibilityRole="header">\{RETURN_REQUEST_COPY\.eyebrow\}<\/Eyebrow>/,
+    );
+    expect(order).toContain('heading={<Eyebrow>{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>}');
+  });
+
+  it('every button label may wrap (Dynamic Type)', () => {
+    expect(section.match(/<Button\b/g)).toHaveLength(2);
+    expect(section.match(/<Button\s+block\s+wrap\b/g)).toHaveLength(2);
   });
 });
 
 describe('the return screen', () => {
   it('draws the section only behind the gate, from the mailboxes the read answered', () => {
-    expect(workbench).toContain('setRequestEmail(returnRequestEmailFromWorkbench(next.returnRequestEmail))');
+    expect(workbench).toContain(
+      'if (wb && wb.returnRequestEmail !== undefined && wb.returnRequestEmail !== requestEmailSource) {',
+    );
+    expect(workbench).toContain('returnRequestEmailFromWorkbench(requestEmailSource)');
     expect(workbench).toContain('returnRequestContentForWorkbench({ ...wb, exchange: ex }, requestEmail)');
     expect(workbench).toMatch(/\{requestContent && requestEmail\.recipients \? \(\s*<ReturnRequestSection/);
     expect(workbench).toContain('surface="return"');
     expect(workbench).toContain('orderId={r.orderRequestId}');
-    // An action's answer never clears it; another return does.
-    const adopt = workbench.slice(workbench.indexOf('function adopt('), workbench.indexOf('function adopt(') + 200);
-    expect(adopt).not.toContain('setRequestEmail');
-    expect(workbench).toContain('setRequestEmail(NO_REQUEST_EMAIL);');
+    // An action's answer (no field) never clears it; another return does.
+    expect(workbench.match(/setRequestEmailSource\(/g)).toHaveLength(2);
+    expect(workbench).toContain('setRequestEmailSource(undefined);');
   });
 
   it("offers Report a problem behind the item screen's two gates, with the order and the return number", () => {
@@ -91,6 +103,7 @@ describe('the return screen', () => {
       "enabledModules.has('maintenance_requests') && showWriteCta(permissions, 'maintenance_requests:submit')",
     );
     expect(workbench).toMatch(/\{canReportProblem \? \(\s*<Button/);
+    expect(workbench).toContain('{RETURN_PROBLEM_LABEL}');
     expect(workbench).toContain("pathname: '/maintenance/new'");
     expect(workbench).toContain('params: returnProblemLaunchParams(r)');
   });

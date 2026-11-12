@@ -6,10 +6,7 @@ import type { DeliveryRequestRecipients, ReturnRequestEmailContent } from '@stoc
 
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { GlassHeading } from '@/components/ui/glass/parts';
-import { sentenceCase } from '@/components/ui/glass/screens/item';
-import { useGlass } from '@/components/ui/glass/use-glass';
-import { Body, Eyebrow } from '@/components/ui/text';
+import { Body } from '@/components/ui/text';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
 import {
   RETURN_REQUEST_COPY,
@@ -43,23 +40,26 @@ import { useTheme } from '@/lib/use-theme';
  * server's record checks the member again.
  *
  * Classic and Liquid Glass: the shared Button, Card and text primitives draw
- * themselves for either design; the heading is the glass heading under
- * Liquid Glass and the eyebrow under Classic, as on the return screen.
+ * themselves for either design, so this file branches on neither. The
+ * heading is the screen's own (`heading`): each screen passes the heading
+ * its other sections use, so the section sits in the screen like a sibling.
  */
 export function ReturnRequestSection({
   orderId,
   surface,
   content,
   recipients,
+  heading,
 }: {
   /** The order the return is on (the record is keyed to it; a hint only). */
   orderId: string;
   surface: 'order' | 'return';
   content: ReturnRequestEmailContent;
   recipients: DeliveryRequestRecipients;
+  /** The screen's own section heading (an eyebrow, or its glass heading). */
+  heading: React.ReactNode;
 }) {
   const { c } = useTheme();
-  const lg = useGlass();
 
   // ONE probe, whose answer feeds the prepare call and nothing else: the
   // opener follows the transport stamped on the prepared draft, so what is
@@ -126,17 +126,14 @@ export function ReturnRequestSection({
 
   return (
     <View style={{ gap: 8 }}>
-      {lg ? (
-        <GlassHeading>{sentenceCase(RETURN_REQUEST_COPY.eyebrow)}</GlassHeading>
-      ) : (
-        <Eyebrow accessibilityRole="header">{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>
-      )}
+      {heading}
       <Card padding={14}>
         <View style={{ gap: 8 }}>
           {/* The outline, as the order's Email delivery request: it opens a
               draft and commits nothing. */}
           <Button
             block
+            wrap
             variant="outline"
             onPress={handlePress}
             disabled={opening}
@@ -204,7 +201,7 @@ export function ReturnRequestSection({
               </Body>
             </>
           ) : (
-            <Button block variant="outline" onPress={() => setCopyOpen(true)}>
+            <Button block wrap variant="outline" onPress={() => setCopyOpen(true)}>
               {RETURN_REQUEST_COPY.copy}
             </Button>
           )}

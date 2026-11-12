@@ -252,6 +252,9 @@ export function shouldWarnReturnRequestDuplicate(openCount: number): boolean {
   return openCount > 0;
 }
 
+/** The label of the return screen's launch point (the item screen's words). */
+export const RETURN_PROBLEM_LABEL = 'Report a problem';
+
 /** "Report a problem" from a return: the order attached, the return named in the subject. */
 export function returnProblemLaunchParams(ret: {
   orderRequestId: string;
