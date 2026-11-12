@@ -59,6 +59,9 @@ vi.mock('@/server/actions/returns', () => ({
   buyReturnLabelAction: vi.fn(),
 }));
 
+import * as React from 'react';
+
+import { ReturnWorkbench } from '@/components/returns/return-workbench';
 import { ServiceError } from '@/server/services/context';
 
 import ReturnDetailPage from './page';
@@ -228,6 +231,39 @@ describe('the RMA workbench page: Send return request and Report a problem (F14)
       'Email routing for delivery requests is not configured for this organization, so the return request email is hidden. Set it in Settings → Email routing.',
     );
     expect(hint()!.querySelector('a')).toHaveAttribute('href', '/dashboard/settings/email-routing');
+  });
+
+  it('the mailboxes reach the client only while the button can show: none for a closed, denied or cancelled return', async () => {
+    // ReturnWorkbench is a client component, so its props are written into
+    // the page's HTML whether or not it draws the button; read them off the
+    // element the page returns.
+    const workbenchProps = (node: unknown): { returnRequest: { recipients: unknown } } => {
+      if (!React.isValidElement(node)) throw new Error('no element');
+      if (node.type === ReturnWorkbench) return node.props as never;
+      const children = React.Children.toArray((node.props as { children?: React.ReactNode }).children);
+      for (const child of children) {
+        try {
+          return workbenchProps(child);
+        } catch {
+          // not under this child
+        }
+      }
+      throw new Error('no ReturnWorkbench');
+    };
+    routing.value = VALID;
+    for (const status of ['closed', 'denied', 'cancelled']) {
+      workbench.mockResolvedValueOnce(bench({ return: { ...bench().return, status } }));
+      const props = workbenchProps(await ReturnDetailPage(args));
+      expect(props.returnRequest.recipients, status).toBeNull();
+      expect(JSON.stringify(props.returnRequest), status).not.toContain('intake@warehouse.test');
+    }
+    workbench.mockResolvedValueOnce(bench({ return: { ...bench().return, returnNumber: null } }));
+    expect(workbenchProps(await ReturnDetailPage(args)).returnRequest.recipients).toBeNull();
+    // Control: an open, numbered return hands them over.
+    workbench.mockResolvedValueOnce(bench());
+    expect(workbenchProps(await ReturnDetailPage(args)).returnRequest.recipients).toEqual(
+      expect.objectContaining({ to: 'intake@warehouse.test', cc: 'copy@warehouse.test' }),
+    );
   });
 
   it('a closed, denied or cancelled return has no Send return request and no hint', async () => {

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -19,7 +19,7 @@ import {
   type ReturnRequestEmailContent,
 } from '@stockpilot/core';
 
-import { ReturnRequestAction } from './return-request-action';
+import { RETURN_REQUEST_PRESS_BURST_MS, ReturnRequestAction } from './return-request-action';
 import { SendReturnRequestButton } from './send-return-request-button';
 
 // Reserved test domains only. Nothing here can reach a real mailbox, and no
@@ -87,6 +87,21 @@ function renderAction(over: Partial<Parameters<typeof ReturnRequestAction>[0]> =
   );
 }
 const primary = () => screen.getByRole('button', { name: 'Email return request' });
+
+/** Fake timers that still move with the clock (so waitFor and userEvent run),
+ *  and a step past one press's burst. */
+function useBurstClock() {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  return userEvent.setup({ advanceTimers: (ms) => vi.advanceTimersByTime(ms) });
+}
+function passTheBurst() {
+  act(() => {
+    vi.advanceTimersByTime(RETURN_REQUEST_PRESS_BURST_MS);
+  });
+}
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('ReturnRequestAction: opening the draft', () => {
   it('opens the web compose link the default prepare measured, with no features string, and cuts the opener', async () => {
@@ -158,24 +173,57 @@ describe('ReturnRequestAction: a second draft', () => {
   });
 
   it('a second press is warned about, not refused: it opens and records again', async () => {
+    const user = useBurstClock();
     renderAction();
-    await userEvent.click(primary());
-    await userEvent.click(primary());
+    await user.click(primary());
+    passTheBurst();
+    await user.click(primary());
     expect(openSpy).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(recordAction).toHaveBeenCalledTimes(2));
+  });
+
+  it('a double click is one press: one window.open, one record, and the button is disabled for the burst', async () => {
+    // The skeptic round (2026-11-12, replay.log line 2): a real double click
+    // called window.open twice and opened two drafts.
+    const user = useBurstClock();
+    renderAction();
+    await user.dblClick(primary());
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(recordAction).toHaveBeenCalledTimes(1));
+    expect(primary()).toBeDisabled();
+    // A third click inside the same burst opens nothing either.
+    await user.click(primary());
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    passTheBurst();
+    expect(primary()).toBeEnabled();
+  });
+
+  it('a double click on a blocked pop-up navigates to mailto once and tries window.open once', async () => {
+    openSpy.mockReturnValue(null as unknown as Window);
+    const user = useBurstClock();
+    renderAction();
+    await user.dblClick(primary());
+    expect(openSpy).toHaveBeenCalledTimes(1);
+    expect(assignSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Try Outlook Again' })).toBeDisabled();
+    passTheBurst();
+    expect(screen.getByRole('button', { name: 'Try Outlook Again' })).toBeEnabled();
   });
 });
 
 describe('ReturnRequestAction: pop-up blocked', () => {
   it('shows the panel, navigates to mailto once, and records nothing', async () => {
     openSpy.mockReturnValue(null as unknown as Window);
+    const user = useBurstClock();
     renderAction();
-    await userEvent.click(primary());
+    await user.click(primary());
     expect(await screen.findByText('Outlook could not be opened automatically.', { selector: 'p' })).toBeInTheDocument();
     expect(assignSpy).toHaveBeenCalledTimes(1);
     expect(String(assignSpy.mock.calls[0]![0])).toMatch(/^mailto:intake@warehouse\.test\?cc=copy%40warehouse\.test/);
     expect(recordAction).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    passTheBurst();
+    await user.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    expect(openSpy).toHaveBeenCalledTimes(2);
     expect(assignSpy).toHaveBeenCalledTimes(1);
     expect(recordAction).not.toHaveBeenCalled();
     expect(screen.getByTestId('return-request-live')).not.toHaveTextContent(RETURN_REQUEST_COPY.success);
@@ -183,9 +231,11 @@ describe('ReturnRequestAction: pop-up blocked', () => {
 
   it('a later press that does open is recorded, and the panel goes', async () => {
     openSpy.mockReturnValueOnce(null as unknown as Window);
+    const user = useBurstClock();
     renderAction();
-    await userEvent.click(primary());
-    await userEvent.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
+    await user.click(primary());
+    passTheBurst();
+    await user.click(screen.getByRole('button', { name: 'Try Outlook Again' }));
     await waitFor(() => expect(recordAction).toHaveBeenCalledTimes(1));
     expect(screen.queryByText('Outlook could not be opened automatically.', { selector: 'p' })).not.toBeInTheDocument();
   });

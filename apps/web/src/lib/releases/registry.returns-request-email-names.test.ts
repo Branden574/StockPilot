@@ -334,7 +334,7 @@ describe('the returns request and names release: the code its words rest on', ()
     expect(page).toContain(
       "const returnRequestGate = isOwnRequest && !can(ctx, 'returns:manage') && returnsModuleGate;",
     );
-    expect(page).toContain('requesterTrackingEligible && returnRequestRecipients');
+    expect(page).toContain('requesterTrackingEligible && returnRequestSendable && returnRequestRecipients');
     expect(source('components/returns/requester-tracking.tsx')).toContain(
       '<SendReturnRequestButton',
     );

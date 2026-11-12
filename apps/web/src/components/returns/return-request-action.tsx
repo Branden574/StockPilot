@@ -48,8 +48,19 @@ import { recordReturnRequestDraftedAction } from '@/server/actions/return-reques
  * component already lives inside a dialog. The warning shows as soon as one
  * draft was opened, so it is read before the second press, not after it.
  *
+ * A double click is one press, not two: after a press the open buttons are
+ * disabled for RETURN_REQUEST_PRESS_BURST_MS, and a click that still arrives
+ * in that time (checked on a ref, so it holds before React re-renders) opens
+ * nothing. Before this, a real double click called window.open twice and
+ * opened two drafts (skeptic round 2026-11-12, replay.log). The phone guards
+ * the same way: its button is disabled while the open is under way.
+ *
  * The words are core's RETURN_REQUEST_COPY, shared with the phone.
  */
+/** How long one press holds the open buttons: longer than any double click,
+ *  short enough that a deliberate second draft is a moment away. */
+export const RETURN_REQUEST_PRESS_BURST_MS = 1000;
+
 export interface ReturnRequestActionProps {
   /** The order the return is on: the record is keyed to it. A hint only; the
    *  server checks it against the caller's organization. */
@@ -100,9 +111,28 @@ function ReturnRequestActionInner({
   // One automatic mailto: navigation per visit (a second would open a second
   // draft while the first prompt is still up).
   const mailtoAttemptedRef = React.useRef(false);
+  // The press burst: the ref answers a click that lands before the re-render,
+  // the state disables the buttons for everyone else to see.
+  const burstRef = React.useRef(false);
+  const [opening, setOpening] = React.useState(false);
+  const burstTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  React.useEffect(
+    () => () => {
+      if (burstTimerRef.current !== null) clearTimeout(burstTimerRef.current);
+    },
+    [],
+  );
 
   function openDraft() {
     if (!prepared.linkFits) return; // The oversized note below is the answer.
+    if (burstRef.current) return; // The same press: one draft.
+    burstRef.current = true;
+    setOpening(true);
+    burstTimerRef.current = setTimeout(() => {
+      burstRef.current = false;
+      burstTimerRef.current = null;
+      setOpening(false);
+    }, RETURN_REQUEST_PRESS_BURST_MS);
 
     let opened: Window | null = null;
     try {
@@ -181,7 +211,7 @@ function ReturnRequestActionInner({
   return (
     <div className="space-y-3" data-testid="return-request-action">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" onClick={openDraft} disabled={!prepared.linkFits}>
+        <Button type="button" onClick={openDraft} disabled={!prepared.linkFits || opening}>
           <Mail className="h-4 w-4" aria-hidden="true" />
           {RETURN_REQUEST_COPY.primary}
         </Button>
@@ -231,7 +261,7 @@ function ReturnRequestActionInner({
           <p className="text-foreground font-medium">{RETURN_REQUEST_COPY.blocked}</p>
           <p className="text-muted-foreground">{RETURN_REQUEST_COPY.blockedRetry}</p>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" size="sm" variant="outline" onClick={openDraft}>
+            <Button type="button" size="sm" variant="outline" onClick={openDraft} disabled={opening}>
               <Mail className="h-4 w-4" aria-hidden="true" />
               {RETURN_REQUEST_COPY.retry}
             </Button>

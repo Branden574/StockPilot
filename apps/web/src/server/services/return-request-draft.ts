@@ -15,7 +15,16 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 export const RETURN_REQUEST_DRAFTED_PER_HOUR = 60;
 
 const schema = z.object({
-  orderId: z.string().uuid(),
+  // Lower case, as the member requester gate hands its routes the id
+  // (orders/[id]/return-request/http.ts): a uuid column matches either case,
+  // but the audit row's entity id is jsonb text stored as given, and the
+  // order's timeline finds its rows by a text match on it
+  // (metadata->>entity_id, components/orders/order-timeline.tsx), so a row
+  // keyed in upper case would never show beside the others.
+  orderId: z
+    .string()
+    .uuid()
+    .transform((id) => id.toLowerCase()),
   returnNumber: z.string().refine(isReturnNumberShape),
   isCondensed: z.boolean(),
   surface: z.enum(['order', 'return']),

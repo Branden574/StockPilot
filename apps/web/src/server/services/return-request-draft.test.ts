@@ -89,6 +89,19 @@ describe('recordReturnRequestDrafted', () => {
     );
   });
 
+  it('an order id sent in upper case is read and recorded in lower case, as the member requester gate hands it on', async () => {
+    // The skeptic round (2026-11-12, api.log line 35): the phone route stored
+    // the path's id as sent, so the row was keyed in upper case and the
+    // order's timeline (a text match on metadata->>entity_id) never found it.
+    const stub = stubFor();
+    const ctx = ctxFor(stub.client, { role: 'staff', userId: REQUESTER });
+    const res = await recordReturnRequestDrafted(ctx as never, { ...INPUT, orderId: ORDER.toUpperCase() });
+    expect(res).toEqual({ recorded: true });
+    expect((auditSpy.mock.calls[0]![0] as { entityId: unknown }).entityId).toBe(ORDER);
+    expect(filtersOf(stub, 'order_requests.select')).toEqual(expect.arrayContaining([['eq', 'id', ORDER]]));
+    expect(filtersOf(stub, 'returns.select')).toEqual(expect.arrayContaining([['eq', 'order_request_id', ORDER]]));
+  });
+
   it('writes for a member who can read returns and is not the requester', async () => {
     const stub = stubFor();
     const ctx = ctxFor(stub.client, { role: 'manager', userId: 'someone-else' });
