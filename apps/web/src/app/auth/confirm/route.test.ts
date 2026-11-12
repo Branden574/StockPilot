@@ -779,15 +779,14 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
   });
 });
 
-// PR-1 of S25: a link without r (sent before this release, which expires
-// within the hour, or built by hand) still gets the page it got before, with
-// S14's notice when signed in, and is logged with its type only. The next
-// release refuses it.
-describe('GET /auth/confirm for a link without r (until the next release)', () => {
+// S25's first release: a link written by an earlier build carries no r. It
+// gets the page it got before, with S14's notice when signed in, and is
+// logged with its type only. The next release requires r on every link.
+describe('GET /auth/confirm for a link written before S25', () => {
   const NOTICE =
     'If this link was sent to a different account, continuing signs you in to that account instead.';
 
-  it("today's page, with the notice naming the account this browser is signed in as, and a log line with the type only", async () => {
+  it('the page as before, with the notice naming the account this browser is signed in as, and a log line with the type only', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     signedInAs(USER_B, EMAIL_B);
     const res = await GET(getReq('token_hash=abc123&type=recovery&next=%2Freset%2Fcomplete'));
@@ -956,7 +955,7 @@ describe('POST /auth/confirm checks r before the token is spent (S25)', () => {
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
-  it('a press without r (until the next release): verified as today, and logged with its type only', async () => {
+  it('a press from a link written before S25: answered as before, and logged with its type only', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
     verifyOtp.mockResolvedValue({ error: null });
     const res = await POST(

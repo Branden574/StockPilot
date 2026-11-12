@@ -73,11 +73,11 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     account was on screen. No element has an id, so no link can open the
  *     page scrolled to the button;
  *   - where a link lands is fixed by its type (lib/auth/confirm-landing.ts).
- * A link without `r` (sent before S25's first release, so expired within the
- * hour, or built by hand) still gets the page it got before and is logged;
- * the next release refuses it. What stays open: a person who reads another
- * account's address and presses anyway, or is talked into pressing again
- * later (INV-E5, "Not covered").
+ * A link written by a build from before S25's first release carries no `r`:
+ * it gets the page it got before, with the gate, and is logged with its type.
+ * The next release requires `r` on every link. What stays open: a person who
+ * reads another account's address and presses anyway, or is talked into
+ * pressing again later (INV-E5, "Not covered").
  */
 
 /** Only the email types we actually send through this route. 'magiclink' is
@@ -296,9 +296,9 @@ async function signedInAccount(): Promise<{ id: string; email: string | null } |
 }
 
 /**
- * A link without `r` in a browser that is already signed in (S14's notice):
- * the page cannot say whose the link is, so it says what pressing on may do.
- * The next release refuses such a link.
+ * S14's notice, for a link written before S25's first release in a browser
+ * that is already signed in: such a link names no account, so the page says
+ * what pressing on may do. It goes when the next release requires `r`.
  */
 function signedInNotice(email: string | null): string {
   const who = email
@@ -409,9 +409,9 @@ export async function GET(request: NextRequest) {
   const r = searchParams.get('r');
 
   if (r === null) {
-    // A link without r: sent before S25's first release (expired within the
-    // hour), or built by hand. Until the next release it gets the page it got
-    // before; the log line, type only, says when none are left.
+    // A link written by a build from before S25's first release carries no
+    // r. It gets the page it got before, and the log line, type only, shows
+    // when no such link is opened any more. The next release requires r.
     console.info('[auth/confirm] link without a recipient', { type });
     const signedIn = await signedInAccount();
     return confirmPage({
@@ -523,7 +523,8 @@ export async function POST(request: NextRequest) {
     if (verdict.status === 'stale') return expiredAnswer(origin, type);
     recipient = verdict.userId;
   } else {
-    // Until the next release, verified as before (see GET).
+    // A link written before S25's first release: verified as before, and
+    // logged (see GET).
     console.info('[auth/confirm] link without a recipient', { type: loggedType(type) });
   }
 

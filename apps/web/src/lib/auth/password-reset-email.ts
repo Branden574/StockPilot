@@ -66,9 +66,9 @@ export async function sendPasswordResetEmail(email: string): Promise<boolean> {
       userId: data?.user?.id,
     });
     if (!resetUrl) {
-      // No key to sign with, or GoTrue returned no usable id: a link without
-      // `r` is refused from the next release on, so send nothing. Reported
-      // without the token, the id or the address.
+      // No key to sign with, or GoTrue returned no usable id: the link could
+      // not name its account, so send nothing. Reported without the token,
+      // the id or the address.
       void reportError(new Error('a recovery link could not be signed for its account'), {
         tag: 'auth.confirm_link_unsigned',
       });

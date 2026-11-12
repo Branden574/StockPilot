@@ -47,8 +47,8 @@ export type ConfirmLinkRequest = {
 
 /**
  * The link, or null when it cannot be signed (no key, a user id that is not a
- * UUID, or a token hash outside GoTrue's shape). Never send a link without r:
- * the next release refuses one.
+ * UUID, or a token hash outside GoTrue's shape). A builder that gets null
+ * sends nothing: every link the app sends names its account.
  */
 export function confirmLinkUrl(link: ConfirmLinkRequest): string | null {
   const now = link.now ?? new Date();

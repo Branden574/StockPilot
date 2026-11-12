@@ -62,7 +62,7 @@ function runGate(): { form: HTMLFormElement; button: HTMLButtonElement } {
   };
 }
 
-/** The form alone: a page that names no address (a link without r, until PR-2). */
+/** The form alone: a page that names no address (a link written before S25's first release). */
 function mount(): { form: HTMLFormElement; button: HTMLButtonElement } {
   document.body.innerHTML = `<main>
     <form method="post" action="/auth/confirm" ${PRESS_GATE_FORM_ATTR}>
