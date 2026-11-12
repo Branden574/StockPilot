@@ -1,0 +1,21 @@
+{
+  "source": "1c9abdd2e43c729409177499c45764b23888a85c",
+  "files": [
+    "app/(auth)/auth.css",
+    "app/globals.css",
+    "components/orders/public-v2/public-orders.css",
+    "components/orders/storefront/storefront.css",
+    "components/po/po-list.css"
+  ],
+  "imports": {
+    "app/globals.css": ["@import 'tailwindcss'", "@plugin 'tailwindcss-animate'"]
+  },
+  "stylesheetImports": [
+    "app/(auth)/auth.css",
+    "app/globals.css",
+    "components/orders/public-v2/public-orders.css",
+    "components/orders/storefront/storefront.css",
+    "components/po/po-list.css",
+    "maplibre-gl/dist/maplibre-gl.css"
+  ]
+}

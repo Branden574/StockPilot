@@ -24,6 +24,20 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Card, Hair } from '@/components/ui/card';
+import { GlassHeading, GlassSubline, GlassTile } from '@/components/ui/glass/parts';
+import { glassRowSub } from '@/components/ui/glass/primitive-styles';
+import {
+  GLASS_PAGE,
+  GLASS_TAB_PREVIEW,
+  GLASS_TILED_INSET,
+  glassControlChip,
+  glassSettingTitle,
+  inkAlpha,
+} from '@/components/ui/glass/screens/admin';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
@@ -112,6 +126,9 @@ try {
  */
 export default function CustomizeTabsScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: the IosTabBar board as the live preview over iOS
+  // grouped rows): every move, add, remove and reset control stays.
+  const lg = useGlass();
   const router = useRouter();
   const { user } = useAuth();
   const userId = user?.id ?? null;
@@ -207,9 +224,10 @@ export default function CustomizeTabsScreen() {
   };
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -220,24 +238,34 @@ export default function CustomizeTabsScreen() {
             minTap
           />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SETTINGS · TAB BAR</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Bottom <Em>tabs.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {lg ? null : <Eyebrow>SETTINGS · TAB BAR</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Bottom {lg ? 'tabs' : <Em>tabs.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Settings · Tab bar</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
+        contentContainerStyle={
+          lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
+        }
         showsVerticalScrollIndicator={false}
       >
         {/* Live preview of the REAL bar — Home pinned, then the chosen slots
             in order with gating applied (a currently-unavailable choice is
             absent here but stays editable in the list below). Label sizing
             mirrors the real bar's density tiers (previewLabelStyleForCount). */}
-        <Card padding={0} style={{ marginTop: 14 }}>
-          <View style={styles.preview}>
+        <Card
+          padding={0}
+          style={lg ? [{ marginTop: 14 }, GLASS_TAB_PREVIEW.card] : { marginTop: 14 }}
+        >
+          <View style={lg ? GLASS_TAB_PREVIEW.row : styles.preview}>
             <PreviewTab
               icon={HOME_TAB_ICON}
               label="Home"
@@ -255,9 +283,15 @@ export default function CustomizeTabsScreen() {
           </View>
         </Card>
         <View style={{ paddingHorizontal: 4, paddingTop: 10 }}>
-          <Mono size={10} tracking={0.1} color={c.ink3}>
-            HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED
-          </Mono>
+          {lg ? (
+            <Mono size={13} color={c.ink3} style={glassRowSub(lg)}>
+              {`Home is always first · ${slots.length} of ${MAX_TAB_SLOTS} slots used`}
+            </Mono>
+          ) : (
+            <Mono size={10} tracking={0.1} color={c.ink3}>
+              HOME IS ALWAYS FIRST · {slots.length} OF {MAX_TAB_SLOTS} SLOTS USED
+            </Mono>
+          )}
         </View>
 
         <Section label="IN YOUR BAR">
@@ -270,16 +304,20 @@ export default function CustomizeTabsScreen() {
             const unavailable = !allowed.has(id);
             return (
               <React.Fragment key={id}>
-                {idx > 0 ? <Hair inset={70} /> : null}
-                <View style={[styles.row, stackControls && styles.rowStacked]}>
+                {idx > 0 ? <Hair inset={lg ? GLASS_TILED_INSET : 70} /> : null}
+                <View style={[styles.row, stackControls && styles.rowStacked, lg && GLASS_ROW_GAP]}>
+                  {lg ? (
+                    <GlassTile icon={TAB_ICONS[id]} fill={unavailable ? lg.c.ink4 : lg.g.accent} />
+                  ) : (
                   <View style={[styles.iconWell, { borderColor: c.hair }]}>
                     <SlotIcon id={id} color={unavailable ? c.ink4 : c.ink} />
                   </View>
+                  )}
                   <View style={{ flex: 1, minWidth: 0 }}>
                     <Body
-                      size={15.5}
+                      size={lg ? 16 : 15.5}
                       color={unavailable ? c.ink3 : undefined}
-                      style={{ fontFamily: FONT.display }}
+                      style={lg ? glassSettingTitle(lg) : { fontFamily: FONT.display }}
                     >
                       {cand.settingsLabel}
                     </Body>
@@ -288,9 +326,11 @@ export default function CustomizeTabsScreen() {
                         size={10}
                         tracking={0.06}
                         color={c.ink3}
-                        style={{ marginTop: 3 }}
+                        style={lg ? glassRowSub(lg) : { marginTop: 3 }}
                       >
-                        UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR
+                        {lg
+                          ? 'Unavailable right now · hidden from the bar'
+                          : 'UNAVAILABLE RIGHT NOW — HIDDEN FROM THE BAR'}
                       </Mono>
                     ) : null}
                   </View>
@@ -337,12 +377,23 @@ export default function CustomizeTabsScreen() {
           ) : (
             available.map((cand, idx) => (
               <React.Fragment key={cand.id}>
-                {idx > 0 ? <Hair inset={70} /> : null}
-                <View style={styles.row}>
-                  <View style={[styles.iconWell, { borderColor: c.hair }]}>
-                    <SlotIcon id={cand.id} color={c.ink} />
-                  </View>
-                  <Body size={15.5} style={{ flex: 1, fontFamily: FONT.display }}>
+                {idx > 0 ? <Hair inset={lg ? GLASS_TILED_INSET : 70} /> : null}
+                <View style={[styles.row, lg && GLASS_ROW_GAP]}>
+                  {lg ? (
+                    <GlassTile icon={TAB_ICONS[cand.id]} fill={lg.g.accent} />
+                  ) : (
+                    <View style={[styles.iconWell, { borderColor: c.hair }]}>
+                      <SlotIcon id={cand.id} color={c.ink} />
+                    </View>
+                  )}
+                  <Body
+                    size={lg ? 16 : 15.5}
+                    style={
+                      lg
+                        ? [glassSettingTitle(lg), { flex: 1 }]
+                        : { flex: 1, fontFamily: FONT.display }
+                    }
+                  >
                     {cand.settingsLabel}
                   </Body>
                   <ControlChip
@@ -365,17 +416,33 @@ export default function CustomizeTabsScreen() {
             onPress={reset}
             accessibilityRole="button"
             android_ripple={{ color: c.hair }}
-            style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
+            style={({ pressed }) =>
+              lg
+                ? { backgroundColor: pressed ? lg.ios.fill : 'transparent' }
+                : { opacity: pressed ? 0.7 : 1 }
+            }
           >
-            <View style={styles.row}>
-              <View style={[styles.iconWell, { borderColor: c.hair }]}>
-                <RotateCcw size={16} color={c.ink} strokeWidth={1.5} />
-              </View>
+            <View style={[styles.row, lg && GLASS_ROW_GAP]}>
+              {lg ? (
+                <GlassTile icon={RotateCcw} fill={lg.g.dangerFill} />
+              ) : (
+                <View style={[styles.iconWell, { borderColor: c.hair }]}>
+                  <RotateCcw size={16} color={c.ink} strokeWidth={1.5} />
+                </View>
+              )}
               <View style={{ flex: 1 }}>
-                <Body size={15.5} style={{ fontFamily: FONT.display }}>
+                <Body
+                  size={lg ? 16 : 15.5}
+                  style={lg ? glassSettingTitle(lg) : { fontFamily: FONT.display }}
+                >
                   Reset to default
                 </Body>
-                <Mono size={10.5} tracking={0.04} color={c.ink3} style={{ marginTop: 3 }}>
+                <Mono
+                  size={10.5}
+                  tracking={0.04}
+                  color={c.ink3}
+                  style={lg ? glassRowSub(lg) : { marginTop: 3 }}
+                >
                   Home · Items · Books · POs · Scan
                 </Mono>
               </View>
@@ -404,20 +471,27 @@ function PreviewTab({
   active?: boolean;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   // The real bar's tints (DESIGN-SPEC 6.20, as the tab layout draws them):
   // Home, the active tab, in the accent (5.53:1 on the card in light, 9.91:1
   // in dark), the others in the muted ink, so their words read at AA (the
   // faint ink4 held them near 3:1). As on the bar, the active tab also takes
   // the heavier stroke and the semibold face, so colour is never the only cue.
-  const tint = active ? c.accent : c.ink3;
+  const tint = lg ? (active ? lg.g.accentText : c.ink) : active ? c.accent : c.ink3;
   // Raw Text, not <Mono>: the bar's letterSpacing is ABSOLUTE pt while
   // Mono's `tracking` prop is an em ratio — feeding 0.6 into Mono produced
   // 9 × 0.6 = 5.4pt of tracking, the "O r d e r s" bug this replaces. One
   // line always; adjustsFontSizeToFit only as a last resort (the preview's
   // slots are a touch narrower than the real bar's inside the Card).
   return (
-    <View style={styles.previewTab}>
-      <Icon size={20} color={tint} strokeWidth={active ? 1.7 : 1.4} />
+    <View
+      style={[
+        styles.previewTab,
+        lg && GLASS_TAB_PREVIEW.tab,
+        lg && { backgroundColor: active ? inkAlpha(c.ink, 0.08) : 'transparent' },
+      ]}
+    >
+      <Icon size={lg ? 22 : 20} color={tint} strokeWidth={lg ? 1.8 : active ? 1.7 : 1.4} />
       <Text
         numberOfLines={1}
         adjustsFontSizeToFit
@@ -427,6 +501,7 @@ function PreviewTab({
           styles.previewLabel,
           { color: tint, fontFamily: active ? FONT.displaySemi : FONT.display },
           metrics,
+          lg && lg.font.displaySemi,
         ]}
       >
         {label}
@@ -453,6 +528,7 @@ function ControlChip({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <Pressable
       accessibilityRole="button"
@@ -466,34 +542,41 @@ function ControlChip({
         pressed && !disabled && { opacity: 0.6 },
       ]}
     >
-      <View style={[styles.control, { borderColor: c.hair2 }]}>
-        <Icon size={15} color={c.ink} strokeWidth={1.6} />
+      <View style={[styles.control, { borderColor: c.hair2 }, lg && glassControlChip(lg)]}>
+        <Icon size={15} color={lg ? lg.g.accentText : c.ink} strokeWidth={lg ? 1.8 : 1.6} />
       </View>
     </Pressable>
   );
 }
 
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  const lg = useGlass();
   return (
-    <View style={{ marginTop: 24 }}>
-      <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-        <Eyebrow>{label}</Eyebrow>
+    <View style={lg ? GLASS_PAGE.section : { marginTop: 24 }}>
+      <View style={lg ? GLASS_PAGE.sectionHead : { paddingHorizontal: 4, paddingBottom: 10 }}>
+        {lg ? <GlassHeading>{sentenceCase(label)}</GlassHeading> : <Eyebrow>{label}</Eyebrow>}
       </View>
-      <Card padding={0}>{children}</Card>
+      <Card padding={0} style={lg ? GLASS_PAGE.group : undefined}>
+        {children}
+      </Card>
     </View>
   );
 }
 
 function Hint({ text }: { text: string }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View style={{ paddingHorizontal: 4, paddingTop: 8 }}>
-      <Mono size={10} tracking={0.1} color={c.ink3}>
-        {text}
+      <Mono size={10} tracking={0.1} color={c.ink3} style={lg ? glassRowSub(lg) : undefined}>
+        {lg ? sentenceCase(text) : text}
       </Mono>
     </View>
   );
 }
+
+/** Liquid Glass: the iOS row's 12pt gap beside the tile (the tile has no margin of its own). */
+const GLASS_ROW_GAP = { gap: 12 } as const;
 
 const styles = StyleSheet.create({
   root: { flex: 1 },

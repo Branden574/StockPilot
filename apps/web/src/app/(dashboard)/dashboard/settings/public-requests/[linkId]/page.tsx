@@ -14,6 +14,11 @@ import { ServiceError } from '@/server/services/context';
 import { PublicLinksService, type PublicLinkRow } from '@/server/services/public-links';
 import { WarehousesService } from '@/server/services/warehouses';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default async function PublicLinkEditorPage({

@@ -1,6 +1,6 @@
 import { useNetworkState } from 'expo-network';
 import { type Href, useRouter } from 'expo-router';
-import { TriangleAlert, WifiOff } from 'lucide-react-native';
+import { TriangleAlert, WifiOff, Wrench } from 'lucide-react-native';
 import * as React from 'react';
 import {
   AccessibilityInfo,
@@ -27,14 +27,30 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { ReturnActionSheet, type ReturnSheetMode } from '@/components/return-action-sheet';
+import { ReturnRequestSection } from '@/components/return-request-section';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { glassCardStyle } from '@/components/ui/glass/primitive-styles';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_NOTE, GLASS_WORKBENCH } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
+import { showWriteCta } from '@/lib/cta-gating';
 import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import { isOfflineState } from '@/lib/exceptions-api';
+import {
+  RETURN_PROBLEM_LABEL,
+  RETURN_REQUEST_COPY,
+  returnProblemLaunchParams,
+  returnRequestContentForWorkbench,
+  returnRequestEmailFromWorkbench,
+  type ReturnRequestEmailForReturn,
+} from '@/lib/return-request-actions';
 import {
   describeReturnError,
   getReturnWorkbench,
@@ -64,6 +80,7 @@ import {
   workbenchStillWaiting,
 } from '@/lib/returns-view';
 import { FONT } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -96,6 +113,12 @@ export function ReturnWorkbenchView({
   onChanged?: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Return-Detail.dc.html stacked for
+  // the phone; beside the list on iPad): 16 from the sides, the cards on the
+  // grouped glass surface, the sections under iOS headings, the held-step
+  // notes on the boards' status line; the action sheets take the glass sheet.
+  // Every action, gate, note and word stays.
+  const lg = useGlass();
   // Simulator fault F-B (2026-10-06): at AX5 on the iPhone the 72 pt photo
   // beside each card's words broke them mid-word. Past the AX threshold both
   // cards put the photo above their words (the orders card's rule).
@@ -110,6 +133,29 @@ export function ReturnWorkbenchView({
   const [busy, setBusy] = React.useState(false);
   const [sheet, setSheet] = React.useState<ReturnSheetMode | null>(null);
   const [notice, setNotice] = React.useState<string | null>(null);
+  // F14: the mailboxes and the link for "Email return request", as the
+  // workbench READ answered them (GET /api/v1/returns/[id]
+  // `returnRequestEmail`). Remembered apart from `wb` because an action's
+  // answer (the steps route) is a workbench without that field, and adopting
+  // it must not take the section away: the last answer that carried the
+  // field stays, adjusted during render like the returnId reset below (no
+  // effect, no cascading render). An older server sends no field: no
+  // mailboxes, no section (lib/return-request-actions.ts).
+  const [requestEmailSource, setRequestEmailSource] = React.useState<unknown>(undefined);
+  if (wb && wb.returnRequestEmail !== undefined && wb.returnRequestEmail !== requestEmailSource) {
+    setRequestEmailSource(wb.returnRequestEmail);
+  }
+  const requestEmail = React.useMemo<ReturnRequestEmailForReturn>(
+    () => returnRequestEmailFromWorkbench(requestEmailSource),
+    [requestEmailSource],
+  );
+  // F14, "Report a problem": the item screen's two-part gate (the maintenance
+  // module on, and maintenance_requests:submit). Cosmetic: the form and the
+  // server check both again.
+  const enabledModules = useEnabledModules();
+  const permissions = useEffectivePermissions();
+  const canReportProblem =
+    enabledModules.has('maintenance_requests') && showWriteCta(permissions, 'maintenance_requests:submit');
 
   // Every read is numbered (the list's sequence guard): only the newest one
   // paints the screen, and an action's answer takes a number too (adopt), so
@@ -145,6 +191,7 @@ export function ReturnWorkbenchView({
     setWb(null);
     setSheet(null);
     setNotice(null);
+    setRequestEmailSource(undefined);
   }
 
   React.useEffect(() => {
@@ -161,7 +208,7 @@ export function ReturnWorkbenchView({
     // Nothing could be read: the words, with the no-connection glyph offline
     // and the warning glyph otherwise (the shared list's failed panel).
     return (
-      <View style={styles.failed}>
+      <View style={lg ? [styles.failed, glassCardStyle(lg), GLASS_WORKBENCH.failed] : styles.failed}>
         {offline ? (
           <WifiOff size={32} color={c.ink3} strokeWidth={1.3} style={{ marginBottom: 12 }} />
         ) : (
@@ -195,6 +242,11 @@ export function ReturnWorkbenchView({
   const r = wb.return;
   const ex = exchangeOf(wb);
   const hasExchange = ex.kind === 'exchange';
+  // F14: what the draft says, or null (no section): the mailboxes are
+  // missing, or the return is closed, denied, cancelled or has no number.
+  // Core's mapping of this workbench, the website's too; it never reads the
+  // notes or the denial reason.
+  const requestContent = returnRequestContentForWorkbench({ ...wb, exchange: ex }, requestEmail);
   const actions = workbenchActions(wb, { itemIsHere: wb.createdOnCounter, online: !offline, busy });
   const disabled = actions.disabledReason !== null;
   // Review fix P18: what "Get replacement ready" does, under it and as its
@@ -306,7 +358,11 @@ export function ReturnWorkbenchView({
   return (
     <>
       <ScrollView
-        contentContainerStyle={[styles.content, compact ? { paddingTop: 12 } : null]}
+        contentContainerStyle={[
+          styles.content,
+          compact ? { paddingTop: 12 } : null,
+          lg && GLASS_WORKBENCH.content,
+        ]}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -355,7 +411,7 @@ export function ReturnWorkbenchView({
         {/* Notes that hold the actions back: on the warning wash, each with
             its glyph beside the words (never the colour alone). */}
         {offline ? (
-          <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+          <View style={[styles.banner, { backgroundColor: c.warnWash }, lg && GLASS_NOTE]}>
             <WifiOff size={16} color={c.warnText} strokeWidth={1.75} style={{ marginTop: 2 }} />
             <Body size={13.5} color={c.warnText} style={{ flex: 1 }}>
               {RETURNS_COPY.offlineActionsWait}
@@ -363,7 +419,7 @@ export function ReturnWorkbenchView({
           </View>
         ) : null}
         {wb.destinationsUnavailable && wb.viewer.canManageReturns && (actions.primary || actions.secondary.length > 0) ? (
-          <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+          <View style={[styles.banner, { backgroundColor: c.warnWash }, lg && GLASS_NOTE]}>
             <TriangleAlert
               size={16}
               color={c.warnText}
@@ -449,7 +505,11 @@ export function ReturnWorkbenchView({
 
         {hasExchange ? (
           <>
-            <Eyebrow accessibilityRole="header">{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
+            {lg ? (
+              <GlassHeading>{sentenceCase(RETURNS_COPY.exchangeStatusHeading)}</GlassHeading>
+            ) : (
+              <Eyebrow accessibilityRole="header">{RETURNS_COPY.exchangeStatusHeading}</Eyebrow>
+            )}
             <Card padding={14}>
               <View style={{ gap: 6 }}>
                 {ex.rail.length > 0 ? (
@@ -484,7 +544,11 @@ export function ReturnWorkbenchView({
           </>
         ) : null}
 
-        <Eyebrow accessibilityRole="header">{RETURNS_COPY.returning}</Eyebrow>
+        {lg ? (
+          <GlassHeading>{sentenceCase(RETURNS_COPY.returning)}</GlassHeading>
+        ) : (
+          <Eyebrow accessibilityRole="header">{RETURNS_COPY.returning}</Eyebrow>
+        )}
         <View style={compact ? { gap: 10 } : styles.cards}>
           {wb.lines.map((l) => {
             const name = l.item.name ?? 'Deleted item';
@@ -601,7 +665,50 @@ export function ReturnWorkbenchView({
           </Card>
         ) : null}
 
-        <Eyebrow accessibilityRole="header">HISTORY</Eyebrow>
+        {/* F14: write to the warehouse about this return (a prefilled draft
+            to the saved delivery-request mailboxes), and report a problem
+            with it (the maintenance request form, with this return's order
+            attached and the return named in the subject). Both are open to
+            every member this screen opens for, like the website's header. */}
+        {requestContent && requestEmail.recipients ? (
+          <ReturnRequestSection
+            orderId={r.orderRequestId}
+            surface="return"
+            content={requestContent}
+            recipients={requestEmail.recipients}
+            heading={
+              lg ? (
+                <GlassHeading>{sentenceCase(RETURN_REQUEST_COPY.eyebrow)}</GlassHeading>
+              ) : (
+                <Eyebrow accessibilityRole="header">{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>
+              )
+            }
+          />
+        ) : null}
+        {canReportProblem ? (
+          <Button
+            block
+            wrap
+            variant="outline"
+            onPress={() =>
+              router.push({
+                pathname: '/maintenance/new',
+                // Hints only: the form's server side re-derives the order
+                // against this organization before attaching it.
+                params: returnProblemLaunchParams(r),
+              } as unknown as Href)
+            }
+            leading={<Wrench size={16} color={c.ink} strokeWidth={1.5} />}
+          >
+            {RETURN_PROBLEM_LABEL}
+          </Button>
+        ) : null}
+
+        {lg ? (
+          <GlassHeading>History</GlassHeading>
+        ) : (
+          <Eyebrow accessibilityRole="header">HISTORY</Eyebrow>
+        )}
         <Card padding={14}>
           <View style={{ gap: 10 }}>
             {wb.chain.length === 0 ? (

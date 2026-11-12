@@ -203,8 +203,8 @@ export function OrderItemsAccessDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
-        <DialogHeader>
+      <DialogContent data-glass-role="order-items-access">
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>Order items access</DialogTitle>
           <DialogDescription>
             Whether this member can use Manage order items: choosing which items and books appear in
@@ -212,7 +212,7 @@ export function OrderItemsAccessDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div data-glass="dialog-body" className="space-y-4">
           <div className="space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-foreground text-[13.5px] font-medium">{target.name}</span>
@@ -253,7 +253,10 @@ export function OrderItemsAccessDialog({
             ))}
           </RadioGroup>
 
-          <div className="bg-sunk border-border space-y-2 rounded-md border p-3">
+          <div
+            data-glass-role="order-items-access-after"
+            className="bg-sunk border-border space-y-2 rounded-md border p-3"
+          >
             <p
               className="text-foreground text-[13px] font-medium"
               aria-live="polite"
@@ -277,7 +280,7 @@ export function OrderItemsAccessDialog({
           ) : null}
         </div>
 
-        <DialogFooter>
+        <DialogFooter data-glass="dialog-footer">
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={pending}>
             Cancel
           </Button>

@@ -14,8 +14,11 @@ const CARD = 'border-border bg-card min-w-0 overflow-hidden rounded-lg border';
 
 function CardSkeleton({ lines = 3 }: { lines?: number }) {
   return (
-    <div className={CARD}>
-      <div className="border-border flex h-[49px] items-center border-b px-[18px]">
+    <div className={CARD} data-glass="card">
+      <div
+        className="border-border flex h-[49px] items-center border-b px-[18px]"
+        data-glass-role="skeleton-card-head"
+      >
         <Skeleton className="h-3 w-40" />
       </div>
       <div className="space-y-2.5 p-[18px]">
@@ -29,7 +32,7 @@ function CardSkeleton({ lines = 3 }: { lines?: number }) {
 
 export default function ExceptionDetailLoading() {
   return (
-    <div className={PAGE} aria-busy="true">
+    <div className={PAGE} aria-busy="true" data-glass="skeleton-page" data-glass-width="wide">
       <Skeleton className="h-3.5 w-24" />
       <div className="space-y-2.5">
         <Skeleton className="h-7 w-72 max-w-full" />
@@ -47,7 +50,7 @@ export default function ExceptionDetailLoading() {
             <CardSkeleton lines={3} />
             <CardSkeleton lines={5} />
           </div>
-          <div className={CARD}>
+          <div className={CARD} data-glass="card">
             <div className="divide-border divide-y">
               {Array.from({ length: 4 }).map((_, i) => (
                 <div

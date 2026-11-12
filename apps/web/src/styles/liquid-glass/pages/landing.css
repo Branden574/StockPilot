@@ -1,0 +1,1751 @@
+/* The Liquid Glass landing (app/(site-glass)/glass-site/page.tsx;
+   Landing.dc.html, Landing-Mobile.dc.html, Landing-Dark.dc.html). Values from
+   the artifact's sp.css: the .lp-* block (lines 540-610), the glass
+   overrides (1023-1037, 1121-1124) and the primitives its previews are drawn
+   with (.thumb, .badge, .chip, .size, .loc, .dt, .toast, .nav-item). Colours
+   come from the generated --lg-* tokens; the one exception is the cycle-count
+   band, which the board draws in the Night theme on every page
+   (data-theme="dark"), so in Day it carries the Night token values and the
+   night picture (--lg-scene-img-night): the one place Day fetches a dark file.
+
+   Imported only by the landing twin, after pages/site.css (the ground, nav,
+   footer, buttons and cards), and every selector is scoped to the landing's
+   <main data-glass-page="landing">. The previews are decoration over demo
+   data: no photo is loaded (tinted tiles stand in for the board's product
+   photos), and the stage panels, the step vignettes, the band and the closing
+   call show the scene illustration through var(--lg-scene-img) (scene.css;
+   `none` in the opaque materials and in a browser that cannot parse type()
+   inside image-set(), where the panels fall back to their veils and fills).
+   Reduce Transparency, Increase Contrast and the low-power material: opaque,
+   unblurred, no scene; forced colours: system colours; reduced motion: the
+   FAQ marker does not turn. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── Shared preview pieces ───────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] {
+      --lgl-thumb: 40px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-num {
+      color: var(--lg-ink);
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-mono {
+      font-family: var(--font-mono);
+      font-size: 0.9em;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-xs {
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-sm {
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-strong {
+      font-weight: 650;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-muted {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ink2 {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] :is(.lgl-ok, .lgl-ok-ink) {
+      color: var(--lg-ok);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-warn {
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-danger {
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-info {
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-accent-ink {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-col {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-gap {
+      gap: 8px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-row-jb {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-grow {
+      flex: 1 1 auto;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-clamp {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-inline svg {
+      width: 14px;
+      height: 14px;
+      flex: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-title {
+      font-family: var(--font-display);
+      font-size: 20px;
+      line-height: 26px;
+      font-weight: 650;
+      letter-spacing: -0.016em;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-title-sm {
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 650;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-thumb {
+      width: var(--lgl-thumb);
+      height: var(--lgl-thumb);
+      border-radius: 9px;
+      display: inline-grid;
+      place-items: center;
+      flex: none;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink-2);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-thumb svg {
+      width: 55%;
+      height: 55%;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-thumb-sm {
+      --lgl-thumb: 28px;
+      border-radius: 7px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-table .lgl-thumb-sm {
+      --lgl-thumb: 32px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-thumb-lg {
+      --lgl-thumb: 64px;
+      border-radius: 12px;
+    }
+    /* Product-photo stand-ins: the same tint in Day and Night, as a photo is. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-kind-shirt {
+      background-color: #dfe6ee;
+      color: #24364f;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-kind-book {
+      width: calc(var(--lgl-thumb) * 0.72);
+      border-radius: 3px 6px 6px 3px;
+      background-color: #e6dcc8;
+      color: #5a4320;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-kind-vest {
+      background-color: #f6ecc4;
+      color: #6b5200;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      :is(.lgl-kind-bottle, .lgl-kind-kit) {
+      background-color: #dcefe6;
+      color: #1e5a44;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      :is(.lgl-kind-planner, .lgl-kind-charger, .lgl-kind-marker) {
+      background-color: #e4e4ea;
+      color: #33343c;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1;
+      white-space: nowrap;
+      background-color: var(--lg-neutral-wash);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-badge svg {
+      width: 13px;
+      height: 13px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-badge.lgl-tone-warn {
+      background-color: var(--lg-warn-wash);
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-badge.lgl-tone-accent {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-badge.lgl-tone-outline {
+      background-color: transparent;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background-color: currentColor;
+      flex: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-demo {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 9px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--lg-info);
+      background-color: var(--lg-info-wash);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-demo svg {
+      width: 14px;
+      height: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 32px;
+      padding: 0 12px;
+      border-radius: 999px;
+      border: var(--lg-b-w) solid var(--lg-line-2);
+      background-color: var(--lg-surface);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--lg-ink-2);
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chip svg {
+      width: 14px;
+      height: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chip.lgl-on {
+      background-color: var(--lg-ink);
+      border-color: var(--lg-ink);
+      color: var(--lg-surface);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-search {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1 1 auto;
+      height: 36px;
+      padding: 0 12px;
+      border-radius: var(--lg-r-md);
+      border: var(--lg-b-w) solid var(--lg-field-line);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink);
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-search svg {
+      width: 16px;
+      height: 16px;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-sizes {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-size {
+      min-width: 44px;
+      height: 36px;
+      padding: 0 10px;
+      border-radius: 10px;
+      border: var(--lg-b-w) solid var(--lg-line-2);
+      background-color: var(--lg-surface);
+      font-size: 13px;
+      font-weight: 600;
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-size small {
+      font-size: 11px;
+      font-weight: 500;
+      line-height: 1.1;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-size.lgl-on {
+      background-color: var(--lg-ink);
+      border-color: var(--lg-ink);
+      color: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-size.lgl-on small {
+      color: color-mix(in srgb, var(--lg-surface) 80%, transparent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-loc {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 24px;
+      padding: 0 8px;
+      border-radius: 7px;
+      background-color: var(--lg-surface-3);
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--lg-ink-2);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-loc .lgl-q {
+      color: var(--lg-ink);
+      font-weight: 700;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-loc.lgl-stg {
+      background-color: var(--lg-warn-wash);
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stepper {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      height: 36px;
+      padding: 0 10px;
+      border-radius: var(--lg-r-md);
+      border: var(--lg-b-w) solid var(--lg-field-line);
+      background-color: var(--lg-field-fill);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stepper svg {
+      width: 14px;
+      height: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stepper output {
+      min-width: 22px;
+      text-align: center;
+      font-weight: 600;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fake-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 30px;
+      padding: 0 10px;
+      border-radius: var(--lg-r-sm);
+      border: var(--lg-b-w) solid var(--lg-field-line);
+      background-color: var(--lg-field-fill);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--lg-ink);
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fake-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fake-btn.lgl-primary {
+      background-color: var(--lg-accent);
+      border-color: transparent;
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fake-btn.lgl-ghost {
+      background-color: transparent;
+      border-color: transparent;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fake-btn.lgl-lg {
+      height: 44px;
+      font-size: 15px;
+      border-radius: 12px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fake-btn.lgl-icon {
+      width: 30px;
+      padding: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-well {
+      padding: 10px 12px;
+      border-radius: var(--lg-r-md);
+      background-color: var(--lg-card-fill-2);
+      border: var(--lg-b-w) solid var(--lg-card-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stat {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 500;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stat b {
+      font-family: var(--font-display);
+      font-size: 28px;
+      line-height: 34px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      color: var(--lg-ink);
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stat b.lgl-warn {
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-num.lgl-warn {
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-num.lgl-danger {
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-num.lgl-ok {
+      color: var(--lg-ok);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-num.lgl-muted {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-list {
+      display: flex;
+      flex-direction: column;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-li {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 56px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-li:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-card-h {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      min-height: 52px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-card-f {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--lg-line);
+    }
+
+    /* ── Tables in the previews (.dt) ────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-table {
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-size: 14px;
+      border-radius: 20px;
+      background-color: var(--lg-card-fill);
+      border: var(--lg-b-w) solid var(--lg-card-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tr {
+      display: grid;
+      grid-template-columns: minmax(0, 2fr) minmax(0, 1.1fr) minmax(0, 1fr) 80px 80px;
+      align-items: center;
+      min-height: 46px;
+      border-bottom: 1px solid var(--lg-line);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tr > * {
+      min-width: 0;
+      padding: 6px 12px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tr:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-th {
+      min-height: 38px;
+      background-color: var(--lg-surface-2);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--lg-ink-3);
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-group {
+      min-height: 48px;
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-r {
+      text-align: right;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-td-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-kid .lgl-td-item {
+      position: relative;
+      padding-left: 40px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-kid
+      .lgl-td-item::before {
+      content: '';
+      position: absolute;
+      left: 22px;
+      top: -1px;
+      bottom: -1px;
+      width: 1.5px;
+      background-color: var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chev {
+      width: 14px;
+      height: 14px;
+      flex: none;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-count-table .lgl-tr {
+      grid-template-columns: minmax(0, 2fr) 70px 70px 80px;
+      min-height: 52px;
+    }
+
+    /* ── Hero ────────────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero {
+      position: relative;
+      padding: 56px 0 72px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 22px 48px;
+      align-items: end;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-hero-top
+      > :is(.lgl-h1, .lgl-pill) {
+      grid-column: 1 / -1;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-act {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      align-items: flex-end;
+    }
+    /* The calls to action (.lp-cta): a plain block holding the two
+       inline-flex buttons with a space between them, as the board renders
+       them; at 390 px they stay on one row. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cta {
+      display: block;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-pill {
+      justify-self: start;
+      height: 32px;
+      padding: 0 14px 0 10px;
+      border-radius: 999px;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-mint-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: var(--lg-mint);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-h1 {
+      font-family: var(--font-display);
+      font-size: clamp(44px, 5.3vw, 78px);
+      line-height: 0.98;
+      letter-spacing: -0.042em;
+      font-weight: 650;
+      color: var(--lg-ink);
+      text-wrap: balance;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-soft {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-sub {
+      max-width: 540px;
+      font-size: clamp(17px, 1.45vw, 21px);
+      line-height: 1.5;
+      color: var(--lg-ink-2);
+      text-wrap: pretty;
+    }
+    /* The hero note (p.sm.pretty.hero-note.glass-clear): 13 / 18. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero-note {
+      --lg-glass-clear: rgba(255, 255, 255, 0.46);
+      padding: 10px 14px;
+      border-radius: 16px;
+      font-size: 13px;
+      line-height: 18px;
+      color: var(--lg-ink-2);
+      text-wrap: pretty;
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-hero-note {
+      --lg-glass-clear: rgba(20, 24, 23, 0.5);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-frame {
+      position: relative;
+      margin-top: 56px;
+      padding: 10px;
+      border-radius: 34px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-window {
+      display: grid;
+      grid-template-columns: 204px minmax(0, 1fr);
+      height: 590px;
+      overflow: hidden;
+      border-radius: 25px;
+      background-color: rgba(255, 255, 255, 0.24);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 0 0 0.5px rgba(255, 255, 255, 0.6);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-window {
+      background-color: rgba(20, 24, 23, 0.34);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 0 0 0.5px rgba(255, 255, 255, 0.1);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-mini-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 8px 0 8px 8px;
+      padding: 10px 8px;
+      overflow: hidden;
+      border-radius: 18px;
+      background-color: var(--lg-glass);
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ws {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 2px 4px 4px;
+      font-size: 12px;
+      font-weight: 650;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ws-tile {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      flex: none;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #ffffff;
+      background: linear-gradient(140deg, #3a7f9e, #21506a);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ws-name {
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      height: 30px;
+      padding: 0 9px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--lg-ink-2);
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-item svg {
+      width: 18px;
+      height: 18px;
+      flex: none;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-item.lgl-on {
+      background-color: var(--lg-surface);
+      color: var(--lg-ink);
+      font-weight: 650;
+      box-shadow:
+        0 1px 2px rgba(16, 20, 18, 0.1),
+        0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-item.lgl-on svg {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-sec {
+      padding: 8px 9px 2px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-ct {
+      margin-left: auto;
+      font-size: 12px;
+      font-weight: 650;
+      color: var(--lg-ink-3);
+      font-variant-numeric: tabular-nums;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-nav-ct.lgl-hot {
+      display: grid;
+      place-items: center;
+      min-width: 20px;
+      height: 20px;
+      padding: 0 6px;
+      border-radius: 10px;
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-window-main {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 0;
+      padding: 16px 18px 0 16px;
+      overflow: hidden;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-toast {
+      position: absolute;
+      right: 40px;
+      top: -22px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 46px;
+      padding: 8px 14px;
+      border-radius: 14px;
+      background-color: var(--lg-ink);
+      color: var(--lg-surface);
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: var(--lg-sh-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-toast svg {
+      width: 18px;
+      height: 18px;
+      color: #7be6c1;
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-toast svg {
+      color: #0b7a5c;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-float-card {
+      position: absolute;
+      left: -72px;
+      bottom: -44px;
+      width: 282px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 16px;
+      border-radius: 18px;
+      background-color: var(--lg-card-fill);
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      box-shadow: var(--lg-glass-inner), var(--lg-sh-3);
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-two {
+      display: flex;
+      gap: 6px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-two > * {
+      flex: 1 1 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-prev-mob {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-mob-card {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px;
+      border-radius: 22px;
+      box-shadow: var(--lg-glass-inner), var(--lg-sh-2);
+    }
+
+    /* ── The four questions ──────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-story {
+      padding-top: 72px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0;
+      border-top: 1px solid var(--lg-line-2);
+      border-bottom: 1px solid var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions > div {
+      padding: 32px 28px 32px 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions > div + div {
+      padding-left: 28px;
+      border-left: 1px solid var(--lg-line);
+    }
+    /* Each question: the .h2 at 24 / 30, the answer at 15 / 1.55. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-q-t {
+      font-size: 24px;
+      line-height: 30px;
+      font-weight: 650;
+      letter-spacing: -0.016em;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-q-a {
+      font-size: 15px;
+      line-height: 1.55;
+      text-wrap: pretty;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-n {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      flex: none;
+      font-size: 13px;
+      font-weight: 700;
+      background-color: var(--lg-ink);
+      color: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-n svg {
+      width: 16px;
+      height: 16px;
+    }
+    /* The questions' icon discs are the accent tile (Landing.dc.html:91). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-n.lgl-q-n {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    /* Section heads that wrap as drawn (How it works 760, Web & mobile 780). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-text-760 {
+      max-width: 760px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-text-780 {
+      max-width: 780px;
+    }
+
+    /* ── Sections, splits and the stage panels ──────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-sec {
+      padding: 104px 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-sec.lgl-tight {
+      padding-top: 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-steps {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-vig {
+      height: 250px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding: 14px;
+      overflow: hidden;
+      border-radius: 20px;
+      color: var(--lg-ink);
+      background: linear-gradient(var(--lg-card-fill), var(--lg-card-fill)), var(--lg-scene-img);
+      background-size:
+        auto,
+        420% auto;
+      background-position:
+        0 0,
+        var(--lgl-vp, 18% 40%);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-step:nth-child(2)
+      .lgl-vig {
+      --lgl-vp: 44% 30%;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-step:nth-child(3)
+      .lgl-vig {
+      --lgl-vp: 72% 36%;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-step:nth-child(4)
+      .lgl-vig {
+      --lgl-vp: 96% 60%;
+    }
+    /* Step titles: .h3 (16 / 22 / 600). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-step-t {
+      font-size: 16px;
+      line-height: 22px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chain {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chain.lgl-now {
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chain.lgl-todo {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chain-dot {
+      width: 26px;
+      height: 26px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      flex: none;
+      background-color: var(--lg-ok-wash);
+      color: var(--lg-ok);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-chain-dot svg {
+      width: 14px;
+      height: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-chain.lgl-now
+      .lgl-chain-dot {
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-chain.lgl-todo
+      .lgl-chain-dot {
+      background-color: transparent;
+      color: var(--lg-ink-3);
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ledger {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 13px;
+      background-color: var(--lg-card-fill-2);
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+      gap: 72px;
+      align-items: center;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-split.lgl-rev
+      > :first-child {
+      order: 2;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-facts {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      margin-top: 8px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fact {
+      display: grid;
+      grid-template-columns: 36px 1fr;
+      gap: 14px;
+      align-items: start;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fi {
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+      display: grid;
+      place-items: center;
+      background-color: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fi svg {
+      width: 18px;
+      height: 18px;
+    }
+    /* Fact titles .h4 (14 / 20 / 600), their words .sm (13 / 18). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fact-t {
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fact-d {
+      font-size: 13px;
+      line-height: 18px;
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 30px;
+      border-radius: 40px;
+      background:
+        var(--lg-scene-veil),
+        var(--lg-scene-img) var(--lgl-stage-pos, 30% 45%) / cover no-repeat;
+      box-shadow:
+        inset 0 0 0 1px rgba(255, 255, 255, 0.5),
+        0 30px 60px -30px rgba(60, 44, 26, 0.35);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-rev .lgl-stage {
+      --lgl-stage-pos: 78% 40%;
+    }
+    /* The card on a stage carries more frost, so it reads over the photo. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage .lgs-card {
+      --lg-card-fill: rgba(255, 255, 255, 0.7);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-stage .lgs-card {
+      --lg-card-fill: rgba(24, 28, 27, 0.7);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-item-card {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      padding: 24px;
+    }
+    /* Inventory & books (Landing.dc.html:153-167): a 560 px stage, the item
+       card at 84% (22 px, radius 26, sh-3) at its top, and three book covers
+       fanned at its bottom right (tinted tiles: no photo is loaded). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage.lgl-stage-item {
+      position: relative;
+      justify-content: flex-start;
+      min-height: 560px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-stage-item
+      .lgs-card.lgl-item-card {
+      width: 84%;
+      padding: 22px;
+      border-radius: 26px;
+      box-shadow: var(--lg-sh-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-fan {
+      position: absolute;
+      right: -6px;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover {
+      --lgl-cover: 150px;
+      height: var(--lgl-cover);
+      width: calc(var(--lgl-cover) * 0.667);
+      display: grid;
+      place-items: center;
+      flex: none;
+      border-radius: 3px 5px 5px 3px;
+      background-color: #e6dcc8;
+      color: #5a4320;
+      box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.18),
+        0 4px 10px -6px rgba(0, 0, 0, 0.35);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover svg {
+      width: 40%;
+      height: 40%;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover:nth-child(1) {
+      transform: rotate(-8deg) translate(30px, 10px);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover:nth-child(2) {
+      --lgl-cover: 158px;
+      z-index: 1;
+      transform: rotate(-2deg) translate(8px, 0);
+      background-color: #dfe6ee;
+      color: #24364f;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-cover:nth-child(3) {
+      z-index: 2;
+      transform: rotate(6deg) translate(-14px, 6px);
+      background-color: #dcefe6;
+      color: #1e5a44;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-shop {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 20px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-steps-mini {
+      display: flex;
+      gap: 10px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-steps-mini .lgl-done {
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-steps-mini .lgl-now {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-shop-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-shop-card {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-report {
+      display: flex;
+      flex-direction: column;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-report .lgl-stats {
+      padding: 16px;
+      border-bottom: 1px solid var(--lg-line);
+    }
+
+    /* ── Cycle counts: the band, in the Night theme on every page ────────── */
+    :root[data-appearance='liquid-glass']:not(.dark) [data-glass-page='landing'] .lgl-band {
+      --lg-accent: #3fcb9b;
+      --lg-accent-text: #56d6a9;
+      --lg-accent-wash: rgba(63, 203, 155, 0.14);
+      --lg-bg: #0e100f;
+      --lg-card-fill-2: rgba(255, 255, 255, 0.045);
+      --lg-card-line: rgba(255, 255, 255, 0.1);
+      --lg-card-shadow: 0 1px 1px rgba(0, 0, 0, 0.3), 0 18px 42px -16px rgba(0, 0, 0, 0.75);
+      --lg-danger: #ff8f84;
+      --lg-field-fill: rgba(255, 255, 255, 0.07);
+      --lg-field-line: rgba(255, 255, 255, 0.14);
+      --lg-focus: #56d6a9;
+      --lg-glass-inner:
+        inset 0 1px 0 rgba(255, 255, 255, 0.1), inset 0 -1px 0 rgba(255, 255, 255, 0.03);
+      --lg-ink: #f1f4f2;
+      --lg-ink-2: #d2d8d4;
+      --lg-ink-3: #a9b2ad;
+      --lg-line: rgba(255, 255, 255, 0.08);
+      --lg-line-2: rgba(255, 255, 255, 0.13);
+      --lg-neutral-wash: #232825;
+      --lg-ok: #5ed18c;
+      --lg-on-accent: #03140d;
+      /* The night picture (sp.css:924, 1032), none in every opaque material. */
+      --lg-scene-img: var(--lg-scene-img-night);
+      --lg-scene-veil: linear-gradient(180deg, rgba(6, 10, 9, 0.18), rgba(6, 10, 9, 0.3));
+      --lg-surface: #171a19;
+      --lg-surface-2: rgba(255, 255, 255, 0.05);
+      --lg-surface-3: rgba(255, 255, 255, 0.08);
+      --lg-warn: #f3be5a;
+      --lg-warn-wash: rgba(243, 190, 90, 0.13);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-band {
+      position: relative;
+      overflow: hidden;
+      padding: 72px 64px;
+      border-radius: 40px;
+      color: var(--lg-ink);
+      background:
+        var(--lg-scene-veil),
+        var(--lg-scene-img) center / cover no-repeat,
+        var(--lg-bg);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-count {
+      --lg-card-fill: rgba(24, 28, 27, 0.62);
+      overflow: hidden;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-count .lgl-table {
+      border: 0;
+      border-radius: 0;
+      background-color: transparent;
+    }
+
+    /* ── Web & mobile: three devices ─────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-devices {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(0, 1.1fr) minmax(0, 0.6fr);
+      gap: 28px;
+      align-items: end;
+    }
+    /* Each device: the preview, its .h4 caption and its .sm line, 14 px apart. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dev {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dev-t {
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-dev-d {
+      font-size: 13px;
+      line-height: 18px;
+      color: var(--lg-ink-2);
+    }
+    /* At the desk: a card at radius 18 with sh-2, a full-width 34 px address
+       bar over a rule, and a 300 px body (the timeline on surface 2). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-desk-card {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      padding: 0;
+      overflow: hidden;
+      border-radius: 18px;
+      box-shadow: var(--lg-sh-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-bar {
+      display: flex;
+      align-items: center;
+      height: 34px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--lg-line);
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-desk-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+      gap: 0;
+      height: 300px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-desk-grid > * {
+      padding: 16px;
+      gap: 10px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-timeline {
+      gap: 8px;
+      border-left: 1px solid var(--lg-line);
+      background-color: var(--lg-surface-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl.lgl-muted {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      flex: none;
+      background-color: var(--lg-surface);
+      box-shadow: inset 0 0 0 1.5px var(--lg-line-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl-dot svg {
+      width: 12px;
+      height: 12px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl-dot.lgl-ok {
+      background-color: var(--lg-ok-wash);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-tl-dot.lgl-info {
+      background-color: var(--lg-info-wash);
+      box-shadow: none;
+    }
+    /* On a tablet: an ink bezel (8 px, radius 26, sh-2) around a 302 px
+       screen on the page ground (radius 18), list beside detail. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-ipad-card {
+      padding: 8px;
+      overflow: hidden;
+      border-color: transparent;
+      border-radius: 26px;
+      background-color: var(--lg-ink);
+      box-shadow: var(--lg-sh-2);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 0;
+      height: 302px;
+      overflow: hidden;
+      border-radius: 18px;
+      background-color: var(--lg-bg);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-grid > * {
+      padding: 12px;
+      min-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-ipad-grid
+      > :first-child {
+      gap: 4px;
+      border-right: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-row {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      padding: 6px 8px;
+      border-radius: 10px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad-row.lgl-on {
+      background-color: var(--lg-surface);
+      box-shadow: 0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-prog {
+      display: flex;
+      height: 6px;
+      overflow: hidden;
+      border-radius: 3px;
+      background-color: var(--lg-surface-4);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-prog > i {
+      width: 89%;
+      background-color: var(--lg-accent);
+    }
+    /* In the aisle: a 7 px ink bezel (radius 34, sh-2) around a 392 px
+       screen on the page ground (radius 28 inside it), the lines from 34 px
+       down and the glass action bar 8 px off the screen's bottom edge. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-phone-frame {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      height: 406px;
+      overflow: hidden;
+      padding: 34px 12px 0;
+      border: 7px solid var(--lg-ink);
+      border-radius: 34px;
+      background-color: var(--lg-bg);
+      box-shadow: var(--lg-sh-2);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-phone-frame .lgl-gap {
+      gap: 8px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-phone-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 12px;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-phone-bar {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      display: flex;
+      gap: 6px;
+      padding: 6px;
+      border-radius: 20px;
+      background-color: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+    }
+
+    /* ── Access: the roles ───────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-roles {
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+      gap: 64px;
+      align-items: start;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-alert {
+      padding: 12px 14px;
+      border-radius: 12px;
+      border: var(--lg-b-w) solid var(--lg-info-line);
+      background-color: var(--lg-info-wash);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-alert svg {
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-role-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+    /* Role names: .h4 (14 / 20 / 600). */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-role-name {
+      font-size: 14px;
+      line-height: 20px;
+      font-weight: 600;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-av {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: inline-grid;
+      place-items: center;
+      flex: none;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: #ffffff;
+      background-color: #2f7a68;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-av-3 {
+      background-color: #a0543a;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-av-4 {
+      background-color: #3d63a8;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-av-5 {
+      background-color: #6e5f26;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-av-6 {
+      background-color: #8c3f6b;
+    }
+
+    /* ── Questions ───────────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq {
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq details {
+      border-bottom: 1px solid var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq summary {
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      min-height: 72px;
+      padding: 12px 4px;
+      cursor: pointer;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-faq
+      summary::-webkit-details-marker {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq-ic {
+      width: 20px;
+      height: 20px;
+      flex: none;
+      margin-left: auto;
+      color: var(--lg-ink-3);
+      transition: transform var(--lg-d-2) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='landing']
+      .lgl-faq
+      details[open]
+      .lgl-faq-ic {
+      transform: rotate(45deg);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ans {
+      max-width: 820px;
+      padding: 0 48px 24px 4px;
+      font-size: 16px;
+      line-height: 1.6;
+      color: var(--lg-ink-2);
+    }
+
+    /* ── The closing call ────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-close.lgs-glass {
+      padding: 80px 48px;
+      border-radius: 40px;
+      background:
+        linear-gradient(var(--lg-glass), var(--lg-glass)),
+        var(--lg-scene-img) center 35% / cover no-repeat;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-close-mark {
+      color: var(--lg-ink);
+    }
+
+    /* ── Up to 1100 px: two devices ──────────────────────────────────────── */
+    @media (max-width: 1100px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-devices {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 0.62fr);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ipad {
+        display: none;
+      }
+    }
+
+    /* ── Up to 900 px: one column and the compact previews ──────────────── */
+    @media (max-width: 900px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero {
+        padding: 36px 0 32px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero-top {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-act {
+        align-items: stretch;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-frame {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-prev-mob {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-top: 32px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        :is(.lgl-split, .lgl-roles) {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 36px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        .lgl-split.lgl-rev
+        > :first-child {
+        order: 0;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        .lgl-questions
+        > div:nth-child(3) {
+        padding-left: 0;
+        border-left: 0;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        .lgl-questions
+        > div:nth-child(n + 3) {
+        border-top: 1px solid var(--lg-line);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-sec {
+        padding: 64px 0;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage {
+        padding: 16px;
+        border-radius: 30px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-band {
+        padding: 40px 24px;
+        border-radius: 28px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-devices {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-desk {
+        display: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-close.lgs-glass {
+        padding: 48px 20px;
+        border-radius: 28px;
+      }
+    }
+
+    /* ── Up to 600 px: phones ────────────────────────────────────────────── */
+    @media (max-width: 600px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions > div,
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions > div + div {
+        padding: 22px 0;
+        border-left: 0;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-questions > div + div {
+        border-top: 1px solid var(--lg-line);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-steps {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-vig {
+        height: auto;
+        min-height: 200px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq summary {
+        min-height: 64px;
+        font-size: 16px;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-ans {
+        padding: 0 8px 20px 4px;
+        font-size: 15px;
+      }
+    }
+
+    /* ── Reduced motion: the FAQ marker does not turn ───────────────────── */
+    @media (prefers-reduced-motion: reduce) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-faq-ic {
+        transition: none;
+      }
+    }
+
+    /* ── Reduce Transparency and Increase Contrast: opaque, no blur ─────── */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage {
+        background: var(--lg-surface-2);
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-stage .lgs-card,
+      :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-stage .lgs-card,
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgs-card.lgl-count {
+        --lg-card-fill: var(--lg-surface);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-hero-note,
+      :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-hero-note {
+        --lg-glass-clear: var(--lg-surface);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        :is(.lgs-card.lgl-vig, .lgl-close.lgs-glass) {
+        background: var(--lg-surface);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-band {
+        background: var(--lg-bg);
+      }
+      :root[data-appearance='liquid-glass'] [data-glass-page='landing'] .lgl-window,
+      :root[data-appearance='liquid-glass'].dark [data-glass-page='landing'] .lgl-window {
+        background-color: var(--lg-bg);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        :is(.lgl-float-card, .lgl-phone-bar) {
+        background-color: var(--lg-surface);
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"; R7),
+       declaration for declaration (site-pages.guard.test.ts). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      .lgl-stage {
+      background: var(--lg-surface-2);
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      .lgl-stage
+      .lgs-card,
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'].dark
+      [data-glass-page='landing']
+      .lgl-stage
+      .lgs-card,
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      .lgs-card.lgl-count {
+      --lg-card-fill: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      .lgl-hero-note,
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'].dark
+      [data-glass-page='landing']
+      .lgl-hero-note {
+      --lg-glass-clear: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      :is(.lgs-card.lgl-vig, .lgl-close.lgs-glass) {
+      background: var(--lg-surface);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      .lgl-band {
+      background: var(--lg-bg);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      .lgl-window,
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'].dark
+      [data-glass-page='landing']
+      .lgl-window {
+      background-color: var(--lg-bg);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='landing']
+      :is(.lgl-float-card, .lgl-phone-bar) {
+      background-color: var(--lg-surface);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    /* ── Forced colours: the system's own colours, no material ──────────── */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='landing']
+        :is(
+          .lgl-stage,
+          .lgl-close.lgs-glass,
+          .lgl-band,
+          .lgl-float-card,
+          .lgl-phone-bar,
+          .lgl-window,
+          .lgl-table,
+          .lgl-toast,
+          .lgs-card.lgl-vig
+        ) {
+        background: Canvas;
+        color: CanvasText;
+        border: 1px solid CanvasText;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+    }
+  }
+}

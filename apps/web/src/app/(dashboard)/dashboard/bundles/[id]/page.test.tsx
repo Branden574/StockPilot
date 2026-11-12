@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { effectivePermissions, type Role } from '@stockpilot/core';
 
+import { ServiceError } from '@/server/services/context';
+
 /**
  * The bundle page in the redesign (P4.D2, matrix W-CA-11): the record header
  * (back link, name, status and Pre-assembly labels, SKU, description, Edit /
@@ -22,12 +24,17 @@ type Detail = {
   phantom: { quantityOnHand: number; warehouseId: string | null } | null;
 };
 
-const data: { detail: Detail; recent: Array<Record<string, unknown>>; fail: boolean } = {
+/** `fail`: what the bundle read throws, or null when it answers. */
+const data: { detail: Detail; recent: Array<Record<string, unknown>>; fail: unknown } = {
   detail: { bundle: {}, components: [], phantom: null },
   recent: [],
-  fail: false,
+  fail: null,
 };
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');
@@ -53,7 +60,7 @@ vi.mock('@/server/services/bundles', () => ({
   BundlesService: {
     forCurrentUser: vi.fn(async () => ({
       get: vi.fn(async () => {
-        if (data.fail) throw new Error('not found');
+        if (data.fail) throw data.fail;
         return data.detail;
       }),
       recentDistributions: vi.fn(async () => data.recent),
@@ -86,9 +93,11 @@ vi.mock('@/components/bundles/archive-bundle-button', () => ({
 
 import BundleDetailPage from './page';
 
+const BUNDLE_ID = '5eed0000-0000-4000-8000-0000000000b9';
+
 function bundle(over: Record<string, unknown> = {}) {
   return {
-    id: 'b-1',
+    id: BUNDLE_ID,
     name: 'Science Starter Kit',
     sku: 'KIT-SCI-01',
     description: 'One per new science classroom.',
@@ -104,12 +113,12 @@ function bundle(over: Record<string, unknown> = {}) {
 async function renderAs(role: Role = 'owner') {
   ctx.role = role;
   ctx.permissions = effectivePermissions(role);
-  return render(await BundleDetailPage({ params: Promise.resolve({ id: 'b-1' }) }));
+  return render(await BundleDetailPage({ params: Promise.resolve({ id: BUNDLE_ID }) }));
 }
 
 beforeEach(() => {
   cleanup();
-  data.fail = false;
+  data.fail = null;
   data.detail = {
     bundle: bundle(),
     components: [
@@ -168,7 +177,7 @@ describe('bundle page header', () => {
     await renderAs('manager');
     expect(screen.getByRole('link', { name: 'Edit' })).toHaveAttribute(
       'href',
-      '/dashboard/bundles/b-1/edit',
+      `/dashboard/bundles/${BUNDLE_ID}/edit`,
     );
     expect(screen.getByRole('button', { name: 'Archive' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Distribute' })).toBeTruthy();
@@ -199,9 +208,16 @@ describe('bundle page header', () => {
     expect(screen.queryByRole('button', { name: 'Distribute' })).toBeNull();
   });
 
-  it('any failure to load the bundle is a 404', async () => {
-    data.fail = true;
+  // B66: only a missing bundle is a 404. A failed read used to be one too,
+  // telling the person the bundle did not exist; it now reaches the error
+  // page, which says the page could not be loaded and offers Try again.
+  it('a missing bundle is a 404, and a failed read reaches the error page', async () => {
+    data.fail = new ServiceError('not_found', 'Bundle not found');
     await expect(renderAs('owner')).rejects.toThrow('notFound');
+
+    const failure = new ServiceError('internal_error', 'canceling statement due to timeout');
+    data.fail = failure;
+    await expect(renderAs('owner')).rejects.toBe(failure);
   });
 });
 
@@ -284,5 +300,27 @@ describe('bundle page cards', () => {
     await renderAs();
     expect(screen.queryAllByRole('checkbox')).toHaveLength(0);
     expect(screen.queryByText(/Group selected|Ungroup/i)).toBeNull();
+  });
+});
+
+// B63: a mistyped or cut-off link is Page not found before anything else:
+// ahead of the bundles:read redirect, and before the bundle is read (the
+// catch-all around that read already answered not found, but only after the
+// read had failed).
+describe('bundle page: an id that is not a uuid', () => {
+  it('is the not-found page, with nothing read', async () => {
+    const { requireOrgContext } = await import('@/lib/auth/session');
+    const { BundlesService } = await import('@/server/services/bundles');
+    vi.mocked(requireOrgContext).mockClear();
+    vi.mocked(BundlesService.forCurrentUser).mockClear();
+    ctx.role = 'viewer';
+    ctx.permissions = new Set<string>();
+    for (const id of ['not-a-uuid', BUNDLE_ID.slice(0, -1)]) {
+      await expect(BundleDetailPage({ params: Promise.resolve({ id }) }), id).rejects.toThrow(
+        'notFound',
+      );
+    }
+    expect(requireOrgContext).not.toHaveBeenCalled();
+    expect(BundlesService.forCurrentUser).not.toHaveBeenCalled();
   });
 });

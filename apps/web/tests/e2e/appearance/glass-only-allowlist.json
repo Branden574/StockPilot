@@ -1,0 +1,391 @@
+{
+  "$comment": "Glass-only elements (Liquid Glass plan 4.4, 8.5; plans/REVISION-DEFAULT.md R13). The 8.5 action-inventory check (stage 4) fails on any glass-only action not listed here. A 'duplicate action' entry names the classic element it duplicates on the same route, behind the same gate; an 'appearance control (no data action)' entry has no classic twin: it changes only the viewer's own appearance and reads or writes no other data; a 'renamed action' entry is a classic element that glass names differently (DECISIONS.md F6). appearance-render.guard.test.ts checks that every data-glass-only element in the source is listed; appearance-select.test.tsx checks the header menu's renamed trigger.",
+  "kinds": {
+    "duplicate action": "Goes where an existing classic element on the same route goes, behind the same permission gate; classicTwin names that element.",
+    "appearance control (no data action)": "The header appearance menu (Design and Theme). No classic twin on the route; no permission gate; touches only the viewer's own appearance (device record, Design cookie, own user_appearance row).",
+    "renamed action": "The classic element itself, with the same role, target, position and permission gate, under another accessible name (and tooltip) while <html> carries data-appearance=\"liquid-glass\". name is its glass name and classicTwin its classic name: the 8.5 check counts the two as one action, so walkers find it by either name and the classic name missing in glass is not a missing action.",
+    "decoration (no action)": "Glass-only icons or words inside an element Classic already has, holding no link, button or field of their own: the element keeps its role, accessible name, target and permission gate in both designs. The 8.5 check has no action to pair; the classic proof drops them under default and they are not rendered under off.",
+    "replaced below a width": "A glass-only element that glass shows only in windows maxWidth px wide or narrower, where it hides the classic elements listed in replaces; each goes to the same target (href) behind the same permission gate. At those widths the 8.5 check counts a replaced classic action as present in glass when a glass element of the same role goes to the same target, and at wider sizes it expects the classic elements as they are (the glass-only one is hidden there).",
+    "hidden in a width band (target on screen)": "A classic control (not glass-only) that glass does not draw in windows from minWidth to maxWidth px wide, because what it reaches is already on screen there and the board draws no such control at those widths. The 8.5 check skips it in glass in that band only and expects it at every other width.",
+    "moved block (no action)": "A stateless block (words only: no link, button or field) that glass draws in another place on the page (plan 4.6): this glass-only copy, while the classic block carries data-classic-only and is hidden in glass, so exactly one of the two is shown in either design and the page holds the block, and its heading, once. The 8.5 check has no action to pair; the classic proof drops the copy under default and it is not rendered under off.",
+    "public page link (no data action)": "A plain link, drawn by the board's frame, to one of the 7 public marketing pages (/contact, /security, ...), which every visitor may open: no data, no form, no permission gate, nothing the viewer could not reach in classic from the same route through the shell's StockPilot home link and the marketing pages' own navigation. classicTwin names that classic path; the 8.5 check counts the entry as navigation, never as a missing or extra action.",
+    "summary block (no action)": "A stateless block glass draws that Classic does not have (plan 4.6: a summary row, a figure, a progress bar or rail), made only of words, figures and marks drawn from data the page already loads for every viewer of it: it holds no link, button or field, so the 8.5 check has no action to pair, and it reads nothing new (no data request). The classic proof drops it under default and it is not rendered under off.",
+    "presentation control (no data action)": "A glass-only control that changes only how this viewer's glass page draws what it already loaded (which classic columns a glass table shows), kept in this browser; it reads and writes no data and has no permission gate. Classic always draws everything it chooses between, so it has no classic twin; the 8.5 check counts it as no data action. The elements it brings back are classic's own, in their classic place.",
+    "moved into a menu below a width": "A classic control that glass does not draw in windows maxWidth px wide or narrower, where this glass-only menu item does the same thing (the same handler, behind the same permission gate) from a menu on the same bar; replaces names the classic control. Above maxWidth the item is hidden and the classic control is drawn as it is. At those widths the 8.5 check counts the replaced control as present in glass when the menu holds an item of this entry's name (the menu's trigger opens it), and at wider sizes it expects the classic control.",
+    "disclosure of classic actions (no action)": "A glass-only button that only shows or hides classic controls of the same route, in place (aria-expanded): it performs no action, goes nowhere and reads or writes nothing. The classic controls it reveals keep their nodes, roles, names, targets, gates and DOM order; glass hides them (display: none) while it is closed and shows them in the same row when it is open. The 8.5 check presses it (expects aria-expanded=\"true\") before counting the controls listed in reveals, and expects each of them there in glass at every width.",
+    "summary (no action)": "Glass-only words, figures and decorative images the board draws, built only from values the route already loads (no read is added for them), holding no button or field and no link unless the link has its own entry. Where the block replaces a stateless classic block, that block carries data-classic-only and is hidden in glass, so each figure is shown once in either design. The 8.5 check has no action to pair; the classic proof drops them under default and they are not rendered under off."
+  },
+  "entries": [
+    {
+      "id": "external-appearance-menu",
+      "source": "apps/web/src/components/auth/external-shell.tsx",
+      "selector": "[data-slot=\"external-appearance\"]",
+      "kind": "appearance control (no data action)",
+      "routes": [
+        "/portal",
+        "/p/items/[id]",
+        "/m/[token]",
+        "/returns/request/[token]",
+        "/orders/sign/[token]",
+        "/r/[token]",
+        "/r/track",
+        "/r/confirm"
+      ],
+      "$comment": "ExternalAppearanceCorner. ExternalShell draws it in its page frame when the page passes no top bar; app/r/layout.tsx draws it for /r/[token], /r/track and /r/confirm, whose columns use frame=\"column\" inside that layout. /invite/[token] and /onboarding pass a top bar that already holds the menu. Its trigger is the header menu's, so in glass it is named \"Appearance: design and theme\" (entry header-appearance-menu-trigger).",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "header-appearance-menu-trigger",
+      "source": "apps/web/src/components/theme/theme-toggle.tsx",
+      "selector": "#theme-toggle-trigger",
+      "role": "button",
+      "name": "Appearance: design and theme",
+      "kind": "renamed action",
+      "routes": [
+        "/",
+        "/contact",
+        "/pricing",
+        "/privacy",
+        "/security",
+        "/support",
+        "/terms",
+        "/signin",
+        "/signin/mfa",
+        "/signup",
+        "/reset",
+        "/reset/complete",
+        "/account-disabled",
+        "/invite/[token]",
+        "/onboarding",
+        "/dashboard",
+        "/dashboard/**"
+      ],
+      "$comment": "DECISIONS.md F6: the header appearance menu's trigger (ThemeToggle) opens the Design and the Theme, so while <html> shows Liquid Glass it is named, and titled, for both; in Classic, in every rollout, it is origin/main's \"Toggle theme\" with no tooltip. The routes are those whose classic page shows it: the marketing header (/, the 6 marketing pages), the sign-in layout, the invite and onboarding top bars, and the dashboard top bar on /dashboard and every route under it (/dashboard/**), where it is shown from a 680 px wide bar. On the /dashboard/orders/[id]/print route <html> is never glass, so it keeps its classic name there. The 8 external routes are entry external-appearance-menu: there it exists only in glass.",
+      "classicTwin": "Toggle theme",
+      "gate": null
+    },
+    {
+      "id": "sidebar-place-an-order",
+      "source": "apps/web/src/components/dashboard/sidebar.tsx",
+      "selector": "[data-glass=\"sb-cta\"]",
+      "role": "link",
+      "name": "Place an order",
+      "kind": "duplicate action",
+      "routes": ["/dashboard", "/dashboard/**"],
+      "$comment": "AppSidebar.dc.html's tinted .sb-cta (IMPLEMENTATION-PLAN.md 8.5 names it). A link to /dashboard/orders/new, the page the Orders list's own primary action opens (\"+ Place order\", app/(dashboard)/dashboard/orders/page.tsx); in classic the same page is reached from every dashboard route through the sidebar's Orders entry and that action. Shown, in the desktop sidebar and the phone navigation sheet alike, only when the viewer's nav shows the registry's Orders entry (the Orders module on and orders:request, packages/core/src/modules/registry.ts orders placement; /dashboard/orders/new redirects anyone else, orders/new/page.tsx:32-37) and the org's nav overrides have not hidden it; a custom link to the list never stands in for the permission (sidebar.place-order.test.tsx). Not rendered under the off rollout. The 8.5 check pairs it with classicTwin on /dashboard/orders and with the sidebar's Orders link on every other dashboard route, for the same role.",
+      "classicTwin": "+ Place order (/dashboard/orders page header), reached through the sidebar's Orders link",
+      "gate": "orders module on + orders:request (the sidebar's Orders entry)"
+    },
+    {
+      "id": "topbar-phone-title",
+      "source": "apps/web/src/components/dashboard/topbar.tsx",
+      "selector": "[data-glass=\"tb-title\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard", "/dashboard/**"],
+      "$comment": "Overview-Mobile / AppTopbar's phone title (.mob.h3): the current page's name, the same words as the trail's last crumb (topbar-crumbs.ts with the org's nav labels), drawn in the dashboard top bar in glass at 760 px and under where the trail is not on screen (shell.css). Words only, inside the bar Classic already has: no link, button or field. Not rendered under off; hidden in Classic by visibility.css.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "account-menu-whats-new",
+      "source": "apps/web/src/components/dashboard/user-menu.tsx",
+      "selector": "[data-glass=\"um-whats-new\"] [role=\"menuitem\"]",
+      "role": "menuitem",
+      "name": "What’s new",
+      "kind": "moved into a menu below a width",
+      "routes": ["/dashboard", "/dashboard/**"],
+      "$comment": "Overview-Mobile's phone bar draws the menu button, the page title, the search and the bell. On a touch phone, where every control is 44 px, the title had about 24-54 px and read 'Over…' (fidelity-small round 2, finding 1), so glass at 760 px and under leaves the bar's What's New button (whats-new-button.tsx, #whats-new-entry) out and draws this item in the account menu, after Support & feedback (shell.css). It calls openWhatsNew, as the button does, and carries the same unread count in its name ('What’s new, 3 unread'). No permission gate: the button has none. When What's New closes, focus goes back to the bar's button where it is drawn, else to the account menu's button (update-center.tsx). Not rendered under off; hidden in Classic by visibility.css and from 761 px by shell.css. The release history page (/dashboard/whats-new, through Help & Learning) is reachable at every width as before.",
+      "maxWidth": 760,
+      "replaces": [
+        {
+          "role": "button",
+          "selector": "#whats-new-entry",
+          "name": "What’s new (or 'What’s new, <n> unread')"
+        }
+      ],
+      "classicTwin": "the top bar's What's New button (#whats-new-entry)",
+      "gate": null
+    },
+    {
+      "id": "books-columns-chooser",
+      "source": "apps/web/src/components/books/books-glass-columns.tsx",
+      "selector": "[data-glass=\"books-columns\"]",
+      "role": "button",
+      "name": "Choose more columns",
+      "kind": "presentation control (no data action)",
+      "routes": ["/dashboard/books"],
+      "$comment": "Books.dc.html draws seven columns (Title, ISBN, Grade, Crate · rack, On hand, Available, Status); glass draws classic's Item, Grade, Rack, Crate, On hand and Status and leaves out Category, Charter, Location, Coverage, 14-day (with its qty / moves toggle) and Updated. This chooser, in the Books toolbar in the Table view only, brings any of the six back in its classic place (styles/liquid-glass/pages/items.css reads the table's inert data-glass-cols hook). The choice is kept in localStorage (sp-books-glass-columns). Not rendered under off; hidden in Classic by visibility.css.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "books-cover-grade-number",
+      "source": "apps/web/src/components/inventory/inventory-table.tsx",
+      "selector": "[data-glass=\"book-grade-bare\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard/books"],
+      "$comment": "Books.dc.html's cover card reads 'Grade 9'. BookGradeLabel, in the cover card's Grade fact only, renders this glass-only copy of the bare grade number beside classic's 'Gr 9' (which keeps its text and gains the inert hook book-grade-classic); the glass Books cover view draws the fact's own 'Grade' label and this number and leaves 'Gr 9' out (styles/liquid-glass/pages/items.css), so the card and a screen reader read 'Grade 9'. Hidden everywhere else in glass (primitives.css), in Classic (visibility.css) and in print. Words only, inside the fact Classic already has; no link, button or field. Not rendered under off, nor for a grade that is not one or two digits (classic shows that grade as written).",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "orders-phone-cards",
+      "source": "apps/web/src/components/orders/order-phone-cards.tsx",
+      "selector": "[data-glass=\"orders-phone-cards\"] a",
+      "role": "link",
+      "kind": "replaced below a width",
+      "routes": ["/dashboard/orders"],
+      "$comment": "Orders.dc.html's phone cards (.mob-f, 760 px and under). Each card links to /dashboard/orders/<id>, where the same row's order number and requester links in the Orders table go, behind the same page gate (the Orders module; orders:approve lists every order, otherwise the viewer's own requests). Glass shows the cards and hides the table's scroll box (both links on every row) only at 760 px and under (styles/liquid-glass/pages/orders.css); above that the cards are hidden and the table is the same as Classic's. A card's accessible name is its whole text (the order number, status, requester and every other column), so the check pairs by role and target, not by name. A card prints every column of its row, so no column is lost on a phone. Not rendered under off.",
+      "maxWidth": 760,
+      "href": "/dashboard/orders/<id>",
+      "replaces": [
+        {
+          "role": "link",
+          "selector": "[data-glass='table-scroll'] tbody td:first-child a",
+          "name": "the row's order number (SO-000231)",
+          "href": "/dashboard/orders/<id>"
+        },
+        {
+          "role": "link",
+          "selector": "[data-glass='table-scroll'] tbody td:nth-child(2) a",
+          "name": "the row's requester label",
+          "href": "/dashboard/orders/<id>"
+        }
+      ],
+      "classicTwin": "the row's order number and requester links in the Orders table (href /dashboard/orders/<id>), hidden in glass at 760 px and under",
+      "gate": "the Orders page's own gate"
+    },
+    {
+      "id": "orders-export-menu-details",
+      "source": "apps/web/src/components/orders/orders-export-menu.tsx",
+      "selector": "[data-glass-role=\"orders-export-menu\"] [data-glass-only]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard/orders"],
+      "$comment": "Orders.dc.html's Export menu: a list or printer icon, the open tab's name after the format (\" · Needs approval\") and a sub-line (\"Matches the tab you are on\", \"Printable order history\") inside each of the two existing items. The items keep their links, downloads and accessible names (\"Export orders to CSV\", \"Export orders to PDF\").",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "order-fulfilment-badge",
+      "source": "apps/web/src/components/orders/order-fulfilment-badge.tsx",
+      "selector": "[data-glass=\"order-fulfilment\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard/orders/[id]"],
+      "$comment": "Order-Detail.dc.html's outline badge beside the status in the page head: a truck and \"Delivery\", or a box and \"Pickup\", from the order's own fulfillment_type, which the page already loads. Words and a decorative icon on the head's title line, which Classic already has; no link, button or field. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "order-requester-note-aside",
+      "source": "apps/web/src/components/orders/order-requester-note-aside.tsx",
+      "selector": "[data-glass=\"order-requester-note-aside\"]",
+      "kind": "moved block (no action)",
+      "routes": ["/dashboard/orders/[id]"],
+      "$comment": "Order-Detail.dc.html's aside ends with the requester's note. The order page renders this copy in the side column, between Dates and Details in the DOM (order-detail.css draws it last), when the order has notes; the main column's note (data-testid order-requester-note) carries data-classic-only. The note is the order's own notes, words only, which the page already loads for every viewer of the order. Not rendered under off.",
+      "classicTwin": "the main column's Requester note section (data-classic-only, hidden in glass)",
+      "gate": null
+    },
+    {
+      "id": "storefront-cart-fab",
+      "source": "apps/web/src/components/orders/storefront/storefront-cart.tsx",
+      "selector": ".sp-storefront:not(.sf-public) .sf-fab",
+      "role": "button",
+      "name": "Scroll to cart, <n> units",
+      "kind": "hidden in a width band (target on screen)",
+      "routes": ["/dashboard/orders/new"],
+      "$comment": "Place an order's floating cart button (CartFab), which only scrolls the page down to the cart when the cart is stacked under the catalog. Classic stacks the cart and shows the button (with units in the cart) in windows 1280 px wide or narrower; glass keeps the cart beside the catalog, sticky and on screen, down to 1101 px (Order-New.dc.html .cols-side, sp.css:291-292) and does not draw the button there (styles/liquid-glass/storefront.glass.css). At 1100 px and narrower glass stacks the cart and shows the button as Classic does.",
+      "minWidth": 1101,
+      "maxWidth": 1280,
+      "classicTwin": null,
+      "gate": "Place an order's own gate"
+    },
+    {
+      "id": "auth-contact-the-team",
+      "source": "apps/web/src/app/(auth)/layout.tsx",
+      "selector": ".auth-panel-head a.auth-glass-contact[data-glass-only]",
+      "role": "link",
+      "name": "Contact the team",
+      "kind": "public page link (no data action)",
+      "routes": [
+        "/signin",
+        "/signin/mfa",
+        "/signup",
+        "/reset",
+        "/reset/complete",
+        "/account-disabled"
+      ],
+      "$comment": "Auth-SignIn.dc.html's top bar: btn-glass btn-pill \"Contact the team\" to /contact (COVERAGE row app/(auth)/layout.tsx; IMPLEMENTATION-PLAN.md 8.5 names it). Glass-only, after the header appearance menu; not rendered under the off rollout (auth-layout.glass.test.tsx). In classic the same page is reached from these routes through the StockPilot home link (/) and the marketing header there.",
+      "classicTwin": "StockPilot home link (/), then Contact in the marketing header",
+      "gate": null
+    },
+    {
+      "id": "auth-help-security",
+      "source": "apps/web/src/app/(auth)/layout.tsx",
+      "selector": ".auth-panel-foot nav [data-glass-only] a[href=\"/security\"]",
+      "role": "link",
+      "name": "Security",
+      "kind": "public page link (no data action)",
+      "routes": [
+        "/signin",
+        "/signin/mfa",
+        "/signup",
+        "/reset",
+        "/reset/complete",
+        "/account-disabled"
+      ],
+      "$comment": "Auth-SignIn.dc.html's help pill: Privacy, Terms, Security, Support. The classic help links (Support, Privacy, Terms) keep their order (the DOM order wins over the board's, plan 4.6), and Security, glass-only, comes last, inside a glass-only span because auth.css gives every help link a display at phone width. Not rendered under the off rollout. In classic /security is reached through the StockPilot home link (/) and the marketing header and footer there.",
+      "classicTwin": "StockPilot home link (/), then Security in the marketing header",
+      "gate": null
+    },
+    {
+      "id": "cycle-count-differ-figure",
+      "source": "apps/web/src/components/cycle-counts/count-glass-summary.tsx",
+      "selector": "[data-glass=\"count-differ\"]",
+      "kind": "summary block (no action)",
+      "routes": ["/dashboard/cycle-counts/[id]"],
+      "$comment": "Cycle-Count-Detail.dc.html's fifth figure, \"Lines that differ\", in the count's figures between Uncounted and Net variance: the summary's varianceCount, which the lines card head already prints as \"n with variance\". A label and a number. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "cycle-count-wide-progress",
+      "source": "apps/web/src/components/cycle-counts/count-glass-summary.tsx",
+      "selector": "[data-glass=\"count-progress\"]",
+      "kind": "summary block (no action)",
+      "routes": ["/dashboard/cycle-counts/[id]"],
+      "$comment": "Cycle-Count-Detail.dc.html's wide bar under the figures (.prog, role progressbar, \"Lines counted\"): counted out of the items in scope, the two figures the strip and the lines card head already print. Glass hides Classic's small aria-hidden bar under Counted in its place (pages/counts.css). Not rendered under off, nor for a count with no lines.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "return-progress-rail",
+      "source": "apps/web/src/components/returns/return-progress-rail.tsx",
+      "selector": "[data-glass=\"return-rail\"]",
+      "kind": "summary block (no action)",
+      "routes": ["/dashboard/returns/[id]"],
+      "$comment": "Return-Detail.dc.html's progress rail under the page head (.steps, \"Return progress\"): Requested, Approved, Received, Processed, the steps before the return's status done, its status current (aria-current=\"step\"). Words and marks from the return's own status, which the workbench already has (the status badge beside the title says the same). None for a denied or cancelled return. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "po-receiving-progress",
+      "source": "apps/web/src/components/po/po-receiving-glass.tsx",
+      "selector": "[data-glass=\"po-progress\"]",
+      "kind": "summary block (no action)",
+      "routes": ["/dashboard/purchase-orders/[id]"],
+      "$comment": "Purchase-Order.dc.html's \"Receiving progress\" card over the lines: Received x of y units, Still expected, Expected (the day), and the bar of units received (role progressbar). Sums of the lines' ordered and received quantities and the expected day, which the page already loads (the lines table and Summary print them). Drawn for an ordered, expected, partly or fully received order; not for a draft or cancelled one. No \"Overdue by n days\": that needs the organization's day, which the page does not read. Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "po-line-board-columns",
+      "source": "apps/web/src/components/po/po-receiving-glass.tsx",
+      "selector": "[data-testid=\"po-line\"] > td[data-glass-only], th[data-glass^=\"po-line-\"]",
+      "kind": "moved block (no action)",
+      "routes": ["/dashboard/purchase-orders/[id]"],
+      "$comment": "Purchase-Order.dc.html's line columns: Ordered, Received, Outstanding and the line's status (\"n still to come\" or \"Fully received\"). Glass shows them in place of Classic's \"Received / ordered\" column (the head and each line's cell carry data-classic-only and are hidden in glass), so each line's received and ordered figures are on screen once in either design; Outstanding and the status are derived from the same two figures. Figures and words only, no link, button or field. Not rendered under off.",
+      "classicTwin": "the lines table's \"Received / ordered\" column (data-classic-only, hidden in glass)",
+      "gate": null
+    },
+    {
+      "id": "cycle-count-title-status",
+      "source": "apps/web/src/components/cycle-counts/count-glass-summary.tsx",
+      "selector": "[data-glass=\"count-title-status\"]",
+      "kind": "moved block (no action)",
+      "routes": ["/dashboard/cycle-counts/[id]"],
+      "$comment": "Cycle-Count-Detail.dc.html's title row: the h1, the copy button, then the count's status badge. The page renders this copy of the lines card head's status badge (the same component, words and tone, from the header the page already has) in the title row, between the h1 and the copy button in the DOM (pages/counts.css draws it after the button), when the count's reference can be read. While it is drawn pages/counts.css hides the card head's badge, so the status is on screen once in either design; without a reference the card head keeps it. Words only, no link, button or field. Not rendered under off.",
+      "classicTwin": "the lines card head's status badge (hidden in glass by pages/counts.css while this copy is drawn)",
+      "gate": null
+    },
+    {
+      "id": "cycle-count-lines-note",
+      "source": "apps/web/src/components/cycle-counts/count-glass-summary.tsx",
+      "selector": "[data-glass=\"count-lines-note\"]",
+      "kind": "decoration (no action)",
+      "routes": ["/dashboard/cycle-counts/[id]"],
+      "$comment": "Cycle-Count-Detail.dc.html's note at the end of the lines toolbar (.xs.muted.ml-a.desk): \"Expected is the system quantity when the line was counted.\", the short form of the Expected column's help, which stays. Words only, between the search and the views in the DOM (pages/counts.css draws it last, not on a phone). Not rendered under off.",
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "reports-hub-glass",
+      "source": "apps/web/src/components/reports/reports-hub-glass.tsx",
+      "selector": "[data-glass=\"reports-hub\"]",
+      "kind": "duplicate action",
+      "routes": ["/dashboard/reports"],
+      "$comment": "Reports.dc.html's grouped hub: the Book Order Totals feature tile, then Inventory, Purchasing & cost, Bundles and Lots. One link per report in the page's own module-filtered list, with the name, the description and the target of the Classic tile it stands for; Classic's tiles carry data-classic-only and are hidden in glass, so each report is one link in either design. The eyebrow, the chips and the cover fan are aria-hidden decoration.",
+      "classicTwin": "the Classic tile of the same report (data-classic-only, hidden in glass), same name, description and href",
+      "gate": "the page's report list, filtered by reportModules(slug) on the modules enabled for the organization"
+    },
+    {
+      "id": "item-more-actions",
+      "source": "apps/web/src/components/inventory/item-more-actions.tsx",
+      "selector": "[data-glass=\"item-more\"] button",
+      "role": "button",
+      "name": "More actions",
+      "kind": "disclosure of classic actions (no action)",
+      "routes": [
+        "/dashboard/inventory/[id]",
+        "/dashboard/books/[id]",
+        "/dashboard/rentals/items/[id]"
+      ],
+      "$comment": "Item-Detail.dc.html's page head draws Transfer, Adjust, Edit and a More button. The item page keeps every classic action in its tour row [data-tour=\"item-actions\"], each rendered once with its own gate and dialog; glass shows the three with an inert data-glass-action hook (Edit, Adjust stock, Transfer) and hides the others until this button is pressed, then shows them in the same row in their DOM order (styles/liquid-glass/pages/item-detail.css). It never closes on its own. When none of the three is allowed, glass hides nothing and does not draw the button. Not rendered under off.",
+      "reveals": [
+        {
+          "role": "button",
+          "name": "Duplicate",
+          "gate": "items:create"
+        },
+        {
+          "role": "button",
+          "name": "Label",
+          "gate": null
+        },
+        {
+          "role": "link",
+          "name": "Print label",
+          "gate": null
+        },
+        {
+          "role": "button",
+          "name": "Count this item",
+          "gate": "canStartCount + a countable item"
+        },
+        {
+          "role": "button",
+          "name": "Report a problem",
+          "gate": "maintenance_requests:submit + the module"
+        }
+      ],
+      "classicTwin": null,
+      "gate": null
+    },
+    {
+      "id": "item-glass-summary",
+      "source": "apps/web/src/components/inventory/item-glass-summary.tsx",
+      "selector": "[data-glass=\"item-summary\"], [data-glass=\"item-aside\"]",
+      "kind": "summary (no action)",
+      "routes": [
+        "/dashboard/inventory/[id]",
+        "/dashboard/books/[id]",
+        "/dashboard/rentals/items/[id]"
+      ],
+      "$comment": "Item-Detail.dc.html and Book-Detail.dc.html: the summary card (the photo or cover, the book's ISBN, author, grade and home crate, the On hand / Available / Reserved / Reorder at or In Staging / Value wells, the reorder alert) and the side column (Ordering, Reserved, Expected, Product family and the Reorder card's rows), on the Overview tab only. Every value comes from the item row, the reserved sum and the photo the Overview already reads, and the context's modules and permissions. The figure strip and the Reorder card carry data-classic-only. The side column's one link has its own entry (item-book-order-totals). Not rendered under off.",
+      "classicTwin": "the Overview's figure strip and Reorder card (data-classic-only, hidden in glass)",
+      "gate": null
+    },
+    {
+      "id": "item-book-order-totals",
+      "source": "apps/web/src/components/inventory/item-glass-summary.tsx",
+      "selector": "[data-glass=\"item-aside\"] a[href=\"/dashboard/reports/book-order-totals\"]",
+      "role": "link",
+      "name": "Open the report",
+      "kind": "duplicate action",
+      "routes": ["/dashboard/books/[id]", "/dashboard/inventory/[id]"],
+      "$comment": "Book-Detail.dc.html's Book Order Totals card: on a book's Overview, a link to /dashboard/reports/book-order-totals, the page the Reports list's Book Order Totals card opens; in classic it is reached from every dashboard route through the sidebar's Reports link. Shown only with reports:read and the Orders and Books modules on, the report page's own gate (reports/book-order-totals/page.tsx). The board's figure (copies requested in the last 30 days) is not drawn: it would be a report read on the book page. Not rendered under off.",
+      "classicTwin": "the Book Order Totals card on /dashboard/reports, reached through the sidebar's Reports link",
+      "gate": "reports:read + the Orders and Books modules"
+    }
+  ]
+}

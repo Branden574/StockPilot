@@ -19,6 +19,8 @@ import {
 } from '@/components/ui/dialog';
 
 import '@/components/orders/storefront/storefront.css';
+// Liquid Glass: the unlayered companion, on the next line (plan 4.1).
+import '@/styles/liquid-glass/storefront.glass.css';
 
 /** One order line, flattened to exactly what the assistant's draft needs.
  *  Plain objects only — this crosses the RSC boundary from the order detail
@@ -166,12 +168,11 @@ export function SendDeliveryRequestButton(props: SendDeliveryRequestButtonProps)
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
-        <DialogHeader>
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>Send delivery request</DialogTitle>
           <DialogDescription>
-            The same email assistant offered when this order was placed. It opens a
-            prefilled draft in your mail client — nothing is sent until you press Send
-            yourself.
+            The same email assistant offered when this order was placed. It opens a prefilled draft
+            in your mail client — nothing is sent until you press Send yourself.
           </DialogDescription>
         </DialogHeader>
         {/* sp-storefront scopes the assistant's sf-* classes (sf-embedded drops

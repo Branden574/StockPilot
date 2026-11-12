@@ -1,0 +1,109 @@
+<div aria-busy="true" class="flex flex-col gap-4 max-w-[1320px] mx-auto pb-16 pt-6 px-4 sm:pt-7 sm:px-8 w-full" data-schedule-skeleton="calendar">
+  <div class="min-w-0">
+    <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-40">
+    <div class="flex h-[42px] items-center mt-2">
+      <div class="animate-pulse bg-[var(--ed-line)] h-[26px] rounded-md w-56">
+    <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-xl mt-1 rounded-md w-full">
+  <div class="flex flex-wrap gap-3 items-center justify-between">
+    <div class="flex gap-1.5 items-center">
+      <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="animate-pulse bg-[var(--ed-line)] h-7 ml-1 rounded-md w-14">
+    <div class="animate-pulse bg-[var(--ed-line)] h-5 rounded-md w-36">
+    <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-28">
+  <div class="bg-card border border-border overflow-hidden rounded-lg">
+    <div class="overflow-x-auto">
+      <div class="min-w-[640px]">
+        <div class="bg-sunk border-b border-border grid grid-cols-7 h-[37px] items-center">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+          <div class="animate-pulse bg-[var(--ed-line)] h-2 mx-auto rounded-md w-8">
+        <div class="grid grid-cols-7">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r-0 min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r-0 min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r-0 min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r-0 min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b border-border border-r-0 min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">
+          <div class="border-b-0 border-border border-r-0 min-h-[112px] p-1.5" data-skeleton-day="">
+            <div class="animate-pulse bg-[var(--ed-line)] h-4 rounded-md w-5">

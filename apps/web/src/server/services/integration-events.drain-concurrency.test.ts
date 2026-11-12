@@ -100,12 +100,107 @@ describe('drainIntegrationDeliveries fan-out', () => {
       { clock: () => now },
     );
 
-    // The first wave started inside the budget; nothing after it.
+    // The first wave started inside the budget; nothing after it, and the
+    // summary says rows were left for time (docket B81, integrator R3).
     expect(DRAIN_DELIVERY_CONCURRENCY * 10_000).toBeGreaterThanOrEqual(DRAIN_TIME_BUDGET_MS);
     expect(summary).toEqual({
       attempted: DRAIN_DELIVERY_CONCURRENCY,
       delivered: DRAIN_DELIVERY_CONCURRENCY,
+      skipped: 'deadline',
     });
     expect(claims(s)).toBe(DRAIN_DELIVERY_CONCURRENCY);
+  });
+});
+
+/**
+ * docket B81: the drain-outbox cron runs the connector drain first, then the
+ * monthly valuation, then this drain, under one maxDuration of 60 s, and this
+ * drain measured its budget from its own start. It now also takes the cron
+ * run's deadline: it starts no delivery with less than a claim lease left
+ * (the 8 s timeout plus 5 s), so a delivery it starts ends before the
+ * deadline, and with less than that left at the start it reads nothing.
+ */
+describe('drainIntegrationDeliveries under the cron run deadline', () => {
+  it('with 12 s left it reads, claims and sends nothing, and says it was skipped', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const s = stub();
+    const deadlineAt = 1_000_000;
+
+    const summary = await drainIntegrationDeliveries(
+      s.client,
+      new Date('2026-09-23T12:00:00Z'),
+      100,
+      {
+        clock: () => deadlineAt - 12_000,
+        deadlineAt,
+      },
+    );
+
+    expect(summary).toEqual({ attempted: 0, delivered: 0, skipped: 'deadline' });
+    expect(s.fromCalls).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('with 14 s left it delivers', async () => {
+    const fetchMock = vi.fn(async () => new Response('ok', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const s = stub();
+    const deadlineAt = 1_000_000;
+
+    const summary = await drainIntegrationDeliveries(
+      s.client,
+      new Date('2026-09-23T12:00:00Z'),
+      100,
+      {
+        clock: () => deadlineAt - 14_000,
+        deadlineAt,
+      },
+    );
+
+    expect(summary).toEqual({ attempted: 100, delivered: 100 });
+    expect(fetchMock).toHaveBeenCalledTimes(100);
+  });
+
+  it('starts no delivery once less than a claim lease is left', async () => {
+    // 20 s left at the start; each POST takes 1 s of the clock.
+    const deadlineAt = 1_000_000;
+    let now = deadlineAt - 20_000;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        now += 1_000;
+        return new Response('ok', { status: 200 });
+      }),
+    );
+    // The time left when each delivery is claimed. The stub answers a claim as
+    // it is made, right after the drain's own check, before anything awaits.
+    const leftAtClaim: number[] = [];
+    const s = makeSupabaseStub({
+      'integration_deliveries.select': { data: DUE, error: null },
+      'integration_endpoints.select': { data: [ENDPOINT], error: null },
+      'integration_deliveries.update': (call: { args: unknown[][] }) => {
+        const patch = call.args[0]?.[0] as { status?: string } | undefined;
+        if (patch?.status === undefined) leftAtClaim.push(deadlineAt - now);
+        return { data: [{ id: 'x' }], error: null };
+      },
+      'integration_endpoints.update': { data: null, error: null },
+    });
+
+    const summary = await drainIntegrationDeliveries(
+      s.client,
+      new Date('2026-09-23T12:00:00Z'),
+      100,
+      {
+        clock: () => now,
+        deadlineAt,
+      },
+    );
+
+    expect(leftAtClaim.length).toBeGreaterThan(0);
+    expect(summary.attempted).toBe(leftAtClaim.length);
+    expect(summary.attempted).toBeLessThan(100);
+    expect(Math.min(...leftAtClaim)).toBeGreaterThanOrEqual(13_000);
+    expect(summary.skipped).toBe('deadline');
   });
 });

@@ -13,6 +13,7 @@ import {
   reportDegradedRead,
   writeInIdBatches,
 } from './lib/fetch-by-ids';
+import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
@@ -222,6 +223,16 @@ export class ReceivingService {
 
     const requestHash = hashReceiptRequest(input);
 
+    // S39: the PO is read in THIS organization first, and a miss refuses
+    // before the function. post_receipt_v2 decides on the PO's own
+    // organization, so for a member of two organizations a page or phone
+    // screen left open after a switch received stock into the other
+    // organization while the audit row, the receipt.posted outbox row, the
+    // po.received webhook and the cache invalidation below went to this one
+    // (and this organization's QuickBooks acknowledged a receipt it could not
+    // find, so the other one never made the Bill). It runs beside the PO line
+    // read below, which never rejects; a miss rejects the pair.
+    //
     // Lines in item order, then PO line order (L27). post_receipt_v2 takes
     // each line's item lock in the order the lines arrive, so two receipts
     // naming the same items in opposite orders could wait on each other; one
@@ -229,7 +240,10 @@ export class ReceivingService {
     // here. The hash above sorts its own copy, so it is unchanged. When the
     // item read fails the receipt still posts, in PO line order (the RPC
     // checks every line itself).
-    const itemsRead = await this.itemIdsByPoLine(input.lines.map((l) => l.poLineId));
+    const [, itemsRead] = await Promise.all([
+      readInActiveOrg(this.ctx, 'purchase_orders', input.purchaseOrderId, 'PO or line not found.'),
+      this.itemIdsByPoLine(input.lines.map((l) => l.poLineId)),
+    ]);
     if (!itemsRead.ok) {
       reportDegradedRead('receiving.line_lock_order', itemsRead.err, {
         lines: input.lines.length,
@@ -583,6 +597,10 @@ export class ReceivingService {
     assertModuleEnabled(this.ctx, 'receiving');
     assertPermission(this.ctx, 'stock:adjust');
 
+    // S39: the receipt is read in THIS organization first, and a miss refuses
+    // before the function, which decides on the receipt's own organization:
+    // the audit row below (with the reason) is written here.
+    await readInActiveOrg(this.ctx, 'receipts', input.receiptId, 'Receipt not found.');
     const { data, error } = await this.ctx.supabase.rpc('reverse_receipt', {
       p_receipt_id: input.receiptId,
       p_reason: input.reason,

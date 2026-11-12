@@ -2,6 +2,12 @@ import type { Metadata } from 'next';
 
 import { ItemDetail } from '@/components/inventory/item-detail';
 import { safeReturnPath } from '@/lib/safe-return-path';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
+
+// The Liquid Glass item page (Item-Detail.dc.html, Book-Detail.dc.html): every
+// rule is scoped to ItemDetail's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/item-detail.css';
 
 // The browser tab's title (CONFLICTS D16: the item page had none, so it read
 // "Dashboard · StockPilot"). A fixed word, as the Exception and Location pages
@@ -18,6 +24,9 @@ export default async function ItemDetailPage({
   searchParams: Promise<{ tab?: string; return?: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const { tab, return: returnParam } = await searchParams;
   // Validate the back-link target — `return` is user-controlled so we
   // never trust it without going through safeReturnPath. Cross-origin

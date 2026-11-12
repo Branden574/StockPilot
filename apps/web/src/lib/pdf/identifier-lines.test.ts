@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { width } from '@/test/pdf-font-metrics';
 
-import { breakIdentifierLines } from './identifier-lines';
+import { breakIdentifierLines, breakOverwideWords } from './identifier-lines';
 
 const SIZE = 8.5;
 
@@ -71,5 +71,41 @@ describe('breakIdentifierLines', () => {
         }
       }
     }
+  });
+});
+
+describe('breakOverwideWords', () => {
+  const BODY = 9;
+
+  it('returns a text whose every word fits unchanged', () => {
+    const title = 'Brightwater classroom science kit with twelve sample jars · Size 10';
+    expect(breakOverwideWords(title, 60, BODY)).toBe(title);
+    expect(breakOverwideWords('Rack 12-B · Crate Blue 7', 60, BODY)).toBe(
+      'Rack 12-B · Crate Blue 7',
+    );
+    expect(breakOverwideWords('', 60, BODY)).toBe('');
+  });
+
+  it('breaks only the word wider than the box, and keeps the spaces around it', () => {
+    const out = breakOverwideWords('Cable QX9000QX9100QX9200QX9300 spare', 60, BODY);
+    expect(out.startsWith('Cable ')).toBe(true);
+    expect(out.endsWith(' spare')).toBe(true);
+    expect(out.replace(/\n/g, '')).toBe('Cable QX9000QX9100QX9200QX9300 spare');
+    for (const piece of out.split(/[ \n]+/)) {
+      expect(width(piece, 'Helvetica', BODY)).toBeLessThanOrEqual(60);
+    }
+  });
+
+  it("ends a line after the word's own separator when one falls on it", () => {
+    expect(breakOverwideWords('Grade3/Grade4/Grade5/Grade6 set', 70, BODY)).toBe(
+      'Grade3/Grade4/\nGrade5/Grade6 set',
+    );
+  });
+
+  it('measures in the font it is given', () => {
+    // 'mmmmmmmm' is 59.98pt in Helvetica and 64.01pt in Helvetica-Bold at
+    // 9pt: it fits a 62pt box in one and not the other.
+    expect(breakOverwideWords('mmmmmmmm', 62, BODY)).toBe('mmmmmmmm');
+    expect(breakOverwideWords('mmmmmmmm', 62, BODY, 'Helvetica-Bold')).toContain('\n');
   });
 });

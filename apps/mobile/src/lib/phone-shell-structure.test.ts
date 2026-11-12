@@ -19,6 +19,7 @@ import {
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
 import { DEFAULT_TAB_SLOTS, MAX_TAB_SLOTS, MIN_TAB_SLOTS, TAB_SLOT_IDS } from './tab-config';
+import { printClassic } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 // drawer-nav maps icon names to lucide components; the icons are irrelevant
@@ -341,8 +342,8 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     );
   });
 
-  it('RootLayout keeps its order: OTA reload, the database and count sync, the font gate, then the providers and the splash', () => {
-    const ota = layout.indexOf('useOtaAutoReload();');
+  it('RootLayout keeps its order: phone updates, the database and count sync, the font gate, then the providers and the splash', () => {
+    const ota = layout.indexOf('useOtaUpdates();');
     const db = layout.indexOf('await initDb();');
     const prune = layout.indexOf('await pruneRejected();');
     const sync = layout.indexOf('cycleCountSync.start();');
@@ -357,6 +358,31 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     expect(blank).toBeGreaterThan(fonts);
     expect(providers).toBeGreaterThan(blank);
     expect(layout).toContain('cycleCountSync.stop();');
+  });
+
+  // B44: every native alert holds the phone update pop-up, from the first
+  // alert this JavaScript runtime shows.
+  it('installs the alert holds once, at module scope, right after crash reporting', () => {
+    const sf = treeOf(ROOT_LAYOUT);
+    const topLevel = sf.statements.map((st) => st.getText(sf));
+    expect(topLevel.filter((t) => t === 'installAlertHolds();')).toHaveLength(1);
+    expect(src.split('installAlertHolds();')).toHaveLength(2);
+    const sentry = src.indexOf('initSentry();');
+    const alerts = src.indexOf('installAlertHolds();');
+    const cold = src.indexOf('let coldLaunchHandled = false;');
+    expect(sentry).toBeGreaterThan(-1);
+    expect(alerts).toBeGreaterThan(sentry);
+    expect(cold).toBeGreaterThan(alerts);
+  });
+
+  // B44: the update pop-up watches the screen only in the signed-in shell,
+  // beside What's New, never over sign-in, MFA, the lock or a disabled account.
+  it('mounts one UpdatePromptHost after the stack, in the signed-in shell only', () => {
+    expect(src.split('<UpdatePromptHost')).toHaveLength(2);
+    expect(gate.indexOf('<UpdatePromptHost')).toBeGreaterThan(gate.indexOf('</Stack>'));
+    expect(gate).toContain(
+      '{session && !loading && !mfaRequired && !locked ? ( <UpdatePromptHost segments={segments} /> ) : null}',
+    );
   });
 
   it('the splash is fire-once per cold launch and hands off to the lock (the Face ID prompt waits for it)', () => {
@@ -538,6 +564,8 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
   it.each([
     ['settings/integrations', 'Integrations'],
     ['settings/customize-tabs', 'Customize tab bar'],
+    // Settings > Appearance (Liquid Glass stage 2).
+    ['settings/appearance', 'Appearance'],
     ['settings/rejected-work', 'Unsent work'],
     ['settings/change-email', 'Change email'],
     ['admin/index', 'Admin overview'],
@@ -558,7 +586,7 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
 
   it('registers no other screen', () => {
     expect(elements(DRAWER_LAYOUT, (el, s) => tagOf(el, s) === 'Drawer.Screen').els).toHaveLength(
-      37,
+      38,
     );
   });
 
@@ -827,7 +855,10 @@ describe('workspace switcher: the chip and the sheet', () => {
   });
 
   it("the sheet is the app's sheet shape: a Close scrim behind the card, VoiceOver kept inside, the escape scrub closes", () => {
-    const sf = treeOf(SWITCHER);
+    // Classic's shape, read off the Classic projection: Liquid Glass lays its
+    // scrim, card and material over these in branches of its own
+    // (glass-sheet-frames.test.ts).
+    const sf = parseTsx(printClassic(src, SWITCHER), SWITCHER);
     let container: JsxNode | undefined;
     walkJsx(sf, (el) => {
       if (attrText(el, 'accessibilityViewIsModal', sf) === 'true') container = el;
@@ -852,10 +883,15 @@ describe('workspace switcher: the chip and the sheet', () => {
       "mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)'",
     );
     expect(tagOf(card, sf)).toBe('View');
-    expect(attrText(card, 'style', sf)).toBe(
-      '[styles.sheet, { backgroundColor: c.card, borderColor: c.hair }]',
+    expect(flat(attrText(card, 'style', sf) ?? '')).toMatch(
+      /^\[\s*styles\.sheet,\s*\{ backgroundColor: c\.card, borderColor: c\.hair \},?\s*\]$/,
     );
-    expect(code).toContain('<View style={[styles.grabber, { backgroundColor: c.ink5 }]} />');
+    expect(flat(printClassic(src, SWITCHER))).toMatch(
+      /<View style=\{\[styles\.grabber, \{ backgroundColor: c\.ink5 \}\]\}\s*\/>/,
+    );
+    expect(code).toContain(
+      '<View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />',
+    );
     expect(src).not.toContain('#ccc');
   });
 
@@ -1032,9 +1068,11 @@ describe('tours: the same targets, the same start rules, the reference buttons',
   const src = sourceOf(TOUR);
   const code = flat(codeOnly(src));
 
-  it('starts from ?tour=<id>, only on the focused screen, never while What’s New is up', () => {
+  it('starts from ?tour=<id>, only on the focused screen, never while What’s New or the update pop-up is up', () => {
     expect(code).toContain('if (params.tour === tour.id && !autoStarted.current) {');
-    expect(code).toContain("visible={isFocused && phase !== 'idle' && !whatsNewOpen}");
+    expect(code).toContain(
+      "visible={isFocused && phase !== 'idle' && !whatsNewOpen && !updatePromptOpen}",
+    );
     expect(code).toContain("setTourVisible(tour.id, isFocused && phase !== 'idle');");
     expect(code).toContain('setActiveTour(tour.id);');
   });

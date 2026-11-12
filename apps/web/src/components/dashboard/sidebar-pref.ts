@@ -9,6 +9,11 @@
 
 import { isAdminRole, SECTION_ORDER, type NavSectionKey, type Role } from '@stockpilot/core';
 
+import {
+  desktopViewportQuery,
+  subscribeToDesktopViewportQueries,
+} from '@/components/theme/glass-viewport';
+
 /** Cookie that persists the per-device preference. "1" = hidden. */
 export const SIDEBAR_HIDDEN_COOKIE = 'sp_sidebar_hidden';
 
@@ -30,19 +35,22 @@ export function sidebarCookieString(hidden: boolean): string {
     : `${SIDEBAR_HIDDEN_COOKIE}=; path=/; max-age=0; samesite=lax`;
 }
 
-/** Desktop width: Tailwind `md`, where the pinned sidebar shows. */
-const DESKTOP_QUERY = '(min-width: 768px)';
-
-/** True when the viewport is desktop-width (Tailwind `md`, ≥768px). */
+/**
+ * True when the viewport is desktop-width, where the pinned sidebar shows:
+ * Tailwind `md` (≥768px) in classic, ≥761px while Liquid Glass is on screen
+ * (components/theme/glass-viewport.ts; shell.css shows the sidebar there).
+ */
 export function isDesktopViewport(): boolean {
-  return typeof window !== 'undefined' && window.matchMedia(DESKTOP_QUERY).matches;
+  return typeof window !== 'undefined' && window.matchMedia(desktopViewportQuery()).matches;
 }
 
-/** Calls `onChange` whenever the window crosses the desktop width; returns the unsubscribe. */
+/**
+ * Calls `onChange` whenever the window crosses the desktop width (or, with
+ * Liquid Glass in the build, the Design on screen changes); returns the
+ * unsubscribe.
+ */
 export function subscribeToDesktopViewport(onChange: () => void): () => void {
-  const query = window.matchMedia(DESKTOP_QUERY);
-  query.addEventListener('change', onChange);
-  return () => query.removeEventListener('change', onChange);
+  return subscribeToDesktopViewportQueries(onChange);
 }
 
 /** The chord that toggles the sidebar: Cmd+\ (mac) / Ctrl+\ (win/linux). */

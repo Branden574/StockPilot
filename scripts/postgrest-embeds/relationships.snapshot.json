@@ -1,6 +1,6 @@
 {
   "generatedBy": "scripts/gen-postgrest-embed-snapshot.mjs (do not edit by hand)",
-  "source": "production catalog, project xizpqmhhslgzbuqtjubv, read-only SELECT on pg_constraint/pg_class/pg_attribute (public schema), 2026-10-12, migrations through 0400",
+  "source": "local database catalog (scripts/postgrest-embeds/census.sql), 2026-11-03",
   "foreignKeys": [
     ["activity_logs","activity_logs_organization_id_fkey","organizations",["organization_id"],["id"]],
     ["activity_logs","activity_logs_user_id_fkey","user_profiles",["user_id"],["id"]],
@@ -533,6 +533,7 @@
     "tags": ["id"],
     "tolerance_profiles": ["id"],
     "uom_conversions": ["id"],
+    "user_appearance": ["user_id"],
     "user_category_assignments": ["id"],
     "user_login_devices": ["id"],
     "user_onboarding": ["user_id"],

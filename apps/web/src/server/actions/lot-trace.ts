@@ -1,9 +1,8 @@
 'use server';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { LotsService, type LotTraceResult } from '@/server/services/lots';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 export async function traceLotAction(lotNumber: string): Promise<ActionResult<LotTraceResult>> {
   if (!lotNumber?.trim()) return err('validation_error', 'Enter a lot number.');
@@ -11,8 +10,6 @@ export async function traceLotAction(lotNumber: string): Promise<ActionResult<Lo
     const svc = await LotsService.forCurrentUser();
     return ok(await svc.traceLot(lotNumber));
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.lot_trace.trace_lot');
   }
 }

@@ -4,6 +4,11 @@ import { CreateOrgForForm } from '@/components/admin/create-org-for-form';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export const metadata = {
   title: 'Provision new organization',
 };
@@ -17,7 +22,12 @@ export default async function PlatformAdminCreateOrgPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="orgs-new"
+      data-glass-width="form"
+      className="mx-auto flex w-full max-w-2xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/admin">← Back to admin</PageHeaderBackLink>}
         title="Provision a new organization"

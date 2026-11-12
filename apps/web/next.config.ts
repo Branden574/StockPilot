@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 
 import type { NextConfig } from 'next';
 
+import {
+  glassSiteRedirects,
+  liquidGlassRollout,
+  marketingRewrites,
+} from './src/components/theme/appearance-flag';
+
 // ── Build identity (update detection) ────────────────────────────────────────
 // "Which build is THIS bundle?" has to be answered at BUILD time and baked into
 // the bundle, because every runtime source of it lies to an old tab:
@@ -111,9 +117,21 @@ const nextConfig: NextConfig = {
   //      don't have to loosen the security headers to ship analytics.
   //   2. Ad blockers / Brave Shields drop requests to known tracker hosts;
   //      first-party /ingest requests sail through, so we don't under-count.
+  // The proxy is the route handler app/ingest/[...path]/route.ts, NOT a
+  // rewrite (docket S34). Being same-origin, every /ingest request carries
+  // this host's cookies, the Supabase session among them, and an external
+  // rewrite forwards the request's headers as they came. The route builds a
+  // new request from a list of headers instead: never a cookie, never a
+  // member's Authorization. It passes on only the requests posthog-js makes
+  // with the provider's init options, each by the method the SDK uses (any
+  // other path answers 404, another method 405), so turning an SDK feature
+  // on, or a posthog-js update, means checking the route's list
+  // (route.census.test.ts fails on a path or bundle it has not seen).
+  // src/test/ingest-proxy.guard.test.ts fails if a /ingest rewrite comes back.
   // skipTrailingSlashRedirect stops Next from 308-redirecting PostHog's
-  // /flags|/decide style paths. Hosts are US Cloud (the project's region) and
-  // MUST match api_host:'/ingest' in the PostHog provider.
+  // /e/ and /flags/ style paths, so they reach the route as the SDK spelled
+  // them. Hosts are US Cloud (the project's region, set in the route) and the
+  // path MUST match api_host:'/ingest' in the PostHog provider.
   skipTrailingSlashRedirect: true,
   // Belt-and-suspenders: Next.js defaults this to false, but a future
   // dependency (e.g. a Sentry plugin) can flip the underlying webpack
@@ -208,17 +226,32 @@ const nextConfig: NextConfig = {
 
   transpilePackages: ['@stockpilot/core'],
 
-  // First-party proxy for PostHog (see skipTrailingSlashRedirect note above).
-  // The browser only ever talks to /ingest on our own domain; Next rewrites
-  // it server-side to PostHog US Cloud, invisible to CSP + ad blockers.
+  // The only rewrites are the Liquid Glass marketing twins' (components/theme/
+  // appearance-flag.ts, plans/REVISION-DEFAULT.md R8). /ingest (PostHog) is
+  // never rewritten: a route handler that copies no cookie proxies it (see
+  // the skipTrailingSlashRedirect note above; src/test/ingest-proxy.guard.
+  // test.ts fails on an /ingest rewrite).
+  //
+  // Each of the 7 marketing paths (/, /contact, /pricing, /privacy, /security,
+  // /support, /terms) is served from its twin under app/(site-glass)/
+  // glass-site when the rollout and the sp_style cookie select glass:
+  //   default  unless sp_style=classic (no cookie, a crawler included: glass);
+  //   opt-in   only with sp_style=liquid-glass;
+  //   off      no rewrite at all (MARKETING_TWINS_BUILT is true there).
+  // beforeFiles, so the rewrite resolves before the filesystem and the cache:
+  // both variants stay static, each cached under its own destination. The
+  // rollout is read when this file is evaluated, at build time.
   async rewrites() {
-    return [
-      {
-        source: '/ingest/static/:path*',
-        destination: 'https://us-assets.i.posthog.com/static/:path*',
-      },
-      { source: '/ingest/:path*', destination: 'https://us.i.posthog.com/:path*' },
-    ];
+    return { beforeFiles: marketingRewrites(liquidGlassRollout()), afterFiles: [], fallback: [] };
+  },
+
+  // Liquid Glass (components/theme/appearance-flag.ts): a direct
+  // /glass-site/* URL redirects to its public path in every rollout, so a
+  // twin URL is never indexed and never forces glass. Redirects run before
+  // rewrites and only on the address asked for, so the rewrites above still
+  // reach the twins. No other redirect exists.
+  async redirects() {
+    return glassSiteRedirects();
   },
 
   async headers() {
@@ -325,6 +358,17 @@ const nextConfig: NextConfig = {
         // and BOTH rules would then emit a CORP header for that one path.
         source: '/email/:path+',
         headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }],
+      },
+      {
+        // The Liquid Glass scene illustrations (public/liquid-glass). The glass
+        // stylesheet (styles/liquid-glass/scene.css) names each one with
+        // ?v= and the start of the SHA-256 the scene manifest pins, and a test
+        // ties the two together, so a changed file is a new address. Without
+        // this rule a public file is served with `public, max-age=0`, and every
+        // hard load of a glass page waits a round trip to revalidate the scene
+        // before it can draw it.
+        source: '/liquid-glass/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
       },
     ];
   },

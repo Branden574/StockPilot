@@ -1,6 +1,12 @@
 import { ItemDetail } from '@/components/inventory/item-detail';
 import { safeReturnPath } from '@/lib/safe-return-path';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { InventoryService } from '@/server/services/inventory';
+
+// The Liquid Glass item composition (Item-Detail.dc.html): ItemDetail draws
+// its [data-glass-page] root, and every rule is scoped to it and to glass, so
+// Classic never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/item-detail.css';
 
 const DEFAULT_BACK = '/dashboard/rentals/items';
 
@@ -12,6 +18,9 @@ export default async function RentalItemDetailPage({
   searchParams: Promise<{ tab?: string; return?: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
   const { tab, return: returnParam } = await searchParams;
   const validated = safeReturnPath(returnParam);
   const backHref = validated ?? DEFAULT_BACK;

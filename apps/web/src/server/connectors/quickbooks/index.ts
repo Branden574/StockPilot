@@ -11,8 +11,9 @@ import type {
 
 import { env } from '@/lib/env';
 
+import { MappingReadError } from '../mapping-read-error';
 import { buildBillFromReceipt, resolveVendor, round2, type BillLine } from './bill';
-import { QboClient, type QboEnv } from './client';
+import { QboApiError, QboClient, type QboEnv } from './client';
 import { buildReturnCreditJournalEntry, type ReturnCreditLine } from './creditmemo';
 import { refreshTokens } from './oauth';
 import { buildPurchaseOrderFromPo } from './purchase-order';
@@ -32,10 +33,21 @@ interface QboSettings {
 
 /** Classify a thrown QBO error as transient (retryable) vs caller-error. */
 function isRetryableQboError(e: unknown): boolean {
-  const status = (e as { status?: number })?.status ?? 0;
+  // A failed mapping read is StockPilot's own read, made before anything is
+  // posted, not a QuickBooks answer: retry it with backoff (docket S27). Its
+  // cause can carry PostgREST's status (200 or 204), which is no QuickBooks status.
+  if (e instanceof MappingReadError) return true;
+  // No Intuit HTTP answer: fetch threw (a failed lookup, a refused or reset
+  // connection), the call timed out, or a 2xx body could not be read. That
+  // read as status 0, a caller error, and the export went to dead on its first
+  // try (docket B81). Every create carries a fixed requestid (client.ts), so
+  // posting again cannot create a second Bill, purchase order, journal entry
+  // or vendor. `instanceof`, not "has a numeric status": a ListReadError
+  // carries PostgREST's status (200 or 204), which is no Intuit answer.
+  if (!(e instanceof QboApiError)) return true;
   // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
   // transient → retryable. Other 4xx are caller errors → not retryable.
-  return status === 429 || status >= 500 || status === 401;
+  return e.status === 429 || e.status >= 500 || e.status === 401;
 }
 
 /**

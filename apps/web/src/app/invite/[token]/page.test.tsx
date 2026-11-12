@@ -46,6 +46,7 @@ vi.mock('./accept-button', () => ({
   AcceptInviteButton: () => <button type="button">Accept invite</button>,
 }));
 
+import { INVITE_ACCOUNT_EXISTS_COPY } from './invite-copy';
 import InvitePage from './page';
 
 // The invite link's path segment: a dull value under a neutral name, since
@@ -121,6 +122,16 @@ describe('/invite/[token]', () => {
     );
     expect(screen.getAllByRole('link').map((a) => a.getAttribute('href'))).toContain('/');
     expect(screen.getByRole('button', { name: 'Theme' })).toBeInTheDocument();
+  });
+
+  it('names its footer exactly as the account-exists answer does (B77)', async () => {
+    invite = makeInvite();
+    await open();
+    // The sign-up refusal for an address that already has an account tells the
+    // invitee which link to use; it must be the words this footer shows.
+    const footer = screen.getByText(/Already have an account\?/);
+    expect(footer).toHaveTextContent(/^Already have an account\? Sign in$/);
+    expect(INVITE_ACCOUNT_EXISTS_COPY).toContain(`"${footer.textContent}"`);
   });
 
   it('valid, signed in as someone else: says so, with no accept control', async () => {

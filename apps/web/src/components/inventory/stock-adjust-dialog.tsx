@@ -104,7 +104,10 @@ export function StockAdjustDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="default">
+          // data-glass-action: an inert hook (no classic CSS reads it); the Liquid
+          // Glass item page keeps this action in its head row by it
+          // (styles/liquid-glass/pages/item-detail.css).
+          <Button variant="default" data-glass-action="adjust">
             <Plus className="h-4 w-4" />
             Adjust stock
           </Button>

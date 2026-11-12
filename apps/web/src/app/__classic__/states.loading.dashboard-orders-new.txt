@@ -1,0 +1,98 @@
+<div class="sp-storefront">
+  <div aria-busy="true" aria-label="Loading order page" class="sf-page">
+    <div class="sf-head">
+      <div style="min-width: 0; max-width: 100%;">
+        <div class="sf-sk" style="width: 110px; height: 12px; border-radius: 6px; margin: 4px 0px 12px;">
+        <div style="height: 42px; display: flex; align-items: center;">
+          <div class="sf-sk" style="width: 210px; height: 26px;">
+        <div style="height: 20px; display: flex; align-items: center; margin-top: 2px;">
+          <div class="sf-sk" style="width: 380px; max-width: 100%; height: 12px;">
+      <div class="sf-sk" style="width: 300px; max-width: 100%; height: 18px; border-radius: 999px;">
+    <div class="sf-setup">
+      <div class="sf-setup-cell static">
+        <div class="sf-sk" style="width: 32px; height: 32px;">
+        <div style="flex-grow: 1; flex-shrink: 1; flex-basis: 0%;">
+          <div class="sf-sk" style="width: 45%; height: 10px; border-radius: 5px; margin-bottom: 6px;">
+          <div class="sf-sk" style="width: 70%; height: 13px;">
+      <div class="sf-setup-cell static">
+        <div class="sf-sk" style="width: 32px; height: 32px;">
+        <div style="flex-grow: 1; flex-shrink: 1; flex-basis: 0%;">
+          <div class="sf-sk" style="width: 45%; height: 10px; border-radius: 5px; margin-bottom: 6px;">
+          <div class="sf-sk" style="width: 70%; height: 13px;">
+      <div class="sf-setup-cell static">
+        <div class="sf-sk" style="width: 32px; height: 32px;">
+        <div style="flex-grow: 1; flex-shrink: 1; flex-basis: 0%;">
+          <div class="sf-sk" style="width: 45%; height: 10px; border-radius: 5px; margin-bottom: 6px;">
+          <div class="sf-sk" style="width: 70%; height: 13px;">
+      <div class="sf-setup-cell static">
+        <div class="sf-sk" style="width: 32px; height: 32px;">
+        <div style="flex-grow: 1; flex-shrink: 1; flex-basis: 0%;">
+          <div class="sf-sk" style="width: 45%; height: 10px; border-radius: 5px; margin-bottom: 6px;">
+          <div class="sf-sk" style="width: 70%; height: 13px;">
+    <div aria-busy="true" aria-label="Loading catalog" class="sf-shell">
+      <div style="min-width: 0;">
+        <div class="sf-sk" style="height: 34px; border-radius: 6px; margin: 8px 0px 12px;">
+        <div style="display: flex; gap: 8px; margin: 0px 0px 18px; overflow: hidden;">
+          <div class="sf-sk" style="width: 64px; height: 30px; border-radius: 999px;">
+          <div class="sf-sk" style="width: 118px; height: 30px; border-radius: 999px;">
+          <div class="sf-sk" style="width: 96px; height: 30px; border-radius: 999px;">
+          <div class="sf-sk" style="width: 132px; height: 30px; border-radius: 999px;">
+          <div class="sf-sk" style="width: 88px; height: 30px; border-radius: 999px;">
+        <div class="sf-grid">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+          <div class="sf-sk-card">
+            <div class="ph sf-sk">
+            <div class="bd">
+              <div class="sf-sk" style="height: 13px; width: 85%;">
+              <div class="sf-sk" style="height: 13px; width: 55%;">
+              <div class="sf-sk" style="height: 32px; width: 100%; margin-top: 6px; border-radius: 6px;">
+      <div class="sf-rail">
+        <div class="sf-cart">
+          <div class="sf-cart-head">
+            <div class="sf-sk" style="width: 130px; height: 16px;">
+          <div style="padding: 16px; display: flex; flex-direction: column; gap: 10px; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;">
+            <div class="sf-sk" style="height: 36px; border-radius: 6px;">
+            <div class="sf-sk" style="height: 36px; border-radius: 6px;">
+          <div class="sf-cart-foot">
+            <div class="sf-sk" style="height: 36px; border-radius: 6px;">

@@ -21,6 +21,12 @@ import { ProcedureCategoriesService } from '@/server/services/procedure-categori
 import { ProceduresService } from '@/server/services/procedures';
 import { WarehousesService } from '@/server/services/warehouses';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const dynamic = 'force-dynamic';
 
 const PAGE_SIZE = 24;
@@ -74,7 +80,7 @@ export default async function ProceduresListPage({
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass-page="ops" data-glass-view="procedures">
       <PageHeader
         title="Procedures"
         subline={

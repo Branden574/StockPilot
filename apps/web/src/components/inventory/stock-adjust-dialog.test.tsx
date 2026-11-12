@@ -78,3 +78,13 @@ describe('StockAdjustDialog', () => {
     expect(adjustStockAction).not.toHaveBeenCalled();
   });
 });
+
+describe('the Liquid Glass keep hook', () => {
+  it('the default trigger carries the inert data-glass-action="adjust" (the glass item page keeps it in its head row)', () => {
+    render(<StockAdjustDialog itemId="item-1" itemName="Copy paper" currentQuantity={10} />);
+    expect(screen.getByRole('button', { name: 'Adjust stock' })).toHaveAttribute(
+      'data-glass-action',
+      'adjust',
+    );
+  });
+});

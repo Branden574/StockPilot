@@ -1,6 +1,8 @@
 import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
+
 /**
  * The Books page's server chain before rows: the two module checks run
  * together, the books gate still answers before any book is read, and the
@@ -40,6 +42,8 @@ const h = vi.hoisted(() => ({
   planRows: null as null | { rows: unknown[]; total: number; valueOnHand: number },
   /** The request's cookies (the Table / Grid choice, redesign P3.2). */
   cookies: {} as Record<string, string>,
+  /** The warehouse filter (the switcher's cookie), null for all warehouses. */
+  filter: null as string | null,
 }));
 
 const m = vi.hoisted(() => ({
@@ -60,6 +64,9 @@ const m = vi.hoisted(() => ({
   tableProps: vi.fn(),
   notEnabledProps: vi.fn(),
   toggleProps: vi.fn(),
+  emptyStateProps: vi.fn(),
+  getWarehousesForRequest: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -90,9 +97,17 @@ vi.mock('@/components/inventory/rack-filter-dropdown', () => ({ RackFilterDropdo
 vi.mock('@/components/ui/button', () => ({
   Button: ({ children }: { children: unknown }) => children,
 }));
-vi.mock('@/components/ui/empty-state', () => ({ EmptyState: () => null }));
+vi.mock('@/components/ui/empty-state', () => ({
+  EmptyState: (props: Record<string, unknown>) => {
+    m.emptyStateProps(props);
+    return null;
+  },
+}));
 vi.mock('@/components/perf/perf-useful', () => ({
   PerfUseful: ({ children }: { children: unknown }) => children,
+}));
+vi.mock('@/components/inventory/clear-warehouse-filter-button', () => ({
+  ClearWarehouseFilterButton: () => null,
 }));
 vi.mock('@/components/books/books-inventory-table', () => ({
   BooksInventoryTable: (props: Record<string, unknown>) => {
@@ -113,7 +128,15 @@ vi.mock('next/headers', () => ({
 }));
 vi.mock('@/server/services/context', () => ({ withContext: m.withContext }));
 vi.mock('@/lib/nav-labels', () => ({ effectiveNavLabel: vi.fn(async () => 'Books') }));
-vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: vi.fn(async () => null) }));
+vi.mock('@/lib/warehouse-filter', () => ({
+  getActiveWarehouseFilter: vi.fn(async () => h.filter),
+}));
+vi.mock('@/lib/dashboard/request-cache', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/dashboard/request-cache')>()),
+  getWarehousesForRequest: m.getWarehousesForRequest,
+}));
+// The count elsewhere's user-authed client (the warehouse hint's tests set it).
+vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn() }));
 
 vi.mock('@/server/loaders/inventory-list', async () => {
   const core = await import('@stockpilot/core');
@@ -163,7 +186,11 @@ vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: lookupSvc('listForLookups'),
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: async () => ({ list: async () => [], listLabels: m.charterLabels }),
+  },
+}));
 vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
   // As the real readers do, the client (a promise) is awaited inside a try.
@@ -177,7 +204,10 @@ vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
   },
 }));
 
-import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+import { effectivePermissions, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+
+import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
+import { createClient } from '@/lib/supabase/server';
 
 import BooksPage from './page';
 
@@ -189,7 +219,14 @@ const BOOK = {
   quantity_on_hand: 3,
   awaiting_first_receipt: false,
 };
-const LOOKUPS = { categories: [], locations: [], suppliers: [], tags: [], charters: [] };
+const LOOKUPS = {
+  categories: [],
+  locations: [],
+  suppliers: [],
+  tags: [],
+  charters: [],
+  unlistedCharters: [],
+};
 
 function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
   events.push(`${name}:start`);
@@ -216,6 +253,13 @@ beforeEach(() => {
   h.datasetGate = null;
   h.savedViewsError = null;
   h.liveExtra = null;
+  h.filter = null;
+  m.getWarehousesForRequest.mockImplementation(() =>
+    logged('warehouses', async () => [
+      { id: 'wh-1', name: 'North' },
+      { id: 'wh-2', name: 'South' },
+    ]),
+  );
 
   m.checkModuleAccess.mockImplementation((id: string) =>
     logged(`module:${id}`, async () => {
@@ -246,6 +290,7 @@ beforeEach(() => {
   );
   m.loadInventoryList.mockImplementation(() => logged('list', async () => null));
   m.loadInventoryLookups.mockImplementation(async () => LOOKUPS);
+  m.charterLabels.mockImplementation(async () => []);
   m.loadInventoryTrendBuckets.mockImplementation(async () => ({}));
   m.resolveInventoryListImages.mockImplementation((_org: string, items: unknown[]) =>
     logged('images', async () => items),
@@ -280,6 +325,69 @@ function callPage(params: Record<string, string> = {}) {
   return BooksPage({ searchParams: Promise.resolve(params) });
 }
 
+/**
+ * B97 part 1: the table's charter lookup also names the archived and inactive
+ * charters, so a book tagged to one is no longer called "Generic"; the
+ * Charter filter keeps the active ones.
+ */
+describe('Books page: the Charter cell names archived charters (B97)', () => {
+  const ACTIVE = { id: 'ch-1', name: 'North Campus', code: 'NC' };
+  const ARCHIVED = { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' as const };
+  const charterLookup = () =>
+    (m.tableProps.mock.calls[0]![0] as { lookups: { charters: Map<string, unknown> } }).lookups
+      .charters;
+
+  it('manager: from the cached lookups', async () => {
+    m.loadInventoryLookups.mockImplementation(async () => ({
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+    }));
+    render(await callPage());
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it('manager, default view over the instant cap: from the cached list', async () => {
+    // No instant dataset (over the cap), so the default view is served by the
+    // cached list; only that payload names the archived charter.
+    m.loadInventoryDataset.mockImplementation(async () => null);
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [BOOK],
+      total: 1,
+      valueOnHand: 3,
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+      trends: {},
+      expectedCount: 0,
+    }));
+    render(await callPage());
+    expect(m.loadInventoryList).toHaveBeenCalled();
+    expect(m.inventoryList).not.toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).not.toHaveProperty('instant');
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(charterLookup().get('ch-1')).toEqual({ name: 'North Campus', code: 'NC' });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it("staff: from the member's own read of the archived and inactive charters", async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => [ARCHIVED]);
+    render(await callPage());
+    expect(m.charterLabels).toHaveBeenCalledWith({ exceptActive: true });
+    expect(charterLookup().get('ch-9')).toMatchObject({ name: 'Old Campus', status: 'archived' });
+  });
+});
+
 describe('Books page: server chain before rows', () => {
   it('the price_tracking check runs alongside the books gate, not after it', async () => {
     const books = deferred<void>();
@@ -313,9 +421,11 @@ describe('Books page: server chain before rows', () => {
 
   it('a context that fails while the gate says no is observed, and the page is the not-enabled screen', async () => {
     h.booksEnabled = false;
-    m.withContext.mockImplementation(() => logged('withContext', async () => {
-      throw new Error('context read failed');
-    }));
+    m.withContext.mockImplementation(() =>
+      logged('withContext', async () => {
+        throw new Error('context read failed');
+      }),
+    );
 
     render(await callPage());
     await flush();
@@ -454,6 +564,275 @@ describe('Books page: the Auto-archived only parameter', () => {
   );
 });
 
+/**
+ * Grouping walk 2026-10-20 (W4 no-match), as on the Items page: a Category
+ * filter that leaves no book showed the table's "No items match your
+ * filters." with its filters only in instant mode right after the tick; a
+ * reload or a pasted address (the manager's instant branch) and staff and
+ * viewers (the live path) got "No books yet" with an offer to add a first book
+ * and no filter bar. A stock view or the Expected chip had page-level states
+ * without the bar too. Every view a filter leaves empty is now the table;
+ * "No books yet" is only for a list with nothing in it and no filter at all.
+ */
+describe('Books page: a filter that leaves nothing is the table, with its filters', () => {
+  const FILTERED: Array<[string, Record<string, string>]> = [
+    ['a Category', { cat: 'cat-empty' }],
+    ['a Location', { loc: 'loc-empty' }],
+    ['a Charter', { charter: 'generic' }],
+    ['a rack', { rack: '9-Z' }],
+    ['a search', { q: 'zzqqxx' }],
+    ['Low + critical', { stock: 'low' }],
+    ['Out of stock', { stock: 'out' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a Category on the Archived view', { status: 'archived', cat: 'cat-empty' }],
+    ['the shared view Grade 2 readers (a search and a sort)', { q: 'Grade 2', sort: 'name_asc' }],
+  ];
+
+  it.each(FILTERED)(
+    'manager, reloaded or pasted (instant mode), %s: the table with nothing in it, never an empty state',
+    async (_l, params) => {
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      const props = m.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+      expect(props).toHaveProperty('instant');
+      expect(props).toMatchObject({ total: 0, initialQuery: params.q });
+    },
+  );
+
+  describe.each(['staff', 'viewer'])('%s (server mode)', (role) => {
+    it.each(FILTERED)(
+      '%s: the table with nothing in it, never an empty state',
+      async (_l, params) => {
+        h.role = role;
+        h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+        render(await callPage(params));
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+        expect(m.tableProps.mock.calls[0]![0]).toMatchObject({
+          total: 0,
+          items: [],
+          initialQuery: params.q,
+        });
+      },
+    );
+  });
+
+  it.each<[string, Record<string, string>]>([
+    ['no address', {}],
+    ['a sort', { sort: 'name_asc' }],
+    ['a page', { page: '2' }],
+  ])(
+    'staff, an empty list with %s: "No books yet" and its add action, as before',
+    async (_l, params) => {
+      h.role = 'staff';
+      h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+      render(await callPage(params));
+      expect(m.tableProps).not.toHaveBeenCalled();
+      expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+      expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+        title: 'No books yet',
+        cta: { label: 'Add your first book', href: '/dashboard/books/new' },
+      });
+    },
+  );
+
+  it('viewer, an empty list and no filter: "No books yet" without an add action, as before', async () => {
+    h.role = 'viewer';
+    h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+    render(await callPage());
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+      title: 'No books yet',
+      description: 'No books have been added to this workspace yet.',
+      cta: undefined,
+    });
+  });
+
+  it('manager, the Archived view with nothing archived and no filter: "No archived books", as before', async () => {
+    render(await callPage({ status: 'archived' }));
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+      title: 'No archived books',
+      description: 'Nothing here yet. Books you archive will show up in this view.',
+      cta: { label: 'Back to active books', href: '/dashboard/books' },
+    });
+  });
+});
+
+/**
+ * Review of batch D (2026-10-20): the Books list and its instant dataset are
+ * narrowed to the warehouse filter (the switcher's cookie, or a saved view's
+ * warehouse), and when that alone left the view empty the page said "No books
+ * yet" and offered to add a first book, with nothing naming the warehouse. As
+ * on the Items page, it now says "Nothing here in North" and how many match in
+ * the other warehouses, with "Search all warehouses", whenever the count can
+ * answer the view (the search alone, if any, on Active or All). The count is
+ * asked only then, of books, through the user's own client (RLS decides).
+ */
+describe('Books page: a warehouse filter that empties the view says so, as on the Items page', () => {
+  const countReads = vi.fn();
+  const countFilters = vi.fn();
+  /** A user-authed client whose HEAD count answers `count`. */
+  function countingClient(count: number) {
+    // The query is the thenable, never the client (a thenable client would
+    // be adopted by createClient's own promise).
+    const q: Record<string, unknown> = {};
+    for (const k of ['select', 'is', 'or']) q[k] = () => q;
+    q.eq = (column: string, value: unknown) => {
+      countFilters(column, value);
+      return q;
+    };
+    q.then = (resolve: (v: unknown) => unknown) => resolve({ count, error: null });
+    return {
+      from: (table: string) => {
+        countReads(table);
+        return q;
+      },
+    };
+  }
+
+  const emptyDataset = () =>
+    m.loadInventoryDataset.mockImplementation(() =>
+      logged('dataset', async () => ({ items: [], placement: {} })),
+    );
+
+  beforeEach(() => {
+    vi.mocked(createClient).mockReset();
+    vi.mocked(createClient).mockResolvedValue(countingClient(3) as never);
+    countReads.mockReset();
+    countFilters.mockReset();
+    h.filter = 'wh-1';
+  });
+
+  function expectHint(description: string) {
+    expect(m.tableProps).not.toHaveBeenCalled();
+    expect(m.emptyStateProps).toHaveBeenCalledTimes(1);
+    const props = m.emptyStateProps.mock.calls[0]![0] as {
+      title: string;
+      description: string;
+      action: { type: unknown; props: { label: string } };
+      cta?: unknown;
+    };
+    expect(props).toMatchObject({ title: 'Nothing here in North', description });
+    expect(props.action.type).toBe(ClearWarehouseFilterButton);
+    expect(props.action.props).toEqual({ label: 'Search all warehouses' });
+    // No "Add your first book" with it.
+    expect(props.cta).toBeUndefined();
+  }
+
+  it('manager (instant mode), nothing in the warehouse: "Nothing here in North", with the way out', async () => {
+    emptyDataset();
+    render(await callPage());
+    expect(m.loadInventoryDataset.mock.calls[0]!.slice(1)).toEqual(['wh-1', 'books']);
+    expectHint('3 items match in your other warehouses. This view is filtered to North.');
+    // Books, counted as the list counts them: active, received, not rentals.
+    expect(countReads).toHaveBeenCalledWith('inventory_items');
+    expect(countFilters.mock.calls).toEqual(
+      expect.arrayContaining([
+        ['organization_id', 'org-1'],
+        ['status', 'active'],
+        ['item_type', 'book'],
+        ['is_rental', false],
+        ['awaiting_first_receipt', false],
+      ]),
+    );
+  });
+
+  it('manager (instant mode), a search that matches only elsewhere: the same, on All too', async () => {
+    render(await callPage({ q: 'lanyard', status: 'all' }));
+    expectHint('3 items match in your other warehouses. This view is filtered to North.');
+  });
+
+  it.each(['staff', 'viewer'])(
+    '%s (server mode), nothing in the warehouse: "Nothing here in North", one book elsewhere',
+    async (role) => {
+      h.role = role;
+      h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+      vi.mocked(createClient).mockResolvedValue(countingClient(1) as never);
+      render(await callPage());
+      expectHint('1 item matches in your other warehouses. This view is filtered to North.');
+    },
+  );
+
+  it('staff, a search that matches only elsewhere: the same', async () => {
+    h.role = 'staff';
+    h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+    render(await callPage({ q: 'lanyard' }));
+    expectHint('3 items match in your other warehouses. This view is filtered to North.');
+  });
+
+  it('nothing elsewhere either: "No books yet" and its add action, as before', async () => {
+    emptyDataset();
+    vi.mocked(createClient).mockResolvedValue(countingClient(0) as never);
+    render(await callPage());
+    expect(countReads).toHaveBeenCalledTimes(1);
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({
+      title: 'No books yet',
+      cta: { label: 'Add your first book', href: '/dashboard/books/new' },
+    });
+  });
+
+  it.each<[string, Record<string, string>]>([
+    ['a Category', { cat: 'cat-empty' }],
+    ['a search and a stock view', { q: 'lanyard', stock: 'low' }],
+    ['the Expected chip', { expected: '1' }],
+    ['a rack', { rack: '9-Z' }],
+  ])(
+    '%s: the table and its filters, and no count (it would leave that filter out)',
+    async (_l, params) => {
+      emptyDataset();
+      render(await callPage(params));
+      expect(m.emptyStateProps).not.toHaveBeenCalled();
+      expect(m.tableProps).toHaveBeenCalledTimes(1);
+      expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ total: 0 });
+      expect(countReads).not.toHaveBeenCalled();
+      expect(m.getWarehousesForRequest).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each<[string, Record<string, string>, string]>([
+    ['the Archived view', { status: 'archived' }, 'No archived books'],
+    ['the Discontinued view', { status: 'discontinued' }, ''],
+  ])(
+    "staff, %s with nothing in the warehouse: no count (it counts active books), the view's own state",
+    async (_l, params, title) => {
+      h.role = 'staff';
+      h.liveExtra = { items: [], total: 0, valueOnHand: 0 };
+      render(await callPage(params));
+      expect(countReads).not.toHaveBeenCalled();
+      if (title) {
+        expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title });
+      } else {
+        expect(m.emptyStateProps).not.toHaveBeenCalled();
+        expect(m.tableProps).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it('books in the warehouse: the table, and neither the count nor the names are read', async () => {
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(countReads).not.toHaveBeenCalled();
+    expect(m.getWarehousesForRequest).not.toHaveBeenCalled();
+  });
+
+  it('no warehouse filter: "No books yet" for an empty list, and no count', async () => {
+    h.filter = null;
+    emptyDataset();
+    render(await callPage());
+    expect(countReads).not.toHaveBeenCalled();
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No books yet' });
+  });
+
+  it('a failed count is not "0 elsewhere": the ordinary empty state', async () => {
+    emptyDataset();
+    vi.mocked(createClient).mockRejectedValue(new Error('auth down'));
+    render(await callPage());
+    expect(m.emptyStateProps.mock.calls[0]![0]).toMatchObject({ title: 'No books yet' });
+  });
+});
+
 // Phase 2 of the grouping brief: a staff member's or viewer's Books page is
 // planned group-aware too, so a title on more than one rack (one SKU, a
 // record per rack) or a display group is never split across their pages.
@@ -584,6 +963,71 @@ describe('Books page: a staff page is planned group-aware', () => {
 });
 
 /**
+ * B68: Export (the toolbar menu and the bulk bar's button) showed to every
+ * member, while the export, its sample and export.csv answer only
+ * items:export, which staff and viewers lack by default. The page passes the
+ * member's EFFECTIVE permission (core can() over the request's set) at both of
+ * its table calls, so a grant and a revoke both count.
+ */
+describe('Books page: Export only for a member who holds items:export', () => {
+  /** Signs in as `role`, with a user-level override of items:export if given. */
+  function signedInAs(role: 'manager' | 'staff', granted?: boolean) {
+    h.role = role;
+    const permissions = effectivePermissions(
+      role,
+      [],
+      granted === undefined ? [] : [{ permission: 'items:export', granted }],
+    );
+    const ctx = { organizationId: 'org-1', userId: 'u-1', role, permissions };
+    m.requireOrgContext.mockImplementation(() => logged('ctx', async () => ctx));
+    m.withContext.mockImplementation(() => logged('withContext', async () => ctx));
+  }
+  /** Over the instant cap: the live list and the page's second table call. */
+  function overTheCap() {
+    m.loadInventoryDataset.mockImplementation(() => logged('dataset', async () => null));
+  }
+
+  it('a manager is offered it (instant mode)', async () => {
+    signedInAs('manager');
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager is offered it (over the cap, the live list)', async () => {
+    signedInAs('manager');
+    overTheCap();
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('staff are not: they do not hold it by default', async () => {
+    signedInAs('staff');
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+
+  it('staff granted items:export are', async () => {
+    signedInAs('staff', true);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager whose items:export was revoked is not, at either table call', async () => {
+    signedInAs('manager', false);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+
+    m.tableProps.mockClear();
+    overTheCap();
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+});
+
+/**
  * Redesign P3.2: the Books list keeps its own Table / Grid choice
  * (sp_view_books), read on the server for the first paint.
  */
@@ -615,5 +1059,65 @@ describe('Books page: the Table / Grid choice comes from its cookie', () => {
       'Books you archived. Select one and choose Restore to make it active again.',
     );
     expect(container.textContent).not.toContain('setting status to Active');
+  });
+});
+
+/**
+ * B42: the bulk bar's Cycle count had no gate, so staff were sent to Start a
+ * count, which the server refuses below a manager with cycle_counts:assign
+ * and stock:adjust. The page asks the Cycle Counts module with its other
+ * gates and passes core countStartAllowed at both of its table calls.
+ */
+describe('Books page: Cycle count in the bulk bar only for someone who can start a count', () => {
+  it('a manager with Cycle Counts on is offered it (instant mode)', async () => {
+    render(await callPage());
+    expect(events).toContain('module:cycle_counts:start');
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('a manager with Cycle Counts on is offered it (over the cap, the live list)', async () => {
+    m.loadInventoryDataset.mockImplementation(() => logged('dataset', async () => null));
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: true });
+  });
+
+  it('staff (stock:adjust, no cycle_counts:assign) are not', async () => {
+    h.role = 'staff';
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+
+  it('nor a manager whose organization turned Cycle Counts off', async () => {
+    m.checkModuleAccess.mockImplementation((id: string) =>
+      logged(`module:${id}`, async () => ({ enabled: id !== 'cycle_counts', canManage: true })),
+    );
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+});
+
+/**
+ * CLASSIC PARITY (Liquid Glass stage 3, items lane; IMPLEMENTATION-PLAN.md
+ * 4.6 and 4.7 item 3). The page's own markup (its frame, header and notices;
+ * the table is mocked here and has its own parity file in
+ * components/inventory/items.classic-parity.test.tsx), every inert hook
+ * stripped, must stay the file written before the stage 3 hooks went in.
+ */
+describe('Books page: classic parity of its own markup', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("the off rollout renders no glass-only element and today's markup", async () => {
+    const { container } = render(await callPage());
+    expect(glassOnlyElements(container)).toEqual([]);
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
+  });
+
+  it("the default rollout's markup, inert hooks stripped, is the same", async () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const { container } = render(await callPage());
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
   });
 });

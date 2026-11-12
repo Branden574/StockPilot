@@ -3,7 +3,7 @@ import { useIsFocused, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { LogOut } from 'lucide-react-native';
 import * as React from 'react';
-import { Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import {
   SafeAreaView,
   initialWindowMetrics,
@@ -11,6 +11,7 @@ import {
 } from 'react-native-safe-area-context';
 
 import { BrandLockup } from '@/components/brand/mark';
+import { GlassSurface } from '@/components/ui/glass/glass-surface';
 import { Avatar } from '@/components/ui/avatar';
 import { Hair } from '@/components/ui/card';
 import { BUTTON_RADIUS } from '@/components/ui/tones';
@@ -75,9 +76,18 @@ function hidesStatusBar(
  * screen on the reference's selected-row fill in full ink and the heavier
  * weight (and announced as selected), every row a 44pt target. The entries,
  * their order, gates and words are the registry's, exactly as before.
+ *
+ * Liquid Glass draws the artifact's AppSidebar (sheet variant) over the same
+ * entries, gates, words, targets and actions: the panel is one glass surface
+ * (the navigator's own panel is transparent then, (drawer)/_layout.tsx), the
+ * section headers are 12pt semibold in the muted ink, rows have the 10pt
+ * radius, and the page on screen sits on --surface (--surface-4 in Night
+ * glass) with an accent icon and the semibold weight. Classic is unchanged.
  */
 export function DrawerContent(props: DrawerContentComponentProps) {
-  const { c, mode } = useTheme();
+  const { c, mode, g, font } = useTheme();
+  const glass = g !== null;
+  const glassSelected = g === null ? null : mode === 'dark' ? g.surface4 : g.surface;
   const insets = useSafeAreaInsets();
   const drawerOpen = useDrawerStatus() === 'open';
   // The drawer's own screen (the root stack's drawer group) is on top.
@@ -123,7 +133,8 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [switcherOpen, setSwitcherOpen] = React.useState(false);
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
+    <View style={[styles.root, { backgroundColor: glass ? 'transparent' : c.paper }]}>
+      {glass ? <GlassSurface variant="overlay" radius={0} style={StyleSheet.absoluteFill} /> : null}
       {/* Mounted only while it applies: when the drawer closes it unmounts and
           the status bar of the root (or of the Scan tab) shows again. */}
       {hidesStatusBar(drawerOpen, onTop, mode, activeHref, SENSOR_HOUSING) ? (
@@ -148,7 +159,16 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           <View key={section.label ?? `section-${sIdx}`} style={{ marginTop: sIdx === 0 ? 0 : 20 }}>
             {section.label ? (
               <View style={{ paddingHorizontal: 12, paddingBottom: 8 }}>
-                <Eyebrow accessibilityRole="header">{section.label}</Eyebrow>
+                {glass ? (
+                  <Text
+                    accessibilityRole="header"
+                    style={[font.displaySemi, styles.glassSection, { color: c.ink3 }]}
+                  >
+                    {section.label}
+                  </Text>
+                ) : (
+                  <Eyebrow accessibilityRole="header">{section.label}</Eyebrow>
+                )}
               </View>
             ) : null}
             {section.items.map((item) => {
@@ -172,16 +192,29 @@ export function DrawerContent(props: DrawerContentComponentProps) {
                       backgroundColor: isActive ? c.paper2 : 'transparent',
                       opacity: pressed ? 0.7 : 1,
                     },
+                    glass
+                      ? {
+                          borderRadius: styles.glassRow.borderRadius,
+                          backgroundColor: isActive ? glassSelected! : 'transparent',
+                        }
+                      : null,
                   ]}
                 >
-                  <Icon size={18} color={isActive ? c.ink : c.ink3} strokeWidth={1.6} />
+                  {glass ? (
+                    <Icon size={18} color={isActive ? c.accent : c.ink3} strokeWidth={1.8} />
+                  ) : (
+                    <Icon size={18} color={isActive ? c.ink : c.ink3} strokeWidth={1.6} />
+                  )}
                   <Body
                     size={14}
                     color={isActive ? c.ink : c.ink2}
-                    style={{
-                      flex: 1,
-                      fontFamily: isActive ? FONT.display : FONT.displayRegular,
-                    }}
+                    style={[
+                      {
+                        flex: 1,
+                        fontFamily: isActive ? FONT.display : FONT.displayRegular,
+                      },
+                      glass ? (isActive ? font.displaySemi : font.display) : null,
+                    ]}
                   >
                     {item.label}
                   </Body>
@@ -248,6 +281,9 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
+  // Liquid Glass: .sb-sec-h (12pt 600) and .nav-item's 10pt radius.
+  glassSection: { fontSize: 12, lineHeight: 16 },
+  glassRow: { borderRadius: 10 },
   // minHeight, not a fixed height: a 44pt target that grows with the label.
   row: {
     flexDirection: 'row',

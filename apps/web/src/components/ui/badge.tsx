@@ -64,6 +64,8 @@ export interface BadgeProps
 export function Badge({ className, variant, look, dot = false, children, ...props }: BadgeProps) {
   return (
     <div
+      data-glass="badge"
+      data-glass-variant={variant ?? 'default'}
       className={cn(
         badgeVariants({ variant, look: look ?? (dot ? 'wash' : 'chip') }),
         // A dotted badge takes its baseline from the label, not the empty dot:

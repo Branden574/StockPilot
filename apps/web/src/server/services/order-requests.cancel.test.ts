@@ -104,7 +104,7 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
     expect((row as { status: string }).status).toBe('cancelled');
   });
 
-  it('does not apply the requester window to a manager (no ownership probe at all)', async () => {
+  it("reads a manager's order in the organization too, and applies no requester window", async () => {
     const stub = makeSupabaseStub({
       'order_requests.select.maybeSingle': {
         data: { status: 'approved', requester_user_id: 'u1' },
@@ -114,8 +114,17 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
     });
     await svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null);
     expect(stub.rpcCalls[0]?.name).toBe('cancel_order_request');
-    // The manager path must not even read the row to decide.
-    expect(stub.fromCalls).not.toContain('order_requests');
+    // S39: every caller's cancel reads the order in the active organization
+    // first (an order of another organization is not found); for a manager
+    // the read decides nothing else.
+    expect(stub.chainArgsAll.get('order_requests.select')?.[0]).toEqual(
+      expect.arrayContaining([
+        ['organization_id', 'org-test'],
+        ['id', 'ord-1'],
+      ]),
+    );
+    // Nor a warehouse check: a manager's would read `warehouses`.
+    expect(stub.fromCalls).not.toContain('warehouses');
   });
 
   it('DENIES when the ownership/status read fails, without reaching the RPC', async () => {
@@ -171,16 +180,25 @@ describe('OrderRequestsService.cancel — requester self-cancel window', () => {
 });
 
 describe('OrderRequestsService.cancel — Items/Books cache', () => {
+  // The order, read in the organization before the function (S39).
+  const IN_ORG = {
+    'order_requests.select.maybeSingle': {
+      data: { status: 'approved', requester_user_id: 'u1' },
+      error: null,
+    },
+  };
+
   // cancel_order_request restocks a drawn batch. The AI cancelOrder tool calls
   // this method with no invalidation of its own, so the service must.
   it('invalidates the org list cache once the RPC committed', async () => {
-    const stub = makeSupabaseStub({ ...OK_RPC });
+    const stub = makeSupabaseStub({ ...IN_ORG, ...OK_RPC });
     await svc(stub, { role: 'manager', userId: 'mgr-1' }).cancel('ord-1', null);
     expect(invalidateInventoryListAfterWrite).toHaveBeenCalledWith('org-test', 'order.cancel');
   });
 
   it('does not invalidate when the RPC refused (nothing restocked)', async () => {
     const stub = makeSupabaseStub({
+      ...IN_ORG,
       'rpc:cancel_order_request': { data: null, error: { message: 'invalid_status_transition' } },
     });
     await expect(

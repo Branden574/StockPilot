@@ -15,13 +15,16 @@ import { POST } from './route';
  *
  * The answer used to be the ZodError's own text, its issue list as JSON. S16
  * replaced it with "The request could not be read." for every refusal, and
- * the phone hits two of them in normal use: it sends the whole transcript as
- * `history` with every message (app/ai/chat.tsx), and the schema caps that
- * at 40 turns of at most 8,000 characters, so about the 22nd message of a
- * chat is refused, as is every message after a reply over 8,000 characters.
- * The web chat box has no length cap. Those refusals now say what to do, in
- * the app's words; a body that is not JSON, or any other refusal, keeps the
- * fixed sentence. None of them carries the parser's text.
+ * the phone hit two of them in normal use: it sent the whole transcript as
+ * `history` with every message (app/ai/chat.tsx before docket B75), and the
+ * schema caps that at 40 turns of at most 8,000 characters, so about the 22nd
+ * message of a chat was refused, as was every message after a reply over
+ * 8,000 characters. Since B75 a request that names a session is read without
+ * its history (route.session-contract.test.ts), so those caps refuse only a
+ * request without a session id. The web chat box has no length cap. Those
+ * refusals now say what to do, in the app's words; a body that is not JSON,
+ * or any other refusal, keeps the fixed sentence. None of them carries the
+ * parser's text.
  */
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
@@ -93,7 +96,7 @@ describe('POST /api/ai/chat refusals', () => {
     expect(r.body).toEqual({ error: 'validation_error', message: MESSAGE_TOO_LONG });
   });
 
-  it("the phone's 22nd message (42 turns of history) says to start a new chat", async () => {
+  it('42 turns of history without a session id says to start a new chat', async () => {
     const r = await refusal(JSON.stringify({ message: 'next question', history: transcript(42) }));
     expect(r.status).toBe(400);
     expect(r.body).toEqual({ error: 'validation_error', message: CONVERSATION_TOO_LONG });

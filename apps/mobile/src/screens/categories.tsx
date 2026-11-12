@@ -7,6 +7,8 @@ import { safeHexColor } from '@stockpilot/core';
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Body, Mono } from '@/components/ui/text';
+import { glassIconWell } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { countItemsByCategory } from '@/lib/category-counts';
 import { useOrg } from '@/lib/use-org';
 import { retryWorkspace } from '@/lib/use-workspace';
@@ -217,6 +219,8 @@ export default function Categories() {
  *  the well; the old fixed grey was the faint ink4, 3.0:1 on it in light). */
 function CategoryCard({ category, depth = 0 }: { category: Category; depth?: number }) {
   const { c } = useTheme();
+  // Liquid Glass: the swatch's well on the iOS fill (Routes-Gallery categories).
+  const lg = useGlass();
   // Only the #rrggbb form the app writes: the column takes any text through
   // the Data API, and anything else draws the no-colour mark (docket T14).
   const swatch = safeHexColor(category.color) ?? c.ink3;
@@ -226,16 +230,19 @@ function CategoryCard({ category, depth = 0 }: { category: Category; depth?: num
       <Card padding={isChild ? 12 : 14}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
           <View
-            style={{
-              width: isChild ? 26 : 32,
-              height: isChild ? 26 : 32,
-              borderRadius: 8,
-              backgroundColor: c.sunk,
-              borderWidth: 1,
-              borderColor: c.hair,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+            style={[
+              {
+                width: isChild ? 26 : 32,
+                height: isChild ? 26 : 32,
+                borderRadius: 8,
+                backgroundColor: c.sunk,
+                borderWidth: 1,
+                borderColor: c.hair,
+                alignItems: 'center',
+                justifyContent: 'center',
+              },
+              lg && glassIconWell(lg),
+            ]}
           >
             <View
               style={{

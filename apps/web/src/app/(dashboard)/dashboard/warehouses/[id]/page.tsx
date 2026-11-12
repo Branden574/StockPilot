@@ -18,10 +18,17 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { createClient } from '@/lib/supabase/server';
 import { formatNumber, formatRelative } from '@/lib/utils';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ChartersService } from '@/server/services/charters';
 import { ServiceError } from '@/server/services/context';
 import { WarehouseChartersService } from '@/server/services/warehouse-charters';
 import { WarehousesService } from '@/server/services/warehouses';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
 
 // The tab names the page ("Warehouse · StockPilot" through the (dashboard)
 // layout's title template); before, it read the group's "Dashboard"
@@ -74,6 +81,9 @@ export default async function WarehouseDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
 
   const warehousesSvc = await WarehousesService.forCurrentUser();
   let warehouse;
@@ -138,7 +148,7 @@ export default async function WarehouseDetailPage({
   const managerMailto = plainAddressMailtoUrl(warehouse.manager?.email);
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="warehouse">
       {/* The record's header (DESIGN-SPEC 6.1): the name is the page's h1 with
           the code chip and the status label beside it, when it was last
           updated under it, and Edit and New order from here on the right,

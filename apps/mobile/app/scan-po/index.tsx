@@ -22,6 +22,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
@@ -86,6 +89,11 @@ export default function ScanPo() {
   const router = useRouter();
   const { session } = useAuth();
   const { c, mode: themeMode } = useTheme();
+  // Liquid Glass (inferred from the iOS Scan capture chrome): the review page
+  // over the scene with Back in the glass nav and its cards and fields in their
+  // glass looks; the camera and its bars stay dark, every page, name and
+  // Upload stays.
+  const lg = useGlass();
   const styles = SCAN_PO_STYLES[themeMode];
   const [permission, requestPermission] = useCameraPermissions();
   const [frames, setFrames] = React.useState<CapturedFrame[]>([]);
@@ -543,8 +551,12 @@ export default function ScanPo() {
   }
 
   return (
-    <SafeAreaView style={styles.root} edges={['top']}>
-      <View style={styles.topbar}>
+    <SafeAreaView
+      style={[styles.root, lg && { backgroundColor: 'transparent' }]}
+      edges={['top']}
+    >
+      {lg ? <SceneBackground /> : null}
+      <View style={lg ? GLASS_LIST.nav : styles.topbar}>
         <IconChip
           icon={ChevronLeft}
           onPress={() => {

@@ -12,6 +12,12 @@ import { VerificationService, type LocationVerification } from '@/server/service
 
 import { uuidSchema, verificationRefusalOf, type VerificationRefusal } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const metadata = { title: 'Location' };
 
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the other pages use. */
@@ -82,7 +88,7 @@ export default async function LocationPage({
   }
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="location">
       {data === null ? (
         <>
           <div>
@@ -103,7 +109,7 @@ export default async function LocationPage({
 
 function Refused({ refusal }: { refusal: VerificationRefusal }) {
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="location">
       <div>
         <LocationBackLink />
       </div>

@@ -874,7 +874,12 @@ select is(
               -- RX-1 (0394) restated process_return_disposition with ten lines
               -- tagged -- RX-1 (plan 3.4); both tags are stripped, and its expected
               -- value is 0373's body minus the manager-role line those lines replace.
-              md5(regexp_replace(p.prosrc, '\n[^\n]*-- (0373|RX-1)[^\n]*', '', 'g')) as stripped,
+              -- 0415 restated assemble_bundle and distribute_bundle with lines
+              -- tagged -- 0404 (kit checks, docket S4; the file was numbered 0404
+              -- when it was written and reviewed, and its content is unchanged),
+              -- each an added line only, so stripping them too leaves the
+              -- expected values unchanged.
+              md5(regexp_replace(p.prosrc, '\n[^\n]*-- (0373|RX-1|0404)[^\n]*', '', 'g')) as stripped,
               (select bool_and(btrim(m[1]) ~ '^(v_prov\s+public\.stock_draw;|v_prov := ledger\.apply_level_delta_for\([^;]+, true, v_user\);|draw,|v_prov,)\s+-- 0373$'
                                or btrim(m[1]) = '-- 0373: drawn before the insert (0197 drew after it), so this row carries its own draw.')
                  from regexp_matches(p.prosrc, '\n([^\n]*-- 0373[^\n]*)', 'g') m) as shapes_ok

@@ -25,6 +25,7 @@ export function FilterBar({ leading, children, className, role, ...props }: Filt
   return (
     <div
       data-slot="filter-bar"
+      data-glass="filter-bar"
       role={role ?? (named ? 'group' : undefined)}
       className={cn('flex min-w-0 flex-wrap items-center justify-between gap-3', className)}
       {...props}
@@ -86,6 +87,7 @@ export function FilterTrigger({
     <button
       type={type}
       data-slot="filter-trigger"
+      data-glass="filter-trigger"
       data-active={isActive ? '' : undefined}
       className={cn(
         'border-border bg-card inline-flex h-8 max-w-full shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[13px] font-normal text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:pointer-events-none disabled:opacity-50 data-[state=open]:border-[var(--ed-line-strong)] max-sm:min-h-11 [&_svg]:shrink-0',

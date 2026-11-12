@@ -76,6 +76,15 @@ export const RECOUNT_MANAGER_ONLY_COPY =
   'Only a manager with permission to assign counts and adjust stock can start a recount.';
 
 /**
+ * Why this reader cannot start a count (B42): the server's refusal of a
+ * start, and what the Start a count screens say in place of the form (web
+ * and phone). Staff hold stock:adjust but not cycle_counts:assign, and the
+ * refusal used to read "Missing permission: cycle_counts:assign".
+ */
+export const COUNT_START_MANAGER_ONLY_COPY =
+  'Only a manager with permission to assign counts and adjust stock can start a count.';
+
+/**
  * Why this reader cannot start a recount (the server's assertCountStartFloors
  * as a reason, checked in its order):
  *   - module_disabled: the organization has Cycle Counts turned off (the
@@ -446,6 +455,21 @@ export function countStartAllowed(input: {
   if (!input.role || !input.cycleCountsEnabled) return false;
   const ctx = { role: input.role, permissions: input.permissions };
   return isManagerOrAbove(input.role) && can(ctx, 'cycle_counts:assign') && can(ctx, 'stock:adjust');
+}
+
+/**
+ * Whether the Start a count screens should say COUNT_START_MANAGER_ONLY_COPY
+ * in place of the form (B42): the role and permission half of
+ * countStartAllowed. The module is left out (a manager whose organization
+ * turned Cycle Counts off must not read "only a manager"; the server refuses
+ * that start in its own words), and so is an unknown role (nothing is said
+ * until it is known).
+ */
+export function countStartManagerOnly(input: {
+  role: Role | null | undefined;
+  permissions?: ReadonlySet<Permission>;
+}): boolean {
+  return !!input.role && !countStartAllowed({ ...input, cycleCountsEnabled: true });
 }
 
 /**

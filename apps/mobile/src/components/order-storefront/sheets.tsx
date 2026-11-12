@@ -34,6 +34,9 @@ import {
   STOREFRONT_SORT_AND_FILTER_COPY,
   STOREFRONT_SORT_LABEL_COPY,
   STOREFRONT_STATUS_LABEL_COPY,
+  addAllButtonCopy,
+  addAllState,
+  addAllTarget,
   availabilityLabel,
   availableOf,
   componentItem,
@@ -61,7 +64,7 @@ import {
   selectNeededByDay,
   type NeededByDraft,
 } from '@/lib/order-needed-by';
-import { MISSING_VALUE, spokenValue } from '@/lib/order-storefront/a11y';
+import { MISSING_VALUE, addAllLabel, changeLockedHint, spokenValue } from '@/lib/order-storefront/a11y';
 import { someoneNewCheck, wallClockIso } from '@/lib/order-storefront/checkout';
 import { MIN_TAP } from '@/lib/order-storefront/layout';
 import {
@@ -90,15 +93,25 @@ import { StorefrontSheet } from './storefront-sheet';
 /** A typed quantity, clamped to what is available (0 removes the line; a
  *  blank field keeps the quantity, as the web's does). The field is as wide
  *  as the digits of what is available at the capped size
- *  (pickQtyFieldWidthFor). */
+ *  (pickQtyFieldWidthFor).
+ *
+ *  "Add all" under Set quantity saves everything available in one press
+ *  (core's addAllTarget: never above the most one order can hold). It is
+ *  drawn only when there is more to add (addAllState) and the line is not
+ *  marked as no longer orderable, and is dimmed with the lock's words while
+ *  the cart is locked. */
 export function QuantitySheet({
   item,
   quantity,
+  locked,
+  notOrderable,
   onSave,
   onClose,
 }: {
   item: StorefrontItem;
   quantity: number;
+  locked: boolean;
+  notOrderable: boolean;
   onSave: (value: number) => void;
   onClose: () => void;
 }) {
@@ -113,7 +126,20 @@ export function QuantitySheet({
       visible
       title={STOREFRONT_QUANTITY_TITLE_COPY}
       onClose={onClose}
-      footer={<SmallAction label={STOREFRONT_QUANTITY_SAVE_COPY} variant="primary" onPress={save} />}
+      footer={
+        <>
+          <SmallAction label={STOREFRONT_QUANTITY_SAVE_COPY} variant="primary" onPress={save} />
+          {addAllState(available, quantity) === 'offer' && !notOrderable ? (
+            <SmallAction
+              label={addAllButtonCopy(available)}
+              accessibilityLabel={addAllLabel(item.name, available, quantity)}
+              disabled={locked}
+              hint={changeLockedHint(locked)}
+              onPress={() => onSave(addAllTarget(available))}
+            />
+          ) : null}
+        </>
+      }
     >
       <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
         {item.name}

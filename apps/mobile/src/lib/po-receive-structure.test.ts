@@ -14,7 +14,17 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { FONT, RADIUS, SPACE, TYPE_CEILING, capTo, palette, type Palette } from './theme';
+
+/**
+ * The code Classic runs (every Liquid Glass branch folded to Classic), in one
+ * spelling (flatNorm, a self-closing tag's space dropped): the pins on
+ * Classic's exact text read this, so a glass branch beside a Classic value
+ * neither hides it nor breaks the pin.
+ */
+const classicOf = (file: string) => classicFlat(sourceOf(file), file).replace(/ \/>/g, '/>');
+const norm = (text: string) => flatNorm(text).replace(/ \/>/g, '/>');
 
 /**
  * RECEIVING A PO ON THE PHONE, READ AS SOURCE (redesign package P5.8).
@@ -195,9 +205,19 @@ describe('the receive screen and its attachments follow the device, on the per-m
     expect(code).toContain(
       `const ${sheet}: Record<ThemeMode, ReturnType<typeof makeStyles>> = { light: makeStyles(palette('light')), dark: makeStyles(palette('dark')), };`,
     );
-    const picks = code.match(new RegExp(`const styles = ${sheet}\\[mode\\];`, 'g')) ?? [];
+    const picks =
+      classicOf(file).match(new RegExp(`const styles = ${sheet}\\[mode\\];`, 'g')) ?? [];
     // The screen and each part that draws with them (SizeRunCard, Metric).
     expect(picks.length).toBe(file === PO ? 3 : 1);
+    // Liquid Glass picks the glass recipe of the same styles in its place.
+    const glassPicks =
+      code.match(
+        new RegExp(
+          `const styles = lg \\? glassRecipe\\(lg, makeStyles, glassPoShape\\) : ${sheet}\\[mode\\];`,
+          'g',
+        ),
+      ) ?? [];
+    expect(glassPicks.length + picks.length).toBeGreaterThanOrEqual(file === PO ? 3 : 1);
   });
 
   it.each(MODES)('%s: every word on the receive screen reads at AA on what it sits on', (_m, c) => {
@@ -428,16 +448,33 @@ describe('the receipt is posted once, as before', () => {
 
   it('the footer clears the home indicator', () => {
     expect(code).toContain('const insets = useSafeAreaInsets();');
-    expect(code).toMatch(
-      /\{readOnly \? null : \( <View style=\{styles\.footer\}> <Button block onPress=\{postReceipt\}[^>]*>[^<]*<\/Button> <View style=\{\{ height: Math\.max\(0, insets\.bottom - SPACE\.md\) \}\} \/> <\/View> \)\}/,
+    const classic = classicOf(PO);
+    expect(classic).toContain(
+      norm('{readOnly ? null : ( <View style={styles.footer}> <Button block onPress={postReceipt}'),
     );
+    expect(classic).toContain(
+      norm(
+        '</Button> <View style={{ height: Math.max(0, insets.bottom - SPACE.md) }} /> </View> )}',
+      ),
+    );
+    // Liquid Glass floats the bar 22 pt over the foot (the iOS Receive
+    // board's action bar), clear of the home indicator, so only Classic
+    // draws the spacer.
+    expect(code).toContain(
+      '{lg ? null : <View style={{ height: Math.max(0, insets.bottom - SPACE.md) }} />}',
+    );
+    expect(code).toContain('{lg ? <GlassActionBarBackdrop /> : null}');
   });
 
   // Mutation caught: the focused quantity or note left under the keyboard.
   it('the focused box scrolls clear of the keyboard', () => {
-    expect(code).toContain(
-      '<ScrollView contentContainerStyle={{ padding: SPACE.md, paddingBottom: 140 }} automaticallyAdjustKeyboardInsets >',
+    expect(classicOf(PO)).toContain(
+      norm(
+        '<ScrollView contentContainerStyle={{ padding: SPACE.md, paddingBottom: 140 }} automaticallyAdjustKeyboardInsets >',
+      ),
     );
+    // Liquid Glass keeps the keyboard inset on the same scroll.
+    expect(code).toContain('automaticallyAdjustKeyboardInsets');
   });
 });
 
@@ -474,9 +511,13 @@ describe('every control on the receive screen is a 44pt target with a role and a
   // the button left without a role.
   it('Scan is a button with a camera icon beside the same word; no emoji or check glyphs in the words', () => {
     const code = flatCode(PO);
-    expect(code).toMatch(
-      /\{readOnly \? null : \( <Pressable onPress=\{openScanner\} accessibilityRole="button" style=\{\(\{ pressed \}\) => \[styles\.scanBtn, pressed && \{ opacity: 0\.7 \}\]\} > <Camera size=\{16\} color=\{c\.ink\} strokeWidth=\{1\.75\} \/> <Text style=\{styles\.scanBtnText\} numberOfLines=\{1\} maxFontSizeMultiplier=\{SCAN_CAP\}> Scan <\/Text> <\/Pressable> \)\}/,
+    expect(classicOf(PO)).toContain(
+      norm(
+        '{readOnly ? null : ( <Pressable onPress={openScanner} accessibilityRole="button" style={({ pressed }) => [styles.scanBtn, pressed && { opacity: 0.7 }]} > <Camera size={16} color={c.ink} strokeWidth={1.75} /> <Text style={styles.scanBtnText} numberOfLines={1} maxFontSizeMultiplier={SCAN_CAP}> Scan </Text> </Pressable> )}',
+      ),
     );
+    // Liquid Glass keeps Scan as a named button that opens the same scanner.
+    expect(code.match(/onPress=\{openScanner\}/g)?.length ?? 0).toBeGreaterThanOrEqual(1);
     expect(code).not.toMatch(/📷|✓/u);
     // Fully received and Full keep their words, with a check icon beside them.
     expect(code).toContain(
@@ -575,7 +616,8 @@ describe('the attachments panel', () => {
       expect(attrText(el, 'disabled', sf)).toBe('busy');
     }
     expect(attrText(els[0]!, 'onPress', sf)).toBe('addFile');
-    expect(attrText(els[1]!, 'onPress', sf)).toBe('() => void scanDocument()');
+    // The scan holds the phone update pop-up until it is done (B44).
+    expect(attrText(els[1]!, 'onPress', sf)).toBe('() => void whileUpdatePromptHeld(scanDocument)');
     // Attach keeps its word beside the spinner while a file uploads.
     expect(code).toContain(
       'leading={ busy ? ( <ActivityIndicator color={c.ink} size="small" /> ) : ( <Plus size={15} color={c.ink} strokeWidth={1.75} /> ) }',
@@ -665,9 +707,10 @@ describe('the attachments panel', () => {
       "{row.file_name ?? 'File'}",
       'Remove',
       "Alert.alert('Attach a file', 'Add a packing slip, photo, or PDF to this PO.', [",
-      "{ text: 'Take Photo', onPress: () => void takePhoto() },",
-      "{ text: 'Choose from Library', onPress: () => void pickFromLibrary() },",
-      "{ text: 'Choose File (PDF)', onPress: () => void pickDocument() },",
+      // Each choice holds the phone update pop-up until its upload is done (B44).
+      "{ text: 'Take Photo', onPress: () => void whileUpdatePromptHeld(takePhoto) },",
+      "{ text: 'Choose from Library', onPress: () => void whileUpdatePromptHeld(pickFromLibrary) },",
+      "{ text: 'Choose File (PDF)', onPress: () => void whileUpdatePromptHeld(pickDocument) },",
       // The card's screen has no pull to refresh, so the refusal no longer
       // offers one (lib/stored-file-link.ts signs the file again at the tap).
       "'Couldn’t open file', 'No download link is available right now. Check your connection and try again.',",

@@ -33,6 +33,7 @@ import { formatRelative } from '@/lib/utils';
 
 import {
   can,
+  countStartAllowed,
   CYCLE_COUNT_REFERENCE_UNAVAILABLE,
   CYCLE_COUNT_STATUS_LABELS,
   CYCLE_COUNT_STATUSES,
@@ -44,6 +45,13 @@ import {
   parsePageParam,
   resolveOrgTimezone,
 } from '@stockpilot/core';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/counts.css';
 
 type ListSearchParams = {
   q?: string | string[];
@@ -77,12 +85,21 @@ export default async function CycleCountsPage({
   // Visibility gates on cycle_counts:read (staff+ by default, grantable to
   // viewers for read-only audit access). stock:adjust holders keep access
   // even if an org revokes the read perm from a role that can still count.
-  // Writing (starting/entering/posting a count) stays gated on stock:adjust.
+  // Entering and posting a count stay gated on stock:adjust.
   const ctx = await requireOrgContext();
   if (!can(ctx, 'cycle_counts:read') && !can(ctx, 'stock:adjust')) {
     redirect('/dashboard');
   }
-  const canStart = can(ctx, 'stock:adjust');
+  // Starting one follows the server's floors (B42): a manager with
+  // cycle_counts:assign and stock:adjust. Staff hold stock:adjust, this page's
+  // old gate, and were offered a start the server always refused. Core
+  // countStartAllowed is assertCountStartFloors as a yes/no; a required MFA
+  // step-up is asked for when the start is sent, as everywhere else.
+  const canStart = countStartAllowed({
+    role: ctx.role,
+    permissions: ctx.permissions,
+    cycleCountsEnabled: moduleAccess.enabled,
+  });
 
   // The URL is the list's state: ?q= (search), ?status= (filter), ?page=.
   const sp = (await searchParams) ?? {};
@@ -160,7 +177,7 @@ export default async function CycleCountsPage({
   );
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="cycle-counts">
       <RememberCycleCountListView q={q} status={status} page={result.page} />
       <PageHeader
         title={heading}
@@ -227,7 +244,11 @@ export default async function CycleCountsPage({
               surface="plain"
               icon={ClipboardCheck}
               title="No cycle counts yet"
-              description="Start a count to snapshot expected quantities, then enter actuals as you walk the warehouse. We post the variance adjustments for you."
+              description={
+                canStart
+                  ? 'Start a count to snapshot expected quantities, then enter actuals as you walk the warehouse. We post the variance adjustments for you.'
+                  : 'Counts a manager starts appear here.'
+              }
               action={
                 canStart ? (
                   <Button asChild variant="gradient">

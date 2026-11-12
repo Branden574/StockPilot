@@ -44,7 +44,10 @@ const EAST_DC = '55555555-5555-4555-8555-555555555555';
 const NORTH = '22222222-2222-4222-8222-222222222222';
 const SOUTH = '33333333-3333-4333-8333-333333333333';
 
-function renderForm(pairs: Array<{ warehouse_id: string; charter_id: string }>) {
+function renderForm(
+  pairs: Array<{ warehouse_id: string; charter_id: string }>,
+  opts: { capped?: boolean } = {},
+) {
   render(
     <ItemForm
       defaults={{
@@ -63,6 +66,7 @@ function renderForm(pairs: Array<{ warehouse_id: string; charter_id: string }>) 
         { id: EAST_DC, name: 'East DC' },
       ]}
       warehouseCharters={pairs}
+      {...(opts.capped === undefined ? {} : { warehouseChartersCapped: opts.capped })}
       charters={[
         { id: NORTH, name: 'North Campus' },
         { id: SOUTH, name: 'South Campus' },
@@ -156,5 +160,241 @@ describe('ItemForm: the charter', () => {
 
     expect(charterBox()).not.toHaveTextContent('North Campus');
     expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: null });
+  });
+});
+
+/**
+ * B47 decisions round (2026-11-01): the page's warehouse charter list stops at
+ * the lookup ceiling (listPairs reads at most LOOKUP_ROW_CEILING links). At
+ * that many, a pair missing from the list may still exist, so the form must
+ * not change the record's charter from part of the list: it keeps the charter
+ * on a warehouse change, makes no "not linked" claim, and the server checks
+ * the pair on save (refusing one the warehouse does not service).
+ */
+describe('ItemForm: the charter when the warehouse charter list is cut at the ceiling', () => {
+  it("keeps the record's charter when the warehouse changes and sends it for the server to check", async () => {
+    // The cut list shows East DC with South only; it may serve North too.
+    renderForm(
+      [
+        { warehouse_id: MAIN_DC, charter_id: NORTH },
+        { warehouse_id: EAST_DC, charter_id: SOUTH },
+      ],
+      { capped: true },
+    );
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('combobox', { name: /warehouse/i }));
+    await user.click(await screen.findByRole('option', { name: 'East DC' }));
+
+    expect(charterBox()).toHaveTextContent('North Campus');
+    expect(charterBox()).not.toHaveTextContent(/not linked/i);
+    expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: NORTH });
+  });
+
+  it('a list under the ceiling still clears it, as before', async () => {
+    renderForm(
+      [
+        { warehouse_id: MAIN_DC, charter_id: NORTH },
+        { warehouse_id: EAST_DC, charter_id: SOUTH },
+      ],
+      { capped: false },
+    );
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole('combobox', { name: /warehouse/i }));
+    await user.click(await screen.findByRole('option', { name: 'East DC' }));
+
+    expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: null });
+  });
+});
+
+/**
+ * S44: a charter that has been archived (or set inactive) keeps its warehouse
+ * links and the records that carry it, while the page lists active charters
+ * only. The form offers active charters for a new pick, and names a record's
+ * own non-active charter from `recordCharter` ('{name} (archived)'), keeping
+ * it on save, also when the record moves to another warehouse that links it.
+ */
+describe("ItemForm: a record's archived charter", () => {
+  const ARCH = '66666666-6666-4666-8666-666666666666';
+  const OLD_CAMPUS = { id: ARCH, name: 'Old Campus', status: 'archived' as const };
+
+  function renderArchived(
+    pairs: Array<{ warehouse_id: string; charter_id: string }>,
+    opts: {
+      create?: boolean;
+      recordCharter?: {
+        id: string;
+        name: string;
+        status: 'active' | 'inactive' | 'archived';
+      } | null;
+      capped?: boolean;
+    } = {},
+  ) {
+    render(
+      <ItemForm
+        defaults={
+          opts.create
+            ? { name: '', sku: '', warehouseId: MAIN_DC, customFields: {} }
+            : {
+                id: ITEM,
+                name: 'Chromebook',
+                sku: 'CB-1',
+                warehouseId: MAIN_DC,
+                charterId: ARCH,
+                customFields: {},
+              }
+        }
+        categories={[]}
+        locations={[]}
+        suppliers={[]}
+        warehouses={[
+          { id: MAIN_DC, name: 'Main DC' },
+          { id: EAST_DC, name: 'East DC' },
+        ]}
+        warehouseCharters={pairs}
+        {...(opts.capped === undefined ? {} : { warehouseChartersCapped: opts.capped })}
+        charters={[
+          { id: NORTH, name: 'North Campus' },
+          { id: SOUTH, name: 'South Campus' },
+        ]}
+        recordCharter={opts.recordCharter === undefined ? OLD_CAMPUS : opts.recordCharter}
+        warehouseLabel="Warehouse"
+        charterLabel="Charter"
+      />,
+    );
+  }
+
+  const MAIN_ALL = [
+    { warehouse_id: MAIN_DC, charter_id: NORTH },
+    { warehouse_id: MAIN_DC, charter_id: SOUTH },
+    { warehouse_id: MAIN_DC, charter_id: ARCH },
+  ];
+
+  /** The charter list's option names; closes the list again. */
+  async function charterOptions(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(charterBox());
+    const names = (await screen.findAllByRole('option')).map((o) => o.textContent ?? '');
+    await user.keyboard('{Escape}');
+    return names;
+  }
+
+  async function pickWarehouse(user: ReturnType<typeof userEvent.setup>, name: string) {
+    await user.click(screen.getByRole('combobox', { name: /warehouse/i }));
+    await user.click(await screen.findByRole('option', { name }));
+  }
+
+  it('a new item is offered the active charters only, by name', async () => {
+    renderArchived(MAIN_ALL, { create: true, recordCharter: null });
+    const user = userEvent.setup();
+
+    expect(await charterOptions(user)).toEqual([
+      'Generic — any charter',
+      'North Campus',
+      'South Campus',
+    ]);
+  });
+
+  it("an edit shows the record's archived charter by name and saves it unchanged", async () => {
+    renderArchived(MAIN_ALL);
+    const user = userEvent.setup();
+
+    expect(charterBox()).toHaveTextContent('Old Campus (archived)');
+    expect(charterBox()).not.toHaveTextContent(ARCH);
+    expect(await save(user)).toMatchObject({ warehouseId: MAIN_DC, charterId: ARCH });
+  });
+
+  it('names an inactive one (inactive)', async () => {
+    renderArchived(MAIN_ALL, { recordCharter: { ...OLD_CAMPUS, status: 'inactive' } });
+
+    expect(charterBox()).toHaveTextContent('Old Campus (inactive)');
+  });
+
+  it('after picking another charter, the archived one can be picked back', async () => {
+    renderArchived(MAIN_ALL);
+    const user = userEvent.setup();
+
+    await user.click(charterBox());
+    await user.click(await screen.findByRole('option', { name: 'North Campus' }));
+    expect(charterBox()).toHaveTextContent('North Campus');
+    await user.click(charterBox());
+    await user.click(await screen.findByRole('option', { name: 'Old Campus (archived)' }));
+
+    expect(await save(user)).toMatchObject({ charterId: ARCH });
+  });
+
+  it('when its name could not be read, says "This record\'s charter", never the id, and keeps it', async () => {
+    renderArchived(MAIN_ALL, { recordCharter: null });
+    const user = userEvent.setup();
+
+    expect(charterBox()).toHaveTextContent("This record's charter");
+    expect(charterBox()).not.toHaveTextContent(ARCH);
+    expect(await save(user)).toMatchObject({ charterId: ARCH });
+  });
+
+  it('a move to a warehouse that does not link it clears it; back on its own warehouse it is offered again', async () => {
+    renderArchived([...MAIN_ALL, { warehouse_id: EAST_DC, charter_id: SOUTH }]);
+    const user = userEvent.setup();
+
+    await pickWarehouse(user, 'East DC');
+    expect(charterBox()).toHaveTextContent('Generic');
+    expect(await charterOptions(user)).toEqual(['Generic — any charter', 'South Campus']);
+
+    await pickWarehouse(user, 'Main DC');
+    expect(charterBox()).toHaveTextContent('Generic');
+    expect(await charterOptions(user)).toEqual([
+      'Generic — any charter',
+      'Old Campus (archived)',
+      'North Campus',
+      'South Campus',
+    ]);
+    expect(await save(user)).toMatchObject({ warehouseId: MAIN_DC, charterId: null });
+  });
+
+  it('a move to another warehouse that also links it keeps it, by name', async () => {
+    renderArchived([
+      ...MAIN_ALL,
+      { warehouse_id: EAST_DC, charter_id: ARCH },
+      { warehouse_id: EAST_DC, charter_id: NORTH },
+    ]);
+    const user = userEvent.setup();
+
+    await pickWarehouse(user, 'East DC');
+
+    expect(charterBox()).toHaveTextContent('Old Campus (archived)');
+    expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: ARCH });
+  });
+
+  it('a warehouse that links only archived charters says no ACTIVE charter is linked', async () => {
+    renderArchived([{ warehouse_id: MAIN_DC, charter_id: ARCH }], {
+      create: true,
+      recordCharter: null,
+    });
+    const user = userEvent.setup();
+
+    await user.click(charterBox());
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual([
+      'Generic — any charter',
+    ]);
+    expect(screen.getByText(/No active charters linked to this warehouse/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No charters linked to this warehouse yet/i)).toBeNull();
+  });
+
+  it("the same warehouse on an edit offers Generic and the record's archived charter", async () => {
+    renderArchived([{ warehouse_id: MAIN_DC, charter_id: ARCH }]);
+    const user = userEvent.setup();
+
+    expect(await charterOptions(user)).toEqual(['Generic — any charter', 'Old Campus (archived)']);
+  });
+
+  it('with the warehouse charter list cut at the ceiling, keeps it on a move by name, with no "not linked" claim', async () => {
+    renderArchived([...MAIN_ALL, { warehouse_id: EAST_DC, charter_id: SOUTH }], { capped: true });
+    const user = userEvent.setup();
+
+    await pickWarehouse(user, 'East DC');
+
+    expect(charterBox()).toHaveTextContent('Old Campus (archived)');
+    expect(charterBox()).not.toHaveTextContent(/not linked/i);
+    expect(await save(user)).toMatchObject({ warehouseId: EAST_DC, charterId: ARCH });
   });
 });

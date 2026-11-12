@@ -11,8 +11,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * Books lists' cookies never decide this list's view.
  *
  * Also pinned here: the rentals-only read, the shared header with the
- * Active / Archived toggle and the gated "+ New item", the section tabs, and
- * the three empty states with their words.
+ * Active / Archived toggle and the gated "+ New item", the section tabs, the
+ * two empty states of an empty list with their words, and the table (never
+ * an empty state) for a view a filter or a search leaves empty.
  */
 
 const h = vi.hoisted(() => ({
@@ -22,6 +23,7 @@ const h = vi.hoisted(() => ({
   items: [] as Array<Record<string, unknown>>,
   tableProps: vi.fn(),
   list: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/headers', () => ({
@@ -79,6 +81,11 @@ vi.mock('@/server/services/categories', () => ({ CategoriesService: lookup('list
 vi.mock('@/server/services/locations', () => ({ LocationsService: lookup('list') }));
 vi.mock('@/server/services/suppliers', () => ({ SuppliersService: lookup('listForLookups') }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookup('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: vi.fn(async () => ({ listLabels: h.charterLabels })),
+  },
+}));
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: {
     forCurrentUser: vi.fn(async () => ({
@@ -89,6 +96,8 @@ vi.mock('@/server/services/item-images', () => ({
 vi.mock('@/server/services/movements', () => ({ getItemTrends: vi.fn(async () => new Map()) }));
 
 import RentalItemsPage from './page';
+
+import { requireOrgContext } from '@/lib/auth/session';
 
 function rentalItem(id: string) {
   return { id, name: `Canopy ${id}`, sku: id, quantity_on_hand: 5, is_rental: true };
@@ -108,6 +117,45 @@ beforeEach(() => {
     elsewhereUnavailable: false,
   }));
   h.total = 1;
+  h.charterLabels.mockImplementation(async () => []);
+});
+
+/**
+ * B97 part 1: the Rentals items list built its table lookups without
+ * charters, and the Charter column is always shown, so every rental item
+ * tagged to a charter read "Generic". It now names each charter, active or
+ * not (marked archived or inactive), from the member's own read.
+ */
+describe("Rentals items: the Charter cell names the item's charter (B97)", () => {
+  it('every charter, by its code, with its status', async () => {
+    h.charterLabels.mockImplementation(async () => [
+      { id: 'ch-1', name: 'North Campus', code: 'NC', status: 'active' },
+      { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' },
+    ]);
+    await renderPage();
+    expect(h.charterLabels).toHaveBeenCalledWith();
+    const { charters } = (
+      h.tableProps.mock.calls[0]![0] as {
+        lookups: { charters: Map<string, unknown> };
+      }
+    ).lookups;
+    expect(charters.get('ch-1')).toEqual({ name: 'North Campus', code: 'NC', status: 'active' });
+    expect(charters.get('ch-9')).toEqual({ name: 'Old Campus', code: 'OC', status: 'archived' });
+  });
+
+  it('a failed read names none, and the list still renders', async () => {
+    h.charterLabels.mockImplementation(async () => {
+      throw new Error('statement timeout');
+    });
+    await renderPage();
+    expect(h.tableProps).toHaveBeenCalledTimes(1);
+    const { charters } = (
+      h.tableProps.mock.calls[0]![0] as {
+        lookups: { charters?: Map<string, unknown> };
+      }
+    ).lookups;
+    expect(charters?.size ?? 0).toBe(0);
+  });
 });
 
 describe('Rentals items: the Table / Grid choice comes from its own cookie', () => {
@@ -139,6 +187,23 @@ describe('Rentals items: the Table / Grid choice comes from its own cookie', () 
     // it a typed SKU or name found nothing on this page.
     expect(props.rentalsOnly).toBe(true);
   });
+
+  // B42: the bulk bar draws Cycle count only when the page passes
+  // canStartCount, and this page passes none, even to a manager who can start
+  // counts elsewhere: rental equipment is never counted (0369 D8), so a count
+  // started here would count nothing. The table's default (false) is pinned
+  // in inventory-table.selection.test.tsx.
+  it('even for a manager who can start counts, the table gets no canStartCount', async () => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'manager',
+      permissions: new Set(['items:create', 'cycle_counts:assign', 'stock:adjust']),
+    } as never);
+    await renderPage();
+    const props = h.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.canStartCount ?? false).toBe(false);
+  });
 });
 
 describe('Rentals items: header, tabs and states', () => {
@@ -168,20 +233,100 @@ describe('Rentals items: header, tabs and states', () => {
     expect(screen.getByText('Archived rental items.')).toBeTruthy();
   });
 
-  it('the three empty states keep their words', async () => {
+  it('the two empty states of an empty list keep their words', async () => {
     h.total = 0;
     await renderPage();
     expect(screen.getByText('No rental items yet')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Add your first rental item' })).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Add canopies, supplies, and other circulating assets that staff can check out.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Add your first rental item' }).getAttribute('href'),
+    ).toBe('/dashboard/rentals/items/new');
     document.body.innerHTML = '';
     await renderPage({ status: 'archived' });
     expect(screen.getByText('No archived rental items')).toBeTruthy();
+    expect(screen.getByText('Nothing here yet.')).toBeTruthy();
+    expect(
+      screen.getByRole('link', { name: 'Back to active rental items' }).getAttribute('href'),
+    ).toBe('/dashboard/rentals/items');
     document.body.innerHTML = '';
-    await renderPage({ q: 'tent' });
-    expect(screen.getByText('No rental items match your search')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Clear search' }).getAttribute('href')).toBe(
-      '/dashboard/rentals/items',
-    );
+    // A sort is not a filter: the list is still empty with nothing narrowing it.
+    await renderPage({ sort: 'name_asc' });
+    expect(screen.getByText('No rental items yet')).toBeTruthy();
     expect(h.tableProps).not.toHaveBeenCalled();
+  });
+
+  it('without items:create, "No rental items yet" has no add action, as before', async () => {
+    h.total = 0;
+    h.canCreate = false;
+    await renderPage();
+    expect(screen.getByText('No rental items have been added yet.')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Add your first rental item' })).toBeNull();
+  });
+});
+
+/**
+ * Grouping walk 2026-10-20 (W4 no-match): Rentals items is always server mode,
+ * and a Category filter that left no rental answered "No rental items yet" with
+ * an offer to add one and no filter bar, right after the tick and after a
+ * reload, so the filter could be neither seen nor undone; a search that matched
+ * nothing had a page-level state without the bar ("No rental items match your
+ * search"). Every view a filter or a search leaves empty is now the table, whose
+ * no-match state keeps the filter bar, the active chips and "Clear all filters",
+ * as on Items and Books. The list still applies the filter exactly as before.
+ * The table (stubbed here) says what the page said for a search that matches
+ * nothing, "No rental items match your search" with "Clear search": see
+ * page.no-match.test.tsx, which renders the real table.
+ */
+describe('Rentals items: a filter that leaves nothing is the table, with its filters', () => {
+  it.each<[string, Record<string, string>, Record<string, unknown>]>([
+    ['a Category', { cat: 'cat-empty' }, { categoryIds: ['cat-empty'] }],
+    ['a Location', { loc: 'loc-empty' }, { locationIds: ['loc-empty'] }],
+    ['a search', { q: 'tent' }, { q: 'tent' }],
+    ['Low + critical', { stock: 'low' }, { lowStock: true }],
+    ['Out of stock', { stock: 'out' }, { outOfStock: true }],
+    [
+      'a Category on the Archived view',
+      { status: 'archived', cat: 'cat-empty' },
+      { status: 'archived', categoryIds: ['cat-empty'] },
+    ],
+    ['the Discontinued view', { status: 'discontinued' }, { status: 'discontinued' }],
+  ])('%s that leaves nothing: the table, never an empty state', async (_l, params, applied) => {
+    h.total = 0;
+    await renderPage(params);
+    expect(h.list).toHaveBeenCalledWith(expect.objectContaining(applied));
+    expect(screen.queryByText('No rental items yet')).toBeNull();
+    expect(screen.queryByText('No archived rental items')).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Add your first rental item' })).toBeNull();
+    expect(h.tableProps).toHaveBeenCalledTimes(1);
+    expect(h.tableProps.mock.calls[0]![0]).toMatchObject({
+      total: 0,
+      items: [],
+      // The search box holds the search.
+      initialQuery: params.q,
+    });
+  });
+});
+
+// B68: the toolbar and the bulk bar draw Export only when the page passes
+// canExport, and this page passes none, even to a manager who holds
+// items:export: every export reads only non-rental items (list() keeps
+// is_rental = false without rentalsOnly, and the selected read filters it), so
+// Export here saved items from the Items list, or a file with no rows. The
+// table's default (false) is pinned in inventory-table.export-permission.test.tsx.
+describe('Rentals items: no Export, for anyone (B68)', () => {
+  it('even a manager who holds items:export gets no canExport', async () => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'manager',
+      permissions: new Set(['items:create', 'items:export']),
+    } as never);
+    await renderPage();
+    const props = h.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.canExport ?? false).toBe(false);
   });
 });

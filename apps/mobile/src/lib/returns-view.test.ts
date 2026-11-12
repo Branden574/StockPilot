@@ -125,7 +125,8 @@ describe('list rows', () => {
     expect(returnRowTitle(row())).toBe('RMA-1');
     expect(returnRowTitle(row({ returnNumber: null }))).toBe('ABCDEF12');
     expect(returnRowMeta(row())).toBe('SO-000103 · Pat Lee');
-    expect(returnRowMeta(row({ orderNumber: null, requesterName: null, source: 'internal' }))).toBe('FFFFFFFF · Staff');
+    expect(returnRowMeta(row({ orderNumber: null, requesterName: null, source: 'internal' }))).toBe('FFFFFFFF · Opened by staff');
+    expect(returnRowMeta(row({ requesterName: null, requesterEmail: null, source: 'requester' }))).toBe('SO-000103 · Opened by the requester');
     expect(returnRowItems(row())).toBe('Walk Shirt · Size M ×1, Cap ×2 +1');
     expect(returnRowWaiting(row())).toEqual({ label: 'waiting 9 days', overdue: false });
     expect(returnRowWaiting(row({ waitingDays: 14 }))).toEqual({ label: 'waiting 14 days', overdue: true });

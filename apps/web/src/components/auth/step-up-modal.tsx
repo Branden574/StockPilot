@@ -160,8 +160,8 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
         if (!o && !pending) done(false);
       }}
     >
-      <DialogContent className={ABOVE_DIALOGS}>
-        <DialogHeader>
+      <DialogContent className={ABOVE_DIALOGS} data-glass-role="step-up">
+        <DialogHeader data-glass="step-up-head">
           <DialogTitle className="flex items-center gap-2">
             <ShieldCheck className="text-muted-foreground h-5 w-5" />
             Confirm with your authenticator
@@ -171,9 +171,9 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
             authenticator app — you won&apos;t be signed out.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-3">
+        <form data-glass="step-up-form" onSubmit={submit} className="space-y-3">
           {factors && factors.length > 1 ? (
-            <div className="space-y-1.5">
+            <div data-glass="step-up-field" className="space-y-1.5">
               <Label htmlFor="stepup-factor">Authenticator</Label>
               <select
                 id="stepup-factor"
@@ -192,7 +192,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               </select>
             </div>
           ) : null}
-          <div className="space-y-1.5">
+          <div data-glass="step-up-field" className="space-y-1.5">
             <Label htmlFor="stepup-code">Authentication code</Label>
             <Input
               id="stepup-code"
@@ -200,9 +200,10 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               autoComplete="one-time-code"
               autoFocus
               placeholder="123456"
-              maxLength={6}
               value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+              // Digits only, the first six. No maxLength: a browser cuts a pasted
+              // "123 456" at six characters before this runs, leaving five digits.
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               className="font-mono tracking-widest"
             />
           </div>
@@ -211,7 +212,7 @@ function StepUpModal({ open, onDone }: { open: boolean; onDone: (ok: boolean) =>
               {error}
             </p>
           ) : null}
-          <DialogFooter>
+          <DialogFooter data-glass="step-up-foot">
             <Button type="button" variant="outline" onClick={() => done(false)} disabled={pending}>
               Cancel
             </Button>

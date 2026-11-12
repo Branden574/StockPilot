@@ -1,9 +1,19 @@
 import { useRouter } from 'expo-router';
 import { BellOff, CheckCheck, X } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { glassRowSub, glassScrim } from '@/components/ui/glass/primitive-styles';
+import {
+  GLASS_BARE_CARD,
+  GLASS_DIALOG_CARD,
+  GLASS_DIALOG_RADIUS,
+  GlassJoinedRow,
+} from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
@@ -48,6 +58,10 @@ export default function NotificationsScreen() {
   const { user } = useAuth();
   const { activeOrgId } = useWorkspace();
   const router = useRouter();
+  // Liquid Glass (inferred from Routes-Gallery-2's notifications): the inbox
+  // as one grouped surface, an unread row on the selection fill, and the
+  // detail as a centred glass dialog.
+  const lg = useGlass();
   const [rows, setRows] = React.useState<NotificationRow[]>([]);
   // The last read failed (set by every read that answers).
   const [loadFailed, setLoadFailed] = React.useState(false);
@@ -177,9 +191,13 @@ export default function NotificationsScreen() {
       <DataListScreen
         // A read that failed with nothing on screen quotes no count.
         eyebrow={
-          loadFailed && rows.length === 0
-            ? 'INBOX'
-            : `INBOX · ${rows.filter((r) => !r.read_at).length} UNREAD`
+          lg
+            ? loadFailed && rows.length === 0
+              ? 'Inbox'
+              : `${rows.filter((r) => !r.read_at).length} unread`
+            : loadFailed && rows.length === 0
+              ? 'INBOX'
+              : `INBOX · ${rows.filter((r) => !r.read_at).length} UNREAD`
         }
         title="Notifications"
         italic="."
@@ -206,7 +224,15 @@ export default function NotificationsScreen() {
           ) : null
         }
         keyExtractor={(n) => n.id}
-        renderItem={(n) => <NotifRow row={n} onPress={() => open(n)} />}
+        renderItem={
+          lg
+            ? (n, i) => (
+                <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                  <NotifRow row={n} onPress={() => open(n)} />
+                </GlassJoinedRow>
+              )
+            : (n) => <NotifRow row={n} onPress={() => open(n)} />
+        }
       />
       {detail && <NotifDetailSheet row={detail} onClose={() => setDetail(null)} />}
     </>
@@ -220,6 +246,7 @@ export default function NotificationsScreen() {
  */
 function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () => void }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   return (
     <Modal transparent animationType="fade" onRequestClose={onClose}>
       {/*
@@ -251,6 +278,7 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            lg && glassScrim(lg),
           ]}
           onPress={onClose}
           onAccessibilityTap={onClose}
@@ -261,13 +289,18 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
           style={{ flex: 1, justifyContent: 'center', padding: 24 }}
           pointerEvents="box-none"
         >
-          <Card padding={18}>
+          <Card padding={18} style={lg ? GLASS_DIALOG_CARD : undefined}>
+            {lg ? <GlassSheetBackdrop radius={GLASS_DIALOG_RADIUS} /> : null}
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Body size={16} color={c.ink} style={{ fontFamily: FONT.display }}>
                   {row.title}
                 </Body>
-                <Mono size={10.5} color={c.ink3} style={{ marginTop: 4 }}>
+                <Mono
+                  size={10.5}
+                  color={c.ink3}
+                  style={lg ? [glassRowSub(lg), { marginTop: 4 }] : { marginTop: 4 }}
+                >
                   {new Date(row.created_at).toLocaleString('en-US', {
                     weekday: 'short',
                     month: 'short',
@@ -304,6 +337,7 @@ function NotifDetailSheet({ row, onClose }: { row: NotificationRow; onClose: () 
 
 function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const unread = !row.read_at;
   const when = new Date(row.created_at);
   const ago = relativeTime(when);
@@ -317,7 +351,15 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
           and the dot say it in words and shape too). */}
       <Card
         padding={14}
-        style={unread ? { backgroundColor: c.accentWash, borderColor: c.accent } : undefined}
+        style={
+          lg
+            ? unread
+              ? [GLASS_BARE_CARD, { backgroundColor: lg.g.selFill }]
+              : GLASS_BARE_CARD
+            : unread
+              ? { backgroundColor: c.accentWash, borderColor: c.accent }
+              : undefined
+        }
       >
         <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
           <View
@@ -353,8 +395,8 @@ function NotifRow({ row, onPress }: { row: NotificationRow; onPress: () => void 
                 tracking={0.04}
                 color={c.ink3}
                 numberOfLines={1}
-                maxFontSizeMultiplier={capTo(10.5, TYPE_CEILING.chrome)}
-                style={{ flexShrink: 0 }}
+                maxFontSizeMultiplier={capTo(lg ? 13 : 10.5, TYPE_CEILING.chrome)}
+                style={lg ? [glassRowSub(lg), { flexShrink: 0, marginTop: 0 }] : { flexShrink: 0 }}
               >
                 {ago}
               </Mono>

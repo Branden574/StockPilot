@@ -27,6 +27,8 @@ export function SidebarToggleButton({ hidden, onToggle, className }: SidebarTogg
       // rendered on desktop) — omit when hidden to avoid a dangling reference.
       aria-controls={hidden ? undefined : SIDEBAR_DOM_ID}
       aria-label={hidden ? 'Show sidebar' : 'Hide sidebar'}
+      data-glass="tb-icon"
+      data-glass-variant="sidebar"
       className={cn(
         'hover:bg-muted hover:text-foreground grid size-8 place-items-center rounded-md text-[var(--ed-ink-2)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background [@media(pointer:coarse)]:size-11',
         className,

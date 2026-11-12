@@ -24,6 +24,10 @@ const poGet = vi.fn(async () => ({
   lines: [] as Array<Record<string, unknown>>,
 }));
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => ({
     organizationId: 'org-1',
@@ -74,6 +78,9 @@ vi.mock('@/server/services/context', () => ({
 import { PoForm } from '@/components/po/po-form';
 
 import EditPoPage from './[id]/edit/page';
+
+// A well-formed id: the page refuses any other before reading (B63).
+const PO_ID = '5eed0000-0000-4000-8000-0000000000f1';
 import NewPoPage from './new/page';
 
 /** Depth-first search of a returned RSC element tree for a component's props. */
@@ -154,7 +161,7 @@ describe('PO pages read BOTH product and book (PURCHASE_ORDER_ITEM_TYPES)', () =
   });
 
   it("edit-PO page: list() is called with itemTypes ['product','book']", async () => {
-    await EditPoPage({ params: Promise.resolve({ id: 'po-1' }) });
+    await EditPoPage({ params: Promise.resolve({ id: PO_ID }) });
     expect(inventoryList).toHaveBeenCalledWith({
       limit: 1000,
       expected: 'any',
@@ -180,7 +187,7 @@ describe('PO pages read BOTH product and book (PURCHASE_ORDER_ITEM_TYPES)', () =
   });
 
   it('edit-PO page: the book reaches the form alongside the product', async () => {
-    const items = formItems(await EditPoPage({ params: Promise.resolve({ id: 'po-1' }) }));
+    const items = formItems(await EditPoPage({ params: Promise.resolve({ id: PO_ID }) }));
     expect(items.map((i) => i.id)).toEqual(['p-a', 'b-b']);
     expect(items.find((i) => i.id === 'b-b')?.itemType).toBe('book');
     expect(items.find((i) => i.id === 'b-b')?.barcode).toBe('9780142407332');
@@ -197,7 +204,7 @@ describe('PO pages read BOTH product and book (PURCHASE_ORDER_ITEM_TYPES)', () =
       },
       lines: [{ item_id: 'b-b', quantity_ordered: 4, unit_cost: 6.5 }],
     });
-    const tree = await EditPoPage({ params: Promise.resolve({ id: 'po-1' }) });
+    const tree = await EditPoPage({ params: Promise.resolve({ id: PO_ID }) });
     const props = findProps(tree, PoForm) as {
       initial: { lines: Array<{ itemId?: string; quantityOrdered: number; unitCost: number }> };
       items: FormItem[];

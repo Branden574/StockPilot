@@ -369,6 +369,7 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
           <nav
             aria-label={BOOK_REPORT_UI.pagesNav}
             className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+            data-glass-role="bot-pager"
           >
             <p className="text-muted-foreground text-[12.5px] tabular-nums" aria-live="polite">
               {formatListFooter(
@@ -398,7 +399,7 @@ export async function BookOrderTotalsBody(props: BookOrderTotalsBodyProps) {
               </BookReportPagerLink>
             </div>
           </nav>
-          <div className="space-y-1">
+          <div className="space-y-1" data-glass-role="bot-total">
             <p className="text-[13.5px] font-medium tabular-nums">
               {bookReportGrandTotalLine(answer.summary, totalPages)}
             </p>
@@ -505,7 +506,7 @@ function SummaryCards({ answer }: { answer: BookOrderTotalsResponse }) {
   const copies = formatReportQuantity(summary.copies);
   const copiesWords = copiesRequestedText(summary.copies).slice(copies.length + 1);
   return (
-    <section aria-label={BOOK_REPORT_UI.summaryRegion}>
+    <section aria-label={BOOK_REPORT_UI.summaryRegion} data-glass-role="bot-kpis">
       <StatStrip>
         <MetricCard
           id="book-report-metric-copies"
@@ -551,6 +552,7 @@ function ScopeLines({
     <section
       aria-label={BOOK_REPORT_UI.scopeRegion}
       className="border-border bg-card text-muted-foreground space-y-1 rounded-lg border px-[18px] py-3.5 text-[13px] leading-5"
+      data-glass-role="bot-scope"
     >
       <p>{bookReportRangeLine(answer.range, answer.summary)}</p>
       <BookReportCharterScopeLine
@@ -597,7 +599,10 @@ function BooksTable({
   coverFor: (itemId: string) => Promise<BookCoverSource>;
 }) {
   return (
-    <div className="border-border bg-card overflow-hidden rounded-lg border">
+    <div
+      className="border-border bg-card overflow-hidden rounded-lg border"
+      data-glass-role="bot-table"
+    >
       <Table>
         <TableCaption className="sr-only">
           {bookReportTableCaption(answer.sort, answer.page, totalPages)}

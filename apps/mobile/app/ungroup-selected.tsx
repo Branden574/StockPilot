@@ -37,6 +37,12 @@ import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_FOOT_BAR, GLASS_OPS, GlassFootBackdrop } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Thumb } from '@/components/ui/thumb';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -117,6 +123,11 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
   const [params] = React.useState(routeParams);
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of the iOS boards' review sheets as a
+  // screen): the scene, Back in the glass nav, the title block, the records
+  // on the grouped glass surface and the confirm on the floating glass bar.
+  // Every record, choice, gate and word stays.
+  const lg = useGlass();
   const { user } = useAuth();
   const { activeOrgId } = useWorkspace();
   const view = params?.view ?? 'items';
@@ -293,16 +304,28 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
   );
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={close} accessibilityLabel="Back" minTap />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>{view === 'books' ? 'BOOKS · UNGROUP' : 'ITEMS · UNGROUP'}</Eyebrow>
-          <Display size={30} style={{ marginTop: 12 }}>
+        <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31, the
+              eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>{view === 'books' ? 'BOOKS · UNGROUP' : 'ITEMS · UNGROUP'}</Eyebrow>}
+          <Display
+            size={lg ? 26 : 30}
+            style={lg ? GLASS_ITEM.name : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
             {UNGROUP_COPY.selectedTitle}
           </Display>
+          {lg ? (
+            <GlassSubline style={GLASS_LIST.sub}>
+              {view === 'books' ? 'Books · Ungroup' : 'Items · Ungroup'}
+            </GlassSubline>
+          ) : null}
           <Body muted size={13.5} style={{ marginTop: 8 }}>
             {UNGROUP_COPY.selectedIntro}
           </Body>
@@ -311,8 +334,11 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
 
       <ScrollView
         contentContainerStyle={{
-          paddingHorizontal: 20,
-          paddingBottom: footerReservation(footerHeight, 170),
+          paddingHorizontal: lg ? 16 : 20,
+          // Liquid Glass: plus the floating bar's 8pt lift.
+          paddingBottom: lg
+            ? footerReservation(footerHeight, 170) + 8
+            : footerReservation(footerHeight, 170),
           gap: 16,
         }}
       >
@@ -516,8 +542,14 @@ function UngroupSelectedReview({ params: routeParams }: { params: UngroupSelecte
       <SafeAreaView
         edges={['bottom']}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
-        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        style={[
+          styles.footer,
+          { backgroundColor: c.paper, borderTopColor: c.hair },
+          // Liquid Glass: the floating glass bar, 16 in.
+          lg && GLASS_FOOT_BAR,
+        ]}
       >
+        {lg ? <GlassFootBackdrop /> : null}
         {phase === 'done' ? (
           <View style={{ gap: 10 }}>
             {outcome && !outcome.complete ? (

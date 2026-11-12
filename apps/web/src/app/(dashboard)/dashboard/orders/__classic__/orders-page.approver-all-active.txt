@@ -1,0 +1,355 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <span data-perf="">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]" id="orders-title">
+              "Order requests"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            "Review incoming requests and move them through approval, packaging, and delivery."
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <span data-tour="orders-page">
+        <button aria-expanded="false" aria-haspopup="menu" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3 [&_svg:last-child]:size-3" data-state="closed" id="radix-«id1»" type="button">
+          <svg aria-hidden="true" class="lucide lucide-download" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 15V3">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+            <path d="m7 10 5 5 5-5">
+          "Export"
+          <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="m6 9 6 6 6-6">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/dashboard/orders/manage-items">
+          "Manage order items"
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-accent text-accent-ink hover:bg-accent/90 h-8 px-3.5 text-[13px]" href="/dashboard/orders/new">
+          "+ Place order"
+  <nav aria-label="Status" class="border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip @container" data-slot="stat-strip" data-variant="stages">
+    <div class="[&>*]:border-border -mb-px -mr-px grid [&>*:last-child]:border-r-0 [&>*]:border-b [&>*]:border-r grid-cols-[repeat(auto-fit,minmax(min(100%,130px),1fr))] @min-[880px]:flex @min-[880px]:flex-wrap @min-[880px]:[&>*]:flex-[1_0_auto]">
+      <a aria-current="page" class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 bg-muted" data-slot="stat-strip-link" data-state="active" href="/dashboard/orders?status=all_active">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span class="text-foreground font-medium">
+            "All active"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-accent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=needs_approval">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Needs approval"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=picking">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Picking"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=packing">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Packing"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=staged">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Staged"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=in_transit">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "In transit"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=backordered">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Backordered"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=completed">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Completed"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+      <a class="hover:bg-muted pointer-coarse:min-h-11 relative flex min-w-0 flex-col justify-center gap-0.5 px-4 pb-3.5 pt-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11" data-slot="stat-strip-link" data-state="inactive" href="/dashboard/orders?status=denied_cancelled">
+        <span class="text-muted-foreground whitespace-nowrap text-[12.5px] leading-[18.75px]">
+          <span>
+            "Denied/Cancelled"
+        <span aria-hidden="true" class="absolute inset-x-0 bottom-0 h-0.5 bg-transparent">
+  <div class="border-border bg-card overflow-hidden rounded-lg border">
+    <div aria-labelledby="orders-title" class="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0" role="region">
+      <table class="w-full caption-bottom text-[13.5px] min-w-[860px]">
+        <thead class="[&_tr]:border-b">
+          <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              "Order #"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Requester"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Warehouse"
+            <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+              "Lines"
+            <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap text-right">
+              "Total qty"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Status"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Type"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Picker"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Driver"
+            <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              "Requested"
+            <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap text-right">
+              "Last update"
+        <tbody class="[&_tr:last-child]:border-0">
+          <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <a class="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o1">
+                "SO-000201"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex min-w-32 items-start gap-2">
+                <a class="text-foreground min-w-0 underline-offset-2 hover:underline" href="/dashboard/orders/o1">
+                  <span class="block">
+                    "Pat Lee"
+                  <span class="sr-only">
+                    " · "
+                  <span class="text-muted-foreground block text-[12px] leading-[18px]">
+                    "Ridge Academy"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+              "North DC"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "2"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "12"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning">
+                  "Pending"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <span class="text-ink-2 inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" class="lucide lucide-package text-muted-foreground size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z">
+                  <path d="M12 22V12">
+                  <polyline points="3.29 7 12 12 20.71 7">
+                  <path d="m7.5 4.27 9 5.15">
+                "Pickup"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+              "2 hours ago"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+              "5 minutes ago"
+          <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <a class="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o2">
+                "SO-000202"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex min-w-32 items-start gap-2">
+                <a class="text-foreground min-w-0 underline-offset-2 hover:underline" href="/dashboard/orders/o2">
+                  "Pat Lee"
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground shrink-0">
+                  "Public"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+              "North DC"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "2"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "12"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-primary text-primary-foreground">
+                  "Approved"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <span class="text-ink-2 inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" class="lucide lucide-package text-muted-foreground size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z">
+                  <path d="M12 22V12">
+                  <polyline points="3.29 7 12 12 20.71 7">
+                  <path d="m7.5 4.27 9 5.15">
+                "Pickup"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+              "2 hours ago"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+              "10 minutes ago"
+          <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <a class="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o3">
+                "SO-000203"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex min-w-32 items-start gap-2">
+                <a class="text-foreground min-w-0 underline-offset-2 hover:underline" href="/dashboard/orders/o3">
+                  <span class="block">
+                    "Pat Lee"
+                  <span class="sr-only">
+                    " · "
+                  <span class="text-muted-foreground block text-[12px] leading-[18px]">
+                    "Ridge Academy"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+              "North DC"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "2"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "12"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]">
+                  "Picking"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <span class="text-ink-2 inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" class="lucide lucide-package text-muted-foreground size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z">
+                  <path d="M12 22V12">
+                  <polyline points="3.29 7 12 12 20.71 7">
+                  <path d="m7.5 4.27 9 5.15">
+                "Pickup"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-ink-2">
+                "Luis Ortega"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+              "2 hours ago"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+              "15 minutes ago"
+          <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <a class="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o4">
+                "SO-000204"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex min-w-32 items-start gap-2">
+                <a class="text-foreground min-w-0 underline-offset-2 hover:underline" href="/dashboard/orders/o4">
+                  <span class="block">
+                    "Pat Lee"
+                  <span class="sr-only">
+                    " · "
+                  <span class="text-muted-foreground block text-[12px] leading-[18px]">
+                    "Ridge Academy"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+              "North DC"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "2"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "12"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]">
+                  "In transit"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <span class="text-ink-2 inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" class="lucide lucide-truck text-muted-foreground size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2">
+                  <path d="M15 18H9">
+                  <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14">
+                  <circle cx="17" cy="18" r="2">
+                  <circle cx="7" cy="18" r="2">
+                "Delivery"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-ink-2">
+                "Sam Reyes"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+              "2 hours ago"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+              "20 minutes ago"
+          <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <a class="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o5">
+                "SO-000205"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex min-w-32 items-start gap-2">
+                <a class="text-foreground min-w-0 underline-offset-2 hover:underline" href="/dashboard/orders/o5">
+                  <span class="block">
+                    "Pat Lee"
+                  <span class="sr-only">
+                    " · "
+                  <span class="text-muted-foreground block text-[12px] leading-[18px]">
+                    "Ridge Academy"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+              "North DC"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "2"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "12"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success">
+                  "Handed over"
+                <div class="inline-flex min-w-0 flex-wrap items-center gap-x-1" data-testid="order-exchange-chip">
+                  <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-transparent text-muted-foreground">
+                    "Exchange"
+                  <span class="text-muted-foreground text-[12px]">
+                    <span class="sr-only">
+                      " · "
+                    "Waiting for return"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <span class="text-ink-2 inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" class="lucide lucide-package text-muted-foreground size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z">
+                  <path d="M12 22V12">
+                  <polyline points="3.29 7 12 12 20.71 7">
+                  <path d="m7.5 4.27 9 5.15">
+                "Pickup"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+              "2 hours ago"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+              "25 minutes ago"
+          <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <a class="text-foreground font-mono text-[13.5px] font-medium tabular-nums underline-offset-2 hover:underline" href="/dashboard/orders/o6">
+                "SO-000206"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex min-w-32 items-start gap-2">
+                <a class="text-foreground min-w-0 underline-offset-2 hover:underline" href="/dashboard/orders/o6">
+                  "External requester"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+              "North DC"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "2"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono text-[13.5px] tabular-nums">
+              "12"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-destructive-wash text-destructive">
+                  "Denied"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap">
+              <span class="text-ink-2 inline-flex items-center gap-1.5">
+                <svg aria-hidden="true" class="lucide lucide-package text-muted-foreground size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z">
+                  <path d="M12 22V12">
+                  <polyline points="3.29 7 12 12 20.71 7">
+                  <path d="m7.5 4.27 9 5.15">
+                "Pickup"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+              <span class="text-muted-foreground">
+                "—"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+              "2 hours ago"
+            <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+              "30 minutes ago"
+    <div class="border-border border-t px-4 py-2.5">
+      <div class="text-muted-foreground flex items-center justify-end gap-2 text-[12.5px]">
+        <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-ink-4" disabled="">
+          "← Newer"
+        <p class="px-2 tabular-nums">
+          "Page "
+          "1"
+        <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] disabled:opacity-100 disabled:border-border disabled:bg-transparent disabled:text-ink-4" disabled="">
+          "Older →"

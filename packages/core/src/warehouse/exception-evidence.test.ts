@@ -222,14 +222,14 @@ describe('describeEvidenceEvent', () => {
     expect(
       describeEvidenceEvent({
         kind: 'evidence_added',
-        actorLabel: 'Maria Lopez',
+        actorLabel: 'Pixie Quill',
         capturedAt: '2026-09-27T15:02:00Z',
         uploadedAt: '2026-09-27T15:40:00Z',
         note: '  shelf empty  ',
         timeZone: TZ,
       }),
     ).toEqual({
-      headline: 'Photo added by Maria Lopez',
+      headline: 'Photo added by Pixie Quill',
       detail: "Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)",
       note: 'shelf empty',
     });
@@ -276,7 +276,7 @@ describe('panel copy', () => {
   });
 
   it('names who added a photo, and never shows a blank name', () => {
-    expect(exceptionEvidenceAddedByCopy('Maria Lopez')).toBe('Added by Maria Lopez');
+    expect(exceptionEvidenceAddedByCopy('Pixie Quill')).toBe('Added by Pixie Quill');
     expect(exceptionEvidenceAddedByCopy('Former member')).toBe('Added by Former member');
     expect(exceptionEvidenceAddedByCopy('  ')).toBe('Added by a former member');
     expect(exceptionEvidenceAddedByCopy(null)).toBe('Added by a former member');
@@ -320,7 +320,7 @@ describe('panel copy', () => {
       EXCEPTION_EVIDENCE_PRIVACY_COPY,
       EXCEPTION_EVIDENCE_LIMITS_COPY,
       EXCEPTION_EVIDENCE_REMOVE_COPY,
-      exceptionEvidenceAddedByCopy('Maria Lopez'),
+      exceptionEvidenceAddedByCopy('Pixie Quill'),
       exceptionEvidenceCountLabel(2),
       exceptionEvidenceTimesCopy({ capturedAt: null, uploadedAt: '2026-09-27T15:40:00Z' }, TZ),
     ];

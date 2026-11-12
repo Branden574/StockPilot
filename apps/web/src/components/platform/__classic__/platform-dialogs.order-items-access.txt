@@ -1,0 +1,67 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div aria-hidden="true" data-aria-hidden="true">
+<div aria-hidden="true" class="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" data-aria-hidden="true" data-state="open" style="pointer-events: auto;">
+<div aria-describedby="radix-«id3»" aria-labelledby="radix-«id2»" class="bg-card text-card-foreground fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-1rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 sm:p-6 max-h-[calc(100dvh-1rem)] overflow-y-auto sm:max-h-[calc(100dvh-2rem)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%]" data-state="open" id="radix-«id1»" role="dialog" style="pointer-events: auto;" tabindex="-1">
+  <div class="flex flex-col space-y-1.5 text-center sm:text-left">
+    <h2 class="font-display text-lg font-medium leading-tight tracking-[-0.02em]" id="radix-«id2»">
+      "Order items access"
+    <p class="text-muted-foreground text-[13px]" id="radix-«id3»">
+      "Whether this member can use Manage order items: choosing which items and books appear in Place an Order. Their role does not change."
+  <div class="space-y-4">
+    <div class="space-y-1">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-foreground text-[13.5px] font-medium">
+          "Riley Example"
+        <span class="text-ink-2 text-[12.5px]">
+          "Manager"
+      <p class="text-muted-foreground text-[12.5px]">
+        "Managers, admins and owners have this by default. Staff and viewers do not."
+      <p class="text-[12.5px]" data-testid="order-items-access-now">
+        "Now: "
+        "Deny"
+        "."
+        ␣
+        "Not allowed"
+        "."
+    <div aria-label="Order items access for Riley Example" class="grid gap-2" role="radiogroup">
+      <label class="flex items-start gap-2.5 cursor-pointer bg-card has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background rounded-lg border p-3 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-border hover:border-[var(--ed-line-strong)]">
+        <input aria-describedby="«id4»-description" aria-labelledby="«id4»-label" class="bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none" name="«id5»" type="radio" value="default">
+        <span class="min-w-0">
+          <span class="block text-[13px] font-medium leading-[18px]" id="«id4»-label">
+            "Follow role default"
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]" id="«id4»-description">
+            "Manager default: Allowed."
+      <label class="flex items-start gap-2.5 cursor-pointer bg-card has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background rounded-lg border p-3 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-border hover:border-[var(--ed-line-strong)]">
+        <input aria-describedby="«id6»-description" aria-labelledby="«id6»-label" class="bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none" name="«id5»" type="radio" value="allow">
+        <span class="min-w-0">
+          <span class="block text-[13px] font-medium leading-[18px]" id="«id6»-label">
+            "Allow"
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]" id="«id6»-description">
+            "Allowed, whatever their role."
+      <label class="flex items-start gap-2.5 cursor-pointer bg-card has-[:focus-visible]:ring-ring has-[:focus-visible]:ring-offset-background rounded-lg border p-3 transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-offset-2 border-foreground shadow-[0_0_0_1px_hsl(var(--foreground))]">
+        <input aria-describedby="«id7»-description" aria-labelledby="«id7»-label" checked="" class="bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:outline-none" name="«id5»" type="radio" value="deny">
+        <span class="min-w-0">
+          <span class="block text-[13px] font-medium leading-[18px]" id="«id7»-label">
+            "Deny"
+          <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]" id="«id7»-description">
+            "Not allowed, whatever their role."
+    <div class="bg-sunk border-border space-y-2 rounded-md border p-3">
+      <p aria-live="polite" class="text-foreground text-[13px] font-medium" data-testid="order-items-access-after">
+        "After saving: Not allowed (denied by StockPilot). This stays until StockPilot changes it, even if their role changes."
+      <ul class="text-muted-foreground list-disc space-y-1 pl-4 text-[12.5px]">
+        <li>
+          "A manager, admin or owner needs Deny to lose their default access; Reset returns them to it."
+        <li>
+          "This choice stays if they are removed from the organization and invited again."
+  <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3">
+      "Cancel"
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3.5 text-[13px]" disabled="">
+      "Save"
+  <button class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none" type="button">
+    <svg aria-hidden="true" class="lucide lucide-x h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M18 6 6 18">
+      <path d="m6 6 12 12">
+    <span class="sr-only">
+      "Close"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

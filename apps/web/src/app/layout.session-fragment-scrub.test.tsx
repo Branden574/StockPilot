@@ -54,6 +54,9 @@ vi.mock('@/server/actions/auth', () => ({ signInAction: vi.fn() }));
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() }),
   useSearchParams: () => new URLSearchParams(window.location.search),
+  // The layout's appearance provider reads the path (the print route is never
+  // glass: components/theme/appearance-provider.tsx).
+  usePathname: () => window.location.pathname,
 }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 

@@ -28,6 +28,12 @@ import { Field } from '@/components/ui/field';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
+import { GLASS_OPS } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
@@ -55,6 +61,11 @@ export default function NewScheduleEvent() {
   const router = useRouter();
   const { orgId } = useOrg();
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of the iOS boards' grouped forms):
+  // the scene, Back in the glass nav, the title block and the form 16 from
+  // the sides; the shared boxes, chips, checkbox and cards draw their own
+  // glass. Every field and word stays.
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   // Days and time sit side by side, one over the other past the stacking scale.
   const stacked = shouldStackRow(fontScale);
@@ -148,16 +159,25 @@ export default function NewScheduleEvent() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ChevronLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SCHEDULE · NEW EVENT</Eyebrow>
-          <Display size={32} style={{ marginTop: 12 }}>
-            Add to <Em>calendar.</Em>
+        <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it. */}
+          {lg ? null : <Eyebrow>SCHEDULE · NEW EVENT</Eyebrow>}
+          <Display
+            size={lg ? 26 : 32}
+            style={lg ? GLASS_ITEM.name : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? glassListTitle('Add to', 'calendar.') : 'Add to '}
+            {lg ? null : <Em>calendar.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Schedule · New event</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
@@ -166,7 +186,7 @@ export default function NewScheduleEvent() {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40, gap: 14 }}
+          contentContainerStyle={{ paddingHorizontal: lg ? 16 : 20, paddingBottom: 40, gap: 14 }}
           keyboardShouldPersistTaps="handled"
         >
           <FormSection icon={Calendar} label="EVENT">

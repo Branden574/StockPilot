@@ -65,9 +65,9 @@ export interface RecurringRunSummary {
   templatesSkipped: RecurringSkippedTemplate[];
   /**
    * Names of the send-mode templates whose purchase order was created (a
-   * draft, counted in `created`) and then could not be sent (also counted in
-   * `failures`), in run order. The notice said only "created" (slice 8
-   * review).
+   * draft, counted in `created`) and then could not be marked as ordered
+   * (also counted in `failures`), in run order. The notice said only
+   * "created" (slice 8 review).
    */
   templatesSendFailed: string[];
 }
@@ -147,7 +147,15 @@ function namesForNotice(names: string[]): string {
  * its name when it came fourth (slice 8 review).
  *
  * The title says it needs attention whenever a template created nothing or
- * its purchase order could not be sent, even beside others that ran.
+ * its purchase order could not be marked as ordered, even beside others that
+ * ran.
+ *
+ * It names the controls the reader uses (B64): Mark as ordered, the draft
+ * page's button, on the web (the phone shows a draft read-only); Edit, in
+ * Recurring POs on the web (the phone's Recurring POs can turn a template off
+ * or delete it, but not edit it). And it says what the run did: it marks a
+ * purchase order as ordered, the change Mark as ordered makes, and sends
+ * nothing to a supplier (B105; it said "sent").
  */
 export function recurringRunNotice(
   summary: RecurringRunSummary,
@@ -160,7 +168,7 @@ export function recurringRunNotice(
 
   const parts: string[] = [];
   if (summary.created > 0) {
-    const sentPart = summary.sent > 0 ? `, ${summary.sent} sent` : '';
+    const sentPart = summary.sent > 0 ? `, ${summary.sent} marked as ordered` : '';
     const heldPart = summary.heldForReview > 0 ? `, ${summary.heldForReview} held for review` : '';
     parts.push(
       `Recurring purchase orders created ${summary.created} purchase order${
@@ -172,26 +180,30 @@ export function recurringRunNotice(
     const n = summary.linesLeftOff;
     const names = summary.templatesWithLinesLeftOff;
     parts.push(
-      `${n} template line${n === 1 ? ' was' : 's were'} left off (${namesForNotice(names)}) because the item was deleted or is a pre-assembled kit, which is never ordered. Edit the template${
+      `${n} template line${n === 1 ? ' was' : 's were'} left off (${namesForNotice(names)}) because the item was deleted or is a pre-assembled kit, which is never ordered. On the web, open Recurring POs and edit the template${
         names.length === 1 ? '' : 's'
       } to remove ${n === 1 ? 'it' : 'them'}.`,
     );
   }
   const idle = summary.templatesWithNothingOrderable;
   if (idle.length > 0) {
+    const one = idle.length === 1;
     parts.push(
       `${namesForNotice(idle)} created no purchase order: none of ${
-        idle.length === 1 ? 'its' : 'their'
-      } items can be ordered any more. Edit or disable ${idle.length === 1 ? 'it' : 'them'}.`,
+        one ? 'its' : 'their'
+      } items can be ordered any more. In Recurring POs, edit ${one ? 'it' : 'them'} on the web or turn ${
+        one ? 'it' : 'them'
+      } off.`,
     );
   }
   // A send-mode template whose purchase order exists as a draft because
-  // sending it failed (the draft stays; someone sends it by hand).
+  // marking it as ordered failed (the draft stays; someone marks it as
+  // ordered on the web).
   if (sendFailed.length > 0) {
     parts.push(
       sendFailed.length === 1
-        ? `${namesForNotice(sendFailed)} created its purchase order as a draft, but it could not be sent. Open it in Purchase orders and send it.`
-        : `${namesForNotice(sendFailed)} created their purchase orders as drafts, but they could not be sent. Open them in Purchase orders and send them.`,
+        ? `${namesForNotice(sendFailed)} created its purchase order as a draft, but it could not be marked as ordered. Open it in Purchase orders on the web and select Mark as ordered.`
+        : `${namesForNotice(sendFailed)} created their purchase orders as drafts, but they could not be marked as ordered. Open each in Purchase orders on the web and select Mark as ordered.`,
     );
   }
   // A template whose purchase order the save refused or could not make
@@ -604,10 +616,15 @@ export class RecurringPoTemplatesService {
   /**
    * Daily-cron entry point. CLAIMS each due template (next_run_at <= now) by
    * advancing its schedule conditionally, then — only if the claim won — creates
-   * one PO and optionally auto-sends it within the configured cap + org approval
-   * threshold. Per-template fail-open. Money-safe: auto-send requires
-   * send_mode==='send' AND non-null cap AND total <= cap AND total < approval
-   * threshold. A failed threshold-read BLOCKS all auto-sends (fail-closed).
+   * one PO and optionally marks it as ordered (updateStatus 'ordered', the
+   * change the draft page's Mark as ordered makes; nothing is sent to the
+   * supplier). Per-template fail-open. Money-safe: only in send_mode 'send',
+   * and only under a ceiling (shouldAutoSend): with a cap, when total <= cap
+   * and total < the org's PO approval threshold, if it has one; with no cap,
+   * when total < the threshold; with neither, never (it stays a draft). The
+   * cap is optional: a blank cap does NOT keep a template to drafts when the
+   * org has a threshold. A failed threshold-read BLOCKS all of them
+   * (fail-closed).
    *
    * Claim-BEFORE-create is what makes the run at-most-once per due period even
    * when two invocations overlap (a manual "Run" or an operator curl with
@@ -828,9 +845,10 @@ export class RecurringPoTemplatesService {
         // "advance for every attempted template" contract.
         failures++;
         if (createdPoId !== null) {
-          // The purchase order exists (a draft); only sending it failed. The
-          // notice names the template (it said only "created" until the
-          // slice 8 review), so someone sends the draft by hand.
+          // The purchase order exists (a draft); only marking it as ordered
+          // failed. The notice names the template (it said only "created"
+          // until the slice 8 review), so someone marks the draft as ordered
+          // on the web.
           templatesSendFailed.push(tpl.name);
           void reportError(e, {
             tag: 'recurring_pos.auto_send_failed',

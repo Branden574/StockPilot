@@ -1,0 +1,6 @@
+<div>
+  <button aria-autocomplete="none" aria-expanded="false" aria-label="Filter by charter" class="[&>span]:line-clamp-1 bg-card border border-[var(--ed-line-strong)] data-[placeholder]:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-2 h-8 items-center justify-between max-sm:h-11 max-sm:text-base max-w-full px-2.5 py-1 rounded-md text-[13px] text-left transition-colors w-[220px]" data-state="closed" dir="ltr" role="combobox" type="button">
+    <span style="pointer-events: none;">
+      "All charters"
+    <svg aria-hidden="true" class="h-4 lucide lucide-chevron-down shrink-0 text-muted-foreground w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="m6 9 6 6 6-6">

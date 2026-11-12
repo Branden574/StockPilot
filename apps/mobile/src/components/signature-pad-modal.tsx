@@ -1,13 +1,16 @@
 import { StatusBar } from 'expo-status-bar';
 import { X } from 'lucide-react-native';
 import React, { useRef, useState } from 'react';
-import { Alert, Keyboard, Modal, PanResponder, StyleSheet, useWindowDimensions, View } from 'react-native';
+import { Alert, Keyboard, PanResponder, StyleSheet, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { Path, Rect, Svg } from 'react-native-svg';
 import { type SignaturePoint, isValidSignatureDataUrl, pointsToSmoothSvgPath } from '@stockpilot/core';
 
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { Modal } from '@/components/ui/modal';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';
@@ -51,6 +54,11 @@ export function SignaturePadModal({
   defaultEmail = '',
 }: SignaturePadModalProps) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the frame only (the scene behind the header, the name field
+  // and the buttons, which draw their glass looks). The writing surface is
+  // EXCLUDED: it stays the opaque white it is, so the signature it captures
+  // is the same in every appearance.
+  const lg = useGlass();
   // Fill the available width (up to a cap) so tablets and large phones get a
   // proportionate pad instead of a fixed 320px box floating in the middle.
   const { width: windowWidth } = useWindowDimensions();
@@ -164,9 +172,10 @@ export function SignaturePadModal({
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       <SafeAreaProvider>
         <SafeAreaView
-          style={[styles.container, { backgroundColor: c.paper }]}
+          style={[styles.container, { backgroundColor: lg ? 'transparent' : c.paper }]}
           edges={['top', 'bottom']}
         >
+          {lg ? <SceneBackground /> : null}
           {/* The modal's own status bar: dark words on the light page, light
               words on the dark one (it was the host's: white on a light page
               in dark mode, about 1.05:1). Mounted only while the pad shows,

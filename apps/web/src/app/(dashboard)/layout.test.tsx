@@ -56,7 +56,7 @@ vi.mock('@/lib/dashboard/request-cache', () => ({
     nav_overrides: null,
     order_status_config: null,
   }),
-  getMfaFactorsForRequest: async () => [],
+  getMfaFactorsForRequest: async () => ({ userId: 'u1', factors: [] }),
   getWarehousesForRequest: async () => [{ id: 'wh-1', name: 'Main' }],
   getModulesForRequest: async () => new Set<string>(),
 }));

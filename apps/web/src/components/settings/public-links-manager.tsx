@@ -312,14 +312,14 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
         }}
       >
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>New public request link</DialogTitle>
             <DialogDescription>
               A fresh link starts with an empty catalog and a unique URL. Name it after the audience
               it serves — you pick what it exposes next.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div data-glass="dialog-body" className="space-y-2">
             <Label htmlFor="new-link-name">Link name</Label>
             <Input
               id="new-link-name"
@@ -341,7 +341,7 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
               </p>
             ) : null}
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"
@@ -372,14 +372,14 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
         }}
       >
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Link created — copy the URL now</DialogTitle>
             <DialogDescription>
               For security, this URL is shown only once and cannot be displayed again. If you lose
               it, rotate the link in the editor to get a new one.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div data-glass="dialog-body" className="space-y-2">
             <Input
               readOnly
               aria-label="Public URL"
@@ -392,7 +392,7 @@ export function PublicLinksManager({ appUrl, links }: { appUrl: string; links: P
               {createdCopied ? 'Copied' : 'Copy URL'}
             </Button>
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               onClick={() => {

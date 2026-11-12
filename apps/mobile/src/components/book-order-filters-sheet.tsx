@@ -1,6 +1,6 @@
 import { Check, X } from 'lucide-react-native';
 import * as React from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
   BOOK_REPORT_ALL_CATEGORIES,
@@ -25,7 +25,11 @@ import {
   sheetStyles,
 } from '@/components/book-order-sheet-parts';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import {
   applyBookReportDraft,
   bookReportDraftProblems,
@@ -98,6 +102,9 @@ function FiltersContent({
   echoCategoryName,
 }: React.ComponentProps<typeof BookOrderFiltersSheet>) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [draft, setDraft] = React.useState<BookReportQuery>(() => ({
     ...value,
     statusGroups: [...value.statusGroups],
@@ -148,9 +155,19 @@ function FiltersContent({
         style={[
           StyleSheet.absoluteFill,
           { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+          lg && glassScrim(lg),
         ]}
       />
-      <View style={[styles.card, { backgroundColor: c.card }, SHADOW.sheet]}>
+      <View
+        style={[
+          styles.card,
+          { backgroundColor: c.card },
+          SHADOW.sheet,
+          lg && GLASS_SHEET_CARD,
+        ]}
+      >
+        {lg ? <GlassSheetBackdrop /> : null}
+        {lg ? <GlassSheetGrabber /> : null}
         <View style={styles.header}>
           <Mono
             size={13}

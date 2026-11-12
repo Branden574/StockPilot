@@ -4,6 +4,8 @@ import { Pressable, View } from 'react-native';
 // Relative imports on purpose (as in checkbox.tsx): touch-target.test.ts
 // loads this file in the node test runner, which does not resolve `@/`.
 import { useTheme } from '../../lib/use-theme';
+import { glassChip, glassChipLabel } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { Mono } from './text';
 
 /**
@@ -50,21 +52,32 @@ export function Chip({
   swatch?: string | null;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const text = (
-    <Mono size={12.5} color={active ? c.card : c.ink}>
+    <Mono
+      size={12.5}
+      color={active ? c.card : c.ink}
+      // Liquid Glass: the iOS capsule's 15pt 600 words.
+      style={lg ? glassChipLabel(lg, active) : undefined}
+    >
       {label}
     </Mono>
   );
   const chip = (
     <View
-      style={{
-        paddingHorizontal: 12,
-        paddingVertical: 9,
-        borderRadius: 8,
-        borderWidth: 1,
-        borderColor: active ? c.ink : c.hair2,
-        backgroundColor: active ? c.ink : c.sunk,
-      }}
+      style={
+        // Liquid Glass: the iOS capsule (.ios-capsule): the gray fill, ink when chosen.
+        lg
+          ? glassChip(lg, active)
+          : {
+              paddingHorizontal: 12,
+              paddingVertical: 9,
+              borderRadius: 8,
+              borderWidth: 1,
+              borderColor: active ? c.ink : c.hair2,
+              backgroundColor: active ? c.ink : c.sunk,
+            }
+      }
     >
       {swatch ? (
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>

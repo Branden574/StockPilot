@@ -4,7 +4,6 @@ import * as React from 'react';
 import {
   AccessibilityInfo,
   Animated,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -14,6 +13,14 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import {
+  GLASS_SHEET_CARD,
+  GLASS_SHEET_PADDING,
+  glassScrim,
+} from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { Modal } from '@/components/ui/modal';
 import { Body } from '@/components/ui/text';
 import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
@@ -28,6 +35,8 @@ import {
   isAnyTourVisible,
   setWhatsNewOpen,
   subscribeTourVisibility,
+  UPDATE_PROMPT_LOCK_ID,
+  useTourVisible,
 } from '@/lib/tour-targets';
 import { useTheme } from '@/lib/use-theme';
 import { rewriteWebPath } from '@/lib/web-path-rewrite';
@@ -60,6 +69,11 @@ let shownForUserId: string | null = null;
 
 export function WhatsNew() {
   const { c, mode } = useTheme();
+  // Liquid Glass (inferred: the DS sheet as the iOS sheet): the glass scrim,
+  // the card 8 in from the edges at radius 36 on the overlay glass with the
+  // glass-strong fill, the grabber, and no opacity fade (the sheet is there
+  // at once); every item, link, Done, Next and the dismissals stay.
+  const lg = useGlass();
   const insets = useSafeAreaInsets();
   const { height: winH, fontScale } = useWindowDimensions();
   // The CTA pill and Done/Next are chrome and capped, but even capped they
@@ -74,6 +88,11 @@ export function WhatsNew() {
   const [open, setOpen] = React.useState(false);
   const [reduced, setReduced] = React.useState(false);
   const fade = useAnimatedValue(0);
+  // The phone update pop-up (B44) holds the slot while it is open or the app
+  // is restarting. This sheet decides to open in a timer and says so only in
+  // its effects, so the pop-up can come up in that gap; then the sheet steps
+  // aside, as a tour's does, and comes back when the pop-up is answered.
+  const updatePromptOpen = useTourVisible(UPDATE_PROMPT_LOCK_ID);
 
   React.useEffect(() => {
     if (!uid || shownForUserId === uid) return;
@@ -161,7 +180,7 @@ export function WhatsNew() {
 
   return (
     <Modal
-      visible={open}
+      visible={open && !updatePromptOpen}
       transparent
       statusBarTranslucent
       animationType="none"
@@ -182,11 +201,12 @@ export function WhatsNew() {
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            lg && glassScrim(lg),
           ]}
         />
         <Animated.View
           pointerEvents="box-none"
-          style={[styles.cardSlot, { opacity: fade }]}
+          style={[styles.cardSlot, { opacity: lg ? 1 : fade }]}
         >
           {/* The escape scrub dismisses, as the X and Android's back do. */}
           <View
@@ -204,8 +224,13 @@ export function WhatsNew() {
                 // off the top of the screen. Bound it and scroll the copy.
                 maxHeight: Math.max(200, winH - insets.top - insets.bottom - 24),
               },
+              lg && GLASS_SHEET_CARD,
+              lg && GLASS_SHEET_PADDING,
+              lg && { paddingBottom: 16 + Math.max(0, insets.bottom - 8) },
             ]}
           >
+            {lg ? <GlassSheetBackdrop /> : null}
+            {lg ? <GlassSheetGrabber /> : null}
             <View style={styles.head}>
               <View style={styles.eyebrow}>
                 <Gift size={14} color={c.ink} />

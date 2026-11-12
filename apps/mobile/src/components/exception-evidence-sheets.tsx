@@ -5,7 +5,6 @@ import * as React from 'react';
 import {
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -28,7 +27,12 @@ import {
 
 import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { glassTypedBox } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import {
   describeRemoveEvidenceError,
   EVIDENCE_NOTE_TOO_LONG_COPY,
@@ -126,6 +130,9 @@ function AddSheetContent({
   onAdd: (photos: PickedEvidencePhoto[], note: string | null) => void;
 }) {
   const { c, mode: themeMode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [note, setNote] = React.useState('');
   const [photos, setPhotos] = React.useState<PickedEvidencePhoto[]>([]);
   const [picking, setPicking] = React.useState(false);
@@ -245,13 +252,20 @@ function AddSheetContent({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            lg && glassScrim(lg),
           ]}
         />
         <View
           onStartShouldSetResponder={kb.claimTapOutside}
           onResponderRelease={kb.onTapOutside}
-          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+          style={[
+            styles.sheet,
+            { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight },
+            lg && GLASS_SHEET_CARD,
+          ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Body
               size={16}
@@ -343,6 +357,7 @@ function AddSheetContent({
                 style={[
                   styles.input,
                   { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
+                  lg && glassTypedBox(lg),
                 ]}
               />
               <Mono size={11} color={text.tooLong ? c.critText : c.ink3}>
@@ -426,6 +441,9 @@ function RemoveSheetContent({
   onDone: () => void;
 }) {
   const { c, mode: themeMode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [reason, setReason] = React.useState('');
   const [submitting, setSubmitting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -476,13 +494,20 @@ function RemoveSheetContent({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: themeMode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            lg && glassScrim(lg),
           ]}
         />
         <View
           onStartShouldSetResponder={kb.claimTapOutside}
           onResponderRelease={kb.onTapOutside}
-          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+          style={[
+            styles.sheet,
+            { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight },
+            lg && GLASS_SHEET_CARD,
+          ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Body
               size={16}
@@ -542,6 +567,7 @@ function RemoveSheetContent({
                 style={[
                   styles.input,
                   { borderColor: c.hair2, backgroundColor: c.sunk, color: c.ink },
+                  lg && glassTypedBox(lg),
                 ]}
               />
               <Mono size={11} color={text.tooLong ? c.critText : c.ink3}>

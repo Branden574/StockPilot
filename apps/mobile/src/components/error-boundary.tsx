@@ -1,12 +1,33 @@
+import type { AppearanceStyle } from '@stockpilot/core';
 import * as Updates from 'expo-updates';
 import * as React from 'react';
 import { Pressable, Text, View } from 'react-native';
 
+import { glassRollout } from '@/lib/appearance/flag';
+import { RECOVERY_ACTION_LABEL } from '@/lib/appearance/labels';
+import { markCrashFallback, recoverToClassic } from '@/lib/appearance/recovery';
+import { peekAppearanceController } from '@/lib/appearance/singleton';
+import { asyncStorageAppearance } from '@/lib/appearance/store';
 import { Sentry } from '@/lib/sentry';
 import { palette } from '@/lib/theme';
 
 interface State {
   error: Error | null;
+  /** Liquid Glass is shown: offer "Use classic design" (plan 5.6, revision R13). */
+  glass: boolean;
+}
+
+/**
+ * The Design being drawn when the error happened, from the live controller if
+ * one exists (null otherwise, or if it cannot answer): Sentry's tag (never
+ * data), and the first answer to "is Liquid Glass shown".
+ */
+function drawnStyle(): AppearanceStyle | null {
+  try {
+    return peekAppearanceController()?.getSnapshot().style ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -30,18 +51,28 @@ const SCREEN = palette('dark');
  * the dark palette's tokens (SCREEN above), with the system font, and Reload
  * is the reference's ink button at the shared 52pt height and radius 14.
  *
+ * Liquid Glass (plan 5.6, revision R13): a Reload alone would come straight
+ * back into a glass layer that throws, so whenever Liquid Glass is shown
+ * (under the 'default' rollout that includes a phone that never chose) this
+ * screen also offers "Use classic design" (the Design becomes Classic, the
+ * Theme stays, and the reload waits a moment for the account to have it),
+ * and the crash owes the next launch one classic start with a notice
+ * (markCrashFallback). Both talk to AsyncStorage directly, never through the
+ * appearance provider, which may be what threw. In classic nothing here
+ * changes: the action is not shown and the look is the same fixed dark
+ * screen.
+ *
  * Scope note: this catches RENDER-phase throws only. A MODULE-INIT throw (e.g.
  * a build shipped without EXPO_PUBLIC_SUPABASE_* inlined) happens before React
  * mounts and cannot be caught here — supabase.ts is made fail-soft separately.
  */
-export class AppErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  State
-> {
-  state: State = { error: null };
+export class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
+  state: State = { error: null, glass: false };
 
-  static getDerivedStateFromError(error: Error): State {
-    return { error };
+  static getDerivedStateFromError(error: Error): Partial<State> {
+    // The way back is offered only once Liquid Glass is known to be shown
+    // (componentDidCatch below), never from an earlier error's answer.
+    return { error, glass: false };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -50,8 +81,25 @@ export class AppErrorBoundary extends React.Component<
     // — report here. No-op until Sentry has a DSN.
     Sentry.captureException(error, {
       contexts: { react: { componentStack: info?.componentStack ?? undefined } },
+      tags: { appearance: drawnStyle() ?? 'unknown' },
     });
+    // Owe the next launch one classic start when Liquid Glass is shown, and
+    // offer the way back now. Never throws: a failed read shows Reload alone.
+    void markCrashFallback(asyncStorageAppearance, glassRollout(), Date.now(), drawnStyle())
+      .then((glass) => {
+        if (glass) this.setState({ glass: true });
+      })
+      .catch(() => undefined);
   }
+
+  private handleUseClassic = async () => {
+    // Answered: the action goes at once, so it is not pressed twice while the
+    // Design reaches the account (recoverToClassic waits for that save, at
+    // most RECOVERY_SAVE_WAIT_MS, because the reload would cut it).
+    this.setState({ glass: false });
+    await recoverToClassic(asyncStorageAppearance, Date.now(), peekAppearanceController());
+    await this.handleReload();
+  };
 
   private handleReload = async () => {
     try {
@@ -112,6 +160,26 @@ export class AppErrorBoundary extends React.Component<
           >
             <Text style={{ color: SCREEN.paper, fontWeight: '700', fontSize: 15 }}>Reload</Text>
           </Pressable>
+          {this.state.glass ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={this.handleUseClassic}
+              style={{
+                marginTop: 12,
+                minHeight: 52,
+                justifyContent: 'center',
+                paddingHorizontal: 28,
+                paddingVertical: 13,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: SCREEN.hair2,
+              }}
+            >
+              <Text style={{ color: SCREEN.ink, fontWeight: '700', fontSize: 15 }}>
+                {RECOVERY_ACTION_LABEL}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
       );
     }

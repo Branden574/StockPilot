@@ -25,6 +25,8 @@ import { countFromText } from '@stockpilot/core';
 
 import { SyncStatusBadge } from '@/components/SyncStatusBadge';
 import { Button } from '@/components/ui/button';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
@@ -38,6 +40,7 @@ import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
+import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
 
 const AI_CONFIDENCE_THRESHOLD = 0.85;
@@ -133,6 +136,9 @@ function overrideNotACount(rl: ReviewLine): boolean {
  */
 export default function AiScanScreen() {
   const router = useRouter();
+  // A Design adopted from the account waits while a count is being scanned
+  // (Liquid Glass item 32).
+  useHoldAppearanceAdoptionWhileFocused('count');
   const { id: cycleCountId } = useLocalSearchParams<{ id: string }>();
   const { user } = useAuth();
   const [permission, requestPermission] = useCameraPermissions();
@@ -609,6 +615,10 @@ function ReviewView({
   onCancel: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass (inferred from the iOS Scan capture and the iOS Count review
+  // list): the review over the scene, its footer on the glass-strong fill;
+  // the camera stays dark and every line, choice and Confirm stays.
+  const lg = useGlass();
   const reviewLines = phase.kind === 'review' ? phase.reviewLines : [];
   const saving = phase.kind === 'saving';
 
@@ -624,9 +634,10 @@ function ReviewView({
 
   return (
     <SafeAreaView
-      style={[styles.reviewRoot, { backgroundColor: c.paper }]}
+      style={[styles.reviewRoot, { backgroundColor: lg ? 'transparent' : c.paper }]}
       edges={['top', 'bottom']}
     >
+      {lg ? <SceneBackground /> : null}
       <Stack.Screen options={{ headerShown: false }} />
       <View style={[styles.reviewHeader, { borderBottomColor: c.hair }]}>
         <Pressable
@@ -694,7 +705,13 @@ function ReviewView({
         )}
       </ScrollView>
 
-      <View style={[styles.reviewFooter, { borderTopColor: c.hair, backgroundColor: c.paper }]}>
+      <View
+        style={[
+          styles.reviewFooter,
+          { borderTopColor: c.hair, backgroundColor: c.paper },
+          lg && { backgroundColor: lg.g.glassStrong, borderTopColor: lg.g.paneLine },
+        ]}
+      >
         {/* Confirm writes the counts: the screen's one ink button. */}
         <Button block onPress={onConfirm} disabled={saving}>
           {saving ? 'Saving…' : 'Confirm counts'}

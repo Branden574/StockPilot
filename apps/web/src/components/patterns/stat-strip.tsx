@@ -56,6 +56,7 @@ export function StatStrip({
   return (
     <Root
       data-slot="stat-strip"
+      data-glass="stat-strip"
       data-variant={variant}
       className={cn(
         'border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip',

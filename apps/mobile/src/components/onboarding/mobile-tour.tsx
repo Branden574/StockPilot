@@ -5,7 +5,6 @@ import {
   AccessibilityInfo,
   Animated,
   Keyboard,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +14,10 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GLASS_DIALOG_RADIUS } from '@/components/ui/glass/screens/overlays';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { Modal } from '@/components/ui/modal';
 import { Body } from '@/components/ui/text';
 import { BUTTON_RADIUS, buttonTone } from '@/components/ui/tones';
 import {
@@ -26,6 +29,8 @@ import {
   measureTarget,
   setActiveTour,
   setTourVisible,
+  UPDATE_PROMPT_LOCK_ID,
+  useTourVisible,
   useWhatsNewOpen,
   type TargetRect,
 } from '@/lib/tour-targets';
@@ -57,12 +62,20 @@ import { useTheme } from '@/lib/use-theme';
  */
 export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
   const { c } = useTheme();
+  // Liquid Glass (inferred: the DS popover on glass-strong): the tour's card,
+  // floating or at the foot, on the overlay glass with the glass-strong fill
+  // at the dialog radius; the spotlight, the steps, every word and button stay.
+  const lg = useGlass();
   const insets = useSafeAreaInsets();
   const { width: winW, height: winH, fontScale } = useWindowDimensions();
   const params = useLocalSearchParams<{ tour?: string }>();
   // Mutual lock: if What's New grabbed the interruption slot first, keep this
   // tour's Modal hidden until it closes (we keep our phase, so we re-present).
   const whatsNewOpen = useWhatsNewOpen();
+  // The same for the phone update pop-up (B44) while it is open or the app is
+  // restarting: a native alert sits above any sheet, and the tour keeps its
+  // phase, so it presents again once the pop-up is answered.
+  const updatePromptOpen = useTourVisible(UPDATE_PROMPT_LOCK_ID);
   // Tab navigators keep every screen MOUNTED — without this gate all
   // screens' offers open their Modals at once and the topmost (wrong)
   // one wins. Only the focused screen may present.
@@ -234,7 +247,7 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
       </Pressable>
 
       <Modal
-        visible={isFocused && phase !== 'idle' && !whatsNewOpen}
+        visible={isFocused && phase !== 'idle' && !whatsNewOpen && !updatePromptOpen}
         transparent
         statusBarTranslucent
         animationType="none"
@@ -296,8 +309,18 @@ export function MobileTour({ tour }: { tour: MobileTourDefinition }) {
                   paddingBottom: cardOnTop ? 16 : 16 + insets.bottom,
                   maxHeight: cardMaxHeight,
                 },
+                lg && {
+                  backgroundColor: 'transparent',
+                  borderColor: 'transparent',
+                  borderRadius: GLASS_DIALOG_RADIUS,
+                  borderTopLeftRadius: GLASS_DIALOG_RADIUS,
+                  borderTopRightRadius: GLASS_DIALOG_RADIUS,
+                  shadowOpacity: 0,
+                  elevation: 0,
+                },
               ]}
             >
+              {lg ? <GlassSheetBackdrop radius={GLASS_DIALOG_RADIUS} /> : null}
               {phase === 'offer' ? (
                 <>
                   <View style={styles.head}>

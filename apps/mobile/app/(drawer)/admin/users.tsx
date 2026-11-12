@@ -5,7 +5,6 @@ import {
   Alert,
   Image,
   Linking,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -17,6 +16,20 @@ import { plainAddressMailtoUrl } from '@stockpilot/core';
 import { Card } from '@/components/ui/card';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { DataListScreen } from '@/components/data-list-screen';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import {
+  GLASS_SHEET_CARD,
+  glassGrabber,
+  glassRowSub,
+  glassScrim,
+} from '@/components/ui/glass/primitive-styles';
+import {
+  GLASS_BARE_CARD,
+  GlassJoinedRow,
+  GlassMonogram,
+} from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { useAuth } from '@/lib/auth-context';
@@ -87,6 +100,9 @@ const ROLE_DESCRIPTION: Record<AssignableRole, string> = {
  */
 export default function UsersAdmin() {
   const { user } = useAuth();
+  // Liquid Glass (inferred from Routes-Gallery-2's team rows): the members as
+  // one grouped surface, and the role picker as the iOS sheet.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { role, isAdmin, loading: roleLoading } = useRole();
   // Effective (override-aware) permission set — the same source the drawer
@@ -170,7 +186,7 @@ export default function UsersAdmin() {
   if (!roleLoading && !isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · USERS"
+        eyebrow={lg ? 'Admin · Users' : 'ADMIN · USERS'}
         title="Restricted"
         italic="access."
         emptyIcon={Users}
@@ -250,9 +266,13 @@ export default function UsersAdmin() {
     <>
       <DataListScreen
         eyebrow={
-          loadFailed
-            ? 'ADMIN · USERS'
-            : `ADMIN · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
+          lg
+            ? loadFailed
+              ? 'Admin · Users'
+              : `Admin · ${accepted} ${accepted === 1 ? 'member' : 'members'}${pending > 0 ? ` · ${pending} pending` : ''}`
+            : loadFailed
+              ? 'ADMIN · USERS'
+              : `ADMIN · ${accepted} MEMBERS${pending > 0 ? ` · ${pending} PENDING` : ''}`
         }
         title="Users"
         italic="."
@@ -272,16 +292,29 @@ export default function UsersAdmin() {
         refreshing={refreshing}
         onRefresh={refresh}
         keyExtractor={(u, i) => u.user_id || `pending-${i}`}
-        renderItem={(u) => (
-          <UserCard
-            user={u}
-            isSelf={u.user_id === user?.id}
-            // Same gate changeRole enforces — an admin without
-            // members:update_role should not be offered the picker at all.
-            canChangeRoles={canChangeRoles}
-            onPress={() => setEditing(u)}
-          />
-        )}
+        renderItem={
+          lg
+            ? (u, i) => (
+                <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                  <UserCard
+                    user={u}
+                    isSelf={u.user_id === user?.id}
+                    canChangeRoles={canChangeRoles}
+                    onPress={() => setEditing(u)}
+                  />
+                </GlassJoinedRow>
+              )
+            : (u) => (
+                <UserCard
+                  user={u}
+                  isSelf={u.user_id === user?.id}
+                  // Same gate changeRole enforces — an admin without
+                  // members:update_role should not be offered the picker at all.
+                  canChangeRoles={canChangeRoles}
+                  onPress={() => setEditing(u)}
+                />
+              )
+        }
       />
       <RolePickerSheet
         // Reset-by-remount: each open (and each member) is a fresh session, so
@@ -311,6 +344,7 @@ function UserCard({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const pending = !user.accepted_at;
   // Screen-level `isAdmin` gate (see UsersAdmin above) already decides who
   // reaches this card at all — same predicate the row's edit affordance
@@ -357,12 +391,25 @@ function UserCard({
         if (e.nativeEvent.actionName === 'email') openEmail();
         else if (e.nativeEvent.actionName === 'activate' && canEdit) onPress();
       }}
-      style={({ pressed }) => ({ opacity: pressed && canEdit ? 0.85 : 1 })}
+      style={({ pressed }) =>
+        lg
+          ? { transform: [{ scale: pressed && canEdit ? 0.98 : 1 }] }
+          : { opacity: pressed && canEdit ? 0.85 : 1 }
+      }
     >
-      <Card padding={14}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+      <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: lg ? 12 : 14 }}>
         {avatar ? (
-          <Image source={{ uri: avatar }} style={{ width: 40, height: 40, borderRadius: 20 }} />
+          <Image
+            source={{ uri: avatar }}
+            style={
+              lg
+                ? { width: 36, height: 36, borderRadius: 18 }
+                : { width: 40, height: 40, borderRadius: 20 }
+            }
+          />
+        ) : lg ? (
+          <GlassMonogram initials={initials || '··'} name={name} />
         ) : (
           <View
             style={{
@@ -395,8 +442,12 @@ function UserCard({
                 opacity: pressed ? 0.7 : 1,
               })}
             >
-              <Mail size={11} color={c.ink4} strokeWidth={1.5} />
-              <Mono size={11} tracking={0.04} color={c.ink3}>
+              <Mail
+                size={lg ? 13 : 11}
+                color={lg ? c.ink3 : c.ink4}
+                strokeWidth={lg ? 1.8 : 1.5}
+              />
+              <Mono size={11} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined}>
                 {email}
               </Mono>
             </Pressable>
@@ -404,7 +455,7 @@ function UserCard({
             // Not one plain address: the same words in the same frame, with
             // no touchable and no Mail glyph, so nothing offers to open Mail.
             <View style={{ minHeight: 44, justifyContent: 'center' }}>
-              <Mono size={11} tracking={0.04} color={c.ink3}>
+              <Mono size={11} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined}>
                 {email}
               </Mono>
             </View>
@@ -421,9 +472,9 @@ function UserCard({
           </View>
           {canEdit ? (
             <ChevronRight
-              size={16}
-              color={c.ink4}
-              strokeWidth={1.5}
+              size={lg ? 14 : 16}
+              color={lg ? lg.ios.l2 : c.ink4}
+              strokeWidth={lg ? 1.8 : 1.5}
               style={{ marginLeft: 4 }}
             />
           ) : null}
@@ -464,6 +515,9 @@ function RolePickerSheet({
   onDismiss: () => void;
 }) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the iOS sheet (.ios-sheet.glass-strong), each role a
+  // grouped option with the accent mark, as the app's other glass sheets.
+  const lg = useGlass();
   const [categories, setCategories] = React.useState<CategoryRow[]>([]);
   const [grantedIds, setGrantedIds] = React.useState<Set<string>>(new Set());
   // Either read failed: said, never "No categories yet." and never a list of
@@ -575,6 +629,7 @@ function RolePickerSheet({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            lg && glassScrim(lg),
           ]}
         />
         <View
@@ -582,9 +637,13 @@ function RolePickerSheet({
             pickerStyles.sheet,
             { backgroundColor: c.card, borderColor: c.hair },
             SHADOW.sheet,
+            lg && GLASS_SHEET_CARD,
           ]}
         >
-          <View style={[pickerStyles.grabber, { backgroundColor: c.ink5 }]} />
+          {lg ? <GlassSheetBackdrop /> : null}
+          <View
+            style={[pickerStyles.grabber, { backgroundColor: c.ink5 }, lg && glassGrabber(lg)]}
+          />
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 12 }}
@@ -609,6 +668,13 @@ function RolePickerSheet({
                         backgroundColor: selected ? c.sunk : 'transparent',
                         opacity: pressed ? 0.8 : 1,
                       },
+                      lg && {
+                        borderRadius: 16,
+                        borderColor: selected ? lg.g.accent : lg.g.cardLine,
+                        backgroundColor: selected ? lg.g.selFill : lg.g.cardFill,
+                        opacity: 1,
+                        transform: [{ scale: pressed ? 0.98 : 1 }],
+                      },
                     ]}
                   >
                     <View style={{ flex: 1 }}>
@@ -619,7 +685,9 @@ function RolePickerSheet({
                         {ROLE_DESCRIPTION[role]}
                       </Body>
                     </View>
-                    {selected ? <Check size={16} color={c.ink} strokeWidth={2} /> : null}
+                    {selected ? (
+                      <Check size={16} color={lg ? lg.g.accentText : c.ink} strokeWidth={2} />
+                    ) : null}
                   </Pressable>
                 );
               })}
@@ -665,6 +733,13 @@ function RolePickerSheet({
                               backgroundColor: granted ? c.sunk : 'transparent',
                               opacity: pressed ? 0.8 : 1,
                             },
+                            lg && {
+                              borderRadius: 14,
+                              borderColor: granted ? lg.g.accent : lg.g.cardLine,
+                              backgroundColor: granted ? lg.g.selFill : lg.g.cardFill,
+                              opacity: 1,
+                              transform: [{ scale: pressed ? 0.98 : 1 }],
+                            },
                           ]}
                         >
                           <CheckboxMark checked={granted} />
@@ -688,7 +763,12 @@ function RolePickerSheet({
               accessibilityRole="button"
               style={({ pressed }) => [pickerStyles.cancel, { opacity: pressed ? 0.6 : 1 }]}
             >
-              <Mono size={13} tracking={0.04} color={c.ink3} style={{ fontFamily: FONT.display }}>
+              <Mono
+                size={lg ? 17 : 13}
+                tracking={lg ? 0 : 0.04}
+                color={lg ? lg.g.accentText : c.ink3}
+                style={lg ? lg.font.displaySemi : { fontFamily: FONT.display }}
+              >
                 Done
               </Mono>
             </Pressable>

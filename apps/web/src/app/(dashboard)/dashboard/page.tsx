@@ -38,6 +38,7 @@ import { OrderRequestsService } from '@/server/services/order-requests';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ReportsService } from '@/server/services/reports';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { movementTypeLabel } from '@/lib/movements/movement-type';
 import { ORDERS_AWAITING_SIGNATURE_HREF } from '@/lib/orders/export';
 import { OVERDUE_PO_ATTENTION_DETAIL } from '@/lib/purchase-orders/tabs';
@@ -47,6 +48,7 @@ import {
   getOrgRowForRequest,
   getWarehousesForRequest,
 } from '@/lib/dashboard/request-cache';
+import { factorsOf } from '@/lib/auth/mfa-factors';
 import { getActiveWarehouseFilter } from '@/lib/warehouse-filter';
 import { ScopedWarehouseNotice } from '@/components/dashboard/scoped-warehouse-notice';
 import { createClient } from '@/lib/supabase/server';
@@ -218,6 +220,13 @@ async function DashboardBody({
   // signature card is unchanged and keeps canApproveOrders (a viewer who is an
   // order's assigned driver still hands that order over).
   const approvesOrders = canApproveOrders && ctx.role !== 'viewer';
+  // Both order cards open an Orders page, and with the Orders module off that
+  // page is the module-unavailable panel (can() reads no module; approve()
+  // refuses through assertModuleEnabled), so neither card shows, and neither
+  // count is read, while the module is off (B72). Request-cached: the module
+  // set came with the membership, so this adds no round trip, and it starts
+  // with the fan-out below rather than ahead of it.
+  const ordersModuleOn = checkModuleAccess('orders').then((access) => access.enabled);
 
   // Single parallel fan-out — was two serial Promise.all blocks (15
   // queries total, the second waiting on the first to complete). With
@@ -292,12 +301,19 @@ async function DashboardBody({
     // counted: a staff approver assigned to some warehouses is refused in the
     // others (approve() and deny() ask write access to the request's
     // warehouse), so theirs are counted, not the organization's (B11 review).
-    approvesOrders
-      ? OrderRequestsService.forCurrentUser().then((svc) => svc.approvablePendingCount())
-      : Promise.resolve(0),
-    canApproveOrders
-      ? OrderRequestsService.forCurrentUser().then((svc) => svc.awaitingSignatureCount())
-      : Promise.resolve(0),
+    ordersModuleOn.then((on) =>
+      on && approvesOrders
+        ? OrderRequestsService.forCurrentUser().then((svc) => svc.approvablePendingCount())
+        : 0,
+    ),
+    // The signature card keeps orders:approve, the gate of the list it opens
+    // (a viewer granted it who drives an order still hands that order over);
+    // the count is the waiting orders this reader could hand over (B72).
+    ordersModuleOn.then((on) =>
+      on && canApproveOrders
+        ? OrderRequestsService.forCurrentUser().then((svc) => svc.awaitingSignatureCount())
+        : 0,
+    ),
     supabase
       .from('organization_members')
       .select('id', { count: 'exact', head: true })
@@ -323,7 +339,11 @@ async function DashboardBody({
   ]);
   const warehouseCount = warehousesList.length;
   const teamCount = teamCountRes.count ?? 0;
-  const hasVerifiedFactor = mfaFactors.some((f) => f.status === 'verified');
+  // The checklist's 'Secure your account' step, from this member's own list
+  // only: a list of another account (lib/auth/mfa-factors) marks nothing done.
+  const hasVerifiedFactor = (factorsOf(mfaFactors, ctx.userId) ?? []).some(
+    (f) => f.status === 'verified',
+  );
 
   const checklistSteps = [
     {

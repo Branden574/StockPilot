@@ -82,7 +82,11 @@ import {
   orderDraftPrefixFor,
   useCart,
 } from '../v2/cart-context';
-import { cartStateFromPendingBody, useOrderSubmission, type OrderSubmissionControl } from './order-submission';
+import {
+  cartStateFromPendingBody,
+  useOrderSubmission,
+  type OrderSubmissionControl,
+} from './order-submission';
 import {
   hasOrderPrefill,
   partitionPrefillAgainstCatalog,
@@ -137,6 +141,8 @@ import { QuickViewDrawer, ReviewModal, SfPopover } from './storefront-overlays';
 import { toFreqEntries, useStreamed } from './frequently-ordered';
 
 import './storefront.css';
+// Liquid Glass: the unlayered companion, on the next line (plan 4.1).
+import '@/styles/liquid-glass/storefront.glass.css';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { Button } from '@/components/ui/button';
@@ -333,9 +339,7 @@ function FlowIndicator({ stage }: { stage: FlowStage }) {
             className="sf-flow-step"
             data-state={i < idx ? 'done' : i === idx ? 'active' : 'todo'}
           >
-            <span className="fdot">
-              {i < idx ? <Check size={10} strokeWidth={2.2} /> : null}
-            </span>
+            <span className="fdot">{i < idx ? <Check size={10} strokeWidth={2.2} /> : null}</span>
             <span className="flabel">{s.label}</span>
           </span>
         </React.Fragment>
@@ -411,8 +415,7 @@ function StorefrontShell({
   const toggle = (pop: 'wh' | 'person' | 'site') =>
     setOpenPop((open) => (locked ? null : open === pop ? null : pop));
 
-  const warehouseName =
-    warehouses.find((w) => w.id === warehouseId)?.name ?? warehouseId;
+  const warehouseName = warehouses.find((w) => w.id === warehouseId)?.name ?? warehouseId;
   const charter = chartersForWarehouse.find((c) => c.id === state.charterId) ?? null;
   const viewerLabel = viewerName?.trim() || viewerEmail;
 
@@ -427,7 +430,9 @@ function StorefrontShell({
           : 'browse';
 
   return (
-    <div className="sp-storefront">
+    // data-glass-page: the inert page hook Liquid Glass scopes this route's
+    // composition to (styles/liquid-glass/pages/order-new.css).
+    <div className="sp-storefront" data-glass-page="order-new">
       <div className="sf-page">
         {/* ---------- Page head (the shared page header, DESIGN-SPEC 6.1) ---------- */}
         <PageHeader
@@ -496,9 +501,7 @@ function StorefrontShell({
                     e.stopPropagation();
                     setOpenPop(null);
                     if (w.id !== warehouseId && !locked) {
-                      router.push(
-                        `/dashboard/orders/new?warehouseId=${encodeURIComponent(w.id)}`,
-                      );
+                      router.push(`/dashboard/orders/new?warehouseId=${encodeURIComponent(w.id)}`);
                     }
                   }}
                 >
@@ -548,9 +551,7 @@ function StorefrontShell({
                 </span>
               </div>
               <div className="hint">
-                {state.onBehalfOf
-                  ? `On behalf · ${state.onBehalfOf.email}`
-                  : viewerLabel}
+                {state.onBehalfOf ? `On behalf · ${state.onBehalfOf.email}` : viewerLabel}
               </div>
             </div>
             <SfPopover open={openPop === 'person' && !locked} onClose={() => setOpenPop(null)}>
@@ -923,10 +924,7 @@ function StorefrontCatalog({
   const router = useRouter();
   const { state, dispatch, hydrated } = useCart();
 
-  const itemMap = React.useMemo(
-    () => new Map(items.map((it) => [it.id, it])),
-    [items],
-  );
+  const itemMap = React.useMemo(() => new Map(items.map((it) => [it.id, it])), [items]);
 
   // ═══ STALE LINES (ordering visibility, design 6.5) ═══
   //
@@ -1037,14 +1035,11 @@ function StorefrontCatalog({
       toast.error(
         skipped === 1
           ? "That item isn't orderable from this warehouse right now."
-          : "None of those items are orderable from this warehouse right now.",
+          : 'None of those items are orderable from this warehouse right now.',
       );
     } else {
       const added = `Added ${addable.length} item${addable.length === 1 ? '' : 's'} to your cart.`;
-      const left =
-        skipped > 0
-          ? ` ${skipped} weren’t available here and were skipped.`
-          : '';
+      const left = skipped > 0 ? ` ${skipped} weren’t available here and were skipped.` : '';
       toast.success(added + left);
     }
     // Runs once the cart and the submission are ready and the cart is free;
@@ -1092,9 +1087,7 @@ function StorefrontCatalog({
   );
   const [sort, setSort] = React.useState<SortKey>(DEFAULT_SORT);
   const [view, setView] = React.useState<ViewMode>('grid');
-  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
-    () => new Set<string>(),
-  );
+  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(() => new Set<string>());
   const [toolPop, setToolPop] = React.useState<null | 'avail' | 'sort'>(null);
 
   /* --- overlays --- */
@@ -1250,9 +1243,7 @@ function StorefrontCatalog({
     warehouseName,
     method: state.fulfillmentType,
     siteName: charter?.name ?? null,
-    requesterLabel: state.onBehalfOf
-      ? `For ${state.onBehalfOf.name.split(/\s+/)[0]}`
-      : 'For you',
+    requesterLabel: state.onBehalfOf ? `For ${state.onBehalfOf.name.split(/\s+/)[0]}` : 'For you',
   };
 
   const railRef = React.useRef<HTMLDivElement>(null);
@@ -1352,10 +1343,7 @@ function StorefrontCatalog({
   }
 
   /* --- what the submission says --- */
-  const itemName = React.useCallback(
-    (id: string) => itemMap.get(id)?.name ?? null,
-    [itemMap],
-  );
+  const itemName = React.useCallback((id: string) => itemMap.get(id)?.name ?? null, [itemMap]);
   const wordsCtx = {
     surface: 'web' as const,
     itemName,
@@ -1400,8 +1388,7 @@ function StorefrontCatalog({
   const activeCategoryName =
     category === 'all'
       ? 'All products'
-      : (aisles.find((a) => (a.id ?? 'uncategorized') === category)?.name ??
-        'Category');
+      : (aisles.find((a) => (a.id ?? 'uncategorized') === category)?.name ?? 'Category');
 
   const renderItems = (list: CatalogItem[]) =>
     view === 'grid' ? (
@@ -1477,16 +1464,10 @@ function StorefrontCatalog({
                   aria-expanded={toolPop === 'avail'}
                 >
                   <Filter size={13} /> Availability
-                  {availability.size > 0 && (
-                    <span className="bdg">{availability.size}</span>
-                  )}
+                  {availability.size > 0 && <span className="bdg">{availability.size}</span>}
                   <ChevronDown size={11} />
                 </button>
-                <SfPopover
-                  open={toolPop === 'avail'}
-                  onClose={() => setToolPop(null)}
-                  width={216}
-                >
+                <SfPopover open={toolPop === 'avail'} onClose={() => setToolPop(null)} width={216}>
                   {(['ok', 'low', 'out'] as const).map((id) => (
                     <button
                       key={id}
@@ -1739,9 +1720,7 @@ function StorefrontCatalog({
       {/* Floating cart FAB (stacked layout) */}
       <CartFab
         unitCount={unitCount}
-        onClick={() =>
-          railRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        }
+        onClick={() => railRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
       />
 
       {/* Quick view drawer */}

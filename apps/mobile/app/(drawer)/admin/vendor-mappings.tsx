@@ -4,6 +4,8 @@ import { View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
@@ -36,6 +38,9 @@ const NO_ROWS: MappingRow[] = [];
  * under "Could not refresh", and the eyebrow quotes no count it did not read.
  */
 export default function VendorMappingsAdmin() {
+  // Liquid Glass (inferred: the iOS grouped list): the rows as one grouped
+  // surface of iOS rows; every row, state and message Classic has stays.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   // The rows on screen and the workspace they were read for: a failed read
@@ -116,7 +121,7 @@ export default function VendorMappingsAdmin() {
   if (!roleLoading && !isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · VENDOR MAPPINGS"
+        eyebrow={lg ? 'Admin · Vendor mappings' : 'ADMIN · VENDOR MAPPINGS'}
         title="Restricted"
         italic="access."
         emptyIcon={Layers}
@@ -133,7 +138,13 @@ export default function VendorMappingsAdmin() {
   return (
     <DataListScreen
       eyebrow={
-        failed && rows.length === 0 ? 'ADMIN · VENDOR MAPPINGS' : `ADMIN · ${rows.length} MAPPINGS`
+        lg
+          ? failed && rows.length === 0
+            ? 'Admin · Vendor mappings'
+            : `Admin · ${rows.length} ${rows.length === 1 ? 'mapping' : 'mappings'}`
+          : failed && rows.length === 0
+            ? 'ADMIN · VENDOR MAPPINGS'
+            : `ADMIN · ${rows.length} MAPPINGS`
       }
       title="Vendor"
       italic="mappings."
@@ -154,15 +165,24 @@ export default function VendorMappingsAdmin() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(m) => m.id}
-      renderItem={(m) => <MappingCard mapping={m} />}
+      renderItem={
+        lg
+          ? (m, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <MappingCard mapping={m} />
+              </GlassJoinedRow>
+            )
+          : (m) => <MappingCard mapping={m} />
+      }
     />
   );
 }
 
 function MappingCard({ mapping }: { mapping: MappingRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
-    <Card padding={14}>
+    <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono size={9.5} tracking={0.18} upper color={c.ink3}>

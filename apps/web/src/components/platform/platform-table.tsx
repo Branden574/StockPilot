@@ -35,6 +35,7 @@ export function PlatformTable({
       aria-label={label}
       tabIndex={0}
       data-slot="platform-table"
+      data-glass="card"
       className={cn(
         'border-border bg-card w-full min-w-0 overflow-x-auto rounded-lg border',
         'focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
@@ -42,6 +43,7 @@ export function PlatformTable({
       )}
     >
       <table
+        data-glass="table"
         className="w-full caption-bottom text-[13.5px]"
         style={minWidth ? { minWidth } : undefined}
       >

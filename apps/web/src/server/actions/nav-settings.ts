@@ -3,9 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   err,
@@ -132,9 +132,6 @@ export async function setNavOverridesAction(
 
     return ok({ navOverrides: value });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.nav_settings.set_nav_overrides');
   }
 }

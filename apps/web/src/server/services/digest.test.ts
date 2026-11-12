@@ -1,13 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
+import { NOT_A_LIST } from '@/test/postgrest-answers';
+import { makeSupabaseStub } from '@/test/supabase-mock';
+
 import {
   applySectionOptIns,
   buildDigestPayload,
   digestReaderFor,
   getDigestData,
+  loadDigestReaderData,
   type DigestReaderData,
   type DigestSource,
 } from './digest';
+import { rawErrorText } from './lib/fetch-by-ids';
 
 /**
  * The weekly digest's low-stock section cannot be tested with the generic
@@ -429,5 +434,56 @@ describe('buildDigestPayload: totals', () => {
     expect([gated.lowStockTotal, gated.outOfStockTotal, gated.openPosTotal, gated.overduePosTotal]).toEqual([
       0, 0, 0, 0,
     ]);
+  });
+});
+
+/**
+ * docket S27: what decides each recipient's view is read with the service
+ * role, so no row rule stands behind these reads: their answer is the
+ * decision. An answer with no error that is not a list (postgrest-js resolves
+ * an empty body with data null) was read as "no rows", which widens the
+ * digest: no category rows gives a viewer every category, no override rows
+ * gives back a purchase-order read the organization took away. Each read
+ * refuses it, so the organization's digest is skipped and reported
+ * (route.scope.test.ts runs the cron).
+ */
+describe('loadDigestReaderData: an answer that is not a list is a failed read', () => {
+  const listed = (data: unknown[]) => ({ data, error: null, status: 200 });
+  const READS = {
+    'user_warehouse_assignments.select': listed([
+      { id: 'uwa-1', user_id: 'user-1', warehouse_id: 'wh-1', charter_id: null },
+    ]),
+    'user_category_assignments.select': listed([
+      { id: 'uca-1', user_id: 'user-1', category_id: 'cat-1' },
+    ]),
+    'user_permission_overrides.select': listed([{ user_id: 'user-1', granted: false }]),
+    'role_permission_overrides.select': listed([{ role: 'viewer', granted: false }]),
+    'role_default_permissions.select': listed([{ role: 'viewer' }]),
+  };
+
+  it('reads every list as it came', async () => {
+    const data = await loadDigestReaderData(makeSupabaseStub(READS).client, 'org-1', ['user-1']);
+    expect(data.categories.get('user-1')).toEqual(new Set(['cat-1']));
+    expect(data.userPoRead.get('user-1')).toBe(false);
+    expect(data.rolePoRead.get('viewer')).toBe(false);
+    expect(data.defaultPoReadRoles).toEqual(new Set(['viewer']));
+    // An empty body from the category read gave this viewer every category.
+    const err = await loadDigestReaderData(
+      makeSupabaseStub({ ...READS, 'user_category_assignments.select': NOT_A_LIST[0][1] }).client,
+      'org-1',
+      ['user-1'],
+    ).catch((e: unknown) => e);
+    expect(rawErrorText(err)).toBe('user_category_assignments answered no list (status 200)');
+  });
+
+  describe.each(Object.keys(READS).map((key) => [key.replace(/\.select$/, '')]))('%s', (table) => {
+    it.each(NOT_A_LIST)('%s throws, naming the table and the status', async (_shape, answer) => {
+      const stub = makeSupabaseStub({ ...READS, [`${table}.select`]: answer });
+      const err = await loadDigestReaderData(stub.client, 'org-1', ['user-1']).catch(
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(Error);
+      expect(rawErrorText(err)).toBe(`${table} answered no list (status ${answer.status})`);
+    });
   });
 });

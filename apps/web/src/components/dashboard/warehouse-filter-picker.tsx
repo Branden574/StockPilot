@@ -64,6 +64,8 @@ export function WarehouseFilterPicker({
           icon, its padding and its chevron (2 + 20 + 14 + 8 + 8 + 12 = 64
           px), so the chevron is always inside it; only the name gives way. */}
       <DropdownMenuTrigger
+        data-glass="tb-btn"
+        data-glass-variant="warehouse"
         className="border-border bg-card flex h-8 min-w-16 max-w-full items-center gap-2 rounded-md border px-2.5 text-[13px] text-[var(--ed-ink-2)] transition-colors hover:border-[var(--ed-line-strong)] disabled:opacity-60"
         disabled={pending}
         aria-label={name}
