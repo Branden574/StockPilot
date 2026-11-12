@@ -58,26 +58,35 @@ export function MovementsBreakdownGlassGrow() {
     // On screen already, even partly: the sheet's own start is the motion.
     if (rect.height > 0 && visibleHeight(rect) > 0) return;
 
-    card.setAttribute(GROW_ATTRIBUTE, GROW_WAIT);
+    let observer: IntersectionObserver | undefined;
     const start = () => {
-      observer.disconnect();
+      observer?.disconnect();
       card.removeAttribute(GROW_ATTRIBUTE);
     };
-    const observer = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          // A card more than three windows tall can never show a third of itself.
-          const tooTall = entry.boundingClientRect.height > window.innerHeight * 3;
-          if (entry.intersectionRatio >= GROW_IN_VIEW_RATIO || tooTall) {
-            start();
-            return;
+    // The grow-in is decoration. A browser that refuses the observer must
+    // not take the page down with it, nor leave the bars held: the attribute
+    // comes off and the sheet's own start stands, as with no script at all.
+    try {
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            // A card more than three windows tall can never show a third of itself.
+            const tooTall = entry.boundingClientRect.height > window.innerHeight * 3;
+            if (entry.intersectionRatio >= GROW_IN_VIEW_RATIO || tooTall) {
+              start();
+              return;
+            }
           }
-        }
-      },
-      { threshold: [0, GROW_IN_VIEW_RATIO] },
-    );
-    observer.observe(card);
+        },
+        { threshold: [0, GROW_IN_VIEW_RATIO] },
+      );
+      card.setAttribute(GROW_ATTRIBUTE, GROW_WAIT);
+      observer.observe(card);
+    } catch {
+      start();
+      return;
+    }
     return start;
   }, []);
   return null;

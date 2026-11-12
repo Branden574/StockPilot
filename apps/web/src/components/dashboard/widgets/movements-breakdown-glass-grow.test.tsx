@@ -255,6 +255,36 @@ describe("the Movements card's grow-in trigger", () => {
     expect(card.hasAttribute(GROW_ATTRIBUTE)).toBe(false);
   });
 
+  it('a browser that refuses the observer: nothing is held and the page does not break', () => {
+    class RefusingObserver {
+      constructor() {
+        throw new Error('observer refused');
+      }
+    }
+    vi.stubGlobal('IntersectionObserver', RefusingObserver);
+    let card: Element | undefined;
+    expect(() => {
+      card = mount().card;
+    }).not.toThrow();
+    expect(card!.hasAttribute(GROW_ATTRIBUTE)).toBe(false);
+  });
+
+  it('an observer that cannot watch the card: nothing is held, the observer is dropped, the page does not break', () => {
+    class DeafObserver extends FakeObserver {
+      override observe(): void {
+        throw new Error('cannot observe');
+      }
+    }
+    vi.stubGlobal('IntersectionObserver', DeafObserver);
+    let card: Element | undefined;
+    expect(() => {
+      card = mount().card;
+    }).not.toThrow();
+    expect(card!.hasAttribute(GROW_ATTRIBUTE)).toBe(false);
+    expect(FakeObserver.made).toHaveLength(1);
+    expect(FakeObserver.made[0]!.disconnected).toBe(true);
+  });
+
   it('leaving the page while it waits takes the attribute off and drops the observer', () => {
     const { card, observer, unmount } = mount();
     expect(card.getAttribute(GROW_ATTRIBUTE)).toBe(GROW_WAIT);
