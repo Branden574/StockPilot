@@ -8,10 +8,11 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { returnRequestReturnLink } from '@/lib/returns/return-request-link';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ServiceError } from '@/server/services/context';
+import { returnRequestRecipientsDto } from '@/server/services/return-request-email';
 import { RMAService } from '@/server/services/returns';
 import { ShippingService } from '@/server/services/shipping';
 
-import { can, deliveryRecipientsForRouting, type OrgEmailRoutingReadState } from '@stockpilot/core';
+import { can, type OrgEmailRoutingReadState } from '@stockpilot/core';
 
 // The Liquid Glass operations composition (stage 4: pages/ops.css, the
 // shared frame, and the board's own file where there is one): every rule is
@@ -95,18 +96,10 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
     : null;
 
   // The fallback matrix of the delivery request (core
-  // deliveryRecipientsForRouting): the stored pair when valid, nothing when
-  // unset or invalid. Flattened to plain strings for the client, which
-  // re-validates them at its own seam.
-  const returnRequestRecipients = deliveryRecipientsForRouting(deliveryRouting);
-  const returnRequestRecipientsDto = returnRequestRecipients
-    ? {
-        to: returnRequestRecipients.to,
-        cc: returnRequestRecipients.cc,
-        toName: returnRequestRecipients.toName,
-        ccName: returnRequestRecipients.ccName,
-      }
-    : null;
+  // deliveryRecipientsForRouting, through the helper the phone's routes share):
+  // the stored pair when valid, nothing when unset or invalid, as plain
+  // strings for the client, which re-validates them at its own seam.
+  const returnRequestRecipients = returnRequestRecipientsDto(deliveryRouting);
 
   // The page box every redesigned page shares (DESIGN-SPEC 4 and 5.3), its
   // left edge level with the other pages'; the workbench keeps one column at
@@ -124,7 +117,7 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
           canManageShipping={canManageShipping}
           returnLabel={label}
           returnRequest={{
-            recipients: returnRequestRecipientsDto,
+            recipients: returnRequestRecipients,
             link: returnRequestReturnLink(id),
             showRoutingHint: can(ctx, 'organization:update'),
           }}
