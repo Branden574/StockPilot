@@ -81,8 +81,23 @@ describe('the order nav and the pick head say what Classic says', () => {
 
   it('an order with nothing requested reads 0 and never divides by zero', () => {
     const p = pickProgress([{ requested: 0, picked: 0 }]);
-    expect(p.line).toBe('0 of 1 lines · 0 of 0 units');
+    expect(p.line).toBe('0 of 1 line · 0 of 0 units');
     expect(p.ratio).toBe(0);
+  });
+
+  // PLURAL: one line and one unit are said in the singular ("0 of 1 lines"
+  // and "of 1 units" before).
+  it('says one line and one unit in the singular', () => {
+    expect(pickProgress([{ requested: 1, picked: 0 }]).line).toBe('0 of 1 line · 0 of 1 unit');
+    expect(pickProgress([{ requested: 1, picked: 1 }]).line).toBe('1 of 1 line · 1 of 1 unit');
+    expect(pickProgress([{ requested: 3, picked: 1 }]).line).toBe('0 of 1 line · 1 of 3 units');
+    expect(
+      pickProgress([
+        { requested: 1, picked: 1 },
+        { requested: 0, picked: 0 },
+      ]).line,
+    ).toBe('1 of 2 lines · 1 of 1 unit');
+    expect(pickProgress([]).line).toBe('0 of 0 lines · 0 of 0 units');
   });
 
   it('the nav badge is the board’s 26 pt', () => {

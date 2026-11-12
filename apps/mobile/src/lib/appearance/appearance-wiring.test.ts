@@ -182,9 +182,73 @@ describe('tab bar', () => {
     );
   });
 
-  it('every tab is a selected-aware tab for VoiceOver', () => {
-    expect((bar.match(/accessibilityRole="tab"/g) ?? []).length).toBe(3);
-    expect((bar.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(3);
+  // LG-1: over the Scan camera the capsule went near-black in Day and its
+  // Day-ink icons and labels with it. The Scan tab's camera page says it is
+  // on screen, and the bar then draws the Night look with the Night sheet fill.
+  it('over the Scan camera the bar draws the Night look and its fill, from one look', () => {
+    expect(bar).toContain(
+      'const overCamera = useCameraGround() && state.routes[state.index]?.name === SCAN_ROUTE;',
+    );
+    expect(bar).toContain('const look = glassTabBarLook(theme, overCamera);');
+    // No colour of the bar is read past the look: the old fixed Day ink is gone.
+    expect(bar).not.toContain('const color = focused ? accentText : c.ink;');
+    expect(bar).toContain('const color = focused ? look.accentText : look.ink;');
+    expect(bar).toContain('const selectedFill = withAlpha(look.ink, 0.08);');
+    expect((bar.match(/scheme=\{look\.scheme\}/g) ?? []).length).toBe(2);
+    expect(bar).toContain(
+      '{look.cameraFill ? ( <View pointerEvents="none" style={[styles.fill, { borderRadius: m.radius, backgroundColor: look.cameraFill }]} /> ) : null}',
+    );
+    // The fill is under the tabs, inside the capsule.
+    expect(bar.indexOf('look.cameraFill ? (')).toBeGreaterThan(bar.indexOf('variant="floating"'));
+    expect(bar.indexOf('look.cameraFill ? (')).toBeLessThan(
+      bar.indexOf('<View accessibilityRole="tablist" style={styles.tabs}>'),
+    );
+    expect(bar).toContain('const color = focused ? look.onAccent : look.accentText;');
+    expect(bar).toContain('backgroundColor: look.accent }');
+  });
+
+  it('the Scan tab holds the camera ground only on its camera page, and only in Liquid Glass', () => {
+    const scan = flat('app/(drawer)/(tabs)/scan.tsx');
+    const held = scan.indexOf('{lg ? <CameraGround /> : null}');
+    expect(held).toBeGreaterThan(-1);
+    expect(scan.match(/<CameraGround \/>/g)).toHaveLength(1);
+    // After both early returns: the permission pages sit over the Day or
+    // Night scene and keep the ordinary capsule.
+    expect(held).toBeGreaterThan(scan.indexOf('if (!permission.granted) {'));
+    expect(held).toBeGreaterThan(scan.indexOf('<View style={styles.container}>'));
+    expect(held).toBeLessThan(scan.indexOf('style={styles.cameraBar}'));
+    expect(flat('src/components/ui/glass/camera-ground.tsx')).toContain(
+      'React.useEffect(() => retainCameraGround(), []);',
+    );
+  });
+
+  // A11Y-1. iOS React Native gives the role "tab" no trait
+  // (accessibilityPropsConversions.h: anything it does not list is None), so
+  // the glass tabs were read without "button" where Classic's are buttons
+  // (the navigator's own tab item asks for 'button' on iOS and 'tab'
+  // elsewhere). Selected comes from accessibilityState and is kept.
+  it('every tab is a selected-aware button for VoiceOver on iOS, a tab on Android', () => {
+    const ios = bar.slice(
+      bar.indexOf('function IosGlassTabBar('),
+      bar.indexOf('function AndroidMaterialTabBar('),
+    );
+    const android = bar.slice(bar.indexOf('function AndroidMaterialTabBar('));
+    // The capsule's tabs and the Scan circle.
+    expect((ios.match(/accessibilityRole="button"/g) ?? []).length).toBe(2);
+    expect(ios).not.toContain('accessibilityRole="tab"');
+    expect((ios.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(2);
+    expect((android.match(/accessibilityRole="tab"/g) ?? []).length).toBe(1);
+    expect((android.match(/accessibilityState=\{\{ selected: focused \}\}/g) ?? []).length).toBe(1);
+    // The names VoiceOver reads are unchanged.
+    expect(ios).toContain('accessibilityLabel={options.tabBarAccessibilityLabel ?? title}');
+    expect(ios).toContain('accessibilityLabel={title}');
+  });
+
+  it('the glass segmented control (not on a screen yet) asks for the same roles', () => {
+    const segmented = flat('src/components/ui/glass/glass-segmented.tsx');
+    expect(segmented).not.toContain('accessibilityRole="tab"');
+    expect(segmented).toContain("accessibilityRole={Platform.OS === 'ios' ? 'button' : 'tab'}");
+    expect(segmented).toContain('accessibilityState={{ selected: on }}');
   });
 });
 
@@ -220,6 +284,35 @@ describe('Settings', () => {
     expect(src).toContain(
       ') : ( <SettingRow icon={Moon} title="Theme" detail="Auto" chevron onPress={() => Alert.alert( \'Theme\', \'Mobile follows your device appearance (Light or Dark) automatically.\', ) } /> )}',
     );
+  });
+
+  // A11Y-2. After the text size changed while the app ran, the glass
+  // Appearance screen kept every row at its old height with its text cut,
+  // until a relaunch: React Native's stale measurement, docket B10
+  // (dynamic-type-layout.ts fontScaleKey). The cure is B10's: remount what was
+  // laid out at the old size. Here it is glass-only and stays undefined until
+  // the size really changes, so a Design switch remounts nothing.
+  it('Liquid Glass remounts the head and the scroll of the Appearance screen after a live text-size change', () => {
+    const provider = flat('src/lib/appearance/provider.tsx');
+    expect(provider).toContain('const { fontScale } = useWindowDimensions();');
+    expect(provider).toContain('const [launchFontScale] = React.useState(fontScale);');
+    expect(provider).toContain(
+      "const textSizeKey = snapshot.style === 'liquid-glass' ? liveFontScaleKey(launchFontScale, fontScale) : undefined;",
+    );
+    // It rides on the control (four readers), never on the theme every screen reads.
+    expect(provider).toContain('textSizeKey, chooseStyle: controller.chooseStyle,');
+    expect(provider).toContain('[snapshot, material, textSizeKey, controller],');
+    expect(provider).toContain(
+      '() => ({ style: snapshot.style, theme: snapshot.theme, material, scene }), [snapshot.style, snapshot.theme, material, scene],',
+    );
+
+    const screen = flat('app/(drawer)/settings/appearance.tsx');
+    const key = 'key={lg ? appearance.textSizeKey : undefined}';
+    expect(screen.split(key)).toHaveLength(3);
+    expect(screen).toContain(`<View ${key} style={lg ? GLASS_LIST.head : styles.head} >`);
+    expect(screen).toContain(`<ScrollView ${key} contentContainerStyle={`);
+    // The back button keeps its place, as the list screens' top bar does.
+    expect(screen).toContain('<View style={lg ? GLASS_LIST.nav : styles.topbar}>');
   });
 
   it('the Appearance screen: DESIGN first, then THEME, each a radio group of labelled choices, with no permission gate (item 38)', () => {

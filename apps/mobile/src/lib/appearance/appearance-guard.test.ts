@@ -95,4 +95,16 @@ describe('appearance guards', () => {
       expect(src, rel(f)).not.toMatch(/key=\{\s*(?:appearance|material|theme)(?:\.\w+)?\s*\}/);
     }
   });
+
+  it('the one key that reads the control is the text size, on the Appearance screen, in Liquid Glass only', () => {
+    // A11Y-2: it is undefined until the text size changes while the app runs,
+    // so changing the Design or the Theme alone never changes it.
+    const keyed = SOURCES.filter((f) => !/\.test\.tsx?$/.test(f)).flatMap((f) =>
+      (code(f).match(/key=\{[^}]*\bappearance\b[^}]*\}/g) ?? []).map((k) => `${rel(f)}: ${k}`),
+    );
+    expect(keyed).toEqual([
+      'app/(drawer)/settings/appearance.tsx: key={lg ? appearance.textSizeKey : undefined}',
+      'app/(drawer)/settings/appearance.tsx: key={lg ? appearance.textSizeKey : undefined}',
+    ]);
+  });
 });

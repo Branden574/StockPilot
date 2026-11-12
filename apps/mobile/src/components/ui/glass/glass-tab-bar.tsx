@@ -3,13 +3,16 @@ import * as React from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useCameraGround } from '../../../lib/appearance/camera-ground';
 import { GlassContainerOrNull } from '../../../lib/appearance/glass-module';
 import { GLASS_MD_TOKENS } from '../../../lib/appearance/glass-tokens.generated';
 import {
   GLASS_ANDROID_TAB_BAR,
   GLASS_IOS_TAB_BAR,
   glassCapsuleRight,
+  glassTabBarLook,
   tabBarFootprint,
+  type GlassTabBarLook,
 } from '../../../lib/appearance/tab-bar';
 import { useTheme } from '../../../lib/use-theme';
 
@@ -34,6 +37,12 @@ import { GlassSurface } from './glass-surface';
  * It reports its drawn footprint (tab-bar.ts tabBarFootprint) to the
  * navigator, so useBottomTabBarHeight() and BottomTabBarHeightContext give
  * every list the right bottom padding.
+ *
+ * Every colour of the iOS bar comes from one look (tab-bar.ts
+ * glassTabBarLook): the theme's own, except over the Scan camera, where the
+ * page is dark in every scheme and the bar draws the Night look with the
+ * Night sheet fill inside the capsule (LG-1: in Day the capsule's glass went
+ * near-black there and the Day-ink icons and labels could not be seen).
  */
 
 const SCAN_ROUTE = 'scan';
@@ -84,19 +93,23 @@ export function GlassTabBar(props: BottomTabBarProps) {
 }
 
 function IosGlassTabBar(props: BottomTabBarProps) {
-  const { c, g, material, type } = useTheme();
+  const theme = useTheme();
+  const { material, type } = theme;
   const press = usePress(props);
   const footprint = tabBarFootprint({ style: 'liquid-glass', os: 'ios', bottomInset: 0 });
   useReportHeight(footprint);
 
   const { state, descriptors } = props;
+  // The Scan tab stays mounted behind the other tabs, so its camera page is
+  // the ground only while Scan is the tab in front.
+  const overCamera = useCameraGround() && state.routes[state.index]?.name === SCAN_ROUTE;
+  const look = glassTabBarLook(theme, overCamera);
   const focusedKey = state.routes[state.index]?.key;
   const drawn = state.routes.filter((r) => isDrawn(props, r));
   const scan = drawn.find((r) => r.name === SCAN_ROUTE) ?? null;
   const inCapsule = drawn.filter((r) => r !== scan);
   const m = GLASS_IOS_TAB_BAR;
-  const accentText = g?.accentText ?? c.accent;
-  const selectedFill = withAlpha(c.ink, 0.08);
+  const selectedFill = withAlpha(look.ink, 0.08);
   const label = type?.tab ?? { fontSize: 10.5, fontWeight: '600' as const };
 
   const GlassContainer = material === 'glass' ? GlassContainerOrNull() : null;
@@ -106,6 +119,7 @@ function IosGlassTabBar(props: BottomTabBarProps) {
         variant="floating"
         radius={m.radius}
         solid
+        scheme={look.scheme}
         style={[
           styles.capsule,
           {
@@ -117,16 +131,26 @@ function IosGlassTabBar(props: BottomTabBarProps) {
           },
         ]}
       >
+        {look.cameraFill ? (
+          <View
+            pointerEvents="none"
+            style={[styles.fill, { borderRadius: m.radius, backgroundColor: look.cameraFill }]}
+          />
+        ) : null}
         <View accessibilityRole="tablist" style={styles.tabs}>
           {inCapsule.map((route) => {
             const options = descriptors[route.key]!.options;
             const focused = route.key === focusedKey;
-            const color = focused ? accentText : c.ink;
+            const color = focused ? look.accentText : look.ink;
             const title = options.title ?? route.name;
             return (
               <Pressable
                 key={route.key}
-                accessibilityRole="tab"
+                // "button", as the classic bar's own tab item asks for on iOS:
+                // React Native gives the role "tab" no trait there, so
+                // VoiceOver read no "button" (A11Y-1). Selected comes from
+                // accessibilityState.
+                accessibilityRole="button"
                 accessibilityState={{ selected: focused }}
                 accessibilityLabel={options.tabBarAccessibilityLabel ?? title}
                 onPress={() => press(route)}
@@ -157,6 +181,7 @@ function IosGlassTabBar(props: BottomTabBarProps) {
       {scan ? (
         <ScanCircle
           focused={scan.key === focusedKey}
+          look={look}
           title={descriptors[scan.key]!.options.title ?? 'Scan'}
           icon={descriptors[scan.key]!.options.tabBarIcon}
           onPress={() => press(scan)}
@@ -185,34 +210,38 @@ function IosGlassTabBar(props: BottomTabBarProps) {
 
 function ScanCircle({
   focused,
+  look,
   title,
   icon,
   onPress,
 }: {
   focused: boolean;
+  look: GlassTabBarLook;
   title: string;
   icon: BottomTabBarProps['descriptors'][string]['options']['tabBarIcon'];
   onPress: () => void;
 }) {
-  const { c, g } = useTheme();
   const m = GLASS_IOS_TAB_BAR;
   // .ios-scanfab: accent-text glyph on glass; .on: an accent fill with the on-accent glyph.
-  const color = focused ? (g?.onAccent ?? c.accentInk) : (g?.accentText ?? c.accent);
+  const color = focused ? look.onAccent : look.accentText;
   const circle = { right: m.scanRight, bottom: m.bottom, width: m.scanSize, height: m.scanSize };
   return (
     <View style={[styles.scan, circle]}>
       {focused ? (
         <View
-          style={[
-            styles.fill,
-            { borderRadius: m.scanSize / 2, backgroundColor: g?.accent ?? c.accent },
-          ]}
+          style={[styles.fill, { borderRadius: m.scanSize / 2, backgroundColor: look.accent }]}
         />
       ) : (
-        <GlassSurface variant="floating" radius={m.scanSize / 2} solid style={styles.fill} />
+        <GlassSurface
+          variant="floating"
+          radius={m.scanSize / 2}
+          solid
+          scheme={look.scheme}
+          style={styles.fill}
+        />
       )}
       <Pressable
-        accessibilityRole="tab"
+        accessibilityRole="button"
         accessibilityState={{ selected: focused }}
         accessibilityLabel={title}
         onPress={onPress}

@@ -198,13 +198,16 @@ export function glassOrderTitle(number: string | null, picking: boolean): string
   return picking ? `Pick ${number}` : number;
 }
 
-/** "1 of 5 lines · 5 of 40 units": the pick's progress, from the typed quantities. */
+/**
+ * "1 of 5 lines · 5 of 40 units": the pick's progress, from the typed
+ * quantities. One line and one unit are said in the singular.
+ */
 export function pickProgress(lines: readonly { requested: number; picked: number }[]) {
   const totalUnits = lines.reduce((n, l) => n + l.requested, 0);
   const units = lines.reduce((n, l) => n + Math.min(l.picked, l.requested), 0);
   const doneLines = lines.filter((l) => l.requested > 0 && l.picked >= l.requested).length;
   return {
-    line: `${doneLines} of ${lines.length} lines \u00B7 ${units} of ${totalUnits} units`,
+    line: `${doneLines} of ${lines.length} ${lines.length === 1 ? 'line' : 'lines'} \u00B7 ${units} of ${totalUnits} ${totalUnits === 1 ? 'unit' : 'units'}`,
     units,
     totalUnits,
     ratio: totalUnits > 0 ? units / totalUnits : 0,

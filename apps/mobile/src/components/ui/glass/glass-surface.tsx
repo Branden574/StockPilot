@@ -3,6 +3,8 @@ import * as React from 'react';
 import { StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 
 import { GlassViewOrNull } from '../../../lib/appearance/glass-module';
+import { themeValueFor } from '../../../lib/appearance/theme-value';
+import type { ThemeMode } from '../../../lib/theme';
 import { useTheme } from '../../../lib/use-theme';
 
 /**
@@ -24,6 +26,10 @@ import { useTheme } from '../../../lib/use-theme';
  *   material opaque  the opaque token: --chrome (floating, overlay), the
  *                    reduced card fill (content).
  *
+ * `scheme` draws the surface in that scheme whatever the theme is (the tab
+ * bar over the Scan camera, LG-1): the GlassView's colorScheme, the solid
+ * fallback and the opaque token are all that scheme's.
+ *
  * Rules from the Expo SDK 57 docs, kept here once: never an opacity below 1
  * on a GlassView or its parents (fade with transform instead); never inside
  * FlatList rows (`content` exists for rows and never blurs).
@@ -34,6 +40,7 @@ export function GlassSurface({
   variant,
   radius,
   solid = false,
+  scheme,
   style,
   children,
 }: {
@@ -41,10 +48,16 @@ export function GlassSurface({
   radius: number;
   /** The tab bar: below iOS 26 (blur material) draw the solid fallback, not a BlurView. */
   solid?: boolean;
+  /** Draw in this scheme instead of the theme's (same Design, material and scene). */
+  scheme?: ThemeMode;
   style?: StyleProp<ViewStyle>;
   children?: React.ReactNode;
 }) {
-  const { c, g, ios, material, mode } = useTheme();
+  const theme = useTheme();
+  const { c, g, ios, material, mode } =
+    scheme && scheme !== theme.mode
+      ? themeValueFor(theme.style, scheme, theme.material, theme.scene)
+      : theme;
   const shape = { borderRadius: radius };
 
   if (!g || !ios) {
