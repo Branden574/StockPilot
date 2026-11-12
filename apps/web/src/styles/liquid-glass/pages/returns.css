@@ -37,6 +37,21 @@
       > .max-w-\[1040px\] {
       max-width: none;
     }
+    /* The head's small button (F14: Report a problem beside Send return
+       request) at the size the head of an order gives its small button
+       (pages/order-detail.css): 30 px and 600 beside the 36 px button, so
+       the pair reads as one row. Without this it kept the primitive's 28 px
+       and 500 beside a 36 px, 600 neighbour. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='return']
+      [data-slot='page-header-actions']
+      [data-glass='button'][data-glass-size='sm'] {
+      height: 30px;
+      gap: 6px;
+      padding: 0 10px;
+      font-size: 13px;
+      font-weight: 600;
+    }
     @media (min-width: 1101px) {
       :root[data-appearance='liquid-glass']
         [data-glass-page='ops'][data-glass-view='return']

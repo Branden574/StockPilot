@@ -24,6 +24,8 @@ import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReplacementBanner } from '@/components/orders/replacement-banner';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
+import { returnRequestOrderLink } from '@/lib/returns/return-request-link';
+import { returnRequestRecipientsDto } from '@/server/services/return-request-email';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
 import {
@@ -473,6 +475,13 @@ export default async function OrderDetailPage({
     request.status === 'completed' || (request.status as string) === 'delivered';
   const canReadReturns = can(ctx, 'returns:read') || can(ctx, 'returns:manage');
   const returnsModuleGate = orderIsReturnable && (canReadReturns || isOwnRequest);
+  // F14, "Send return request" on the requester's own requests: the viewer
+  // who gets "Your requests on this order" below (requesterTrackingEligible,
+  // decided once the module answer is in). Known here so the two reads the
+  // draft needs (the delivery site and the delivery-request mailboxes) go out
+  // with the others. A returnable order is completed, so this and
+  // showDeliveryRequest below are never both true.
+  const returnRequestGate = isOwnRequest && !can(ctx, 'returns:manage') && returnsModuleGate;
 
   // "Report a problem" launch point (Task 17, master brief §8) — always
   // available regardless of order status; the module RPC is only paid for a
@@ -701,7 +710,7 @@ export default async function OrderDetailPage({
     // actually render for an order that HAS a charter. A missing/failed row
     // degrades to null — the assistant already tolerates the 5 legacy
     // delivery rows with no charter.
-    showDeliveryRequest && request.delivery_charter_id
+    (showDeliveryRequest || returnRequestGate) && request.delivery_charter_id
       ? (async (): Promise<StorefrontCharter | null> => {
           const supabase = await createClient();
           const { data } = await supabase
@@ -740,7 +749,10 @@ export default async function OrderDetailPage({
     // button renders only when this resolves to a routable pair — unset or
     // invalid routing HIDES it (fail closed; never the compiled
     // constants, which only the pre-migration 'fallback' state may supply).
-    showDeliveryRequest
+    // F14: the return request draft goes to the same mailboxes, so the same
+    // read (and the same fail-closed rule) serves the requester's own
+    // requests on a completed order.
+    showDeliveryRequest || returnRequestGate
       ? getOrgEmailRouting(ctx.organizationId, 'delivery_request')
       : Promise.resolve<OrgEmailRoutingReadState | null>(null),
 
@@ -817,6 +829,13 @@ export default async function OrderDetailPage({
         ccName: deliveryRequestRecipientsValue.ccName,
       }
     : null;
+
+  // F14: the return request draft goes to the same saved mailboxes, by a
+  // stricter rule (services/return-request-email.ts): only a pair this
+  // organization saved, never the compiled pair the pre-migration 'fallback'
+  // state gives the delivery request above.
+  const returnRequestRecipients =
+    returnRequestGate && deliveryRequestRouting ? returnRequestRecipientsDto(deliveryRequestRouting) : null;
 
   // Readiness, as the page shows it. The stock-dependent actions come from
   // the same result (core readinessStockFlags + orderStockGates, the phone's
@@ -1861,11 +1880,40 @@ export default async function OrderDetailPage({
               number is a link only when the returns page would open for this
               viewer. Nothing renders when the order has no returns. */}
             {/* Returns RX-3: the requester's own requests, in their words. */}
+            {/* F14: each open request carries "Send return request" for the
+                viewer this section is for (requesterTrackingEligible), when
+                the organization's delivery-request mailboxes resolved; unset
+                or invalid routing adds nothing, as for the delivery request.
+                The draft says what this card says, plus the order's own
+                facts read above for this viewer. */}
             <RequesterTracking
               requests={returnsShown.tracking}
               id="your-requests"
               density="compact"
               className="bg-card rounded-lg border p-[18px]"
+              returnRequest={
+                requesterTrackingEligible && returnRequestRecipients
+                  ? {
+                      orderId: id,
+                      recipients: returnRequestRecipients,
+                      order: {
+                        orderNumber: orderNumberLabel,
+                        requestedBy: detail.requesterName ?? requesterDisplay,
+                        requesterEmail: detail.requesterEmail,
+                        // Name, code and address: the draft prints no id.
+                        site: deliveryRequestCharter
+                          ? {
+                              name: deliveryRequestCharter.name,
+                              code: deliveryRequestCharter.code,
+                              address: deliveryRequestCharter.address,
+                            }
+                          : null,
+                        warehouseName: warehouseName ?? null,
+                        link: returnRequestOrderLink(id),
+                      },
+                    }
+                  : null
+              }
             />
 
             {returnsShown.orderReturns.length > 0 && (

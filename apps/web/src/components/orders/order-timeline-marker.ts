@@ -55,6 +55,8 @@ const MARKERS: Readonly<Record<string, OrderTimelineMarker>> = {
   'order_request.denied': { tone: 'warn', icon: 'circle-x' },
   'order.pick_slip_generated': { tone: 'acc', icon: 'clipboard-list' },
   'order.delivery_request_drafted': { tone: 'info', icon: 'mail' },
+  // F14: the same kind of entry, for a return on the order.
+  'order.return_request_drafted': { tone: 'info', icon: 'mail' },
   // Inferred, in the board's tones.
   'order_request.cancelled': { tone: 'warn', icon: 'circle-x' },
   'order_request.delivered': { tone: 'ok', icon: 'circle-check' },

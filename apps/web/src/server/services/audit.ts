@@ -291,6 +291,16 @@ export type AuditEvent =
    * OrderTimeline on the order detail page for free.
    */
   | 'order.delivery_request_drafted'
+  /**
+   * A member opened a prefilled return-request DRAFT in their mail client
+   * (F14), from their own request on the order or from the return page. Same
+   * meaning and the same limits as the event above: a draft was OPENED;
+   * StockPilot cannot see Send, delivery or a ticket. Keyed to the order
+   * (entityId) so the order timeline shows it; extra carries the return
+   * number, is_condensed and the surface, nothing else
+   * (services/return-request-draft.ts). No migration, for the reason above.
+   */
+  | 'order.return_request_drafted'
   | 'pdf.exported'
   | 'tag.created'
   | 'tag.updated'

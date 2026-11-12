@@ -283,7 +283,11 @@ describe('the order screen', () => {
   it("shows the requester's own requests in the server's sentences, each once, and staff's returns as before", () => {
     expect(screen).toMatch(/const returnsShown = requesterOrderReturns\(\{[\s\S]*?requesterGate,[\s\S]*?canReadReturns: canReadReturns === true,\s*\}\);/);
     expect(screen).toContain('<Eyebrow>{RETURNS_COPY.requesterYourRequests}</Eyebrow>');
-    expect(screen).toMatch(/returnsShown\.tracking\.map\(\(t, i\) => \(\s*<RequesterTrackingCard/);
+    // Re-pinned on purpose (F14): each card is now followed by its RETURN
+    // REQUEST section, so the map returns the card and the section together.
+    // The card is still drawn once per request, from the same list.
+    expect(screen).toMatch(/returnsShown\.tracking\.map\(\(t, i\) => \{[\s\S]{0,400}?<RequesterTrackingCard request=\{t\} \/>/);
+    expect(screen.match(/<RequesterTrackingCard /g)).toHaveLength(1);
     expect(screen).toContain('returnsShown.orderReturns.map((r) => (');
     expect(screen).toContain('canCreateReturn: showCreateReturn || showRequesterReturn,');
   });

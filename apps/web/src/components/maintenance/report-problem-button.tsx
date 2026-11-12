@@ -12,6 +12,12 @@ export interface ReportProblemPrefill {
   itemId?: string;
   orderRequestId?: string;
   rentalId?: string;
+  /** The start of the request's subject ("Return RMA-…: "), for a launch
+   *  point whose record has no related-record column of its own (a return:
+   *  the request carries the return's ORDER, and names the return here). The
+   *  form trims it and cuts it at 120 characters, and the person can change
+   *  it before saving. */
+  subject?: string;
 }
 
 interface ReportProblemButtonProps {
@@ -42,6 +48,7 @@ export function ReportProblemButton({ moduleEnabled, canSubmit, prefill }: Repor
   if (prefill.itemId) params.set('itemId', prefill.itemId);
   if (prefill.orderRequestId) params.set('orderRequestId', prefill.orderRequestId);
   if (prefill.rentalId) params.set('rentalId', prefill.rentalId);
+  if (prefill.subject) params.set('subject', prefill.subject);
   const qs = params.toString();
   const href = `/dashboard/maintenance/new${qs ? `?${qs}` : ''}`;
 
