@@ -244,10 +244,13 @@ function numberOf(v: unknown): number {
 }
 
 /** A search term safe inside a PostgREST logic tree: letters, digits and a
- *  few separators only, at most 80 characters. */
+ *  few separators only, at most 80 characters. The plus sign is kept so an
+ *  email written with one ("pat+returns@example.com") can be searched whole:
+ *  it has no meaning in the logic tree or in ILIKE, and the client sends it
+ *  percent-encoded. */
 export function sanitizeReturnSearch(raw: string | null | undefined): string {
   return (raw ?? '')
-    .replace(/[^\p{L}\p{N}\s@._-]/gu, ' ')
+    .replace(/[^\p{L}\p{N}\s@._+-]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 80);

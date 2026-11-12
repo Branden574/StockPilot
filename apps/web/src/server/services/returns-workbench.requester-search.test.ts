@@ -383,6 +383,25 @@ describe('B117 search: everything it found before, it still finds', () => {
     expect((await search('lee.public')).ids).toEqual([rid(5)]);
   });
 
+  it('an email written with a plus sign is found whole, on a member profile and on a typed email', async () => {
+    const members: Member[] = [
+      ...MEMBERS,
+      { organization_id: ORG, user_id: uid(9), full_name: 'Pat Mora', email: 'pat+returns@example.com' },
+    ];
+    const rows = [
+      ...ROWS,
+      overview(9, { requester_user_id: uid(9) }),
+      overview(10, { requester_email: 'lee+orders@example.com' }),
+    ];
+    const member = await search('pat+returns@example.com', rows, members);
+    expect(member.page.q).toBe('pat+returns@example.com');
+    expect(member.ids).toEqual([rid(9)]);
+    expect(member.page.requesterSearch).toBe('full');
+    expect((await search('lee+orders@example.com', rows, members)).ids).toEqual([rid(10)]);
+    // The plus is a plain character: it does not match an address without it.
+    expect((await search('pat+nobody@example.com', rows, members)).ids).toEqual([]);
+  });
+
   it('an RMA number and an SO number', async () => {
     expect((await search('RMA-20261101-000003')).ids).toEqual([rid(3)]);
     expect((await search('SO-001005')).ids).toEqual([rid(5)]);
@@ -452,13 +471,14 @@ describe('B117 search: typed text cannot change the filter', () => {
     `robin,requester_user_id.in.(${ELSEWHERE})`,
     'robin*',
     "robin'; drop table returns; --",
+    'robin+x,organization_id.neq.none',
   ])('%s', async (q) => {
     const { page, stub } = await search(q);
     // Only this organisation's rows, whatever was typed.
     const own = new Set(ROWS.filter((r) => r.organization_id === ORG).map((r) => r.id));
     for (const r of page.rows) expect(own.has(r.id)).toBe(true);
     // The term reached both reads holding no filter syntax.
-    expect(page.q).toMatch(/^[\p{L}\p{N}\s@._-]*$/u);
+    expect(page.q).toMatch(/^[\p{L}\p{N}\s@._+-]*$/u);
     const memberOr = (stub.chainsAll.get('organization_members.select') ?? []).flatMap((methods, c) =>
       methods.flatMap((m, i) => (m === 'or' ? [String(stub.chainArgsAll.get('organization_members.select')?.[c]?.[i]?.[0])] : [])),
     );
