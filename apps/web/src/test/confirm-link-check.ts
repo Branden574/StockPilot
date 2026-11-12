@@ -22,7 +22,7 @@ export interface EmailedConfirmLink {
 export function emailedConfirmLink(text: string): EmailedConfirmLink {
   const found = text.match(/https?:\/\/[^\s"'<>]+\/auth\/confirm\?[^\s"'<>]+/g) ?? [];
   if (found.length !== 1) {
-    throw new Error(`expected one /auth/confirm link in the email text, found ${found.length}`);
+    throw new Error(`expected one confirmation link in the email text, found ${found.length}`);
   }
   const url = new URL(found[0]!);
   const tokenHash = url.searchParams.get('token_hash');
