@@ -822,6 +822,74 @@ describe('drainQueue — refused before any write: the adjustment stays queued, 
       'markOk:45',
     ]);
   });
+
+  // Restart now (the phone update pop-up, pauseSyncForRestart) and a held
+  // scope in one pass. The refused row's answer has already come, so it is
+  // recorded as any refusal is; after it nothing is handed off: the one behind
+  // it in its scope is held, and the pause stops the drain before every other
+  // row. None of them is marked sending, failed, rejected or held.
+  it('Restart now while a scope is held: nothing more is sent, and every other row is left as it was', async () => {
+    const state = { refused: true };
+    const paused: { resume?: () => void } = {};
+    apiMock.api.mockImplementation(async (path: string, opts?: { onSend?: () => void }) => {
+      calls.log.push(`api:${path}`);
+      opts?.onSend?.();
+      if (state.refused && path === '/api/v1/items/a1/adjust') {
+        // The pop-up's Restart now lands while the refused request is in flight.
+        paused.resume ??= pauseSyncForRestart();
+        throw marker();
+      }
+      return { ok: true, quantityOnHand: 4 };
+    });
+    pending([A1, A2, B1, R]);
+    try {
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 1, rejected: 0 });
+      expect(calls.log).toEqual(['markSending:41', 'api:/api/v1/items/a1/adjust', 'markFailed:41']);
+      expect(queueMock.markSending).toHaveBeenCalledTimes(1);
+      expect(queueMock.markRejected).not.toHaveBeenCalled();
+      expect(queueMock.markHeld).not.toHaveBeenCalled();
+      expect(unconfirmedStock.get('a1')).toBeNull();
+      expect(adjustSendGate.canSend()).toBe(true);
+
+      // A pass that starts while Restart now still waits: not one row is
+      // touched, the refused one included.
+      calls.log = [];
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+      expect(calls.log).toEqual([]);
+      expect(apiMock.api).toHaveBeenCalledTimes(1);
+    } finally {
+      paused.resume?.();
+    }
+
+    // The restart did not happen and the check works again: the next pass
+    // sends everything, the refused row first among its own.
+    calls.log = [];
+    state.refused = false;
+    expect(await drainQueue()).toEqual({ ok: 4, failed: 0, rejected: 0 });
+    expect(calls.log.filter((c) => c.startsWith('api:'))).toEqual([
+      'api:/api/v1/items/a1/adjust',
+      'api:/api/v1/items/a2/adjust',
+      'api:/api/v1/items/b1/adjust',
+      'api:/api/v1/po/po1/receive-line',
+    ]);
+  });
+
+  it('Restart now waiting before a pass whose scope would be held: the pass sends nothing', async () => {
+    serve({ refused: true });
+    pending([A1, A2, B1, R]);
+    const resume = pauseSyncForRestart();
+    try {
+      expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+      expect(apiMock.api).not.toHaveBeenCalled();
+      expect(calls.log).toEqual([]);
+      expect(adjustSendGate.canSend()).toBe(true);
+    } finally {
+      resume();
+    }
+    // After the resume the pass runs as it does without a restart waiting.
+    expect(await drainQueue()).toEqual({ ok: 2, failed: 1, rejected: 0 });
+    expect(calls.log.filter((c) => c.endsWith(':42') || c.includes('/a2/'))).toEqual([]);
+  });
 });
 
 describe('drainQueue — an adjustment parked "Not confirmed" labels the item it may still change', () => {

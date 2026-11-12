@@ -28,8 +28,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  *      `fetch` that can write but the error webhook.
  *   2. BEHAVIOUR. withApiContext runs on both paths, for every way the one
  *      round trip falls back to the separate reads, into both refusals and the
- *      owner's path, against a client that records every call: nothing but
- *      reads, and no other RPC.
+ *      owner's path, for a member with no authenticator and for one whose
+ *      session has its code, against a client that records every call:
+ *      nothing but reads, and no other RPC.
  * Plants prove the static half can fail.
  */
 
@@ -56,8 +57,18 @@ const ENTRY = 'lib/auth/api-context.ts';
 
 /**
  * The value-import closure of lib/auth/api-context.ts, apps/web/src-relative.
- * Re-derived for docket S26 from the import statements (18 modules). A module
+ * Re-derived for docket S26 from the import statements (20 modules). A module
  * added here must be read for writes before this list is changed.
+ *
+ * Read when they joined the closure:
+ *   lib/auth/verified-claims.ts  the cookie session's assurance level
+ *     (api-context.ts cookieSessionLevel): it loads the session for its access
+ *     token (auth.getSession), checks the token (auth.getClaims, or
+ *     auth.getUser(token) when the key set cannot be read) and compares the
+ *     subject. It loads lib/supabase/server.ts, already listed. The Bearer
+ *     path, the phone's, never reaches it: its level is the token's own claim.
+ *   lib/error-text.ts  the text of a report (error-reporter-core.ts): strings
+ *     in, a string or an Error out. It loads lib/redact-urls.ts, already listed.
  */
 const REVIEWED_CLOSURE = [
   'lib/auth/account-status.ts',
@@ -66,9 +77,11 @@ const REVIEWED_CLOSURE = [
   'lib/auth/effective-permissions.ts',
   'lib/auth/mfa-policy.ts',
   'lib/auth/request-context-bundle.ts',
+  'lib/auth/verified-claims.ts',
   'lib/env.ts',
   'lib/error-reporter-core.ts',
   'lib/error-reporter.ts',
+  'lib/error-text.ts',
   'lib/modules/effective-modules.ts',
   'lib/redact-urls.ts',
   'lib/share-paths.ts',
@@ -448,6 +461,10 @@ const world = {
   role: 'staff' as 'staff' | 'owner',
   statusReadFails: false,
   overrideReadFails: false,
+  /** The account has a verified authenticator factor. */
+  enrolled: false,
+  /** The level of the session the request comes with (the token's claim, or the cookie session's). */
+  aal: 'aal1' as 'aal1' | 'aal2',
   calls: [] as string[],
 };
 
@@ -598,22 +615,23 @@ function recordingClient(): unknown {
           if (prop === 'getUser') {
             return async () => {
               world.calls.push('auth.getUser');
-              return { data: { user: { id: USER, factors: [] } }, error: null };
+              const factors = world.enrolled ? [{ status: 'verified' }] : [];
+              return { data: { user: { id: USER, factors } }, error: null };
             };
           }
-          if (prop === 'mfa') {
-            return new Proxy(
-              {},
-              {
-                get(_t, p) {
-                  if (typeof p === 'symbol' || p === 'then') return undefined;
-                  return async () => {
-                    world.calls.push(`auth.mfa.${p}`);
-                    return { data: { currentLevel: 'aal1' }, error: null };
-                  };
-                },
-              },
-            );
+          // The cookie session's level (lib/auth/verified-claims.ts): the
+          // session's access token, then that token's checked claims.
+          if (prop === 'getSession') {
+            return async () => {
+              world.calls.push('auth.getSession');
+              return { data: { session: { access_token: tokenWith(world.aal) } }, error: null };
+            };
+          }
+          if (prop === 'getClaims') {
+            return async () => {
+              world.calls.push('auth.getClaims');
+              return { data: { claims: { sub: USER, aal: world.aal } }, error: null };
+            };
           }
           world.calls.push(`auth.${prop}`);
           return recordingAnything(`auth.${prop}`);
@@ -632,13 +650,15 @@ function recordingClient(): unknown {
 }
 
 /** A token whose unverified `aal` claim the Bearer path reads (it is never verified here). */
-const token = `h.${Buffer.from(JSON.stringify({ aal: 'aal1' }), 'utf8').toString('base64url')}.sig`;
+function tokenWith(aal: 'aal1' | 'aal2'): string {
+  return `h.${Buffer.from(JSON.stringify({ sub: USER, aal }), 'utf8').toString('base64url')}.sig`;
+}
 
 /** A Bearer request from the phone, and a same-origin cookie request from the web: both POSTs. */
 const bearer = () =>
   new Request('https://app.test/api/v1/items/x/adjust', {
     method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'x-organization-id': ORG },
+    headers: { authorization: `Bearer ${tokenWith(world.aal)}`, 'x-organization-id': ORG },
   });
 const cookie = () =>
   new Request('https://app.test/api/v1/items/x/adjust', {
@@ -656,7 +676,7 @@ function writesIn(calls: string[]): string[] {
     if (/^from:[a-z_]+$/.test(c)) return false;
     if (/^[a-z_]+\.(select|eq|neq|is|not|in|limit|order|maybeSingle|single)$/.test(c)) return false;
     if (c === 'rpc:get_request_context null {"get":true}') return false;
-    if (c === 'auth.getUser' || c === 'auth.mfa.getAuthenticatorAssuranceLevel') return false;
+    if (c === 'auth.getUser' || c === 'auth.getSession' || c === 'auth.getClaims') return false;
     return true;
   });
 }
@@ -680,6 +700,8 @@ describe('withApiContext writes nothing: what it does (behaviour)', () => {
       }),
     );
     delete process.env.REQUEST_CONTEXT_RPC;
+    world.enrolled = false;
+    world.aal = 'aal1';
     world.calls = [];
     refs.client = recordingClient();
   });
@@ -724,6 +746,57 @@ describe('withApiContext writes nothing: what it does (behaviour)', () => {
     expect(writesIn(world.calls)).toEqual([]);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  // A member with an authenticator whose session has its code: the level is
+  // read on the way (the Bearer token's own claim; on the cookie path the
+  // session's checked token, lib/auth/verified-claims.ts), and it is a read.
+  it.each(cases)(
+    'a session with its authenticator code: %s, fallback "%s", %s: reads only',
+    async (pathName, trigger, ending, make) => {
+      world.enrolled = true;
+      world.aal = 'aal2';
+      world.trigger = trigger;
+      if (trigger === 'off') process.env.REQUEST_CONTEXT_RPC = 'off';
+      world.role = ending === 'owner served' ? 'owner' : 'staff';
+      world.statusReadFails = ending === 'status refused';
+      world.overrideReadFails = ending !== 'status refused';
+
+      const outcome = await withApiContext(make()).then(
+        (ctx) => ({ ctx }),
+        (error: unknown) => ({ error }),
+      );
+
+      if (ending === 'permissions refused') {
+        expect(outcome).toEqual({ error: expect.any(PermissionsUnavailableError) });
+      } else if (ending === 'status refused') {
+        expect(outcome).toEqual({ error: expect.any(AccountStatusUnavailableError) });
+      } else {
+        expect('ctx' in outcome && outcome.ctx?.role).toBe('owner');
+        expect('ctx' in outcome && outcome.ctx?.mfaSatisfied).toBe(true);
+      }
+      expect(world.calls).toContain('from:user_profiles');
+      // The cookie path read the session's level; the Bearer path has no session to load.
+      expect(world.calls.includes('auth.getSession')).toBe(pathName === 'cookie');
+      expect(world.calls.includes('auth.getClaims')).toBe(pathName === 'cookie');
+      expect(writesIn(world.calls)).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  // The same member before the code: no context at all (the route's own 401),
+  // and no database call was made for it.
+  it.each(PATHS)(
+    'a session that still owes its authenticator code: %s gets no context, and nothing is read from the database',
+    async (_path, make) => {
+      vi.spyOn(console, 'info').mockImplementation(() => {});
+      world.enrolled = true;
+      world.aal = 'aal1';
+      await expect(withApiContext(make())).resolves.toBeNull();
+      expect(world.calls.filter((c) => c.startsWith('from:') || c.startsWith('rpc:'))).toEqual([]);
+      expect(writesIn(world.calls)).toEqual([]);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
 
   it('the recording client does record a write, so the rule above can fail', async () => {
     world.trigger = 'error';
