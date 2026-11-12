@@ -104,10 +104,15 @@ export function returnRowTitle(row: Pick<MobileReturnListRow, 'returnNumber' | '
   return row.returnNumber ?? row.id.slice(0, 8).toUpperCase();
 }
 
-/** "SO-000103 · Pat Lee" (the order handle falls back to the id prefix). */
+/**
+ * "SO-000103 · Pat Lee" (the order handle falls back to the id prefix). The
+ * server names the person the order was for (B117); with no name to show, the
+ * row says how the return was opened, never a word that reads like a name.
+ */
 export function returnRowMeta(row: MobileReturnListRow): string {
   const so = formatOrderNumber(row.orderNumber) ?? row.orderRequestId.slice(0, 8).toUpperCase();
-  const who = row.requesterName ?? row.requesterEmail ?? (row.source === 'requester' ? 'Requester' : 'Staff');
+  const who =
+    row.requesterName ?? row.requesterEmail ?? (row.source === 'requester' ? 'Opened by the requester' : 'Opened by staff');
   return `${so} · ${who}`;
 }
 

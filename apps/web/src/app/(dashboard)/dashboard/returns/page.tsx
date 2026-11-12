@@ -248,9 +248,12 @@ export default async function ReturnsPage({
                     </div>
                   </TableCell>
                   <TableCell>
+                    {/* B117: the loader names the person the order was for. With
+                        no name to show, say how the return was opened, in
+                        words that cannot be read as a person's name. */}
                     {r.requesterName ?? r.requesterEmail ?? (
                       <span className="text-muted-foreground">
-                        {r.source === 'requester' ? 'Requester' : 'Staff'}
+                        {r.source === 'requester' ? 'Opened by the requester' : 'Opened by staff'}
                       </span>
                     )}
                   </TableCell>

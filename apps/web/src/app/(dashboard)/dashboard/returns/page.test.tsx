@@ -213,7 +213,7 @@ describe('returns list (redesign)', () => {
     expect(waiting.className).toMatch(/\btext-warning\b/);
   });
 
-  it('a row with no requester says who made it (Requester / Staff)', async () => {
+  it('a row with no requester name says how it was opened, never a word that reads like a name (B117)', async () => {
     listPage.mockResolvedValueOnce(
       answer({
         rows: [
@@ -224,8 +224,10 @@ describe('returns list (redesign)', () => {
     );
     await renderPage();
     const [, staffRow, requesterRow] = screen.getAllByRole('row');
-    expect(within(staffRow!).getByText('Staff')).toBeInTheDocument();
-    expect(within(requesterRow!).getByText('Requester')).toBeInTheDocument();
+    expect(within(staffRow!).getByText('Opened by staff')).toBeInTheDocument();
+    expect(within(requesterRow!).getByText('Opened by the requester')).toBeInTheDocument();
+    expect(within(staffRow!).queryByText('Staff')).toBeNull();
+    expect(within(requesterRow!).queryByText('Requester')).toBeNull();
   });
 
   it('pages by cursor with the same words and URLs, in the table card footer', async () => {

@@ -9,8 +9,10 @@ import {
   parseExchangeStatus,
   inboundStateLabel,
   isDeletedPerson,
+  isDeletedRequester,
   originalRowLabel,
   parseRestockOptions,
+  resolveRequesterIdentity,
   returnLineLabel,
   returnListFilter,
   RETURN_LIST_PAGE_SIZE,
@@ -55,9 +57,11 @@ import {
  * HERE, from the effective permissions, the module and write access to the
  * order's warehouse; the screens never decide them from a role.
  *
- * LIST: three round trips per page whatever its size: the `return_overview`
- * page (keyset at 25 rows), the items of the page's lines in chunks of 100,
- * and one image call for the thumbnails (two per row, then "+N").
+ * LIST: at most four round trips per page whatever its size: the
+ * `return_overview` page (keyset at 25 rows), the items of the page's lines
+ * in chunks of 100, one image call for the thumbnails (two per row, then
+ * "+N"), and one read of the page's requesters' profiles (B117; skipped when
+ * every row carries a typed name).
  */
 
 // ── Shapes ─────────────────────────────────────────────────────────────────
@@ -356,6 +360,60 @@ export function requesterNameOf(
 }
 
 /**
+ * Whether a row needs its order requester's profile to be named (B117): no
+ * typed name, and the order was placed by a member for themselves.
+ */
+function requesterProfileId(name: string | null, requesterUserId: string | null | undefined): string | null {
+  return resolveRequesterIdentity(name, null) === null && typeof requesterUserId === 'string' ? requesterUserId : null;
+}
+
+/**
+ * The requester the list and the return page name (B117): the person the
+ * ORDER was for, never the person who opened the return.
+ *
+ *  1. the name typed on the RMA or its order (a public link, or an order
+ *     placed for someone);
+ *  2. else the profile name (else profile email) of the member who placed the
+ *     order for themselves. Such an order holds the person only in
+ *     `requester_user_id` (0391; core orders/requester-identity), which the
+ *     returns screens never followed, so they said "Staff" or "Requester"
+ *     where the orders screens named the person. `names` is read through the
+ *     viewer's own row access (readNames), so a profile the viewer may not
+ *     read stays unnamed;
+ *  3. else nothing when an email was typed (the screens show the email);
+ *  4. else "Deleted user" when the order's requester deleted their account:
+ *     the order was read, and holds no requester and no email (core
+ *     isDeletedRequester, the rule the orders screens use);
+ *  5. else the older rule (requesterNameOf: the opener's deletion stamp), else
+ *     null: the screens then say how the return was opened.
+ */
+export function requesterLabelOf(input: {
+  name: string | null;
+  email: string | null;
+  /** The order's requester_user_id (undefined when the read did not carry it). */
+  requesterUserId: string | null | undefined;
+  /** False when the order's row did not come back (the viewer may not read it). */
+  orderRead: boolean;
+  names: Map<string, string>;
+  requestedBy: string | null | undefined;
+  marks: unknown;
+}): string | null {
+  const typed = resolveRequesterIdentity(input.name, null);
+  if (typed !== null) return input.name;
+  const profileId = requesterProfileId(input.name, input.requesterUserId);
+  const fromProfile = profileId ? (input.names.get(profileId) ?? null) : null;
+  if (fromProfile !== null) return fromProfile;
+  if (profileId) return null;
+  if (
+    input.orderRead &&
+    isDeletedRequester({ requesterUserId: input.requesterUserId, requesterEmail: input.email })
+  ) {
+    return DELETED_USER_LABEL;
+  }
+  return requesterNameOf(input.name, input.email, input.requestedBy, input.marks);
+}
+
+/**
  * A stamp column's person ("Already closed by ..."): the member's name; for a
  * null column stamped by 0393, "Deleted user"; otherwise null (the sentence's
  * own words).
@@ -388,6 +446,8 @@ type HeaderOrder = {
   warehouse_id: string | null;
   requester_name: string | null;
   requester_email: string | null;
+  /** The member the order was for; null for a typed requester or a deleted account. */
+  requester_user_id?: string | null;
   completed_at: string | null;
   /** The hand-over the history shows (return-history handOverOf). */
   signed_at: string | null;
@@ -470,7 +530,7 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       `id, return_number, status, source, reason_code, notes, denial_reason, order_request_id,
        requester_name, requester_email, requested_by, approved_by, approved_at, received_by, received_at,
        closed_by, closed_at, denied_by, denied_at, deleted_users, created_at,
-       order_request:order_requests!order_request_id (order_number, warehouse_id, requester_name, requester_email, completed_at, signed_at),
+       order_request:order_requests!order_request_id (order_number, warehouse_id, requester_name, requester_email, requester_user_id, completed_at, signed_at),
        lines:return_lines (id, order_request_line_id, item_id, quantity, disposition, applied, created_at),
        ${EXCHANGE_LINES_EMBED}`,
     )
@@ -597,6 +657,8 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
   const [images, names, locationRows, picks, replacementDetail, replacementPicks, decisionItems, shownReplacementEverHeld] = await Promise.all([
     readImages(ctx, allItemIds, 'returns.workbench.images'),
     readNames(ctx, [
+      // B117: the member the order was for, when no name was typed.
+      requesterProfileId(h.requester_name ?? order?.requester_name ?? null, order?.requester_user_id),
       h.requested_by,
       h.approved_by,
       h.received_by,
@@ -815,12 +877,15 @@ export async function buildReturnWorkbench(ctx: ServiceContext, id: string): Pro
       orderNumber: order?.order_number ?? null,
       warehouseId,
       warehouseName: warehouse?.name ?? null,
-      requesterName: requesterNameOf(
-        h.requester_name ?? order?.requester_name ?? null,
-        h.requester_email ?? order?.requester_email ?? null,
-        h.requested_by,
-        h.deleted_users,
-      ),
+      requesterName: requesterLabelOf({
+        name: h.requester_name ?? order?.requester_name ?? null,
+        email: h.requester_email ?? order?.requester_email ?? null,
+        requesterUserId: order?.requester_user_id,
+        orderRead: order !== null,
+        names,
+        requestedBy: h.requested_by,
+        marks: h.deleted_users,
+      }),
       requesterEmail: h.requester_email ?? order?.requester_email ?? null,
       createdAt: h.created_at,
       approvedAt: h.approved_at,
@@ -867,6 +932,8 @@ type OverviewRow = {
   order_number: number | null;
   requester_name: string | null;
   requester_email: string | null;
+  /** The order's requester (0396's view column); null for a typed requester or a deleted account. */
+  requester_user_id?: string | null;
   created_at: string;
   approved_at: string | null;
   waiting_days: number | null;
@@ -895,7 +962,7 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
   let req = ctx.supabase
     .from('return_overview')
     .select(
-      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed',
+      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, requester_user_id, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed',
     )
     .eq('organization_id', ctx.organizationId);
   if (filter.statuses) {
@@ -958,9 +1025,14 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
     for (const l of ls) itemIds.add(l.item_id);
   }
   const ids = [...itemIds];
-  const [items, images] = await Promise.all([
+  // B117: the members the page's orders were for, in one read beside the others.
+  const requesterIds = pageRows
+    .map((r) => requesterProfileId(r.requester_name, r.requester_user_id))
+    .filter((v): v is string => v !== null);
+  const [items, images, names] = await Promise.all([
     readItems(ctx, ids, 'returns.list.items'),
     readImages(ctx, ids, 'returns.list.images'),
+    readNames(ctx, requesterIds),
   ]);
 
   return {
@@ -979,7 +1051,16 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
         reasonCode: r.reason_code,
         orderRequestId: r.order_request_id,
         orderNumber: r.order_number,
-        requesterName: requesterNameOf(r.requester_name, r.requester_email, r.requested_by, r.deleted_users),
+        requesterName: requesterLabelOf({
+          name: r.requester_name,
+          email: r.requester_email,
+          requesterUserId: r.requester_user_id,
+          // The view left-joins the order: a hidden order has no number.
+          orderRead: r.order_number !== null,
+          names,
+          requestedBy: r.requested_by,
+          marks: r.deleted_users,
+        }),
         requesterEmail: r.requester_email,
         createdAt: r.created_at,
         approvedAt: r.approved_at,
