@@ -312,8 +312,9 @@ on `GET` and `POST`, prints that account's full address before anyone presses
 (and both addresses when the browser is signed in as another account), counts a
 press only after a quiet second in front with every address it names on screen,
 shows neither address for an email-change link whose change is no longer
-pending, and each link type lands on a fixed page. Until the second S25 release
-a link without `r` still gets the old page.
+pending, and each link type lands on a fixed page. The second S25 release
+requires `r` on every link; until then a link written before the first release
+gets the page it got before.
 
 _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/lib/auth/api-context.cross-site.test.ts`,

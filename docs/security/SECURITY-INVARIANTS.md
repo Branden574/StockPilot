@@ -40,9 +40,9 @@
      AMENDED 2026-10-31 (docket S25, first of two releases): INV-E5's
      Enforced by, Tested at and "Also not covered" texts rewritten for the
      signed account reference every /auth/confirm link now carries and the
-     page's press gate. The sentence on links without the reference is
-     transitional: the second release refuses them and removes it. Nothing
-     else in this document was re-verified.
+     page's press gate. The sentence on links written before the first
+     release is transitional: the second release requires the reference on
+     every link and removes it. Nothing else in this document was re-verified.
 
      AMENDED 2026-11-01 (docket S25 review): INV-E5 said the press gate meant
      a window swap "cannot land a press on it unseen". It could: another site
@@ -56,7 +56,14 @@
      and the page gives no element an id; the Enforced by, Tested at and
      "Also not covered" texts say so. An email-change link whose change
      GoTrue no longer holds now gets the expired answer without the addresses.
-     Nothing else in this document was re-verified. -->
+     Nothing else in this document was re-verified.
+
+     AMENDED 2026-11-12 (docket S25, merge of main): INV-E5's Tested at text
+     says what the wider sweeps of confirm-landing.test.ts hold, and its
+     Enforced by text names the opener policy header the page is sent with,
+     now pinned on that path in security-headers.test.ts. The sentences on
+     links written before the first release were reworded. Nothing else in
+     this document was re-verified. -->
 
 # Security invariants
 
@@ -1508,14 +1515,17 @@ application structure.
   address the page names has been on screen through such a second: wholly,
   or, for one taller than the window, each of its lines
   ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)); the
-  page gives no element an id, so no link opens it scrolled to the button. A
+  page gives no element an id, so no link opens it scrolled to the button,
+  and it is sent with the app's opener policy header, so a browser does not
+  show it in a window that the page opening it has barred from running
+  scripts. A
   window swap (DoubleClickjacking), or a window another site opens small and
   scrolled past the line or into the middle of a long address, therefore
   gets no press before the account's address has been on screen for a
-  second. Until the
-  second S25 release a link without `r` still gets the page it got before,
-  with the signed-in notice and the gate, and is logged (type only). Where a
-  link lands is fixed by its type
+  second. A link written by a build from before the first S25 release carries
+  no `r`: it gets the page it got before, with the signed-in notice and the
+  gate, and is logged (type only); the second release requires `r` on every
+  link. Where a link lands is fixed by its type
   ([`confirm-landing.ts`](../../apps/web/src/lib/auth/confirm-landing.ts)),
   not chosen by the link. The two `GET`s that spend something of the person's
   ask `sentFromAnotherOrigin` (`Sec-Fetch-Site` present and neither
@@ -1561,9 +1571,14 @@ application structure.
   address, opened after the change was corrected or completed, shows neither
   address);
   [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
-  (each type's landings, and sweeps over the five link builders, each signing
-  for the id GoTrue returned with its link, and the repository's sign-in
-  harnesses, each signing `r` and waiting for the gate);
+  (each type's landings, and sweeps over the syntax tree of every source: the
+  five link builders are the only ones that ask GoTrue for a link token, each
+  as many times as reviewed and each signing for the id GoTrue returned with
+  its link; no source but the link writer and the page names the page's
+  path; and in the rest of the repository only the two sign-in harnesses do
+  either, each signing `r` and waiting for the gate);
+  [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
+  (the opener policy header reaches the page, in one value);
   [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
   (another origin's link, image or frame leaves a live session alone and still
   clears a gone one); and
@@ -1630,12 +1645,11 @@ application structure.
     again later, which the gate cannot tell from a real press (the address has
     then been on screen for at least a second, though the page may have been
     scrolled on since); and a lookalike address made to match the full one
-    (much harder than matching a mask). Until the second S25 release a link
-    without `r` (one sent before the first, or one built by hand from a token
-    the other site holds) still gets the old page, which cannot name the
-    account; the second release refuses it. The first version of this entry
-    presented the login CSRF as closed for every browser that sends Fetch
-    Metadata; it was not.
+    (much harder than matching a mask). The second S25 release requires `r`
+    on every link; until then a link written before the first release gets
+    the page it got before, which names no account. The first version of
+    this entry presented the login CSRF as closed for every browser that
+    sends Fetch Metadata; it was not.
   - A post from a browser that sends no `Sec-Fetch-Site` (one without Fetch
     Metadata, or one whose header an extension strips), which needs an unspent
     link for an account the attacker holds; the log line shows whether such
