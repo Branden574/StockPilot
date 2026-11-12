@@ -100,9 +100,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whatsnew-returns-1112 (2026-11-12; was: '2026-11-10T21:50:00Z'): the returns release
     // below is dated 2026-11-12T08:42:00Z, so the placeholder is that same minute.
     // Moved again by docs/whatsnew-phone-1112 (2026-11-12; was: '2026-11-12T08:42:00Z'): the phone appearance and
-    // returns release below is dated 2026-11-12T19:25:00Z, so the placeholder is that same minute. If the
+    // returns release below is dated 2026-11-12T19:30:00Z, so the placeholder is that same minute. If the
     // integrator moves that release's minute, move this one with it.
-    publishedAt: '2026-11-12T19:25:00Z',
+    publishedAt: '2026-11-12T19:30:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -207,9 +207,10 @@ export const RELEASES: Release[] = [
     //   the flag, so 'off').
     // - Web, live since 19:18Z: #504 (Liquid Glass toasts bottom right) and
     //   #502 (one draft per double click on Email return request).
-    // DATED 19:25Z PROVISIONALLY: the integrator moves this to the whole
-    // minute at or after the first iOS launches of the update show in EAS
-    // insights, and moves the Liquid Glass draft's placeholder above with it.
+    // DATED 19:30Z: the update group (181611cd, opt-in, published about
+    // 19:22Z) had its first iOS launch, 0 failures, in EAS insights, and the
+    // owner's phone showed it running at 19:29Z; 19:30Z is the whole minute
+    // after both. The Liquid Glass draft's placeholder above moved with it.
     // If the phone update is rolled back while the web stays, the phone
     // entries are no longer true: withdraw this release or correct it.
     // Claims checked against the code at dd2c349b8 (web paths under
@@ -337,7 +338,7 @@ export const RELEASES: Release[] = [
       'In the mobile app, email a return request, and choose your Design and Theme in Settings, Appearance',
     summary:
       'In the mobile app, after the latest update, an open return has an Email return request button on your own order and on the return screen. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. Settings, Appearance now has Design (Classic, or Liquid Glass if you choose it) and Theme, saved to your account and shared with the website. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
-    publishedAt: '2026-11-12T19:25:00Z',
+    publishedAt: '2026-11-12T19:30:00Z',
     entries: [
       {
         id: 'app-return-request-own-order',
@@ -390,7 +391,7 @@ export const RELEASES: Release[] = [
         area: 'Returns',
         title: 'A double click on Email return request opens one email, not two',
         whatChanged:
-          'On the website, a double click on Email return request now opens one email draft, not two. After a press, the button rests for a second.',
+          'On the website, a double click on Email return request now opens one email draft, not two. After a press, the button is unavailable for a second.',
         whyItMatters:
           'A double click opened two drafts, and sending both would give the warehouse the same request twice.',
         howItAffectsYou:
@@ -407,7 +408,7 @@ export const RELEASES: Release[] = [
         area: 'Web app',
         title: 'In Liquid Glass on the website, pop-up messages are back in the bottom right corner',
         whatChanged:
-          'On the website, in Liquid Glass, the short messages that pop up after an action now appear in the bottom right corner, where Classic shows them. In wider windows they had appeared near the bottom centre of the page.',
+          'On the website, in Liquid Glass, the short messages that pop up after an action now appear in the bottom right corner, where Classic shows them. In wider windows they had appeared near the bottom center of the page.',
         whyItMatters: 'Messages should appear in the same place whichever design you use.',
         howItAffectsYou: 'Nothing changes in Classic.',
         whatToDo: 'No action needed.',
