@@ -1165,7 +1165,9 @@ WEB_TESTS=(
   # what the pin names, reads the write forms of the invariant suite
   # (_sec_inv_writer_re in security_invariants.test.sql, proved form by form
   # by INV-30b): the whole pattern or its UPDATE arm byte for byte, or the
-  # five bare verbs. A pin with a narrower list of its own fails.
+  # five bare verbs. A pin with a narrower list of its own fails. The five
+  # pins that carry the suite's forms keep, beside them, the public-qualified
+  # form they held before; taking that line out fails too.
   src/test/pgtap-write-pins.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web

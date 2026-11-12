@@ -17,9 +17,10 @@ import { describe, expect, it } from 'vitest';
  * This guard keeps the copies equal to the row, and refuses a new pin that
  * carries a narrower list of its own.
  *
- * What is read: every regular expression that follows `!~` or `!~*` in
- * supabase/tests, other than in the suite itself. One that names a write verb
- * (insert, update, delete, merge, truncate) must be one of:
+ * What is read: every regular expression that follows `!~` or `!~*` on the
+ * same line, in supabase/tests, other than in the suite itself. One that
+ * names a write verb (insert, update, delete, merge, truncate) must be one
+ * of:
  *   - the suite's whole pattern, or its UPDATE arm, byte for byte;
  *   - the bare word list of all five verbs (stricter: it refuses the word
  *     wherever it appears);
@@ -28,6 +29,17 @@ import { describe, expect, it } from 'vitest';
  *   - a pattern listed below with its reason.
  * The UPDATE arm is also used through regexp_matches, to count statements;
  * the named files are checked for the form they are expected to carry.
+ *
+ * What is not read: a pin written another way (`not (... ~ ...)`, pgTAP's
+ * doesnt_match or doesnt_imatch, a regexp_matches count of 0) or with its
+ * pattern on the line after the operator. No test file has one; write a new
+ * pin with `!~` or `!~*` and the pattern on the same line, so this guard
+ * reads it.
+ *
+ * The suite's UPDATE form reads a statement as far as its SET. The five named
+ * files also keep the form they held before they took it, which refuses an
+ * UPDATE that names public whatever follows the table; the last check keeps
+ * the two side by side.
  */
 
 const TESTS_DIR = path.resolve(__dirname, '../../../../supabase/tests');
@@ -37,7 +49,9 @@ function read(name: string): string {
   return readFileSync(path.join(TESTS_DIR, name), 'utf8');
 }
 
-const suiteRow = /insert into _sec_inv_writer_re \(re\) values\n {2}\(\$re\$(.*?)\$re\$\);/.exec(read(SUITE));
+const suiteRow = /insert into _sec_inv_writer_re \(re\) values\n {2}\(\$re\$(.*?)\$re\$\);/.exec(
+  read(SUITE),
+);
 const FULL = suiteRow?.[1] ?? '';
 const ARM = FULL.slice(FULL.indexOf('\\mupdate\\s+'));
 const BARE = '\\m(insert|update|delete|merge|truncate)\\M';
@@ -53,7 +67,32 @@ const WHOLE_PATTERN_FILES = [
 const UPDATE_ARM_FILES = ['0378_order_hold_stock.test.sql', '0383_revise_order_needed_by.test.sql'];
 
 /** Files that refuse the five verbs as bare words. */
-const BARE_WORD_FILES = ['0351_platform_member_activity.test.sql', '0377_order_readiness_facts.test.sql'];
+const BARE_WORD_FILES = [
+  '0351_platform_member_activity.test.sql',
+  '0377_order_readiness_facts.test.sql',
+];
+
+/**
+ * The public-qualified form each of the five files held before it took the
+ * suite's, kept beside it. `text` is exact.
+ */
+const EARLIER_FORMS: ReadonlyArray<{ file: string; text: string }> = [
+  ...WHOLE_PATTERN_FILES.map((file) => ({
+    file,
+    text: "and p.prosrc !~* '\\mupdate\\s+public\\M'",
+  })),
+  {
+    file: '0378_order_hold_stock.test.sql',
+    text: "and p.prosrc !~* '\\mupdate\\s+(public\\.|only\\M)'",
+  },
+  {
+    file: '0383_revise_order_needed_by.test.sql',
+    text: "and (select count(*) from regexp_matches(p.prosrc, '\\mupdate\\s+public\\.', 'gi')) = 2",
+  },
+];
+
+const EARLIER_FORM_WHY =
+  'the form this pin held before it took the suite’s, kept beside it: it refuses an UPDATE that names public whatever follows the table, where the suite’s form reads an UPDATE as far as its SET';
 
 /**
  * Patterns that name a write verb and are none of the shared forms, each with
@@ -75,6 +114,16 @@ const LISTED: ReadonlyArray<{ file: string; pattern: string; why: string }> = [
     pattern: 'insert\\s+into\\s+public\\.cycle_count',
     why: 'pins one statement (the function starts a count through start_cycle_count, not by its own INSERT); it does not say the function writes nothing',
   },
+  {
+    file: '0378_order_hold_stock.test.sql',
+    pattern: '\\mupdate\\s+(public\\.|only\\M)',
+    why: EARLIER_FORM_WHY,
+  },
+  ...WHOLE_PATTERN_FILES.map((file) => ({
+    file,
+    pattern: '\\mupdate\\s+public\\M',
+    why: EARLIER_FORM_WHY,
+  })),
 ];
 
 const WRITE_VERB = /(?<![a-z_])(insert|update|delete|merge|truncate)(?![a-z_])/i;
@@ -96,7 +145,9 @@ function writePins(): Pin[] {
         for (const m of text.matchAll(NOT_MATCH_OPERAND)) {
           const pattern = m[2] ?? m[3] ?? '';
           // A class escape (\m, \s, \M) is not part of the word beside it.
-          if (WRITE_VERB.test(pattern.replace(/\\[A-Za-z]/g, ' '))) pins.push({ file, line: i + 1, pattern });
+          if (WRITE_VERB.test(pattern.replace(/\\[A-Za-z]/g, ' '))) {
+            pins.push({ file, line: i + 1, pattern });
+          }
         }
       });
   }
@@ -113,8 +164,10 @@ function isRowLockPin(pattern: string): boolean {
 
 describe('pgTAP write pins read the security invariant suite’s write forms', () => {
   it('finds the suite’s pattern and its UPDATE arm', () => {
-    expect(FULL).toMatch(/^\\m\(insert\\s\+into\|merge\\s\+into\|delete\\s\+from\|truncate\)\\M\|\\mupdate\\s\+/);
-    expect(ARM).toMatch(/^\\mupdate\\s\+\(only\\s\+\)\?/);
+    expect(FULL).toMatch(
+      /^\\m\(insert\\s\+into\|merge\\s\+into\|delete\\s\+from\|truncate\)\\M\|\\mupdate\\s\+/,
+    );
+    expect(ARM).toMatch(/^\\mupdate\\s\+\(only\\s\*\\\(\?\\s\*\)\?/);
     expect(ARM.endsWith('\\s+set\\M')).toBe(true);
   });
 
@@ -152,9 +205,16 @@ describe('pgTAP write pins read the security invariant suite’s write forms', (
 
   it('every listed pattern is still in its file', () => {
     const pins = writePins();
-    const stale = LISTED.filter((l) => !pins.some((p) => p.file === l.file && p.pattern === l.pattern)).map(
-      (l) => `${l.file}: ${l.pattern}`,
-    );
+    const stale = LISTED.filter(
+      (l) => !pins.some((p) => p.file === l.file && p.pattern === l.pattern),
+    ).map((l) => `${l.file}: ${l.pattern}`);
     expect(stale).toEqual([]);
+  });
+
+  it('the five named files keep the public-qualified form beside the suite’s', () => {
+    const missing = EARLIER_FORMS.filter((e) => !read(e.file).includes(e.text)).map(
+      (e) => `${e.file}: ${e.text}`,
+    );
+    expect(missing).toEqual([]);
   });
 });
