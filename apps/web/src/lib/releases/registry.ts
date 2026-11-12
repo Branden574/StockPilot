@@ -97,7 +97,9 @@ export const RELEASES: Release[] = [
     // Moved when main was merged in after #493 and #494 (2026-11-10; was: '2026-11-09T12:00:00Z'): the Add all
     // release below is dated 2026-11-10T21:50:00Z, and dates must not increase going down, so the placeholder is
     // that same minute. Move it again whenever a release is published below this draft.
-    publishedAt: '2026-11-10T21:50:00Z',
+    // Moved again by docs/whatsnew-returns-1112 (2026-11-12; was: '2026-11-10T21:50:00Z'): the returns release
+    // below is dated 2026-11-12T08:42:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-12T08:42:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -173,6 +175,145 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'returns-request-email-names-2026-11',
+    revision: 1,
+    // Two web changes, live on production since 2026-11-12:
+    // - #498 (squash 8d0b832fd, live 08:38Z): "Send return request". The
+    //   phone's half is in the same merge but reaches phones only with the
+    //   next phone update, so the words say "on the website" and that the
+    //   mobile app gets the button with its next update. When that update is
+    //   out, say so in a new release; do not bump this revision for it.
+    // - #499 (squash fcce4e66f, live 08:42Z): the Returns list and the return
+    //   page name the person the order was for; Returns search finds them by
+    //   name or email. Server only for the names and the search: the phone's
+    //   list and return screen already show the server's requesterName (see
+    //   below), so the phone is named for the names and the search, and not
+    //   for the new no-name words, which are phone code (returns-view.ts).
+    // Dated 08:42Z, the minute the later of the two went live.
+    // Claims checked against the code at a772f898e (paths under apps/web/src
+    // unless named):
+    // - "each open request under Your requests on this order": the order page
+    //   passes returnRequest to RequesterTracking only for
+    //   requesterTrackingEligible (app/(dashboard)/dashboard/orders/[id]/
+    //   page.tsx:1186-1187: own order, no returns:manage, returnable, Returns
+    //   on) with resolved mailboxes (:484, :837-838, :1894-1916); the heading is
+    //   RETURNS_COPY.requesterYourRequests (packages/core/src/returns/
+    //   returns-copy.ts:333); the button sits in each request
+    //   (components/returns/requester-tracking.tsx:142-150).
+    // - "while the return is still open": SendReturnRequestButton draws
+    //   nothing unless canSendReturnRequest (send-return-request-button.tsx:
+    //   49-50): status requested, approved or received, with a number
+    //   (packages/core/src/returns/return-request-email.ts:44, :48-54).
+    // - "the mailboxes your organization set for delivery requests", "not
+    //   shown when they are not set": the delivery_request routing, and only
+    //   a pair the organization saved (server/services/
+    //   return-request-email.ts returnRequestRecipientsDto); a null pair draws
+    //   no button (send-return-request-button.tsx:49).
+    // - "the return number, the order and the items": the draft's content
+    //   type (core return-request-email.ts:89-105).
+    // - "in Outlook or in your email app", "Copy details": the dialog's three
+    //   buttons (components/returns/return-request-action.tsx:184-197;
+    //   RETURN_REQUEST_COPY.primary/copy/defaultApp, core :147-149), Outlook
+    //   by window.open(outlookUrl) (:109), the email app by mailtoUrl
+    //   (:148, :157).
+    // - "StockPilot does not send it ... press Send yourself": core
+    //   RETURN_REQUEST_COPY.honesty (:150-151); nothing in #498 sends mail or
+    //   creates a ticket (PUBLISHING.md: it prepares an email the person
+    //   reviews and sends).
+    // - Return page: "Send return request" in the header for every viewer the
+    //   page opens for (returns/[id]/page.tsx:52, :102; return-workbench.tsx:
+    //   943-970, :976 PageHeader actions); "Report a problem" for who may submit maintenance requests
+    //   where Maintenance is on (page.tsx:63, return-workbench.tsx:948), with
+    //   the order attached and the return in the subject (:961-966).
+    // - "people who can change your organization's settings see a note with
+    //   a link to Settings, Email routing": showRoutingHint is
+    //   organization:update (returns/[id]/page.tsx:122), drawn only without
+    //   mailboxes on an open return (return-workbench.tsx:949, :1012-1025).
+    // - "If you manage returns ... on the return page": the order page leaves
+    //   returns:manage out (orders/[id]/page.tsx:484, :1187), and the return
+    //   page opens for returns:read or returns:manage (returns/[id]/page.tsx:52).
+    // - Names: requesterLabelOf (server/services/returns-workbench.ts:406-430):
+    //   the typed name, else the profile name of the member who placed the
+    //   order for themselves, else that profile's email (readNames :351); used
+    //   by the list (:1190) and the return page (:896), which shows it in the
+    //   "Against order" line (components/returns/return-workbench.tsx:991-1001)
+    //   and the list's Requester column (returns/page.tsx:214, :265).
+    // - "Opened by staff or Opened by the requester": returns/page.tsx:265-268
+    //   (website list only).
+    // - Search: searchRequesterMembers matches profile name or email
+    //   (returns-workbench.ts:990-1015) beside the RMA, typed name, email and
+    //   SO number terms (:1102-1117); placeholder "Search RMA, SO number or
+    //   requester" (core returns-copy.ts:270). Over RETURN_SEARCH_MAX_MEMBERS
+    //   (:974, 500) people, or a failed read, the list says so (returns/
+    //   page.tsx:163-169; core returns-copy.ts:273-276: "Type more of the name").
+    // - The mobile app: the Returns list shows requesterName ?? requesterEmail
+    //   (apps/mobile/src/lib/returns-view.ts:112-116) and the return screen
+    //   too (apps/mobile/src/components/return-workbench-view.tsx:405), both
+    //   since #322 (dab3a07d2, 2026-10-05) and so in the phone bundle that is
+    //   live; both read GET /api/v1/returns and /api/v1/returns/[id]
+    //   (apps/mobile/src/lib/returns-api.ts:247-262), whose answers come from
+    //   the same two loaders (server/services/returns.ts:682-712), and the
+    //   phone's search sends q to the list route ((drawer)/returns.tsx:150).
+    // Not said: the order timeline line (audit readers only), the one-per-hour
+    // limit, any number of people, any speed.
+    // Who is told: entry 1, who places orders where Returns is on (the
+    // pattern of returns-requester-exchange, which this section belongs to;
+    // no link: the button is on one order's page). Entries 2 and 3, returns
+    // readers where Returns is on, the gate of the linked page
+    // (returns/page.tsx:75, :80).
+    status: 'published',
+    title: 'Send a return request by email, and see who each return is for',
+    summary:
+      'On the website, an open return now has a Send return request button, on your own order and on the return page. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. The mobile app gets the button with its next update. Returns now name the person each order was for, and Returns search finds returns by that person’s name or email.',
+    publishedAt: '2026-11-12T08:42:00Z',
+    entries: [
+      {
+        id: 'returns-send-request-own-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Send a return request by email from your own order',
+        whatChanged:
+          'On the website, on an order you placed, each open request under Your requests on this order now has a Send return request button. It opens an email to the mailboxes your organization set for delivery requests, already filled in with the return number, the order and the items.',
+        whyItMatters:
+          'To ask the warehouse about a return, you had to write the email yourself and copy the details in.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, you check it and press Send yourself, and StockPilot does not create a ticket. Copy details copies the same text if the email does not open. The button shows while the return is still open, and only when your organization has set its delivery request mailboxes. If you manage returns, use the button on the return page. The mobile app gets the button with its next update.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-send-request-return-page',
+        category: 'new',
+        area: 'Returns',
+        title: 'Send return request and Report a problem on a return',
+        whatChanged:
+          'On the website, the return page now has Send return request at the top while the return is still open. It opens the same prefilled email about that return. Report a problem is there too if you can send maintenance requests: it opens a new maintenance request with the order attached and the return number in its subject.',
+        whyItMatters:
+          'Writing to another team about a return meant starting an email or a request from nothing.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, and you press Send yourself. If your organization has not set its delivery request mailboxes, the button is not shown, and people who can change your organization’s settings see a note with a link to Settings, Email routing. The mobile app gets the button with its next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-requester-names',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Returns name the person each order was for, and search finds them by name or email',
+        whatChanged:
+          'The Returns list and the return page now name the person the order was for, also when they placed the order themselves. A person with no name on their profile shows as their email. Typing part of a person’s name or email into the Returns search now finds their returns, as well as RMA and SO numbers.',
+        whyItMatters:
+          'Returns on orders people placed themselves said Staff or Requester instead of a name, and searching for the person did not find them.',
+        howItAffectsYou:
+          'The Returns list and return screen in the mobile app show the same names, and its search finds the same returns. On the website, a return with no name or email to show now says Opened by staff or Opened by the requester. If a search matches too many people, the list says so: type more of the name.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
       },
     ],
   },

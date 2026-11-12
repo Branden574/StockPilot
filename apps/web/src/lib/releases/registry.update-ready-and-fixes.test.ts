@@ -99,6 +99,8 @@ const LATER_IDS = ['web-fixes-2026-11-02', 'archived-charters-2026-11'];
 // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: the S2 release alone): the count sheet release (#492) is published later still, at the top. Like the S2 release it reaches an owner with every permission and module and not a member with no permission, so it is kept in this list, read by the owner and stamped seen on each phone with it.
 // Re-pinned by feat/order-add-all (2026-11-10; was: the count sheet and S2 releases): the Add all release is published later still, at the top. It reaches an owner with every permission and module, not a member with no permission, so it is kept with these two.
 const S2_IDS = [
+  // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'returns-request-email-names-2026-11',
   'order-add-all-2026-11',
   'count-sheet-long-names-2026-11',
   'approver-controls-own-warehouses-2026-11',
@@ -232,9 +234,10 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
     // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
-    expect(RELEASES[13]?.id).toBe(ID);
-    expect(RELEASES.slice(10, 13).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[14]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[14]?.id).toBe(ID);
+    expect(RELEASES.slice(11, 14).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[15]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -261,12 +264,13 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
     // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
-    for (const r of RELEASES.slice(14)) {
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(15)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
-    for (const r of RELEASES.slice(10, 13)) {
+    for (const r of RELEASES.slice(11, 14)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
@@ -405,7 +409,8 @@ describe('the update-ready-and-fixes release', () => {
         // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: slice(6, 10)): the S2 release is published later, at the top, and reaches this member.
         // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: slice(7, 11)): the count sheet release is published later, at the top, and reaches this member.
         // Re-pinned by feat/order-add-all (2026-11-10; was: slice(8, 12)): the Add all release is published later, at the top, and reaches this member.
-        .slice(9, 13),
+        // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: slice(9, 13)): the returns request and names release is published later, at the top, and reaches this member.
+        .slice(10, 14),
     ).toEqual([...NEWER_IDS, ID]);
     // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: NEWER_IDS before #461, [authenticator, retries, ID] before #471, [ID] after #471): the two releases in LATER_IDS, published later and unseen on each of these phones, reach this member and come first.
     const [webFixes, charters] = LATER_IDS as [string, string];
