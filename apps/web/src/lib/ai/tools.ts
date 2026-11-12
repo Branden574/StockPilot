@@ -12,7 +12,12 @@ import { EXPORT_FORBIDDEN_COPY } from '@/lib/exports/export-refusal';
 import { movementActorLabel } from '@/lib/movements/actor-label';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { safeFetch, SsrfBlockedError, SsrfLookupFailedError } from '@/lib/ssrf-guard';
-import { assertPermission, ServiceError, type ServiceContext } from '@/server/services/context';
+import {
+  assertPermission,
+  mfaGateError,
+  ServiceError,
+  type ServiceContext,
+} from '@/server/services/context';
 import { fetchAllRowsByIds, reportDegradedRead } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
 import { BooksImportService } from '@/server/services/books-import';
@@ -3037,6 +3042,11 @@ const backfillEmbeddingsTool: ToolExecutor = {
     },
   },
   async execute(args, ctx) {
+    // The multi-factor gate first, as assertPermission runs it for every other
+    // write tool and as the Settings backfill does (server/actions/
+    // embeddings.ts): this tool checks a role, not a permission, so it asks
+    // the gate itself.
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
     // Admin gate. Thrown, like every other write tool's refusal, so the
     // attempt is audited as failed.
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {

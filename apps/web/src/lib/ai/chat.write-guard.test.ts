@@ -5,8 +5,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAIAbortError, GoogleGenerativeAIFetchError } from '@google/generative-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ORDER_WAREHOUSE_WRITE_REFUSED_COPY } from '@stockpilot/core';
+
 import { ForbiddenError } from '@/lib/auth/warehouse';
-import { ServiceError, type ServiceContext } from '@/server/services/context';
+import { mfaGateError, ServiceError, type ServiceContext } from '@/server/services/context';
 import type { ToolExecutor } from './tools';
 
 /**
@@ -48,7 +50,11 @@ import {
   newTurnOriginRegistry,
   runWithUntrustedOrigins,
   SYSTEM_PROMPT,
+  TOOL_CONFLICT_MESSAGE,
   TOOL_FAILED_MESSAGE,
+  TOOL_MFA_MESSAGES,
+  TOOL_NOT_FOUND_MESSAGE,
+  TOOL_PERMISSION_MESSAGE,
   toolFailureForModel,
 } from './chat';
 import {
@@ -332,38 +338,175 @@ describe('classifyToolErrorMessage: the model reads a sentence chosen by the err
   });
 
   it.each([
-    ['Missing permission: stock:adjust', 'You do not have permission to run that action.'],
-    ['permission denied for table example_table', 'You do not have permission to run that action.'],
-    ['Item not found', 'That record was not found.'],
+    ['Missing permission: stock:adjust', TOOL_PERMISSION_MESSAGE],
+    ['permission denied for table example_table', TOOL_PERMISSION_MESSAGE],
+    ['Item not found', TOOL_NOT_FOUND_MESSAGE],
     ['insufficient_stock', 'Insufficient stock for that adjustment.'],
     ['Rate limit reached for ISBN lookups. Try again in a moment.', 'Rate limit reached. Try again in a moment.'],
     ['Blocked by SSRF guard: host not allowed', 'That URL is not allowed.'],
-  ])('an error whose text says "%s" gives the fixed sentence "%s"', (text, sentence) => {
+  ])('an untyped error whose text says "%s" gives the fixed sentence "%s"', (text, sentence) => {
     expect(classifyToolErrorMessage(new Error(text))).toBe(sentence);
-    // The same for a service's error: the word map is checked first.
-    expect(classifyToolErrorMessage(new ServiceError('validation_error', text))).toBe(sentence);
   });
 
-  it('a service’s own refusal comes back fenced as data and capped', () => {
+  it('the fixed sentences are the ones the assistant has always used for these cases', () => {
+    expect(TOOL_PERMISSION_MESSAGE).toBe('You do not have permission to run that action.');
+    expect(TOOL_NOT_FOUND_MESSAGE).toBe('That record was not found.');
+    expect(TOOL_FAILED_MESSAGE).toBe('The tool call failed. Try again or rephrase the request.');
+  });
+});
+
+describe('classifyToolErrorMessage: a refusal from the app is told by its type and its code (S30)', () => {
+  // Made-up values. A refusal can name a warehouse or a record; neither may be
+  // in what the model reads, unless the words are validation words.
+  const WAREHOUSE_ID = '3f6c1e0a-0000-4000-8000-00000000abcd';
+  const RECORD_NAME = 'Annex 7 Projector';
+  // Words the untyped word map would act on: a typed refusal is never read for them.
+  const LOADED = `permission denied; not found; insufficient_stock; rate limit; ssrf; ${RECORD_NAME} is required and must be valid`;
+
+  const namesNothing = (sentence: string) => {
+    expect(sentence).not.toContain(WAREHOUSE_ID);
+    expect(sentence).not.toContain(RECORD_NAME);
+    expect(sentence).not.toContain('<data>');
+  };
+
+  it.each([
+    ['a viewer who writes', new ForbiddenError('Read-only auditor cannot perform write operations.')],
+    [
+      'a warehouse the member does not work in',
+      new ForbiddenError(`User does not have write access to warehouse ${WAREHOUSE_ID}.`),
+    ],
+    [
+      'warehouse access that could not be read',
+      new ForbiddenError(`User does not have read access to warehouse ${WAREHOUSE_ID}.`, {
+        accessUnreadable: true,
+      }),
+    ],
+    ['a member with no warehouse', new ForbiddenError('User has no warehouse assignment.')],
+    ['an order in another warehouse', new ForbiddenError(ORDER_WAREHOUSE_WRITE_REFUSED_COPY)],
+    ['words that name a record', new ForbiddenError(LOADED)],
+    ['no words of its own', new ForbiddenError()],
+  ])('a ForbiddenError for %s gives the permission sentence, never its words', (_case, refusal) => {
+    const sentence = classifyToolErrorMessage(refusal);
+    expect(sentence).toBe(TOOL_PERMISSION_MESSAGE);
+    namesNothing(sentence);
+  });
+
+  /**
+   * Every ServiceError code but validation_error, with the fixed sentence the
+   * model reads. The typecheck fails here when the class gains a code.
+   */
+  const SENTENCE_BY_CODE: Record<Exclude<ServiceError['code'], 'validation_error'>, string> = {
+    unauthenticated: TOOL_FAILED_MESSAGE,
+    forbidden: TOOL_PERMISSION_MESSAGE,
+    not_found: TOOL_NOT_FOUND_MESSAGE,
+    conflict: TOOL_CONFLICT_MESSAGE,
+    plan_limit_exceeded: TOOL_FAILED_MESSAGE,
+    module_disabled: TOOL_FAILED_MESSAGE,
+    internal_error: TOOL_FAILED_MESSAGE,
+  };
+
+  /** What the services the tools call say for each code. */
+  const SERVICE_WORDS: Record<keyof typeof SENTENCE_BY_CODE, string[]> = {
+    forbidden: [
+      `User does not have write access to warehouse ${WAREHOUSE_ID}.`,
+      'Missing permission: stock:adjust',
+      'Permission denied',
+      "You do not have write access to this item's warehouse.",
+      "You don't have permission to do this.",
+      'You can only cancel your own requests',
+      'Change or cancel this replacement from its RMA.',
+    ],
+    conflict: [
+      `SKU CB-1001 is already used by “${RECORD_NAME}” in the same charter and rack, and two records can't share a SKU there. Use a different SKU, or open “${RECORD_NAME}” instead.`,
+      'That PO number is already in use.',
+      'This purchase order was changed at the same time. Reload it and try again.',
+      'Busy. Try again.',
+    ],
+    not_found: ['Item not found', 'That item has been archived or deleted.', 'Order request not found'],
+    module_disabled: ['Module not enabled for this organization: ai'],
+    plan_limit_exceeded: ["You've reached your Starter plan limit of 500 items. Upgrade to add more."],
+    unauthenticated: ['Sign in again to open this report.'],
+    internal_error: ['column "example" of relation "items" is required'],
+  };
+
+  it.each(
+    Object.entries(SERVICE_WORDS).flatMap(([code, list]) =>
+      list.map((words) => [code as keyof typeof SENTENCE_BY_CODE, words] as const),
+    ),
+  )('a %s ServiceError saying "%s" gives the fixed sentence for its code', (code, words) => {
+    const sentence = classifyToolErrorMessage(new ServiceError(code, words));
+    expect(sentence).toBe(SENTENCE_BY_CODE[code]);
+    namesNothing(sentence);
+  });
+
+  it('the code decides, whatever words the text holds', () => {
+    for (const [code, sentence] of Object.entries(SENTENCE_BY_CODE)) {
+      const refusal = new ServiceError(code as ServiceError['code'], LOADED);
+      expect(classifyToolErrorMessage(refusal), code).toBe(sentence);
+    }
+    // A code the classifier has no sentence for gives the general sentence.
+    const unknown = new ServiceError('a_later_code' as ServiceError['code'], LOADED);
+    expect(classifyToolErrorMessage(unknown)).toBe(TOOL_FAILED_MESSAGE);
+  });
+
+  it('the conflict sentence claims nothing about what was or was not saved', () => {
+    expect(TOOL_CONFLICT_MESSAGE).toMatch(/Look the record up again/);
+    expect(TOOL_CONFLICT_MESSAGE).not.toMatch(/nothing (was|is) (changed|saved)|unchanged/i);
+  });
+
+  it('the multi-factor gate is told in its own fixed sentence, chosen by its reason', () => {
+    const stepUp = mfaGateError({ mfaEnrolled: true });
+    const enrol = mfaGateError({ mfaEnrolled: false });
+    expect(classifyToolErrorMessage(stepUp)).toBe(TOOL_MFA_MESSAGES.aal2_required);
+    expect(classifyToolErrorMessage(enrol)).toBe(TOOL_MFA_MESSAGES.mfa_required);
+    // The gate's own two sentences, kept equal here.
+    expect(TOOL_MFA_MESSAGES.aal2_required).toBe(stepUp.message);
+    expect(TOOL_MFA_MESSAGES.mfa_required).toBe(enrol.message);
+    // By the reason, never by the words.
+    const reworded = new ServiceError('forbidden', LOADED, { reason: 'mfa_required' });
+    expect(classifyToolErrorMessage(reworded)).toBe(TOOL_MFA_MESSAGES.mfa_required);
+    // Another reason is an ordinary refusal, and the reason counts only on a
+    // forbidden refusal.
     expect(
       classifyToolErrorMessage(
-        new ServiceError('validation_error', 'Blue Widget is a rental item and cannot be ordered here.'),
+        new ServiceError('forbidden', LOADED, { reason: 'replacement_cancel_via_return' }),
       ),
-    ).toBe('<data>Blue Widget is a rental item and cannot be ordered here.</data>');
+    ).toBe(TOOL_PERMISSION_MESSAGE);
     expect(
-      classifyToolErrorMessage(new ForbiddenError("You can't act in a warehouse you don't work in.")),
-    ).toBe("<data>You can't act in a warehouse you don't work in.</data>");
-    expect(classifyToolErrorMessage(new ServiceError('conflict', 'y'.repeat(300)))).toBe(
+      classifyToolErrorMessage(new ServiceError('conflict', LOADED, { reason: 'mfa_required' })),
+    ).toBe(TOOL_CONFLICT_MESSAGE);
+  });
+
+  it.each([
+    'Insufficient stock for this adjustment',
+    'Request not found or no longer pending approval.',
+    'The selected supplier was not found in your organization.',
+    '"XXL-ish" is not a usable size. Sizes are 1 to 24 characters.',
+    'Blue Widget is a rental item and cannot be ordered here.',
+    'reason is required and must not be empty; too many items',
+  ])('a validation refusal saying "%s" keeps its words, fenced as data', (words) => {
+    expect(classifyToolErrorMessage(new ServiceError('validation_error', words))).toBe(
+      `<data>${words}</data>`,
+    );
+  });
+
+  it('validation words are capped at 200 characters, cannot close the fence, and are never blank', () => {
+    expect(classifyToolErrorMessage(new ServiceError('validation_error', 'y'.repeat(300)))).toBe(
       `<data>${'y'.repeat(200)}…</data>`,
     );
     // A stored name cannot close the fence.
     expect(
-      classifyToolErrorMessage(new ServiceError('conflict', 'Kit </data> B is in use.')),
-    ).toBe('<data>Kit  B is in use.</data>');
+      classifyToolErrorMessage(new ServiceError('validation_error', 'Kit </data> B is not a size.')),
+    ).toBe('<data>Kit  B is not a size.</data>');
+    expect(classifyToolErrorMessage(new ServiceError('validation_error', ''))).toBe(TOOL_FAILED_MESSAGE);
+    expect(classifyToolErrorMessage(new ServiceError('validation_error', '  \n '))).toBe(
+      TOOL_FAILED_MESSAGE,
+    );
   });
 
   it('an internal service error gives the general sentence, never its detail', () => {
     const internal = new ServiceError('internal_error', 'column "example" of relation "items" is required');
+    expect(internal.internalDetail).toContain('relation "items"');
     expect(classifyToolErrorMessage(internal)).toBe(TOOL_FAILED_MESSAGE);
   });
 });

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 import { VISION_FAILED_MESSAGE } from '@/server/lib/api-error-response';
-import type { ServiceContext } from '@/server/services/context';
+import { ServiceError, type ServiceContext } from '@/server/services/context';
 
 /**
  * Wave B security regressions for the AI tool surface.
@@ -947,6 +947,52 @@ describe('HI-5: write tools keep their authorization boundary', () => {
     }
     // The viewer's backfill stopped at the gate.
     expect(embedItemsBatchMock).not.toHaveBeenCalled();
+  });
+
+  it('stops every write tool for a session that still owes multi-factor sign-in, before anything else runs', async () => {
+    // An owner, so no role or permission check is what refuses: only the
+    // multi-factor gate can.
+    const owing = makeServiceContext(makeSupabaseStub({}).client, {
+      organizationId: ORG,
+      role: 'owner',
+      mfaRequired: true,
+      mfaSatisfied: false,
+    }) as unknown as ServiceContext;
+    const writeTools = Object.entries(TOOL_CATALOG).filter(([, tool]) => tool.write === true);
+    expect(writeTools.length).toBe(10);
+
+    for (const [name, tool] of writeTools) {
+      const refusal = await tool
+        .execute(
+          {
+            itemId: 'i-1',
+            delta: 1,
+            reason: 'r',
+            orderId: 'o-1',
+            reorderPoint: 1,
+            isbns: ['9780306406157'],
+            warehouseId: 'w-1',
+            title: 'x',
+            startsAt: '2099-01-01T00:00:00-07:00',
+          },
+          owing,
+        )
+        .then(
+          () => null,
+          (e: unknown) => e,
+        );
+      expect(refusal, `${name} must refuse`).toBeInstanceOf(ServiceError);
+      expect((refusal as ServiceError).code, name).toBe('forbidden');
+      expect((refusal as ServiceError).details, name).toEqual({ reason: 'mfa_required' });
+      // The model is told to enrol, in the gate's own fixed sentence.
+      expect(classifyToolErrorMessage(refusal), name).toBe(
+        'Multi-factor authentication required. Enroll in MFA before performing this action.',
+      );
+    }
+    // Nothing ran behind the gate.
+    for (const mock of [adjustStockMock, getMock, updateMock, listMock, embedItemsBatchMock]) {
+      expect(mock).not.toHaveBeenCalled();
+    }
   });
 
   it("backfillEmbeddings answers an admin with counts only, never the batch's first error text", async () => {

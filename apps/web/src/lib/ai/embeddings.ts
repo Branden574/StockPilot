@@ -321,14 +321,15 @@ export interface EmbedBatchResult {
  * otherwise write a line per item every hour. Either way the first failure's
  * message is returned in `firstError`.
  *
- * `stopWhenGeminiFails` (the sweep) stops the batch, starting no other item,
- * at Gemini's first 429, at its first refusal of the key itself, or after
- * GEMINI_FAILURES_IN_A_ROW failed calls in a row, and says why in `stopped`:
- * calls that will fail anyway would only spend the key the AI assistant's
- * searches need. `geminiFailuresInARow` starts the count where the batch
- * before it left it, so a run that walks several organizations stops after
- * three failures in a row across them. Without it (the Settings > AI
- * backfill, the AI tool) every item is tried, as before.
+ * `stopWhenGeminiFails` (the sweep and the AI tool) stops the batch, starting
+ * no other item, at Gemini's first 429, at its first refusal of the key
+ * itself, or after GEMINI_FAILURES_IN_A_ROW failed calls in a row, and says
+ * why in `stopped`: calls that will fail anyway would only spend the key the
+ * AI assistant's searches need, and one chat request would wait out a timeout
+ * per item. `geminiFailuresInARow` starts the count where the batch before it
+ * left it, so a run that walks several organizations stops after three
+ * failures in a row across them (the sweep; the AI tool starts at zero).
+ * Without it (the Settings > AI backfill) every item is tried, as before.
  *
  * `deadline` (a Date.now() value) stops it STARTING another item once it
  * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of

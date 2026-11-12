@@ -49,6 +49,31 @@ export const MAX_HISTORY_TURNS = 40;
 /** What the model reads when a tool failed and nothing more exact is known. */
 export const TOOL_FAILED_MESSAGE = 'The tool call failed. Try again or rephrase the request.';
 
+/** What the model reads when the member may not do what the tool was asked to do. */
+export const TOOL_PERMISSION_MESSAGE = 'You do not have permission to run that action.';
+
+/** What the model reads when the record the tool was pointed at is not there. */
+export const TOOL_NOT_FOUND_MESSAGE = 'That record was not found.';
+
+/**
+ * What the model reads when a change ran into what is already saved. It says
+ * nothing about what was or was not written: one conflict (a SKU that other
+ * records could not follow) is raised after the record itself was saved.
+ */
+export const TOOL_CONFLICT_MESSAGE =
+  'That change could not be completed: it conflicts with what is already saved, or the record was being changed at the same time. Look the record up again to see what it holds now.';
+
+/**
+ * What the model reads when the multi-factor gate refused the call, chosen by
+ * the refusal's `details.reason` (the two shapes of mfaGateError,
+ * server/services/context.ts). The gate's own two sentences; a test keeps
+ * them equal.
+ */
+export const TOOL_MFA_MESSAGES = {
+  aal2_required: 'Re-authenticate with MFA before performing this action.',
+  mfa_required: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
+} as const;
+
 /** The longest sentence of the app's own that a failed tool hands the model. */
 const TOOL_WORDS_MAX = 200;
 
@@ -58,21 +83,34 @@ function capped(words: string): string {
 
 /**
  * The one sentence the model reads for a failed tool call, chosen by the
- * error's TYPE. The error itself goes to the report (toolFailureForModel);
- * the model, and so the visible reply, reads only words the app wrote.
+ * error's TYPE and, for a service's error, its CODE. The error itself goes to
+ * the report (toolFailureForModel); the model, and so the visible reply, reads
+ * only words the app wrote.
  *
  * In order:
  *   1. ToolUnavailableError: the fixed sentence for its tool and kind
  *      (tool-errors.ts).
  *   2. UntrustedWriteRefusedError: its refusal sentence (untrusted.ts).
  *   3. ToolRefusal: the tool's own words, at most 200 characters.
- *   4. A fixed sentence picked by words in the error's text (permission, not
- *      found, not enough stock, rate limit, address not allowed). The text is
- *      only tested, never returned.
- *   5. A ServiceError other than internal_error, or a ForbiddenError: the
- *      service's own refusal, at most 200 characters, fenced as data because a
- *      refusal can name a stored item or location.
- *   6. Anything else: TOOL_FAILED_MESSAGE.
+ *   4. ForbiddenError: always TOOL_PERMISSION_MESSAGE. Its own words can name
+ *      a warehouse or a record, so they are never read here.
+ *   5. ServiceError, by its code and never by its words:
+ *        validation_error  the service's words about what was asked, at most
+ *                          200 characters, fenced as data because they can
+ *                          quote a typed value or a stored name. It is the one
+ *                          code whose words the model reads (the raw error
+ *                          text guard lists every such message the tools can
+ *                          reach that is not a fixed sentence).
+ *        not_found         TOOL_NOT_FOUND_MESSAGE
+ *        conflict          TOOL_CONFLICT_MESSAGE
+ *        forbidden         TOOL_MFA_MESSAGES when the refusal is the
+ *                          multi-factor gate's (details.reason), otherwise
+ *                          TOOL_PERMISSION_MESSAGE
+ *        any other code    TOOL_FAILED_MESSAGE
+ *   6. Any other error: a fixed sentence picked by words in its text
+ *      (permission, not found, not enough stock, rate limit, address not
+ *      allowed). The text is only tested, never returned.
+ *   7. Anything else: TOOL_FAILED_MESSAGE.
  */
 export function classifyToolErrorMessage(err: unknown): string {
   if (err instanceof ToolUnavailableError) return toolFailureSentence(err.tool, err.kind);
@@ -80,12 +118,34 @@ export function classifyToolErrorMessage(err: unknown): string {
     return untrustedWriteRefusalSentence(err.toolName, err.field);
   }
   if (err instanceof ToolRefusal) return capped(err.message);
+  if (err instanceof ForbiddenError) return TOOL_PERMISSION_MESSAGE;
+  if (err instanceof ServiceError) {
+    switch (err.code) {
+      case 'validation_error': {
+        const words = err.message.trim();
+        return words ? String(dataTag(capped(words))) : TOOL_FAILED_MESSAGE;
+      }
+      case 'not_found':
+        return TOOL_NOT_FOUND_MESSAGE;
+      case 'conflict':
+        return TOOL_CONFLICT_MESSAGE;
+      case 'forbidden': {
+        const reason = err.details?.reason;
+        if (reason === 'aal2_required' || reason === 'mfa_required') {
+          return TOOL_MFA_MESSAGES[reason];
+        }
+        return TOOL_PERMISSION_MESSAGE;
+      }
+      default:
+        return TOOL_FAILED_MESSAGE;
+    }
+  }
   const text = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
   if (text.includes('permission denied') || text.includes('forbidden') || text.includes('missing permission')) {
-    return 'You do not have permission to run that action.';
+    return TOOL_PERMISSION_MESSAGE;
   }
   if (text.includes('not found') || text.includes('no rows') || text.includes('404')) {
-    return 'That record was not found.';
+    return TOOL_NOT_FOUND_MESSAGE;
   }
   if (text.includes('insufficient_stock') || text.includes('would go negative')) {
     return 'Insufficient stock for that adjustment.';
@@ -95,9 +155,6 @@ export function classifyToolErrorMessage(err: unknown): string {
   }
   if (text.includes('ssrf') || text.includes('private ip') || text.includes('disallowed scheme')) {
     return 'That URL is not allowed.';
-  }
-  if ((err instanceof ServiceError && err.code !== 'internal_error') || err instanceof ForbiddenError) {
-    return String(dataTag(capped(err.message)));
   }
   return TOOL_FAILED_MESSAGE;
 }
