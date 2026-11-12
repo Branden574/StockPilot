@@ -18,6 +18,12 @@ vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 vi.mock('@/server/services/returns', () => ({ RMAService: { forApiContext: vi.fn() } }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// F14: the workbench answer carries the mailboxes and the link for the
+// phone's "Email return request" (services/return-request-email.ts).
+const returnRequestEmailFor = vi.hoisted(() => vi.fn());
+vi.mock('@/server/services/return-request-email', () => ({
+  loadReturnRequestEmailForReturn: (...a: unknown[]) => returnRequestEmailFor(...a),
+}));
 
 const RET = '11111111-1111-4111-8111-111111111111';
 const LINE = '22222222-2222-4222-8222-222222222222';
@@ -137,6 +143,36 @@ describe('GET /api/v1/returns/[id]', () => {
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('private, no-store');
     expect((await res.json()).actions.primary).toBe('receive');
+  });
+
+  it("carries the caller organization's return request mailboxes and link, read after the workbench answered (F14)", async () => {
+    const context = ctx();
+    vi.mocked(withApiContext).mockResolvedValueOnce(context);
+    service({ workbench: vi.fn(async () => ({ organizationId: 'org-1', return: { id: RET }, actions: { primary: null } })) });
+    returnRequestEmailFor.mockResolvedValueOnce({
+      recipients: { to: 'intake@warehouse.test', cc: 'copy@warehouse.test' },
+      link: `https://app.example.test/dashboard/returns/${RET}`,
+    });
+    const res = await workbenchGET(req(`/api/v1/returns/${RET}`), params());
+    expect((await res.json()).returnRequestEmail).toEqual({
+      recipients: { to: 'intake@warehouse.test', cc: 'copy@warehouse.test' },
+      link: `https://app.example.test/dashboard/returns/${RET}`,
+    });
+    // The context is the caller's own, and the id is the workbench's.
+    expect(returnRequestEmailFor).toHaveBeenCalledTimes(1);
+    expect(returnRequestEmailFor).toHaveBeenCalledWith(context, RET);
+  });
+
+  it('never reads the mailboxes for a return the caller may not open (F14)', async () => {
+    vi.mocked(withApiContext).mockResolvedValueOnce(ctx());
+    service({
+      workbench: vi.fn(async () => {
+        throw new ServiceError('not_found', "This return isn't available.");
+      }),
+    });
+    const res = await workbenchGET(req(`/api/v1/returns/${RET}`), params());
+    expect(res.status).toBe(404);
+    expect(returnRequestEmailFor).not.toHaveBeenCalled();
   });
 
   it('404 for a missing or foreign RMA alike', async () => {

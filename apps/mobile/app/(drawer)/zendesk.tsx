@@ -7,6 +7,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ZendeskLogo } from '@/components/zendesk-logo';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_PAGE } from '@/components/ui/glass/screens/admin';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
 import { Field } from '@/components/ui/field';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
@@ -44,6 +50,10 @@ interface ConnectionResponse {
 
 export default function ZendeskScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: the iOS grouped list): the scene, the glass nav,
+  // the large title with the Zendesk mark and its line, CONNECTION and AGENT
+  // CONSOLE as iOS headings over grouped cards. Every control stays.
+  const lg = useGlass();
   const router = useRouter();
   const navigation = useNavigation();
   const modules = useEnabledModules();
@@ -123,9 +133,10 @@ export default function ZendeskScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -144,22 +155,28 @@ export default function ZendeskScreen() {
             minTap
           />
         </View>
-        <View style={styles.head}>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
             <ZendeskLogo size={22} color={c.ink} />
-            <Eyebrow>ZENDESK</Eyebrow>
+            {lg ? <GlassSubline>Zendesk</GlassSubline> : <Eyebrow>ZENDESK</Eyebrow>}
           </View>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Support<Em>.</Em>
+          <Display
+            size={34}
+            style={lg ? { marginTop: 6 } : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Support{lg ? null : <Em>.</Em>}
           </Display>
-          <Body muted size={14} style={{ marginTop: 8 }}>
+          <Body muted size={14} style={{ marginTop: lg ? 2 : 8 }}>
             Support tickets + an in-app agent console.
           </Body>
         </View>
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60 }}
+        contentContainerStyle={
+          lg ? GLASS_PAGE.scroll : { paddingHorizontal: 20, paddingBottom: 60 }
+        }
         showsVerticalScrollIndicator={false}
       >
         {!enabled ? (
@@ -300,10 +317,11 @@ export default function ZendeskScreen() {
 }
 
 function Section({ label, children }: { label: string; children: React.ReactNode }) {
+  const lg = useGlass();
   return (
-    <View style={{ marginTop: 24 }}>
-      <View style={{ paddingHorizontal: 4, paddingBottom: 10 }}>
-        <Eyebrow>{label}</Eyebrow>
+    <View style={lg ? GLASS_PAGE.section : { marginTop: 24 }}>
+      <View style={lg ? GLASS_PAGE.sectionHead : { paddingHorizontal: 4, paddingBottom: 10 }}>
+        {lg ? <GlassHeading>{sentenceCase(label)}</GlassHeading> : <Eyebrow>{label}</Eyebrow>}
       </View>
       {children}
     </View>

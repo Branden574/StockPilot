@@ -133,6 +133,12 @@ const NON_SESSION: Record<string, NonSession> = {
     reason:
       'QA tooling behind the same BACKFILL_ADMIN_SECRET bearer, for an allowlist of demo addresses only. It reads no session.',
   },
+  'api/appearance/style/route.ts': {
+    methods: ['POST'],
+    auth: 'none',
+    reason:
+      "Liquid Glass (REVISION-DEFAULT R6): sets only the caller's own sp_style cookie to a validated Design, for 400 days. Same-origin browser headers and x-sp-appearance required. No session, no database.",
+  },
   'api/books/lookup/route.ts': {
     methods: ['GET'],
     auth: 'none',
@@ -262,6 +268,11 @@ const NON_SESSION: Record<string, NonSession> = {
 
 /** Routes that build their own principal from the cookie session. Reviewed 2026-11-01. */
 const OWN_SESSION: Record<string, Listed> = {
+  'api/appearance/account/route.ts': {
+    methods: ['POST'],
+    reason:
+      "Liquid Glass (reviewed 2026-11-11): reads the signed-in person's own Design and Theme row. It builds no organization context (a portal customer has none), so it validates the cookie session with getUser and asks cookieSessionOwesStepUp right after, answering 'unauthenticated' before the row is read.",
+  },
   'api/integrations/quickbooks/callback/route.ts': {
     methods: ['GET'],
     reason:

@@ -45,6 +45,27 @@ const MESSAGES_ID = 'clearer-web-messages-2026-11';
 const QW1_ID = 'invites-calendar-record-pages-2026-11';
 const NEW_IDS = [EXPORT_ID, PHONE_ID, MESSAGES_ID, QW1_ID];
 const WEB_FIXES_ID = 'web-fixes-2026-11-02';
+// Added by docs/whats-new-2026-11-05 (2026-11-05): the S2 release, published
+// later, at the top, above these four. It reaches whoever approves orders or
+// picks where Orders is on (an owner with every permission and module among
+// them), not a member with no permission.
+const S2_ID = 'approver-controls-own-warehouses-2026-11';
+// Added by docs/whats-new-count-sheet-long-names (2026-11-10): the count sheet
+// release (#492), published later still, at the top, above the S2 release. It
+// reaches whoever can open a cycle count's PDF where Cycle Counts is on (an
+// owner with every permission and module among them), not a member with no
+// permission.
+const COUNT_SHEET_ID = 'count-sheet-long-names-2026-11';
+// Added by feat/order-add-all (2026-11-10): the Add all release, published at
+// the top, above the count sheet release. It reaches whoever may place orders
+// (orders:request) where Orders is on.
+const ADD_ALL_ID = 'order-add-all-2026-11';
+// Added by docs/whatsnew-returns-1112 (2026-11-12): the returns request and names release, published at the top, above the Add all release.
+const RETURNS_REQUEST_ID = 'returns-request-email-names-2026-11';
+// Added by docs/whatsnew-phone-1112 (2026-11-12): the phone appearance and returns release,
+// published at the top, below the Liquid Glass draft and above the returns request and names
+// release. It reaches every member: its Appearance entry has no audience.
+const PHONE_APPEARANCE_ID = 'phone-appearance-returns-2026-11';
 const byId = (id: string) => RELEASES.find((r) => r.id === id)!;
 const entry = (releaseId: string, entryId: string) =>
   byId(releaseId).entries.find((e) => e.id === entryId)!;
@@ -185,9 +206,24 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
       expect(byId(id).revision, id).toBe(1);
       expect(byId(id).withdrawnNote, id).toBeUndefined();
     }
-    expect(RELEASES.slice(0, 5).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(EXPORT_ID);
-    expect(RELEASES.filter((r) => r.status === 'draft')).toEqual([]);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES.slice(6, 11).map((r) => r.id)).toEqual([...NEW_IDS, WEB_FIXES_ID]);
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: EXPORT_ID): the S2 release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: S2_ID): the count sheet release is published after it, at the top, the newest published release.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: COUNT_SHEET_ID): the Add all release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ADD_ALL_ID): the returns request and names release is published after it, at the top, the newest published release.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      'phone-appearance-returns-2026-11',
+    );
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
   });
 
   it('are dated in the past on a whole minute, each after its change went live, and after every release below', () => {
@@ -206,7 +242,13 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
     // #483 went live at 22:28:58Z.
     expect(at(QW1_ID)).toBeGreaterThan(Date.parse('2026-11-02T22:28:58Z'));
     for (let i = 0; i < NEW_IDS.length; i += 1) {
-      for (const r of RELEASES.slice(i + 1)) {
+      // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+      // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+      // Re-pinned by feat/order-add-all (2026-11-10; was: i + 3): the Add all release is published at the top, so every position below it moves down by one.
+      // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one.
+      // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: i + 5): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+      // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: i + 6): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+      for (const r of RELEASES.slice(i + 7)) {
         expect(at(NEW_IDS[i]!), `${NEW_IDS[i]} after ${r.id}`).toBeGreaterThan(
           Date.parse(r.publishedAt),
         );
@@ -232,26 +274,97 @@ describe('the four releases of 2026-11-02 night: order, status and dates', () =>
   });
 
   it('is the notice in date order for an owner, and the three that reach every member come first for a member', () => {
-    expect(buildReleaseList(RELEASES, everyone, [], null).latestUnread?.id).toBe(EXPORT_ID);
-    expect(buildReleaseList(RELEASES, everyone, [read(EXPORT_ID)], null).latestUnread?.id).toBe(
-      PHONE_ID,
-    );
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: each read set without it): the returns request and names release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before. It does not reach a member with no permission, whose first notice is unchanged.
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: each read set without it): the S2 release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: each read set without it): the count sheet release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: each read set without it): the Add all release is published later, at the top, and reaches an owner, so it is read first in each set, and the notice each set leads to is the one this test checked before. It does not reach a member with no permission, whose first notice is unchanged.
     expect(
-      buildReleaseList(RELEASES, everyone, [read(EXPORT_ID), read(PHONE_ID)], null).latestUnread
-        ?.id,
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member, so it is read first in each set.
+        [
+          read(PHONE_APPEARANCE_ID),
+          read(RETURNS_REQUEST_ID),
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+        ],
+        null,
+      ).latestUnread?.id,
+    ).toBe(EXPORT_ID);
+    expect(
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [
+          // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+          read(PHONE_APPEARANCE_ID),
+          read(RETURNS_REQUEST_ID),
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+          read(EXPORT_ID),
+        ],
+        null,
+      ).latestUnread?.id,
+    ).toBe(PHONE_ID);
+    expect(
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        [
+          // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+          read(PHONE_APPEARANCE_ID),
+          read(RETURNS_REQUEST_ID),
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+          read(EXPORT_ID),
+          read(PHONE_ID),
+        ],
+        null,
+      ).latestUnread?.id,
     ).toBe(MESSAGES_ID);
     expect(
       buildReleaseList(
         RELEASES,
         everyone,
-        [read(EXPORT_ID), read(PHONE_ID), read(MESSAGES_ID)],
+        [
+          // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+          read(PHONE_APPEARANCE_ID),
+          read(RETURNS_REQUEST_ID),
+          read(ADD_ALL_ID),
+          read(COUNT_SHEET_ID),
+          read(S2_ID),
+          read(EXPORT_ID),
+          read(PHONE_ID),
+          read(MESSAGES_ID),
+        ],
         null,
       ).latestUnread?.id,
     ).toBe(QW1_ID);
-    expect(buildReleaseList(RELEASES, everyone, NEW_IDS.map(read), null).latestUnread?.id).toBe(
-      WEB_FIXES_ID,
-    );
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(EXPORT_ID);
+    expect(
+      buildReleaseList(
+        RELEASES,
+        everyone,
+        // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is read first too.
+        [
+          PHONE_APPEARANCE_ID,
+          RETURNS_REQUEST_ID,
+          ADD_ALL_ID,
+          COUNT_SHEET_ID,
+          S2_ID,
+          ...NEW_IDS,
+        ].map(read),
+        null,
+      ).latestUnread?.id,
+    ).toBe(WEB_FIXES_ID);
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: nothing read): the phone appearance and returns release reaches every member, so a member is told it first and the Export items release once it is read.
+    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).toBe(PHONE_APPEARANCE_ID);
+    expect(
+      buildReleaseList(RELEASES, member, [read(PHONE_APPEARANCE_ID)], null).latestUnread?.id,
+    ).toBe(EXPORT_ID);
   });
 });
 

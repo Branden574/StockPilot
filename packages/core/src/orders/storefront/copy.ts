@@ -92,6 +92,8 @@ export const CART_KEEP_COPY = 'Keep';
 export const CART_LINE_ITEMS_LABEL_COPY = 'Line items';
 export const CART_TOTAL_UNITS_LABEL_COPY = 'Total units';
 export const CART_MANAGER_NOTES_LABEL_COPY = 'Manager notes';
+import { ORDER_MAX_UNITS_PER_LINE } from '../place-order';
+
 export const CART_OPTIONAL_COPY = 'Optional';
 export const CART_MANAGER_NOTES_PLACEHOLDER_COPY =
   'Anything the approving manager should know — deadlines, event, room number…';
@@ -118,6 +120,39 @@ export function cartLineOverCopy(available: number): string {
 }
 /** The + control's hint when everything available is already in the cart. */
 export const CART_ALL_STOCK_IN_CART_COPY = 'All available stock is in your cart';
+
+// ── Add all ──────────────────────────────────────────────────────────────────
+//
+// One press sets a line to everything available (logic.ts addAllTarget). An
+// item with more available than one line of an order may hold gets the
+// limit, and then no sentence says "all".
+
+/** The order's per-line limit as people read it ("10,000"). */
+function lineLimitWords(): string {
+  return String(ORDER_MAX_UNITS_PER_LINE).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+/** The button's words: "Add all", or "Add 10,000" when more is available than
+ *  one order can hold. */
+export function addAllButtonCopy(available: number): string {
+  return available > ORDER_MAX_UNITS_PER_LINE ? `Add ${lineLimitWords()}` : 'Add all';
+}
+/** What the button does or why it is dimmed, without the item's name: the
+ *  dimmed button's tooltip, and the first half of its spoken name. */
+export function addAllWordsCopy(available: number, inCart: number): string {
+  // More in the cart than is available (a restored draft, stock that moved):
+  // the over-available words without their full stop, never "All 67".
+  if (inCart > available) return cartLineOverCopy(available).replace(/\.$/, '');
+  if (available > ORDER_MAX_UNITS_PER_LINE) {
+    return inCart >= ORDER_MAX_UNITS_PER_LINE
+      ? `${lineLimitWords()} are in your cart, the most one order can hold`
+      : `Add ${lineLimitWords()}, the most one order can hold`;
+  }
+  return inCart >= available ? cartLineAtMaxCopy(available) : `Add all ${available} available`;
+}
+/** The button's spoken name: "Add all 67 available: Graph Paper Pad". */
+export function addAllLabelCopy(name: string, available: number, inCart = 0): string {
+  return `${addAllWordsCopy(available, inCart)}: ${name}`;
+}
 
 // ── Kits ─────────────────────────────────────────────────────────────────────
 

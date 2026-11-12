@@ -1,0 +1,7 @@
+<div class="bg-background flex flex-col gap-3 items-center justify-center min-h-screen px-6 text-center">
+  <h1 class="font-display font-medium leading-tight text-[28px] tracking-[-0.025em]">
+    "Something went wrong"
+  <p class="leading-relaxed max-w-md text-[13.5px] text-muted-foreground">
+    "We hit an unexpected error. Try again, or refresh the page. If it keeps happening, contact support."
+  <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-primary border border-transparent disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-8 hover:bg-primary/90 inline-flex items-center justify-center max-sm:before:content-[''] mt-2 pointer-coarse:before:content-[''] px-3.5 relative rounded-md text-[13px] text-primary-foreground transition-colors whitespace-nowrap">
+    "Try again"

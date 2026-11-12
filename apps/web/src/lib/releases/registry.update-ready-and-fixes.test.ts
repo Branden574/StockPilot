@@ -89,8 +89,27 @@ const NIGHT_IDS = [
  * seen in every phone state).
  */
 const LATER_IDS = ['web-fixes-2026-11-02', 'archived-charters-2026-11'];
+/**
+ * Added by docs/whats-new-2026-11-05 (2026-11-05): the S2 release, published
+ * later still, at the top, above NIGHT_IDS. It reaches whoever approves
+ * orders or picks where Orders is on (an owner with every permission and
+ * module here), not a member with no permission, so it is kept apart from
+ * NIGHT_IDS, which reach both readers.
+ */
+// Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: the S2 release alone): the count sheet release (#492) is published later still, at the top. Like the S2 release it reaches an owner with every permission and module and not a member with no permission, so it is kept in this list, read by the owner and stamped seen on each phone with it.
+// Re-pinned by feat/order-add-all (2026-11-10; was: the count sheet and S2 releases): the Add all release is published later still, at the top. It reaches an owner with every permission and module, not a member with no permission, so it is kept with these two.
+const S2_IDS = [
+  // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'phone-appearance-returns-2026-11',
+  'returns-request-email-names-2026-11',
+  'order-add-all-2026-11',
+  'count-sheet-long-names-2026-11',
+  'approver-controls-own-warehouses-2026-11',
+];
 // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: LATER_IDS and NEWER_IDS): the releases in NIGHT_IDS are published later still, at the top, reach both readers here, and are read with them.
-const newerReads = [...NIGHT_IDS, ...LATER_IDS, ...NEWER_IDS].map((id) => ({
+// Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without S2_IDS): the S2 release is published later, at the top, reaches an owner, and is read with them.
+const newerReads = [...S2_IDS, ...NIGHT_IDS, ...LATER_IDS, ...NEWER_IDS].map((id) => ({
   release_id: id,
   revision: 1,
   dismissed_at: null,
@@ -113,21 +132,28 @@ const phoneSeen = (ids: readonly string[]): Record<string, unknown> =>
 /** The published releases below this one. */
 const OLDER_IDS = PUBLISHED_IDS.filter(
   // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without NIGHT_IDS): the releases in NIGHT_IDS are published later, at the top.
+  // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without S2_IDS): the S2 release is published later, at the top.
   (id) =>
-    id !== ID && !NEWER_IDS.includes(id) && !LATER_IDS.includes(id) && !NIGHT_IDS.includes(id),
+    id !== ID &&
+    !NEWER_IDS.includes(id) &&
+    !LATER_IDS.includes(id) &&
+    !NIGHT_IDS.includes(id) &&
+    !S2_IDS.includes(id),
 );
 // Re-pinned in the review round of docs/whats-new-2026-11-02d (2026-11-02; was: without NIGHT_IDS): each phone state below also has the releases in NIGHT_IDS stamped, so its list shows where this release falls among the releases published before them, as it did before they were published. unseenNight() takes them out again for the phone that has not yet seen them.
+// Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without S2_IDS): each phone state below also has the S2 release stamped, so its list shows where this release falls among the releases published before it, as it did before it was published. unseenNight() leaves it stamped, so the phone that has not yet seen NIGHT_IDS lists what it listed before.
 /** Closed What's New before #461 went live (about 15:33Z): only the older releases. */
-const closedBefore461 = phoneSeen([...OLDER_IDS, ...NIGHT_IDS]);
+const closedBefore461 = phoneSeen([...OLDER_IDS, ...NIGHT_IDS, ...S2_IDS]);
 /** Closed it between #461 and #471 (about 17:33Z): the lists release too. */
 const closedBefore471 = phoneSeen([
   ...OLDER_IDS,
   'lists-delivery-sites-and-fixes-2026-11',
   ...NIGHT_IDS,
+  ...S2_IDS,
 ]);
 // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: every published release but this one): the two releases in LATER_IDS were published after this phone closed, so they are unseen; closedAfterLater is the phone that has seen every release but this one.
 /** Closed it after #471 went live, before the releases in LATER_IDS: NEWER_IDS too. */
-const closedAfter471 = phoneSeen([...OLDER_IDS, ...NEWER_IDS, ...NIGHT_IDS]);
+const closedAfter471 = phoneSeen([...OLDER_IDS, ...NEWER_IDS, ...NIGHT_IDS, ...S2_IDS]);
 /**
  * Added in the review round of docs/whats-new-2026-11-02c (2026-11-02): closed
  * it after the releases in LATER_IDS were published (20:42Z): every published
@@ -206,9 +232,15 @@ describe('the update-ready-and-fixes release', () => {
   it('is published once, directly below the lists-delivery-sites-and-fixes release and above the export fixes release, at revision 1, with the B44 draft folded in and no draft left', () => {
     // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES[0]): the three newer releases take 0 to 2, so this one is at 3.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(RELEASES[9]?.id).toBe(ID);
-    expect(RELEASES.slice(6, 9).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[10]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[15]?.id).toBe(ID);
+    expect(RELEASES.slice(12, 15).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[16]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -216,7 +248,9 @@ describe('the update-ready-and-fixes release', () => {
     // The draft's id is gone and is not reused; a draft never left the
     // server, so no reader's state names it.
     expect(RELEASES.map((r) => r.id)).not.toContain('mobile-app-asks-before-restarting');
-    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([]);
+    expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
+      'liquid-glass-2026-11',
+    ]);
   });
 
   it('is dated on a whole minute in the past, after the web build was live and the phone update was published, and after every release below it', () => {
@@ -229,10 +263,19 @@ describe('the update-ready-and-fixes release', () => {
     expect(at).toBeLessThanOrEqual(Date.now());
     // Re-pinned when main was merged in after #461 and #471 (2026-11-02; was: RELEASES.slice(1)): this release is at 3, so the releases below it start at 4; the three above it are dated later.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    for (const r of RELEASES.slice(10)) {
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(16)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
-    for (const r of RELEASES.slice(6, 9)) {
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(12, 15)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
@@ -368,7 +411,12 @@ describe('the update-ready-and-fixes release', () => {
       visibleReleases(RELEASES, everyone)
         .map((r) => r.id)
         // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: slice(2, 6)): the releases in NIGHT_IDS are published later, at the top.
-        .slice(6, 10),
+        // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: slice(6, 10)): the S2 release is published later, at the top, and reaches this member.
+        // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: slice(7, 11)): the count sheet release is published later, at the top, and reaches this member.
+        // Re-pinned by feat/order-add-all (2026-11-10; was: slice(8, 12)): the Add all release is published later, at the top, and reaches this member.
+        // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: slice(9, 13)): the returns request and names release is published later, at the top, and reaches this member.
+        // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: slice(10, 14)): the phone appearance and returns release is published later, at the top, and reaches every member.
+        .slice(11, 15),
     ).toEqual([...NEWER_IDS, ID]);
     // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: NEWER_IDS before #461, [authenticator, retries, ID] before #471, [ID] after #471): the two releases in LATER_IDS, published later and unseen on each of these phones, reach this member and come first.
     const [webFixes, charters] = LATER_IDS as [string, string];

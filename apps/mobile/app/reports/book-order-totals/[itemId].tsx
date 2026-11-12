@@ -46,6 +46,11 @@ import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_RECORD_BODY } from '@/components/ui/glass/screens/ops';
+import { GlassNavSpacer, GlassPoNavTitle } from '@/components/ui/glass/screens/po';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { accountEpoch } from '@/lib/account-epoch';
 import { useAuth } from '@/lib/auth-context';
 import {
@@ -120,6 +125,10 @@ export default function BookOrdersScreen() {
   const rawItemId = typeof params.itemId === 'string' ? params.itemId : '';
   const itemId = isUuid(rawItemId) ? rawItemId.toLowerCase() : null;
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of the Book-Order-Totals panel as a
+  // record): the scene, Back in the glass nav and the body 16 from the sides;
+  // the book, totals and orders are cards on the grouped glass surface.
+  const lg = useGlass();
   const { user } = useAuth();
   const userId = user?.id ?? null;
   const ws = useWorkspace();
@@ -390,14 +399,19 @@ export default function BookOrdersScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ChevronLeft} onPress={goBack} accessibilityLabel="Back" minTap />
+          {/* Liquid Glass: the eyebrow's words as the nav's title between
+              the circles (.ios-nav .ttl), not over the book's name. */}
+          {lg ? <GlassPoNavTitle lg={lg} title="Book Order Totals · Orders" /> : null}
+          {lg ? <GlassNavSpacer /> : null}
         </View>
       </SafeAreaView>
       <ScrollView
-        contentContainerStyle={styles.body}
+        contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -407,7 +421,7 @@ export default function BookOrdersScreen() {
           />
         }
       >
-        <Eyebrow>BOOK ORDER TOTALS · ORDERS</Eyebrow>
+        {lg ? null : <Eyebrow>BOOK ORDER TOTALS · ORDERS</Eyebrow>}
         {filtersReset && itemId && !switched ? (
           <Card padding={12}>
             <Body size={13.5} accessibilityRole="alert">

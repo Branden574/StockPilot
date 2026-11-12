@@ -137,7 +137,7 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
 
       <Dialog open={open} onOpenChange={(v) => (v ? setOpen(true) : close())}>
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Save your recovery codes</DialogTitle>
             <DialogDescription>
               Each code works once. Keep them somewhere safe — a password manager works well.
@@ -146,7 +146,10 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
           </DialogHeader>
 
           {codes && (
-            <div className="border-border bg-sunk rounded-lg border p-3.5 font-mono text-[13px]">
+            <div
+              data-glass="dialog-body"
+              className="border-border bg-sunk rounded-lg border p-3.5 font-mono text-[13px]"
+            >
               <ul className="grid grid-cols-2 gap-x-6 gap-y-1.5 tabular-nums">
                 {codes.map((c) => (
                   <li key={c}>{c}</li>
@@ -164,7 +167,7 @@ export function MfaRecoveryCodes({ total, unused }: MfaRecoveryCodesProps) {
             </Button>
           </div>
 
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button onClick={close} disabled={!savedOnce}>
               {savedOnce ? "I've saved them" : 'Copy or download first'}
             </Button>

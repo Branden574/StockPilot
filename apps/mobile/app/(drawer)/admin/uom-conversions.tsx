@@ -4,6 +4,8 @@ import { View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
@@ -33,6 +35,9 @@ const NO_ROWS: ConversionRow[] = [];
  * it did not read.
  */
 export default function UoMConversionsAdmin() {
+  // Liquid Glass (inferred: the iOS grouped list): the rows as one grouped
+  // surface of iOS rows; every row, state and message Classic has stays.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   // The rows on screen and the workspace they were read for: a failed read
@@ -106,7 +111,7 @@ export default function UoMConversionsAdmin() {
   if (!roleLoading && !isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · UOM"
+        eyebrow={lg ? 'Admin · UoM' : 'ADMIN · UOM'}
         title="Restricted"
         italic="access."
         emptyIcon={ArrowLeftRight}
@@ -122,7 +127,15 @@ export default function UoMConversionsAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={failed && rows.length === 0 ? 'ADMIN · UOM' : `ADMIN · ${rows.length} CONVERSIONS`}
+      eyebrow={
+        lg
+          ? failed && rows.length === 0
+            ? 'Admin · UoM'
+            : `Admin · ${rows.length} ${rows.length === 1 ? 'conversion' : 'conversions'}`
+          : failed && rows.length === 0
+            ? 'ADMIN · UOM'
+            : `ADMIN · ${rows.length} CONVERSIONS`
+      }
       title="UoM"
       italic="conversions."
       emptyTitle="No conversions yet."
@@ -142,19 +155,28 @@ export default function UoMConversionsAdmin() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(c) => c.id}
-      renderItem={(c) => <ConversionCard conv={c} />}
+      renderItem={
+        lg
+          ? (c, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <ConversionCard conv={c} />
+              </GlassJoinedRow>
+            )
+          : (c) => <ConversionCard conv={c} />
+      }
     />
   );
 }
 
 function ConversionCard({ conv }: { conv: ConversionRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const ratio =
     conv.denominator === 1
       ? `1 ${conv.from_uom} = ${conv.numerator} ${conv.to_uom}`
       : `${conv.denominator} ${conv.from_uom} = ${conv.numerator} ${conv.to_uom}`;
   return (
-    <Card padding={14}>
+    <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono size={9.5} tracking={0.18} upper color={c.ink3}>

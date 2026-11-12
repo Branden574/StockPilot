@@ -624,7 +624,10 @@ export function StockTransferDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         {trigger ?? (
-          <Button variant="outline">
+          // data-glass-action: an inert hook (no classic CSS reads it); the Liquid
+          // Glass item page keeps this action in its head row by it
+          // (styles/liquid-glass/pages/item-detail.css).
+          <Button variant="outline" data-glass-action="transfer">
             <ArrowRightLeft className="h-4 w-4" />
             Transfer
           </Button>

@@ -196,6 +196,19 @@ describe('cartReducer — kits', () => {
     expect(s.kits).toEqual({ first: { mug: 2 }, second: { mug: 1 } });
   });
 
+  // "Add all" sends set-qty with everything available.
+  it('set-qty to everything available makes the line, or raises it to exactly that, and leaves a kit record alone', () => {
+    let s = cartReducer(seed, { type: 'set-qty', itemId: 'mug', quantity: 67 });
+    expect(s.lines).toEqual([{ itemId: 'mug', quantity: 67 }]);
+    s = cartReducer(seed, { type: 'add', itemId: 'mug', quantity: 5 });
+    s = cartReducer(s, { type: 'set-qty', itemId: 'mug', quantity: 67 });
+    expect(s.lines).toEqual([{ itemId: 'mug', quantity: 67 }]);
+    let k = kit(seed, 'b1', [['mug', 3]]);
+    k = cartReducer(k, { type: 'set-qty', itemId: 'mug', quantity: 67 });
+    expect(k.lines).toEqual([{ itemId: 'mug', quantity: 67 }]);
+    expect(k.kits).toEqual({ b1: { mug: 3 } });
+  });
+
   it('clear and reset forget every kit', () => {
     const s = kit(seed, 'b1', [['mug', 1]]);
     expect(cartReducer(s, { type: 'clear' }).kits).toEqual({});

@@ -117,8 +117,8 @@ export function RemoveOrgDialog({
           Remove organization
         </Button>
 
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent data-glass-role="remove-org">
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle className="flex items-center gap-2">
               <TriangleAlert className="text-destructive h-5 w-5" strokeWidth={2} />
               Remove “{orgName}”
@@ -130,7 +130,7 @@ export function RemoveOrgDialog({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div data-glass="dialog-body" className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="remove-org-name">Type the organization name to confirm</Label>
               <Input
@@ -171,7 +171,7 @@ export function RemoveOrgDialog({
             </Checkbox>
           </div>
 
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"

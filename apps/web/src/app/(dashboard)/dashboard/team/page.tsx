@@ -19,6 +19,12 @@ import { env } from '@/lib/env';
 
 import { can, resolveOrgTimezone, resolveTerminology, type Role } from '@stockpilot/core';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export default async function TeamPage() {
   const ctx = await requireOrgContext();
 
@@ -52,22 +58,19 @@ export default async function TeamPage() {
     effectiveNavLabel('/dashboard/team', 'Team').catch(() => 'Team'),
   ]);
 
-  const [members, invites, chartersList, warehousesList, warehouseCharters] =
-    await Promise.all([
-      team.listMembers(),
-      team.listPendingInvites(),
-      charterSvc.list(),
-      warehouseSvc.listNames(),
-      whCharterSvc.listPairs(),
-    ]);
+  const [members, invites, chartersList, warehousesList, warehouseCharters] = await Promise.all([
+    team.listMembers(),
+    team.listPendingInvites(),
+    charterSvc.list(),
+    warehouseSvc.listNames(),
+    whCharterSvc.listPairs(),
+  ]);
 
   // Load categories + grants in a second wave so the grants query can
   // scope to ACTUAL viewer user_ids (avoiding orphan rows for users
   // who were once viewers, since RLS only deletes assignments when
   // the user is removed from the org).
-  const viewerUserIds = members
-    .filter((m) => m.role === 'viewer')
-    .map((m) => m.user_id);
+  const viewerUserIds = members.filter((m) => m.role === 'viewer').map((m) => m.user_id);
 
   // Charters members hold that the active list lacks: an archived or inactive
   // charter keeps its warehouse links and members' assignments, so the member
@@ -128,14 +131,16 @@ export default async function TeamPage() {
     // dialog showed a viewer with fewer grants than they have, and saving
     // it would have written that back. A failed batch THROWS (error
     // boundary) rather than show wrong access.
-    fetchAllRowsByIds<GrantRow>(viewerUserIds, (batch) => (from, to) =>
-      supabase
-        .from('user_category_assignments')
-        .select('user_id, category_id')
-        .eq('organization_id', ctx.organizationId)
-        .in('user_id', batch)
-        .order('id', { ascending: true })
-        .range(from, to),
+    fetchAllRowsByIds<GrantRow>(
+      viewerUserIds,
+      (batch) => (from, to) =>
+        supabase
+          .from('user_category_assignments')
+          .select('user_id, category_id')
+          .eq('organization_id', ctx.organizationId)
+          .in('user_id', batch)
+          .order('id', { ascending: true })
+          .range(from, to),
     ),
     readCharterLabels(
       (ids) => charterSvc.namesByIds(ids),
@@ -161,7 +166,12 @@ export default async function TeamPage() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="team"
+      data-glass-width="wide"
+    >
       <TeamManager
         title={title}
         subline="Invite, assign roles, and manage workspace access."

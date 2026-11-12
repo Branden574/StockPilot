@@ -51,7 +51,7 @@ Draw a box around each sticker + its size class; mark visibility/blur/glare/occl
 - First TestFlight build can ship with a **stub/placeholder model** so you can validate the camera plumbing before the real model exists.
 
 ### Step 5 — Drop in the model + tune  ·  **ME (OTA) with your on-device feedback**
-Once you have a trained `.tflite`/Core ML: the model file + any JS tuning (gate position, confidence threshold, dedupe window) ship via **`pnpm release:ota`** on top of the TestFlight build. Iterate from what you see on the device.
+Once you have a trained `.tflite`/Core ML: the model file + any JS tuning (gate position, confidence threshold, dedupe window) ship via **`EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota`** on top of the TestFlight build (the script refuses to publish until the command names the Liquid Glass rollout phones have now: `off`, `opt-in` or `default`; docs/runbooks/mobile-ota.md, "Publish"). Iterate from what you see on the device.
 
 ### Step 6 — Validate on-device  ·  **OWNER (only real hardware can)**
 Measure the release gates on your phone: per-size accuracy, duplicate-count rate, missed-count rate, FPS/thermal. **Rapid Pass** (move each garment past a count gate) is the accurate primary mode; **Box Overview** stays a warned beta until its duplicate rate is proven. I can't produce these numbers — they only exist on the device.

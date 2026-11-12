@@ -1,0 +1,164 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="mb-2">
+      <a href="/dashboard/orders">
+        "← "
+        "Back to orders"
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+              "Order request"
+              ␣
+              <span class="text-muted-foreground font-mono text-[0.86em] font-normal tabular-nums tracking-normal">
+                "SO-000042"
+            <span class="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            "From "
+            <span class="text-foreground font-medium">
+              "Jane Smith"
+            " · "
+            "Main DC"
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+  <div class="@container min-w-0">
+    <div class="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+      <div class="flex min-w-0 flex-col gap-4">
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section" data-testid="order-lines">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5" id="order-lines-heading">
+              "Lines (2)"
+            <div class="flex items-center gap-3">
+              <p class="text-muted-foreground text-[12.5px] tabular-nums">
+                "Total qty"
+                ␣
+                <span class="text-foreground font-mono font-medium">
+                  "8"
+          <div class="" data-slot="detail-section-body">
+            <div class="border-border border-b px-[18px] py-3 text-[12.5px] leading-[18px] bg-sunk" data-failed="true" data-mode="full" data-testid="readiness-strip">
+              <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5">
+                <p class="flex min-w-0 items-start gap-2 font-medium text-foreground" role="alert">
+                  <svg aria-hidden="true" class="lucide lucide-circle-question-mark lucide-help-circle lucide-circle-help mt-0.5 size-3.5 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="12" cy="12" r="10">
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3">
+                    <path d="M12 17h.01">
+                  <span data-testid="readiness-headline">
+                    <span class="sr-only">
+                      "Readiness: "
+                    "Couldn't check readiness. Try again."
+                <div class="flex flex-wrap items-center gap-2" data-testid="readiness-actions">
+                  <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]" data-testid="readiness-recheck" type="button">
+                    <svg aria-hidden="true" class="lucide lucide-refresh-cw size-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8">
+                      <path d="M21 3v5h-5">
+                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16">
+                      <path d="M8 16H3v5">
+                    "Try again"
+            <div aria-labelledby="order-lines-heading" class="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0" role="region">
+              <table class="w-full caption-bottom text-[13.5px] [&_td:first-child]:pl-[18px] [&_td:last-child]:pr-[18px] [&_th:first-child]:pl-[18px] [&_th:last-child]:pr-[18px]">
+                <thead class="[&_tr]:border-b">
+                  <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+                    <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 w-full">
+                      "Item"
+                    <th class="text-muted-foreground py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap px-2 text-right">
+                      "Requested"
+                    <th class="text-muted-foreground py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap px-2 text-right">
+                      <span class="inline-flex items-center gap-1">
+                        "Fulfilled"
+                    <th class="text-muted-foreground py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap px-2 text-right">
+                      "Owed"
+                    <th class="text-muted-foreground py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 whitespace-nowrap px-2 text-right">
+                      "On hand"
+                    <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 w-px pl-1">
+                      <span class="sr-only">
+                        "Line actions"
+                <tbody class="[&_tr:last-child]:border-0">
+                  <tr class="data-[state=selected]:bg-success-wash border-b transition-colors data-[review=true]:bg-warning-wash scroll-mt-24 hover:bg-transparent focus:outline-none" id="order-line-LA" tabindex="-1">
+                    <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                      <a href="/dashboard/inventory/item-LA">
+                        <div class="text-foreground text-[13.5px] font-medium leading-5 group-hover/item:underline">
+                          "Staff Polo, Navy, M"
+                        <div class="text-muted-foreground font-mono text-[11.5px] leading-[18px]">
+                          "APP-POLO-NVY-M"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 px-2 text-right font-mono text-[13px] font-medium tabular-nums">
+                      "2"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
+                      "0"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 px-2 text-right font-mono text-[13px] tabular-nums text-warning font-medium">
+                      "2"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
+                      "6"
+                    <td class="px-3 first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 py-1 pl-1 text-right align-middle">
+                  <tr class="data-[state=selected]:bg-success-wash border-b transition-colors data-[review=true]:bg-warning-wash scroll-mt-24 hover:bg-transparent focus:outline-none" id="order-line-LB" tabindex="-1">
+                    <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                      <a href="/dashboard/inventory/item-LB">
+                        <div class="text-foreground text-[13.5px] font-medium leading-5 group-hover/item:underline">
+                          "Safety Vest, Hi-Vis"
+                        <div class="text-muted-foreground font-mono text-[11.5px] leading-[18px]">
+                          "SAF-VEST-HV"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 px-2 text-right font-mono text-[13px] font-medium tabular-nums">
+                      "6"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
+                      "0"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 px-2 text-right font-mono text-[13px] tabular-nums text-warning font-medium">
+                      "6"
+                    <td class="py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground px-2 text-right font-mono text-[13px] tabular-nums">
+                      "46"
+                    <td class="px-3 first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 py-1 pl-1 text-right align-middle">
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section" data-testid="order-requester-note">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+              "Requester note"
+          <div class="p-[18px]" data-slot="detail-section-body">
+            <p class="whitespace-pre-wrap text-[13.5px]">
+              "Two new front-office hires start Monday."
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section" data-testid="order-timeline">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+              "Timeline"
+          <div class="p-[18px]" data-slot="detail-section-body">
+      <aside class="flex min-w-0 flex-col gap-4">
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+              "Dates"
+          <div class="" data-slot="detail-section-body">
+            <dl class="divide-border divide-y" data-slot="key-value-list">
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row" data-testid="dates-needed-by">
+                <dt class="text-muted-foreground shrink-0">
+                  "Needed by"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere] font-medium">
+                  <span class="inline-flex flex-wrap items-center justify-end gap-x-2 gap-y-1">
+                    <span>
+                      "Fri, Nov 6, 3:00 PM"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Submitted"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "3 months ago"
+        <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+            <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+              "Details"
+          <div class="" data-slot="detail-section-body">
+            <dl class="divide-border divide-y" data-slot="key-value-list">
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Requester"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "Jane Smith"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Source"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere] capitalize">
+                  "Internal"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Warehouse"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "Main DC"
+              <div class="flex min-w-0 items-baseline justify-between gap-4 px-[18px] py-[9px] text-[13.5px] leading-[20.25px]" data-slot="key-value-row">
+                <dt class="text-muted-foreground shrink-0">
+                  "Updated"
+                <dd class="text-foreground min-w-0 text-right tabular-nums [overflow-wrap:anywhere]">
+                  "3 months ago"

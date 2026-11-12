@@ -21,6 +21,11 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as React from 'react';
 
+import {
+  BooksGlassColumnsMenu,
+  booksGlassColumnsHook,
+  useBooksGlassColumns,
+} from '@/components/books/books-glass-columns';
 import { BulkActions } from '@/components/inventory/bulk-actions';
 import { CategoryLabel } from '@/components/inventory/category-label';
 import {
@@ -48,6 +53,7 @@ import { StatePanel } from '@/components/patterns/state-panel';
 import { Thumb } from '@/components/patterns/thumb';
 import { touchTargetClass } from '@/components/patterns/touch-target';
 import { usePerfUseful } from '@/components/perf/perf-useful';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { Checkbox, CheckboxGlyph } from '@/components/ui/checkbox';
 import { ExportBuilderDialog } from './export-builder/export-builder-dialog';
 import {
@@ -924,6 +930,12 @@ export function InventoryTable({
   // (the grid draws the same `styledRenderItems`); the cookie is written for
   // the next visit. It never reaches the URL.
   const [listView, setListView] = React.useState<InventoryView>(initialView);
+  // LIQUID GLASS ONLY: the Books table's column chooser (books-glass-columns.tsx).
+  // Glass draws the board's seven Books columns; the viewer can tick classic's
+  // other six back on. Read only by the glass CSS through the table's inert
+  // data-glass-cols hook; never rendered under the `off` rollout.
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const [booksGlassColumns, setBooksGlassColumns] = useBooksGlassColumns();
   const viewCookieName = inventoryViewCookieFor(basePath);
   const selectListView = React.useCallback(
     (next: InventoryView) => {
@@ -2537,7 +2549,7 @@ export function InventoryTable({
       location: facts.location?.name ?? '—',
       facts: storage
         ? [
-            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} /> },
+            { label: 'Grade', value: <BookGradeLabel grade={storage.grade} glassBare /> },
             { label: 'Rack', value: <BookRackContent item={item} /> },
             {
               label: 'Crate',
@@ -2802,7 +2814,7 @@ export function InventoryTable({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-4" data-glass="items-list">
       {/* Group selected (0400): a group header's Rename / Remove and a row
           chip's Add to group. Each reviews first and writes only on Save; a
           change refreshes the page (the server re-reads every row). */}
@@ -2865,7 +2877,7 @@ export function InventoryTable({
           It stays usable while rows are ticked (only the toolbar below swaps
           for the bulk bar), so the view can be switched with a selection: the
           grid draws the same page with the same picks. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3" data-glass="items-views">
         <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
           <SegmentedTabs
             aria-label="Filter by stock"
@@ -3007,12 +3019,13 @@ export function InventoryTable({
           "select-all disappears" / "3-4 clicks for row checkmarks"
           reports). Gmail-style swap keeps every table pixel exactly where
           it was. */}
-      <div className="grid">
+      <div className="grid" data-glass="items-tools">
         <div
           className={cn(
             'col-start-1 row-start-1 flex flex-wrap content-start items-center gap-x-1.5 gap-y-2',
             selected.size > 0 && 'invisible',
           )}
+          data-glass="items-toolbar"
         >
           <div className="relative w-full sm:w-[240px]">
             <Search
@@ -3111,6 +3124,10 @@ export function InventoryTable({
               itemType={showBookFields ? 'book' : (params.get('type') ?? 'product')}
             />
           ) : null}
+
+          {glassBuild && showBookFields && listView !== 'grid' ? (
+            <BooksGlassColumnsMenu shown={booksGlassColumns} onChange={setBooksGlassColumns} />
+          ) : null}
         </div>
 
         {/* Bulk actions layer — always mounted (see grid-stack note above),
@@ -3120,6 +3137,8 @@ export function InventoryTable({
             'col-start-1 row-start-1 flex min-w-0 flex-col justify-center',
             selected.size === 0 && 'invisible',
           )}
+          data-glass="selbar-layer"
+          data-glass-state={selected.size > 0 ? 'open' : 'closed'}
         >
           <BulkActions
             // DISTINCT item ids (not rowKeys) — actions are item-level and the
@@ -3261,7 +3280,10 @@ export function InventoryTable({
           the top pager at the right. The redesign moved the count out of the
           toolbar row, which wrapped it onto a line of its own, to sit under
           the filters beside the pager. */}
-      <div className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+      <div
+        className="flex min-h-7 flex-wrap items-center justify-between gap-x-4 gap-y-2"
+        data-glass="items-count"
+      >
         <p
           className={cn(
             'text-muted-foreground flex items-center gap-1.5 font-mono text-[12px] tabular-nums',
@@ -3350,6 +3372,7 @@ export function InventoryTable({
       {/* Table */}
       <div
         aria-busy={isFilterPending}
+        data-glass="items-card"
         className={cn(
           'border-border bg-card overflow-hidden rounded-lg border transition-opacity',
           // Subtle pending treatment ONLY — never pointer-events-none. The
@@ -3385,7 +3408,13 @@ export function InventoryTable({
           />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px] text-[13.5px]">
+            <table
+              className="w-full min-w-[900px] text-[13.5px]"
+              data-glass="items-table"
+              data-glass-cols={
+                glassBuild && showBookFields ? booksGlassColumnsHook(booksGlassColumns) : undefined
+              }
+            >
               <thead>
                 <tr className="border-border border-b">
                   <th className="w-10 py-2.5 pl-4 pr-0 text-left">
@@ -3571,7 +3600,7 @@ export function InventoryTable({
                       </td>
                       <td className={locationTd(showBookFields)}>{facts.location?.name ?? '—'}</td>
                       {!showBookFields && (
-                        <td className={cn(td('Rack'), RACK_TD)}>
+                        <td className={cn(td('Rack'), RACK_TD)} data-glass="rack">
                           <ItemsRackContent item={item} />
                         </td>
                       )}
@@ -3588,7 +3617,7 @@ export function InventoryTable({
                               >
                                 <BookGradeLabel grade={storage.grade} />
                               </td>
-                              <td className={cn(td('Rack'), RACK_TD)}>
+                              <td className={cn(td('Rack'), RACK_TD)} data-glass="rack">
                                 <BookRackContent item={item} />
                               </td>
                               <td
@@ -3668,7 +3697,10 @@ export function InventoryTable({
         {listView !== 'grid' && displayed.length === 0 ? noMatchLine : null}
 
         {showPagination || (plannedPageStranded && pageRange) || canCreate ? (
-          <div className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5">
+          <div
+            className="border-border flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5"
+            data-glass="items-pager"
+          >
             {/* Pagination — hides when everything fits on one page so the
                 single-screen empty/typical case stays clean. URL-driven so
                 paginated views are bookmarkable + shareable. Server mode also
@@ -3978,7 +4010,13 @@ function ItemsRackContent({ item }: { item: Item }) {
     }
     const awaiting = item.placement_kind === 'staging' || item.placement_kind === 'unplaced';
     return item.placement_label ? (
-      <span className={awaiting ? 'text-warning font-mono tabular-nums' : 'font-mono tabular-nums'}>
+      <span
+        className={awaiting ? 'text-warning font-mono tabular-nums' : 'font-mono tabular-nums'}
+        // Inert hook (no style, no behaviour): Liquid Glass draws the board's
+        // rack chip from it, Staging on the warn wash and Unplaced on the
+        // info wash (pages/items.css).
+        data-glass-tone={awaiting ? item.placement_kind : undefined}
+      >
         {item.placement_label}
       </span>
     ) : (
@@ -4032,12 +4070,38 @@ function ItemsRackContent({ item }: { item: Item }) {
   );
 }
 
-/** The Books layout's Grade cell: "Gr N" for a one- or two-digit grade. */
-function BookGradeLabel({ grade }: { grade: string | null | undefined }) {
-  return grade ? (
-    <span className="font-mono">{/^\d{1,2}$/.test(grade) ? `Gr ${grade}` : grade}</span>
-  ) : (
-    <span className="text-muted-foreground">—</span>
+/**
+ * The Books layout's Grade cell: "Gr N" for a one- or two-digit grade.
+ *
+ * `glassBare` (the cover card's Grade fact): with Liquid Glass in the build a
+ * glass-only copy holds the number alone, beside the classic "Gr N" (which
+ * carries an inert hook and is unchanged). The Books cover view under glass
+ * draws the fact's own "Grade" label and the bare number, so the card reads
+ * "Grade 9" as Books.dc.html's does, to a screen reader too; everywhere else
+ * the copy is hidden and "Gr N" is drawn (styles/liquid-glass/pages/
+ * items.css). Under `off` the copy is not rendered.
+ */
+function BookGradeLabel({
+  grade,
+  glassBare = false,
+}: {
+  grade: string | null | undefined;
+  glassBare?: boolean;
+}) {
+  if (!grade) return <span className="text-muted-foreground">—</span>;
+  const numeric = /^\d{1,2}$/.test(grade);
+  const bare = glassBare && numeric && liquidGlassRollout() !== 'off';
+  return (
+    <>
+      <span className="font-mono" data-glass={bare ? 'book-grade-classic' : undefined}>
+        {numeric ? `Gr ${grade}` : grade}
+      </span>
+      {bare ? (
+        <span data-glass-only="" data-glass="book-grade-bare">
+          {grade}
+        </span>
+      ) : null}
+    </>
   );
 }
 

@@ -19,6 +19,7 @@ import {
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
 import { DEFAULT_TAB_SLOTS, MAX_TAB_SLOTS, MIN_TAB_SLOTS, TAB_SLOT_IDS } from './tab-config';
+import { printClassic } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 // drawer-nav maps icon names to lucide components; the icons are irrelevant
@@ -563,6 +564,8 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
   it.each([
     ['settings/integrations', 'Integrations'],
     ['settings/customize-tabs', 'Customize tab bar'],
+    // Settings > Appearance (Liquid Glass stage 2).
+    ['settings/appearance', 'Appearance'],
     ['settings/rejected-work', 'Unsent work'],
     ['settings/change-email', 'Change email'],
     ['admin/index', 'Admin overview'],
@@ -583,7 +586,7 @@ describe('drawer layout: every screen registered, the panel on the palette', () 
 
   it('registers no other screen', () => {
     expect(elements(DRAWER_LAYOUT, (el, s) => tagOf(el, s) === 'Drawer.Screen').els).toHaveLength(
-      37,
+      38,
     );
   });
 
@@ -852,7 +855,10 @@ describe('workspace switcher: the chip and the sheet', () => {
   });
 
   it("the sheet is the app's sheet shape: a Close scrim behind the card, VoiceOver kept inside, the escape scrub closes", () => {
-    const sf = treeOf(SWITCHER);
+    // Classic's shape, read off the Classic projection: Liquid Glass lays its
+    // scrim, card and material over these in branches of its own
+    // (glass-sheet-frames.test.ts).
+    const sf = parseTsx(printClassic(src, SWITCHER), SWITCHER);
     let container: JsxNode | undefined;
     walkJsx(sf, (el) => {
       if (attrText(el, 'accessibilityViewIsModal', sf) === 'true') container = el;
@@ -877,10 +883,15 @@ describe('workspace switcher: the chip and the sheet', () => {
       "mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)'",
     );
     expect(tagOf(card, sf)).toBe('View');
-    expect(attrText(card, 'style', sf)).toBe(
-      '[styles.sheet, { backgroundColor: c.card, borderColor: c.hair }]',
+    expect(flat(attrText(card, 'style', sf) ?? '')).toMatch(
+      /^\[\s*styles\.sheet,\s*\{ backgroundColor: c\.card, borderColor: c\.hair \},?\s*\]$/,
     );
-    expect(code).toContain('<View style={[styles.grabber, { backgroundColor: c.ink5 }]} />');
+    expect(flat(printClassic(src, SWITCHER))).toMatch(
+      /<View style=\{\[styles\.grabber, \{ backgroundColor: c\.ink5 \}\]\}\s*\/>/,
+    );
+    expect(code).toContain(
+      '<View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />',
+    );
     expect(src).not.toContain('#ccc');
   });
 

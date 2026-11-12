@@ -1,0 +1,557 @@
+/* Glass primitives (spec/design-system.md 12: DS-Components), on the inert
+   data-glass hooks of components/ui and components/patterns. Colours that the
+   remapped semantic tokens already give (an ink default button, accent fills,
+   status washes) are left to the components' own utilities; these rules add
+   what the tokens cannot: the radii, the field and secondary fills, the press
+   scale, the menu and segment states. A rule here that sets a colour for a
+   state also sets its :hover, because layer `lg` beats every Tailwind state
+   utility for the same property. Sizes and layout stay the components' own. */
+@layer lg {
+  @media screen {
+    /* Lucide at the artifact's 1.8 stroke (its own icons differ slightly in
+       geometry; recorded, Q9). */
+    :root[data-appearance='liquid-glass'] svg.lucide {
+      stroke-width: 1.8;
+    }
+
+    /* ── Buttons (12.1) ───────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='button'] {
+      border-radius: var(--lg-r-md);
+      transition:
+        background-color var(--lg-d-1) var(--lg-ease),
+        border-color var(--lg-d-1) var(--lg-ease),
+        color var(--lg-d-1) var(--lg-ease),
+        transform var(--lg-d-1) var(--lg-ease),
+        box-shadow var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-size='sm'] {
+      border-radius: var(--lg-r-sm);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-size='lg'] {
+      border-radius: 12px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-size='xl'] {
+      border-radius: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button']:not([data-glass-variant='link']):not(:disabled):active {
+      transform: scale(0.97);
+    }
+    /* Primary (the flat accent, `gradient` by its old name). */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='gradient'] {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='gradient']:hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='gradient']:active {
+      background-color: var(--lg-accent-press);
+    }
+    /* Secondary (the outline button): the 62% field frost. */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='outline'] {
+      background-color: var(--lg-field-fill);
+      border-color: var(--lg-field-line);
+      color: var(--lg-ink);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.7),
+        0 1px 2px rgba(60, 44, 26, 0.08);
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass='button'][data-glass-variant='outline'] {
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.06),
+        0 1px 2px rgba(0, 0, 0, 0.3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='outline']:hover {
+      background-color: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass='button'][data-glass-variant='outline']:hover {
+      background-color: rgba(255, 255, 255, 0.12);
+    }
+    /* Ghost. */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='ghost'] {
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='ghost']:hover {
+      background-color: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+      color: var(--lg-ink);
+    }
+    /* Danger: the solid danger fill with white words. */
+    :root[data-appearance='liquid-glass'] [data-glass='button'][data-glass-variant='destructive'] {
+      background-color: var(--lg-danger-fill);
+      color: #fff;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='button'][data-glass-variant='destructive']:hover {
+      background-color: color-mix(in srgb, var(--lg-danger-fill) 88%, #000);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='button']:disabled {
+      box-shadow: none;
+    }
+
+    /* ── Keyboard focus (sp.css :focus-visible: the outline ring) ─────────
+       The classic ring is a box-shadow (globals.css :focus-visible and the
+       focus-visible:ring-* utilities), and any glass rule here that draws a
+       material shadow (the accent and outline buttons above, the lifted
+       segment below) replaces it, since layer lg beats both: those controls
+       showed no focus at all (WCAG 2.4.7). Glass draws the board's ring
+       instead, an outline of --lg-focus-w (2 px, 3 in the contrast
+       material) in --lg-focus, 2 px off the edge, and clears the classic ring
+       on the same controls so none draws two. An outline also survives forced
+       colours, which drop every box-shadow. */
+    :root[data-appearance='liquid-glass'] [data-glass='button']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    /* A segment sits on a track that scrolls sideways and clips anything
+       outside it (patterns/segmented-tabs.tsx draws its ring inside), so the
+       outline is drawn inside the segment's edge. */
+    :root[data-appearance='liquid-glass'] [data-glass='seg'] > :focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: calc(-1 * var(--lg-focus-w));
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+
+    /* ── Fields (12.2): the 62% field frost, the input line, the focus halo ── */
+    :root[data-appearance='liquid-glass'] :is([data-glass='input'], [data-glass='select']) {
+      background-color: var(--lg-field-fill);
+      border-color: var(--lg-input-line);
+      border-radius: var(--lg-r-md);
+      color: var(--lg-ink);
+      transition:
+        border-color var(--lg-d-1) var(--lg-ease),
+        box-shadow var(--lg-d-1) var(--lg-ease);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select']):hover:not(:disabled) {
+      border-color: var(--lg-input-line-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select']):focus-visible {
+      border-color: var(--lg-accent);
+      box-shadow: 0 0 0 3px var(--lg-focus-halo);
+      outline: none;
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select'])[aria-invalid='true'] {
+      border-color: var(--lg-danger);
+      box-shadow: 0 0 0 3px var(--lg-danger-wash);
+    }
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='input'], [data-glass='select']):disabled {
+      background-color: var(--lg-surface-2);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='input']::placeholder {
+      color: var(--lg-ink-3);
+      opacity: 0.85;
+    }
+
+    /* ── Thumbnails (patterns/thumb.tsx, data-slot="thumb"; sp.css:302
+       .thumb) ─────────────────────────────────────────────────────────
+       Every Thumb takes the board's frame: the third surface behind it, a
+       6% inner line, no white tile and no classic hairline. Classic's tile is
+       bg-white so photos shot on white read the same in both themes; on
+       Night glass that made every missing-photo tile a solid white square
+       (Manage order items, the Overview's low-stock list). The missing-photo
+       hatch (patterns/missing-photo.tsx) draws its strokes in --ed-line and
+       its ground in --ed-bg-sunk, which the glass tokens already map to the
+       glass line and the third surface (tokens.generated.css), so it reads on
+       this frame in Day and Night with no rule of its own; --ed-line is set
+       to the glass line here too, so the hatch keeps it even if the
+       editorial token is ever remapped. Sizes and radii stay each Thumb's
+       own; the Items and Books tables (pages/items.css) size and round
+       theirs with more specific rules, which still win, and the item page
+       head draws no Thumb in glass (pages/item-detail.css). */
+    :root[data-appearance='liquid-glass'] [data-slot='thumb'] {
+      --ed-line: var(--lg-line);
+      border-color: transparent;
+      background-color: var(--lg-surface-3);
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+    }
+
+    /* ── A book's bare grade (inventory-table.tsx BookGradeLabel): a
+       glass-only copy of the number that only the Books cover view draws
+       (pages/items.css), in place of "Gr 9"; everywhere else glass draws
+       classic's "Gr 9" alone. ──────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='book-grade-bare'] {
+      display: none;
+    }
+
+    /* ── Selection controls (12.2-12.3) ───────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox'] {
+      border-radius: 5px;
+    }
+    /* The checkbox's visible box is its glyph (ui/checkbox.tsx CheckboxGlyph,
+       hooked checkbox-glyph), never the button, which also wraps any label
+       text; the same glyph sits in rows that are themselves the control (a
+       filter option, an export field). It takes .cb (sp.css:180-183, 876):
+       18 px, 24 px where a finger is the pointer, a 1.5 px edge on the
+       surface; ticked or mixed (state on), the accent with an on-accent tick
+       or bar.
+       One accessibility deviation from .cb, the smallest there is: the empty
+       box's edge is ink 4, not line 3. That edge is the only thing that shows
+       an empty box is there, and line 3 reads 1.7:1 (Day) and 2.2:1 (Night)
+       against the card, under the 3:1 a control needs (WCAG 1.4.11); ink 4
+       is the faint ink classic draws the same edge in (ui/checkbox.tsx), and
+       reads at least 3:1 in every material (stage3-contrast.test.ts). */
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] {
+      width: 18px;
+      height: 18px;
+      border-width: 1.5px;
+      border-color: var(--lg-ink-4);
+      background-color: var(--lg-surface);
+    }
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] {
+        width: 24px;
+        height: 24px;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'][data-glass-state='on'] {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span {
+      border-color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span.rounded-full {
+      background-color: var(--lg-on-accent);
+    }
+    /* Forced colours keep the mixed bar's own fill (it opts out of colour
+       adjustment, ui/checkbox.tsx), so it stays the system text colour there,
+       never the on-accent white on a Canvas box. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass'] [data-glass='checkbox-glyph'] > span.rounded-full {
+        background-color: CanvasText;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='switch']:is([aria-checked='true']) {
+      background-color: var(--lg-accent);
+      border-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='switch'] {
+      border-radius: 13px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='switch'][aria-checked='false'] {
+      background-color: var(--lg-surface-4);
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='radio'] {
+      accent-color: var(--lg-accent);
+    }
+    /* Segmented control: the 3 px track; the selected segment lifts. */
+    :root[data-appearance='liquid-glass'] [data-glass='seg'] {
+      background-color: var(--lg-surface-3);
+      border-color: var(--lg-field-line);
+      border-radius: 11px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
+      background-color: rgba(255, 255, 255, 0.9);
+      border-radius: 8px;
+      font-weight: 650;
+      box-shadow:
+        0 1px 2px rgba(16, 20, 18, 0.12),
+        0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
+      background-color: rgba(255, 255, 255, 0.16);
+    }
+    /* ── Settings > Profile > Appearance (components/settings/
+       appearance-panel.tsx; Routes-Gallery-2's Appearance panel, sp.css
+       .choice 194-195 / 995 / 1000, .rb 180-188 / 625-627 / 876, .seg
+       203-207 / 1004-1006), on the panel's inert hooks: classic draws its
+       selected option in ink (a black edge, a black dot). ─────────────────
+       A Design option is the board's glass .choice (sp.css:995): radius 12,
+       the field line (the light frost edge) on the field frost; the chosen one takes the accent edge (its 1 px edge
+       plus a 1 px inset ring, as .choice.on) on the selection wash. */
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-choice'] {
+      border-color: var(--lg-field-line);
+      border-radius: 12px;
+      background-color: var(--lg-field-fill);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-choice']:hover {
+      border-color: var(--lg-line-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-choice'][data-glass-state='on'],
+    :root[data-appearance='liquid-glass']
+      [data-glass='appearance-choice'][data-glass-state='on']:hover {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-sel-fill);
+      box-shadow: inset 0 0 0 1px var(--lg-accent);
+    }
+    /* Its radio (.rb): 18 px (24 px for a finger), a 1.5 px edge on the
+       surface; chosen, the accent fill with the 8 px on-accent dot. The empty
+       edge is ink 4, not .rb's line 3, for the reason the checkbox gives
+       above (the only outline of a control needs 3:1; stage3-contrast). */
+    :root[data-appearance='liquid-glass'] [data-glass='radio-dot'] {
+      width: 18px;
+      height: 18px;
+      border-width: 1.5px;
+      border-color: var(--lg-ink-4);
+      background-color: var(--lg-surface);
+    }
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='radio-dot'] {
+        width: 24px;
+        height: 24px;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='radio-dot'][data-glass-state='on'] {
+      border-color: var(--lg-accent);
+      background-color: var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='radio-dot'] > span {
+      width: 8px;
+      height: 8px;
+      background-color: var(--lg-on-accent);
+    }
+    /* Theme is the board's three-part .seg: a 3 px track on the third
+       surface, 30 px segments of 13 px ink 2 (44 px where a finger is the
+       pointer, as classic's options are), the chosen one lifted in ink at
+       650. Each segment is still its native radio with its word, in the
+       same fieldset: only the look changes. The dot is not drawn there (it
+       is decorative, aria-hidden), apart from forced colours, below. */
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-seg'] {
+      display: inline-flex;
+      max-width: 100%;
+      gap: 2px;
+      padding: 3px;
+      border: 1px solid var(--lg-field-line);
+      border-radius: 11px;
+      background-color: var(--lg-surface-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-seg-item'] {
+      justify-content: center;
+      min-height: 30px;
+      padding: 0 12px;
+      border-color: transparent;
+      border-radius: 8px;
+      background-color: transparent;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    @media (pointer: coarse) {
+      :root[data-appearance='liquid-glass'] [data-glass='appearance-seg-item'] {
+        min-height: 44px;
+      }
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-seg-item']:hover {
+      border-color: transparent;
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-seg-item'] > span:last-child {
+      color: inherit;
+      font-size: inherit;
+      font-weight: inherit;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='appearance-seg-item']
+      > [data-glass='radio-dot'] {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='appearance-seg-item'][data-glass-state='on'] {
+      background-color: rgba(255, 255, 255, 0.9);
+      color: var(--lg-ink);
+      font-weight: 650;
+      box-shadow:
+        0 1px 2px rgba(16, 20, 18, 0.12),
+        0 0 0 0.5px var(--lg-line-2);
+    }
+    :root[data-appearance='liquid-glass'].dark
+      [data-glass='appearance-seg-item'][data-glass-state='on'] {
+      background-color: rgba(255, 255, 255, 0.16);
+    }
+    /* Focus: the glass ring (an outline: the lifted and chosen states own
+       the box shadow, which classic's ring also uses), outside a Design
+       option, inside a segment (the track would crowd it), and classic's
+       ring cleared so none draws two. */
+    :root[data-appearance='liquid-glass']
+      :is([data-glass='appearance-choice'], [data-glass='appearance-seg-item']):has(
+        :focus-visible
+      ) {
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='appearance-seg-item']:has(:focus-visible) {
+      outline-offset: calc(-1 * var(--lg-focus-w));
+    }
+    /* Forced colours drop the fills and the lift: the segments show their
+       radio again, and every chosen dot is drawn in the system text colour,
+       so the choice never rests on a colour the mode removes. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass='appearance-seg-item']
+        > [data-glass='radio-dot'] {
+        display: flex;
+      }
+      :root[data-appearance='liquid-glass'] [data-glass='radio-dot'] > span {
+        forced-color-adjust: none;
+        background-color: CanvasText;
+      }
+    }
+    /* In-page tabs (.tabs / .tab, patterns/tabs.tsx): 42 px tabs in 14 px
+       ink 3, ink on hover, the current one ink at 650 over a 2.5 px accent
+       underline inset 10 px; a count as the board's .ct. The underline is
+       the tab's own last child (TabUnderline, or the button tab's span), so
+       its pending pulse stays the pattern's. It sits on the strip's hairline
+       rather than over it: the tab row scrolls sideways, so anything below
+       it would be clipped. */
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] {
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [role='tab'] {
+      height: 42px;
+      gap: 7px;
+      font-size: 14px;
+      font-weight: 500;
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [role='tab']:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [role='tab'][aria-selected='true'] {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='tabs']
+      [role='tab']
+      > span[aria-hidden]:last-child {
+      left: 10px;
+      right: 10px;
+      height: 2.5px;
+      border-radius: 2px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='tabs']
+      [role='tab'][aria-selected='true']
+      > span[aria-hidden]:last-child {
+      background-color: var(--lg-accent);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='tabs'] [data-slot='tab-count'] {
+      padding: 1px 6px;
+      border-radius: 6px;
+      background-color: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    /* Filter chips: round, on the field frost. */
+    :root[data-appearance='liquid-glass'] [data-glass='chip'] {
+      border-radius: 999px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='meta-chip'] {
+      border-radius: 7px;
+    }
+
+    /* ── Badges (12.6) ────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='badge'] {
+      border-radius: 6px;
+      font-weight: 600;
+    }
+
+    /* ── Tables (12.5): hairlines, quiet header, row hover on the card frost ── */
+    :root[data-appearance='liquid-glass'] [data-glass='table'] th {
+      color: var(--lg-ink-3);
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='table'] tbody tr:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='table'] tbody tr[data-state='selected'] {
+      background-color: var(--lg-sel-fill);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='pager'] {
+      color: var(--lg-ink-3);
+    }
+
+    /* ── Menus and list options (10): highlight is a 12% accent tint ─── */
+    :root[data-appearance='liquid-glass'] [data-glass='menu'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu-item'] {
+      border-radius: 9px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='menu-item']:is([data-highlighted], :focus) {
+      background-color: color-mix(in srgb, var(--lg-accent) 12%, transparent);
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass='menu-item']:is([data-state='checked'], [aria-checked='true']) {
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='popover'] {
+      border-radius: var(--lg-r-lg);
+    }
+    /* The product-update card floats as a popover does (materials.css). */
+    :root[data-appearance='liquid-glass'] [data-update-notice] {
+      border-radius: var(--lg-r-lg);
+    }
+
+    /* ── Dialog, sheet (10, 12.9) ─────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='dialog'] {
+      border-radius: 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sheet'][data-glass-side='right'] {
+      border-radius: 24px 0 0 24px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sheet'][data-glass-side='left'] {
+      border-radius: 0 24px 24px 0;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass='sheet'][data-glass-side='bottom'] {
+      border-radius: 30px 30px 0 0;
+    }
+
+    /* ── Calendar days (12.4) ─────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='calendar'] button {
+      border-radius: 10px;
+    }
+
+    /* ── Loading (12.10): the shine, never a blur ─────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='skeleton'] {
+      background: linear-gradient(
+          90deg,
+          var(--lg-surface-3) 25%,
+          var(--lg-surface-2) 40%,
+          var(--lg-surface-3) 60%
+        )
+        0 0 / 400% 100%;
+      animation: lg-shine 1.4s ease infinite;
+    }
+
+    /* ── Page header (6): the large title ─────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass='page-header'] h1 {
+      font-weight: 650;
+      letter-spacing: -0.022em;
+    }
+  }
+
+  @keyframes lg-shine {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0 50%;
+    }
+  }
+}

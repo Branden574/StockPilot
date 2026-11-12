@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -81,5 +81,27 @@ describe('app/(auth)/auth.css', () => {
     ]);
     const globals = stripComments(readFileSync(join(SRC, 'app', 'globals.css'), 'utf8'));
     expect(globals).not.toMatch(/\.(auth|af)-[\w-]+\s*[{,:]/);
+  });
+
+  it('keeps glass out of auth.css: only a scoped, unlayered glass companion may restyle it', () => {
+    // Liquid Glass (plan 4.1, R22): auth.css is unlayered, so a glass rule in
+    // layer lg could never beat it. Its glass restyling, when the auth pages
+    // get theirs (stage 3), lives in styles/liquid-glass/auth.glass.css,
+    // imported by the auth layout right after auth.css and checked by the
+    // glass scope guard; auth.css itself never names the glass appearance.
+    expect(rules).not.toMatch(/data-appearance|data-glass|liquid-glass/);
+    const companion = join(SRC, 'styles', 'liquid-glass', 'auth.glass.css');
+    const importers = walk(SRC).filter((p) =>
+      /['"](\.\/|.*\/)auth\.glass\.css['"]/.test(readFileSync(p, 'utf8')),
+    );
+    if (existsSync(companion)) {
+      expect(importers.map((p) => p.slice(SRC.length + 1))).toEqual([
+        join('app', '(auth)', 'layout.tsx'),
+      ]);
+      const layout = readFileSync(join(HERE, 'layout.tsx'), 'utf8');
+      expect(layout.indexOf('auth.glass.css')).toBeGreaterThan(layout.indexOf("'./auth.css'"));
+    } else {
+      expect(importers).toEqual([]);
+    }
   });
 });

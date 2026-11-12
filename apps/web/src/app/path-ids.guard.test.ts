@@ -118,6 +118,9 @@ const CHECKED_BY_THE_SERVICE: Record<string, { call: string; service: string; me
 const PARAMS_HANDED_TO_A_GATE: Record<string, string> = {
   'api/v1/orders/[id]/return-request/route.ts': 'memberRequesterGate',
   'api/v1/orders/[id]/return-request/options/route.ts': 'memberRequesterGate',
+  // F14: the requester's mailboxes and order facts for a return request
+  // draft, behind the same gate as the sheet it sits beside.
+  'api/v1/orders/[id]/return-request-email/route.ts': 'memberRequesterGate',
 };
 const GATE_MODULES = ['api/v1/orders/[id]/return-request/http.ts'];
 

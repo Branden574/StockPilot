@@ -4,6 +4,8 @@ import { View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
@@ -32,6 +34,9 @@ const NO_ROWS: BinRow[] = [];
  * refresh", and the eyebrow quotes no count it did not read.
  */
 export default function BinsAdmin() {
+  // Liquid Glass (inferred: the iOS grouped list): the rows as one grouped
+  // surface of iOS rows; every row, state and message Classic has stays.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   // The rows on screen and the workspace they were read for: a failed read
@@ -105,7 +110,7 @@ export default function BinsAdmin() {
   if (!roleLoading && !isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · BINS"
+        eyebrow={lg ? 'Admin · Bins' : 'ADMIN · BINS'}
         title="Restricted"
         italic="access."
         emptyIcon={MapPin}
@@ -121,7 +126,15 @@ export default function BinsAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={failed && rows.length === 0 ? 'ADMIN · BINS' : `ADMIN · ${rows.length} BINS`}
+      eyebrow={
+        lg
+          ? failed && rows.length === 0
+            ? 'Admin · Bins'
+            : `Admin · ${rows.length} ${rows.length === 1 ? 'bin' : 'bins'}`
+          : failed && rows.length === 0
+            ? 'ADMIN · BINS'
+            : `ADMIN · ${rows.length} BINS`
+      }
       title="Bins"
       italic="& putaway."
       emptyTitle="No bins yet."
@@ -141,15 +154,24 @@ export default function BinsAdmin() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(b) => b.id}
-      renderItem={(b) => <BinCard bin={b} />}
+      renderItem={
+        lg
+          ? (b, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <BinCard bin={b} />
+              </GlassJoinedRow>
+            )
+          : (b) => <BinCard bin={b} />
+      }
     />
   );
 }
 
 function BinCard({ bin }: { bin: BinRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
-    <Card padding={14}>
+    <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono size={9.5} tracking={0.18} upper color={c.ink3}>

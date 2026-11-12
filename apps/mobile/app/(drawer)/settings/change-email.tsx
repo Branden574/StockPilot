@@ -15,6 +15,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { GLASS_PAGE } from '@/components/ui/glass/screens/admin';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { useGlass } from '@/components/ui/glass/use-glass';
+import { glassEyebrow } from '@/components/ui/glass/primitive-styles';
 import { Field } from '@/components/ui/field';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
@@ -89,6 +95,10 @@ function relativeTime(iso: string, now: number): string {
 
 export default function ChangeEmailScreen() {
   const { c } = useTheme();
+  // Liquid Glass (inferred: DS-Components fields in an iOS grouped list): the
+  // scene, the glass nav and large title, each part as a grouped card with
+  // the boards' 12/600 label; every field, button and message stays.
+  const lg = useGlass();
   const router = useRouter();
   const { user } = useAuth();
 
@@ -216,9 +226,10 @@ export default function ChangeEmailScreen() {
   const expired = status?.expiresAt ? now > new Date(status.expiresAt).getTime() : false;
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => (router.canGoBack() ? router.back() : router.replace('/settings' as never))}
@@ -226,17 +237,26 @@ export default function ChangeEmailScreen() {
             minTap
           />
         </View>
-        <View style={styles.head}>
-          <Eyebrow>SETTINGS</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Email<Em>.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {lg ? null : <Eyebrow>SETTINGS</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Email{lg ? null : <Em>.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Settings</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
+          contentContainerStyle={
+            lg
+              ? [GLASS_PAGE.scroll, { gap: 16 }]
+              : { paddingHorizontal: 20, paddingBottom: 60, gap: 16 }
+          }
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
@@ -262,7 +282,13 @@ export default function ChangeEmailScreen() {
 
           {status ? (
             <Card padding={16} style={{ gap: 10 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink3}>
+              <Mono
+                size={10}
+                tracking={0.12}
+                upper
+                color={c.ink3}
+                style={lg ? glassEyebrow(lg) : undefined}
+              >
                 SIGN-IN EMAIL
               </Mono>
               <View style={styles.row}>
@@ -279,7 +305,13 @@ export default function ChangeEmailScreen() {
 
           {status && pending ? (
             <Card padding={16} style={{ gap: 10 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink3}>
+              <Mono
+                size={10}
+                tracking={0.12}
+                upper
+                color={c.ink3}
+                style={lg ? glassEyebrow(lg) : undefined}
+              >
                 PENDING CHANGE
               </Mono>
               <View style={styles.row}>
@@ -328,7 +360,13 @@ export default function ChangeEmailScreen() {
 
           {status && (!pending || showForm) ? (
             <Card padding={16} style={{ gap: 14 }}>
-              <Mono size={10} tracking={0.12} upper color={c.ink3}>
+              <Mono
+                size={10}
+                tracking={0.12}
+                upper
+                color={c.ink3}
+                style={lg ? glassEyebrow(lg) : undefined}
+              >
                 {pending ? 'CHANGE TO A DIFFERENT ADDRESS' : 'CHANGE EMAIL'}
               </Mono>
               <Body muted size={13}>

@@ -12,6 +12,8 @@
 import * as React from 'react';
 
 import './storefront.css';
+// Liquid Glass: the unlayered companion, on the next line (plan 4.1).
+import '@/styles/liquid-glass/storefront.glass.css';
 
 /** Grid-card placeholder matching ProductCard's proportions. */
 export function SkeletonCard() {
@@ -35,17 +37,10 @@ export function CatalogSkeleton() {
   return (
     <div className="sf-shell" aria-busy="true" aria-label="Loading catalog">
       <div style={{ minWidth: 0 }}>
-        <div
-          className="sf-sk"
-          style={{ height: 34, borderRadius: 6, margin: '8px 0 12px' }}
-        />
+        <div className="sf-sk" style={{ height: 34, borderRadius: 6, margin: '8px 0 12px' }} />
         <div style={{ display: 'flex', gap: 8, margin: '0 0 18px', overflow: 'hidden' }}>
           {[64, 118, 96, 132, 88].map((w, i) => (
-            <div
-              key={i}
-              className="sf-sk"
-              style={{ width: w, height: 30, borderRadius: 999 }}
-            />
+            <div key={i} className="sf-sk" style={{ width: w, height: 30, borderRadius: 999 }} />
           ))}
         </div>
         <div className="sf-grid">

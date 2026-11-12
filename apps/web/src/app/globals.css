@@ -1,5 +1,8 @@
 @import 'tailwindcss';
 @plugin 'tailwindcss-animate';
+/* Liquid Glass, the opt-in third appearance: every rule scoped to
+   :root[data-appearance="liquid-glass"] in cascade layer lg (styles/liquid-glass). */
+@import '../styles/liquid-glass/index.css';
 
 @custom-variant dark (&:where(.dark, .dark *));
 

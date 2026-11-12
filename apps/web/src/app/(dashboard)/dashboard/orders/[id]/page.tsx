@@ -18,10 +18,14 @@ import { MemberReturnDialog } from '@/components/returns/member-return-dialog';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
+import { OrderFulfilmentBadge } from '@/components/orders/order-fulfilment-badge';
+import { OrderRequesterNoteAside } from '@/components/orders/order-requester-note-aside';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReplacementBanner } from '@/components/orders/replacement-banner';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
+import { returnRequestOrderLink } from '@/lib/returns/return-request-link';
+import { returnRequestRecipientsDto } from '@/server/services/return-request-email';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
 import {
@@ -61,6 +65,7 @@ import {
   BOOK_REPORT_BACK_TO_REPORT,
   can,
   canDraftShortfallPo,
+  canSendReturnRequest,
   deliveryRecipientsForRouting,
   describeCompletionConfirm,
   describeLineReturnRefs,
@@ -150,6 +155,9 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
 import { HelpTip } from '@/components/onboarding/help-tip';
+// Liquid Glass's composition of this page (Order-Detail.dc.html), scoped to
+// the glass root and this page's data-glass-page root; inert in Classic.
+import '@/styles/liquid-glass/pages/order-detail.css';
 
 /** The record page's frame, as the purchase order's (DESIGN-SPEC 5.3). */
 const ORDER_PAGE =
@@ -468,6 +476,13 @@ export default async function OrderDetailPage({
     request.status === 'completed' || (request.status as string) === 'delivered';
   const canReadReturns = can(ctx, 'returns:read') || can(ctx, 'returns:manage');
   const returnsModuleGate = orderIsReturnable && (canReadReturns || isOwnRequest);
+  // F14, "Send return request" on the requester's own requests: the viewer
+  // who gets "Your requests on this order" below (requesterTrackingEligible,
+  // decided once the module answer is in). Known here so the two reads the
+  // draft needs (the delivery site and the delivery-request mailboxes) go out
+  // with the others. A returnable order is completed, so this and
+  // showDeliveryRequest below are never both true.
+  const returnRequestGate = isOwnRequest && !can(ctx, 'returns:manage') && returnsModuleGate;
 
   // "Report a problem" launch point (Task 17, master brief §8) — always
   // available regardless of order status; the module RPC is only paid for a
@@ -696,7 +711,7 @@ export default async function OrderDetailPage({
     // actually render for an order that HAS a charter. A missing/failed row
     // degrades to null — the assistant already tolerates the 5 legacy
     // delivery rows with no charter.
-    showDeliveryRequest && request.delivery_charter_id
+    (showDeliveryRequest || returnRequestGate) && request.delivery_charter_id
       ? (async (): Promise<StorefrontCharter | null> => {
           const supabase = await createClient();
           const { data } = await supabase
@@ -735,7 +750,10 @@ export default async function OrderDetailPage({
     // button renders only when this resolves to a routable pair — unset or
     // invalid routing HIDES it (fail closed; never the compiled
     // constants, which only the pre-migration 'fallback' state may supply).
-    showDeliveryRequest
+    // F14: the return request draft goes to the same mailboxes, so the same
+    // read (and the same fail-closed rule) serves the requester's own
+    // requests on a completed order.
+    showDeliveryRequest || returnRequestGate
       ? getOrgEmailRouting(ctx.organizationId, 'delivery_request')
       : Promise.resolve<OrgEmailRoutingReadState | null>(null),
 
@@ -812,6 +830,13 @@ export default async function OrderDetailPage({
         ccName: deliveryRequestRecipientsValue.ccName,
       }
     : null;
+
+  // F14: the return request draft goes to the same saved mailboxes, by a
+  // stricter rule (services/return-request-email.ts): only a pair this
+  // organization saved, never the compiled pair the pre-migration 'fallback'
+  // state gives the delivery request above.
+  const returnRequestRecipients =
+    returnRequestGate && deliveryRequestRouting ? returnRequestRecipientsDto(deliveryRequestRouting) : null;
 
   // Readiness, as the page shows it. The stock-dependent actions come from
   // the same result (core readinessStockFlags + orderStockGates, the phone's
@@ -1242,6 +1267,14 @@ export default async function OrderDetailPage({
     showTracking: requesterTrackingEligible,
     viewerCanReadReturns: returnsLinkable,
   });
+  // F14: the mailboxes reach the browser only when at least one card will
+  // draw "Send return request" (the button's own rule, core
+  // canSendReturnRequest). RequesterTracking is a client component, so every
+  // prop it is handed is written into the page's HTML even where it renders
+  // no button: a requester with no request, or only closed ones, gets none.
+  const returnRequestSendable = returnsShown.tracking.some((r) =>
+    canSendReturnRequest(r.returnStatus, r.returnNumber),
+  );
   const returnsAnchor =
     returnsShown.orderReturns.length > 0
       ? '#order-returns'
@@ -1319,7 +1352,7 @@ export default async function OrderDetailPage({
   // squeezed); then the lines and the pipeline in the main column beside an
   // aside of facts (Dates, Details), one column below about 856 px of content.
   return (
-    <div className={ORDER_PAGE}>
+    <div data-glass-page="order-detail" className={ORDER_PAGE}>
       <OrderRealtimeRefresh orderId={id} />
       <ReviseNeededByDialog change={neededByChange} trigger={false} />
       <DraftShortfallPoDialog offer={shortfallPoOffer} />
@@ -1340,10 +1373,20 @@ export default async function OrderDetailPage({
           </>
         }
         titleAside={
-          <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
-            <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
-            {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
-          </span>
+          <>
+            {/* Liquid Glass draws the fulfilment beside the status (glass-only
+                words; nothing under the off rollout). Between the title and
+                the status in the DOM, where it moves no Classic element among
+                its siblings; glass shows it after the status. */}
+            <OrderFulfilmentBadge fulfillmentType={request.fulfillment_type} />
+            <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
+              <OrderStatusBadge
+                status={request.status}
+                fulfillmentType={request.fulfillment_type}
+              />
+              {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
+            </span>
+          </>
         }
         subline={
           <>
@@ -1425,13 +1468,17 @@ export default async function OrderDetailPage({
       />
 
       <div className="@container min-w-0">
-        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+        <div
+          data-glass="order-detail-columns"
+          className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4"
+        >
           <div className="flex min-w-0 flex-col gap-4">
             <DetailSection
               headingId="order-lines-heading"
               title={`Lines (${lines.length})`}
               flush
               data-testid="order-lines"
+              data-glass-role="order-lines"
               aside={
                 <div className="flex items-center gap-3">
                   <p className="text-muted-foreground text-[12.5px] tabular-nums">
@@ -1842,11 +1889,40 @@ export default async function OrderDetailPage({
               number is a link only when the returns page would open for this
               viewer. Nothing renders when the order has no returns. */}
             {/* Returns RX-3: the requester's own requests, in their words. */}
+            {/* F14: each open request carries "Send return request" for the
+                viewer this section is for (requesterTrackingEligible), when
+                the organization's delivery-request mailboxes resolved; unset
+                or invalid routing adds nothing, as for the delivery request.
+                The draft says what this card says, plus the order's own
+                facts read above for this viewer. */}
             <RequesterTracking
               requests={returnsShown.tracking}
               id="your-requests"
               density="compact"
               className="bg-card rounded-lg border p-[18px]"
+              returnRequest={
+                requesterTrackingEligible && returnRequestSendable && returnRequestRecipients
+                  ? {
+                      orderId: id,
+                      recipients: returnRequestRecipients,
+                      order: {
+                        orderNumber: orderNumberLabel,
+                        requestedBy: detail.requesterName ?? requesterDisplay,
+                        requesterEmail: detail.requesterEmail,
+                        // Name, code and address: the draft prints no id.
+                        site: deliveryRequestCharter
+                          ? {
+                              name: deliveryRequestCharter.name,
+                              code: deliveryRequestCharter.code,
+                              address: deliveryRequestCharter.address,
+                            }
+                          : null,
+                        warehouseName: warehouseName ?? null,
+                        link: returnRequestOrderLink(id),
+                      },
+                    }
+                  : null
+              }
             />
 
             {returnsShown.orderReturns.length > 0 && (
@@ -1945,8 +2021,16 @@ export default async function OrderDetailPage({
               </DetailSection>
             )}
 
+            {/* Liquid Glass shows the note in the side column instead
+                (OrderRequesterNoteAside, a glass-only copy: the note is words
+                only), so this one is Classic-only. */}
             {request.notes && (
-              <DetailSection title="Requester note" data-testid="order-requester-note">
+              <DetailSection
+                title="Requester note"
+                data-testid="order-requester-note"
+                data-glass-role="order-requester-note"
+                data-classic-only=""
+              >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.notes}</p>
               </DetailSection>
             )}
@@ -2046,12 +2130,17 @@ export default async function OrderDetailPage({
                 title={<span className="text-destructive">Denied</span>}
                 className="border-destructive/40"
                 data-testid="order-denied"
+                data-glass-role="order-denied"
               >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.denied_reason}</p>
               </DetailSection>
             )}
 
-            <DetailSection title="Timeline" data-testid="order-timeline">
+            <DetailSection
+              title="Timeline"
+              data-testid="order-timeline"
+              data-glass-role="order-timeline"
+            >
               {/* Async RSC (audit_logs + user_profiles) — Suspense lets the rest
                 of the order page flush immediately and the timeline stream in,
                 instead of its queries blocking every render (including each
@@ -2078,7 +2167,7 @@ export default async function OrderDetailPage({
           {/* The facts rail (the tour's `main aside`): label and value rows
             (DESIGN-SPEC 6.7). Below the two-column width it follows the main
             column, as before. */}
-          <aside className="flex min-w-0 flex-col gap-4">
+          <aside data-glass="order-detail-aside" className="flex min-w-0 flex-col gap-4">
             <DetailSection title="Dates" flush>
               <KeyValueList>
                 {(neededBy || neededByChangeInDates) && (
@@ -2113,6 +2202,12 @@ export default async function OrderDetailPage({
                 })}
               </KeyValueList>
             </DetailSection>
+
+            {/* Liquid Glass draws the requester note here, after Details
+                (glass-only; order-detail.css orders it last). Between Dates
+                and Details in the DOM, so no Classic element moves among its
+                siblings. */}
+            <OrderRequesterNoteAside notes={request.notes} />
 
             <DetailSection title="Details" flush>
               <KeyValueList>

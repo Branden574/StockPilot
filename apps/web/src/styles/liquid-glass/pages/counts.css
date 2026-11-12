@@ -1,0 +1,578 @@
+/* Liquid Glass, the cycle count pages (stage 4, operations lane): the
+   history (Cycle-Counts.dc.html), a count (Cycle-Count-Detail.dc.html, its
+   Post and Cancel dialogs and line inputs) and Start a count (inferred:
+   Cycle-Counts.dc.html's header over Items.dc.html's selectable table).
+   The shared operations frame (page box, head, table card, badges, pager,
+   states, dialogs) is pages/ops.css; this file adds what these boards draw
+   on top of it.
+
+   Same DOM as Classic (plan M1). Found through the inert root hooks
+   (data-glass-page="ops" with data-glass-view="cycle-counts",
+   "cycle-count" or "cycle-count-new"), the shared components' stage 2 hooks
+   and data-slot attributes, and the count page's own markup. Every rule is
+   scoped to :root[data-appearance="liquid-glass"] inside @media screen and
+   names its page root (glass-scope.guard.test.ts).
+
+   Deviations, recorded (stage4/ops-rows.md): the history keeps Classic's
+   two-line Started cell (relative, then the exact time) and the progress
+   line under an open count's status; every reference is a link (the board
+   links one row, the one it has a page for). A count keeps Cancel count and
+   Review & post at the head of the lines card with the status and the
+   counted figures (the board puts them in the page head): they own the two
+   dialogs and the busy state, so they are rendered once, where Classic has
+   them; the side column (assignee, linked exceptions) stays, as the board
+   draws no counterpart. The board's fifth figure, "Lines that differ", and
+   its wide bar under the figures are glass-only elements of the count
+   (components/cycle-counts/count-glass-summary.tsx); Classic's small bar
+   under Counted is hidden in their place. Imported only by the three cycle
+   count pages. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The history (Cycle-Counts.dc.html) ───────────────────────────── */
+    /* The table rows: --row-h 46, --row-pad 6. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr {
+      height: 46px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td {
+      padding-top: 6px;
+      padding-bottom: 6px;
+      font-size: 13px;
+      line-height: 18px;
+    }
+    /* Count # (mono sm strong, the link in the accent text, underlined). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:first-child
+      a {
+      color: var(--lg-accent-text);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    /* Started and Completed (sm ink 2, tabular), the exact time under it
+       (xs ink 3). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:is(:nth-child(2), :nth-child(5), :nth-child(7)) {
+      color: var(--lg-ink-2);
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td
+      time {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:last-child
+      time {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+    }
+    /* Warehouse in ink, notes muted (sm). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:nth-child(3) {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:nth-child(6) {
+      color: var(--lg-ink-3);
+    }
+    /* The search (.ctrl.search, max 380) and the pager row (.pager: 10 /
+       12 / 10 / 16 on the hairline, 13 px ink 3, 30 px buttons). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      [role='search'] {
+      width: min(380px, 100%);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      nav[aria-label='Cycle count pages'] {
+      padding: 10px 12px 10px 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      nav[aria-label='Cycle count pages']
+      > p {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-counts']
+      nav[aria-label='Cycle count pages']
+      [data-glass='button'] {
+      height: 30px;
+      padding: 0 12px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    /* ── A count (Cycle-Count-Detail.dc.html) ─────────────────────────── */
+    /* The title reads "Cycle count CC-000042" as the board's h1 does: the
+       words a screen reader already hears are shown (the same text node, so
+       the accessibility tree is unchanged). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      h1
+      > .sr-only {
+      position: static;
+      width: auto;
+      height: auto;
+      margin: 0;
+      padding: 0;
+      overflow: visible;
+      clip: auto;
+      clip-path: none;
+      white-space: pre;
+    }
+    /* The title row is the board's .row.g10: the h1, the copy button, then
+       the status badge. The badge is the glass-only copy the page places
+       between the h1 and the button (components/cycle-counts/
+       count-glass-summary.tsx); drawn last here, after the button. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      [data-glass='count-title-status'] {
+      order: 1;
+    }
+    /* While the title row shows the status, the lines card head does not:
+       the status is on screen once. Without a reference (no title copy) the
+       card head keeps it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']:has([data-glass='count-title-status'])
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass-role='status'] {
+      display: none;
+    }
+    /* The board's one meta line under the title (.sm.ink2: "Main Warehouse
+       · Started Fri, Oct 30 · Full count"): the subline and the start time
+       run on together, the time after a middle dot; 4 px under the title
+       row, as the head's other lines are (the line is inline here, so the
+       title row keeps the 4 px under itself; with a block line under it,
+       the two margins collapse into the same 4 px). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1) {
+      margin-bottom: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div:has(+ p) {
+      display: inline;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ p {
+      display: inline;
+      margin: 0;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div
+      + p::before {
+      content: ' · ';
+      content: ' · ' / '';
+    }
+    /* The Count summary card (section.card, 18 / 20): five figures in the
+       auto-fit grid (ops.css draws them as the board's .stat), the glass-only
+       "Lines that differ" among them (components/cycle-counts/
+       count-glass-summary.tsx), and under them the board's one wide bar
+       (.prog, 8 px, 16 px below the figures: the surface 4 track and the ok
+       fill, radius 3). The bar is placed out of the grid's flow, so the
+       auto-fit columns stretch over the five figures alone, as the board
+       lays them out; the grid keeps room under the figures for it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      > div:has(> [data-glass='count-progress']) {
+      position: relative;
+      padding-bottom: 42px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-glass='count-progress'] {
+      display: flex;
+      position: absolute;
+      right: 20px;
+      bottom: 18px;
+      left: 20px;
+      height: 8px;
+      overflow: hidden;
+      border-width: 0;
+      border-radius: 3px;
+      background: var(--lg-surface-4);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-glass='count-progress']
+      > span {
+      display: block;
+      height: 100%;
+      border-radius: 3px;
+      background: var(--lg-ok-fill);
+    }
+    /* Net variance in the board's tones (netCls: t-danger below nothing,
+       t-ok above, ink at nothing) where Classic marks any variance in the
+       warning ink; the direction comes from the figure's inert
+       data-glass-tone hook. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-testid='count-stat-net-variance'][data-glass-tone='down']
+      > div:nth-child(2) {
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-testid='count-stat-net-variance'][data-glass-tone='up']
+      > div:nth-child(2) {
+      color: var(--lg-ok);
+    }
+    /* Uncounted in ink, as the board draws it (.stat-v, no tone class),
+       where Classic draws it in the warning ink while lines are left. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-testid='count-stat-uncounted']
+      > div:nth-child(2) {
+      color: var(--lg-ink);
+    }
+    /* Classic's small bar under Counted: the wide bar stands for it. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='stat-strip']
+      [data-slot='stat-strip-item']
+      > div:has(> [data-slot='count-progress']) {
+      display: none;
+    }
+    /* The lines card's head (status, counted figures, the two actions) as
+       the board's card head (12 x 16, 52 px), and its toolbar (.toolbar,
+       12 x 14, 8 between): the search (.ctrl.search: flex 1 1 280px, max
+       360), the segmented views right after it, and the board's note on
+       Expected at the end (.xs.muted.ml-a.desk: the glass-only
+       count-lines-note, placed between the search and the views and drawn
+       last here; not on a phone). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      + div {
+      justify-content: flex-start;
+      gap: 8px;
+      padding: 12px 14px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      + div
+      > div:first-child {
+      flex: 1 1 280px;
+      width: auto;
+      max-width: 360px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      + div
+      > [data-glass='count-lines-note'] {
+      order: 1;
+      margin-left: auto;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+        .bg-card.rounded-lg.border
+        > .min-h-\[49px\]
+        + div
+        > [data-glass='count-lines-note'] {
+        display: none;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      + div
+      [data-glass='input'] {
+      height: 36px;
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass='button'] {
+      height: 36px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    /* Cancel count reads in the danger ink on the secondary frost (the
+       board's .btn-secondary with color: var(--danger)). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass='button'][data-glass-variant='outline'],
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass='button'][data-glass-variant='outline']:hover {
+      color: var(--lg-danger);
+    }
+    /* Review & post is the board's Post adjustments, the accent primary. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass='button'][data-glass-variant='default'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass='button'][data-glass-variant='default']:hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .min-h-\[49px\]
+      [data-glass='button'][data-glass-variant='default']:disabled {
+      box-shadow: none;
+    }
+    /* Post this count? (Cycle-Count-Detail.dc.html: its Post adjustments is
+       the accent primary, .btn-primary, as Review & post is). The count page
+       opens no other dialog with a primary button: Cancel count's is the
+       danger one. Portalled, so the page is named through :root:has(). */
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+      )
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-variant='default'] {
+      background-color: var(--lg-accent);
+      color: var(--lg-on-accent);
+      box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.28),
+        0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+      )
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-variant='default']:hover {
+      background-color: var(--lg-accent-hover);
+    }
+    :root[data-appearance='liquid-glass']:has(
+        [data-glass-page='ops'][data-glass-view='cycle-count']
+      )
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-variant='default']:disabled {
+      box-shadow: none;
+    }
+    /* The lines: Item, SKU (mono xs muted), Expected (tabular), the count
+       box (.count-in: 96 x 34, right-aligned, 600), Variance (strong). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:first-child
+      > div:first-child {
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:nth-child(2) {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td
+      [data-glass='input'] {
+      width: 96px;
+      height: 34px;
+      padding: 0 10px;
+      background-color: var(--lg-field-fill);
+      font-weight: 600;
+      text-align: right;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td
+      [data-glass='input']:disabled {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: none;
+      color: var(--lg-ink);
+      -webkit-text-fill-color: var(--lg-ink);
+      opacity: 1;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td:nth-child(5) {
+      font-weight: 600;
+    }
+    /* A line whose count differs from what was expected is the board's
+       .var-row (sp.css: the warning wash at 45 % on the row; trCls adds it
+       for any variance but nothing). Found by the Variance cell's tone,
+       which Classic gives only a variance above or below nothing; a line
+       that matches or is not counted yet is muted, so stays plain. One rule
+       per tone (no :has() list, see the board-values guard). Hovered, the
+       row takes the card hover, as the board's .tb .tr:hover outranks
+       .var-row. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-destructive) {
+      background-color: color-mix(in srgb, var(--lg-warn-wash) 45%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-success) {
+      background-color: color-mix(in srgb, var(--lg-warn-wash) 45%, transparent);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-destructive):hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      [data-glass='table']
+      > tbody
+      > tr:has(> td:nth-child(5).text-success):hover {
+      background-color: var(--lg-card-hover);
+    }
+    /* The lines' pager (.pager: 13 px ink 3, 10 / 12 / 10 / 16). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-card.rounded-lg.border
+      > .border-t {
+      padding: 10px 12px 10px 16px;
+      border-color: var(--lg-line);
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+    /* The new-items notice is the board's warning alert (.alert.a-warn:
+       radius 12, the warn line). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-warning-wash.rounded-lg {
+      border: 1px solid var(--lg-warn-line);
+      border-radius: 12px;
+      background: var(--lg-warn-wash);
+      color: var(--lg-ink);
+      font-size: 13.5px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count']
+      .bg-warning-wash.rounded-lg
+      > svg {
+      width: 18px;
+      height: 18px;
+      color: var(--lg-warn);
+    }
+
+    /* ── Start a count (inferred) ─────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='ops'][data-glass-view='cycle-count-new']
+      [data-glass='table']
+      > tbody
+      > tr
+      > td {
+      font-size: 13px;
+    }
+  }
+}

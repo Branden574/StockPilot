@@ -11,6 +11,12 @@ import { can } from '@stockpilot/core';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { AI_TOUR } from '@/lib/onboarding/tours';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export const metadata = {
   title: 'AI Assistant',
 };
@@ -32,7 +38,11 @@ export default async function AiPage() {
     // (16 px on a phone), the shared header, then the sessions rail beside the
     // conversation. The AI tour's first step targets `main h1`, which is the
     // header's title.
-    <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-5 px-4 pb-10 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1120px] flex-col gap-5 px-4 pb-10 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="ai"
+    >
       <PageHeader
         eyebrow={
           <span className="inline-flex items-center gap-1">

@@ -46,6 +46,13 @@ import {
   resolveOrgTimezone,
 } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/counts.css';
+
 type ListSearchParams = {
   q?: string | string[];
   page?: string | string[];
@@ -170,7 +177,7 @@ export default async function CycleCountsPage({
   );
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="cycle-counts">
       <RememberCycleCountListView q={q} status={status} page={result.page} />
       <PageHeader
         title={heading}

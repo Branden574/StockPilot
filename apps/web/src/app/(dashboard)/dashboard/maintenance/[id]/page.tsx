@@ -27,6 +27,12 @@ import { MaintenanceShareLinksService, maintenanceShareLinksEnabled } from '@/se
 
 import { MaintenancePhotosPanelClient, MaintenanceRequestActions } from './detail-client';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const dynamic = 'force-dynamic';
 
 /**
@@ -175,7 +181,7 @@ export default async function MaintenanceRequestDetailPage({
     // than nesting inside the two-column layout below (which would
     // duplicate every field it already shows).
     return (
-      <div className={PAGE_BOX}>
+      <div className={PAGE_BOX} data-glass-page="ops" data-glass-view="maintenance-request">
         <MaintenanceReview
           detail={detail}
           photos={photos}
@@ -224,7 +230,7 @@ export default async function MaintenanceRequestDetailPage({
 
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass-page="ops" data-glass-view="maintenance-request">
       {/* The record header (DESIGN-SPEC 6.1, the item-detail variant without
           a photo): back link, the request number as the page's only h1 with
           its status and priority beside it, the subject line under it, and

@@ -130,6 +130,9 @@ describe('the templated sentences', () => {
     // PO-4 review: "All 1 available are in your cart" (web and phone).
     expect(copy.cartLineAtMaxCopy(1)).toBe('The 1 available is in your cart');
     expect(copy.cartLineOverCopy(3)).toBe('Only 3 available. Reduce the quantity.');
+    expect(copy.addAllButtonCopy(8)).toBe('Add all');
+    expect(copy.addAllWordsCopy(8, 0)).toBe('Add all 8 available');
+    expect(copy.addAllLabelCopy('Planner', 8)).toBe('Add all 8 available: Planner');
     expect(copy.kitsAvailableCopy(1)).toBe('1 kit available');
     expect(copy.kitsAvailableCopy(60)).toBe('60 kits available');
     expect(copy.kitLimitedByCopy('Backpack', 60)).toBe('Limited by Backpack (60)');
@@ -161,6 +164,9 @@ describe('the templated sentences', () => {
       .sort();
     expect(functions).toEqual(
       [
+        'addAllButtonCopy',
+        'addAllLabelCopy',
+        'addAllWordsCopy',
         'cartCountsCopy',
         'cartLineAtMaxCopy',
         'cartLineOverCopy',
@@ -175,6 +181,54 @@ describe('the templated sentences', () => {
         'successSentForApprovalCopy',
       ].sort(),
     );
+  });
+});
+
+// "Add all": the button's words and its spoken name, for the web and the phone.
+describe('the Add all words', () => {
+  const NAME = 'Graph Paper Pad';
+
+  it('the button says Add all, and its name starts with those words', () => {
+    expect(copy.addAllButtonCopy(67)).toBe('Add all');
+    expect(copy.addAllLabelCopy(NAME, 67)).toBe('Add all 67 available: Graph Paper Pad');
+    expect(copy.addAllLabelCopy(NAME, 67, 5)).toBe('Add all 67 available: Graph Paper Pad');
+    expect(copy.addAllLabelCopy(NAME, 2, 0)).toBe('Add all 2 available: Graph Paper Pad');
+  });
+
+  it('with everything available in the cart it says so', () => {
+    expect(copy.addAllWordsCopy(67, 67)).toBe('All 67 available are in your cart');
+    expect(copy.addAllLabelCopy(NAME, 67, 67)).toBe('All 67 available are in your cart: Graph Paper Pad');
+  });
+
+  it('with more in the cart than is available it never says all of them are in the cart', () => {
+    expect(copy.addAllWordsCopy(67, 80)).toBe('Only 67 available. Reduce the quantity');
+    expect(copy.addAllLabelCopy(NAME, 67, 80)).toBe('Only 67 available. Reduce the quantity: Graph Paper Pad');
+    expect(copy.addAllLabelCopy(NAME, 67, 80)).not.toMatch(/\bAll 67\b/);
+  });
+
+  it('above the most one order can hold it never says all', () => {
+    const cap = placeOrder.ORDER_MAX_UNITS_PER_LINE;
+    expect(cap).toBe(10_000);
+    expect(copy.addAllButtonCopy(25_000)).toBe('Add 10,000');
+    expect(copy.addAllButtonCopy(cap)).toBe('Add all');
+    expect(copy.addAllButtonCopy(cap + 1)).toBe('Add 10,000');
+    expect(copy.addAllLabelCopy(NAME, 25_000)).toBe('Add 10,000, the most one order can hold: Graph Paper Pad');
+    expect(copy.addAllLabelCopy(NAME, 25_000, 9_999)).toBe('Add 10,000, the most one order can hold: Graph Paper Pad');
+    expect(copy.addAllLabelCopy(NAME, 25_000, cap)).toBe(
+      '10,000 are in your cart, the most one order can hold: Graph Paper Pad',
+    );
+    for (const inCart of [0, 9_999, cap]) {
+      expect(copy.addAllLabelCopy(NAME, 25_000, inCart)).not.toMatch(/\ball\b/i);
+      expect(copy.addAllLabelCopy(NAME, 25_000, inCart)).not.toContain('25');
+    }
+  });
+
+  it('the limit in the words is the order limit, read by name', () => {
+    const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'copy.ts'), 'utf8');
+    expect(src).toMatch(/import \{ ORDER_MAX_UNITS_PER_LINE \} from '\.\.\/place-order';/);
+    // Comments may say the number; the code may not retype it.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    expect(code).not.toMatch(/10[_,]?000/);
   });
 });
 

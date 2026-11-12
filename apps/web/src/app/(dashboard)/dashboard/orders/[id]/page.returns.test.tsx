@@ -1,6 +1,8 @@
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The PHONE's decision module for the same feature, imported by path so this
@@ -156,6 +158,9 @@ vi.mock('@/server/services/returns-requester', () => ({
 }));
 const exchangeSwitch = vi.hoisted(() => ({ on: true }));
 vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => exchangeSwitch.on }));
+
+import { RequesterTracking } from '@/components/returns/requester-tracking';
+import { getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 
 import OrderDetailPage from './page';
 
@@ -327,6 +332,7 @@ beforeEach(() => {
   resolveReturnTokenMock.mockResolvedValue(null);
   trackingForOrderMock.mockResolvedValue([]);
   exchangeSwitch.on = true;
+  vi.mocked(getOrgEmailRouting).mockResolvedValue({ state: 'unset' });
 });
 
 describe('(c) golden — an order with no returns renders exactly as before', () => {
@@ -970,5 +976,167 @@ describe("(h) the requester's own order: Return or exchange, and their requests 
       const panel = container.querySelector('[data-testid="order-returns"]') as HTMLElement;
       expect(panel.querySelector('a[href="/dashboard/returns/rma-own"]')).not.toBeNull();
     });
+  });
+});
+
+// F14: "Send return request" on the requester's own requests. The draft goes
+// to the organization's delivery-request mailboxes (reserved test domains
+// here); nothing in this file opens a window or sends anything.
+describe("(i) the requester's own request carries Send return request (F14)", () => {
+  const ADMIN = { tag: 'service-role' };
+  const ROUTING = {
+    state: 'valid' as const,
+    recipients: { to: 'intake@warehouse.test', cc: 'copy@warehouse.test' },
+  };
+  function request(over: Record<string, unknown> = {}) {
+    return {
+      returnNumber: 'RMA-20261110-AB12CD',
+      createdAt: '2026-11-10T17:00:00.000Z',
+      returnStatus: 'requested',
+      exchangeStatus: 'none',
+      sentences: ['Requested. The warehouse will review it.'],
+      replacementOrderNumber: null,
+      lines: [{ returning: { name: "Women's Polo", sizeLabel: 'Size S', quantity: 1 }, exchange: null }],
+      ...over,
+    };
+  }
+  const buttons = (container: HTMLElement) =>
+    Array.from(container.querySelectorAll('button')).filter((b) => b.textContent === 'Send return request');
+
+  beforeEach(() => {
+    adminHolder.client = ADMIN;
+    orderGet.mockResolvedValue(
+      detailFixture({
+        request: requestFixture({ requester_user_id: 'u1' }),
+        requesterEmail: 'juniper@school.test',
+      }),
+    );
+    checkModuleAccessMock.mockImplementation(async (moduleId: string) => ({ enabled: moduleId === 'returns', canManage: false }));
+    trackingForOrderMock.mockResolvedValue([request()]);
+    vi.mocked(getOrgEmailRouting).mockResolvedValue(ROUTING);
+  });
+
+  it('an open request with the mailboxes saved: one button inside the card, reading the delivery-request routing of this organization', async () => {
+    const { container } = await renderPage();
+    const section = container.querySelector('#your-requests') as HTMLElement;
+    expect(buttons(section)).toHaveLength(1);
+    expect(buttons(container)).toHaveLength(1);
+    expect(getOrgEmailRouting).toHaveBeenCalledWith('org-1', 'delivery_request');
+  });
+
+  it('the dialog names both mailboxes and the draft says what the card says, with the order facts and no reason or SKU', async () => {
+    const { container } = await renderPage();
+    await userEvent.click(buttons(container)[0]!);
+    const dialog = await screen.findByRole('dialog', { name: 'Send return request' });
+    expect(dialog.textContent).toContain(
+      'This request will be emailed to intake@warehouse.test. A copy will also be sent to copy@warehouse.test.',
+    );
+    const body = dialog.querySelector('[data-testid="return-request-preview"]')!.textContent ?? '';
+    expect(body.split('\n')).toEqual([
+      'Return request',
+      '',
+      'Return: RMA-20261110-AB12CD',
+      'Order: SO-000085',
+      'Status: Requested',
+      'Requested by: Juniper, juniper@school.test',
+      'Warehouse: DC4',
+      '',
+      'Items coming back:',
+      "- Women's Polo, S ×1",
+      '',
+      'Open in StockPilot:',
+      `https://stockpilotusa.com/dashboard/orders/${ORDER_ID}#your-requests`,
+    ]);
+    expect(dialog.textContent).toContain('StockPilot does not send it and does not create a ticket');
+  });
+
+  it('one button per open request; a closed, denied or cancelled request has none', async () => {
+    trackingForOrderMock.mockResolvedValue([
+      request({ returnNumber: 'RMA-A', returnStatus: 'requested' }),
+      request({ returnNumber: 'RMA-B', returnStatus: 'approved' }),
+      request({ returnNumber: 'RMA-C', returnStatus: 'received' }),
+      request({ returnNumber: 'RMA-D', returnStatus: 'closed' }),
+      request({ returnNumber: 'RMA-E', returnStatus: 'denied' }),
+      request({ returnNumber: 'RMA-F', returnStatus: 'cancelled' }),
+      request({ returnNumber: null, returnStatus: 'requested' }),
+    ]);
+    const { container } = await renderPage();
+    expect(container.querySelectorAll('#your-requests > ul > li')).toHaveLength(7);
+    expect(buttons(container)).toHaveLength(3);
+  });
+
+  it('no button when the mailboxes are not set, the saved value is invalid, or only the compiled fallback pair exists (the requests still show)', async () => {
+    for (const state of [{ state: 'unset' as const }, { state: 'invalid' as const }, { state: 'fallback' as const }]) {
+      vi.mocked(getOrgEmailRouting).mockResolvedValue(state as never);
+      const { container, unmount } = await renderPage();
+      expect(container.querySelector('#your-requests')).not.toBeNull();
+      expect(buttons(container)).toHaveLength(0);
+      unmount();
+    }
+  });
+
+  it("someone else's order: no section, no button, and the mailboxes are not read", async () => {
+    orderGet.mockResolvedValue(detailFixture({ request: requestFixture({ requester_user_id: 'other-user' }) }));
+    const { container } = await renderPage();
+    expect(buttons(container)).toHaveLength(0);
+    expect(getOrgEmailRouting).not.toHaveBeenCalled();
+  });
+
+  it('a viewer who manages returns gets no button here (theirs is on the return page), and no mailbox read', async () => {
+    setViewer(['returns:manage']);
+    const { container } = await renderPage();
+    expect(buttons(container)).toHaveLength(0);
+    expect(getOrgEmailRouting).not.toHaveBeenCalled();
+  });
+
+  // RequesterTracking is a client component: whatever the page hands it is
+  // written into the page's HTML, button or not. So the props are read off
+  // the page's element tree, not off the rendered DOM.
+  function requesterTrackingProps(node: unknown): Record<string, unknown> | null {
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = requesterTrackingProps(child);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (!React.isValidElement(node)) return null;
+    const props = node.props as Record<string, unknown>;
+    if (node.type === RequesterTracking) return props;
+    for (const value of Object.values(props)) {
+      const found = requesterTrackingProps(value);
+      if (found) return found;
+    }
+    return null;
+  }
+  const pageTree = () => OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) });
+
+  it('the mailboxes reach the client only when a card draws the button: none with no request, or with only closed or unnumbered ones', async () => {
+    // The skeptic round (2026-11-12, replay.log lines 17 and 18): the HTML of
+    // a requester's own completed order with no return named the mailboxes.
+    for (const tracking of [
+      [],
+      [request({ returnNumber: 'RMA-D', returnStatus: 'closed' }), request({ returnNumber: 'RMA-E', returnStatus: 'denied' })],
+      [request({ returnNumber: 'RMA-F', returnStatus: 'cancelled' }), request({ returnNumber: null, returnStatus: 'requested' })],
+    ]) {
+      trackingForOrderMock.mockResolvedValue(tracking);
+      const props = requesterTrackingProps(await pageTree());
+      expect(props, JSON.stringify(tracking)).not.toBeNull();
+      expect(props!.returnRequest, JSON.stringify(tracking)).toBeNull();
+      expect(JSON.stringify(props), JSON.stringify(tracking)).not.toContain('intake@warehouse.test');
+    }
+    // Control: one open request among closed ones hands the mailboxes over.
+    trackingForOrderMock.mockResolvedValue([
+      request({ returnNumber: 'RMA-D', returnStatus: 'closed' }),
+      request({ returnNumber: 'RMA-B', returnStatus: 'approved' }),
+    ]);
+    const props = requesterTrackingProps(await pageTree());
+    expect((props!.returnRequest as { recipients: { to: string } }).recipients.to).toBe('intake@warehouse.test');
+  });
+
+  it('no button while Returns is switched off', async () => {
+    checkModuleAccessMock.mockResolvedValue({ enabled: false, canManage: false });
+    const { container } = await renderPage();
+    expect(buttons(container)).toHaveLength(0);
   });
 });

@@ -36,6 +36,13 @@ import {
   type ReturnListFilterId,
 } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/returns.css';
+
 /**
  * The page box every redesigned dashboard page shares (DESIGN-SPEC 4 and 5.3:
  * max 1320, 28 / 32 / 64 padding, 16 px gutters on a phone, 16 px between
@@ -114,7 +121,7 @@ export default async function ReturnsPage({
   );
 
   return (
-    <div className={PAGE_BOX}>
+    <div className={PAGE_BOX} data-glass-page="ops" data-glass-view="returns">
       <PageHeader
         title={heading}
         titleId="returns-title"
@@ -149,6 +156,17 @@ export default async function ReturnsPage({
           className="pl-8"
         />
       </form>
+
+      {/* B117: a search that could not match people by their profile name
+          says so (more than 500 people matched, or the people read failed).
+          Nothing is drawn for a full search, so the page is as it was. */}
+      {page.q && page.requesterSearch && page.requesterSearch !== 'full' ? (
+        <p role="status" className="text-muted-foreground max-w-3xl text-sm" data-returns-search-note>
+          {page.requesterSearch === 'too_many'
+            ? RETURNS_COPY.listSearchTooManyPeople
+            : RETURNS_COPY.listSearchPeopleUnavailable}
+        </p>
+      ) : null}
 
       {/* The nine filters as filter chips (DESIGN-SPEC 6.6, the Movements
           type chips), wrapping. They stay links in a navigation landmark
@@ -241,9 +259,12 @@ export default async function ReturnsPage({
                     </div>
                   </TableCell>
                   <TableCell>
+                    {/* B117: the loader names the person the order was for. With
+                        no name to show, say how the return was opened, in
+                        words that cannot be read as a person's name. */}
                     {r.requesterName ?? r.requesterEmail ?? (
                       <span className="text-muted-foreground">
-                        {r.source === 'requester' ? 'Requester' : 'Staff'}
+                        {r.source === 'requester' ? 'Opened by the requester' : 'Opened by staff'}
                       </span>
                     )}
                   </TableCell>

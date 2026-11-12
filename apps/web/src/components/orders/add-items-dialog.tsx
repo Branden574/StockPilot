@@ -166,7 +166,7 @@ export function AddItemsDialog({
             the column 860 px in a 672 px dialog and pushed the search, the
             list, Selected and the buttons off its right edge. */}
         <DialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-2xl">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Add items to this order</DialogTitle>
             <DialogDescription>
               Only items stocked at {warehouseName ?? "this order's warehouse"} can be added. An
@@ -421,7 +421,9 @@ function AddItemsBody({
   }
 
   return (
-    <div className="space-y-3">
+    // add-items-body: an inert hook, so Liquid Glass can reach the foot inside
+    // this wrapper (order-detail.css).
+    <div data-glass="add-items-body" className="space-y-3">
       {/* The segmented look (DESIGN-SPEC 6.5) on the same aria-pressed
           toggles. */}
       <div className="border-border bg-sunk inline-flex gap-0.5 rounded-lg border p-[3px] text-[13px]">
@@ -599,7 +601,7 @@ function AddItemsBody({
         )}
       </div>
 
-      <DialogFooter>
+      <DialogFooter data-glass="dialog-footer">
         <Button type="button" variant="outline" onClick={onClose} disabled={pending}>
           Cancel
         </Button>

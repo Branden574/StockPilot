@@ -80,8 +80,16 @@ export interface CheckboxGlyphProps {
  * owns role="checkbox" and aria-checked, and draws this inside.
  */
 export function CheckboxGlyph({ checked, indeterminate = false, className }: CheckboxGlyphProps) {
+  // data-glass / data-glass-state are inert hooks (no style, no behaviour):
+  // Liquid Glass draws the box from them wherever it sits, the Checkbox
+  // button or a row that is itself the control (primitives.css).
   return (
-    <span aria-hidden className={cn(boxClasses(checked || indeterminate), className)}>
+    <span
+      aria-hidden
+      data-glass="checkbox-glyph"
+      data-glass-state={checked || indeterminate ? 'on' : 'off'}
+      className={cn(boxClasses(checked || indeterminate), className)}
+    >
       {checked ? <Tick /> : indeterminate ? <Bar /> : null}
     </span>
   );
@@ -144,6 +152,7 @@ export const Checkbox = React.forwardRef<HTMLButtonElement, CheckboxProps>(funct
   return (
     <button
       {...props}
+      data-glass="checkbox"
       ref={setRef}
       type="button"
       role="checkbox"

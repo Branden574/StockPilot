@@ -27,6 +27,822 @@ import type { Release } from '@stockpilot/core';
  * change. docs/releases/PUBLISHING.md is the workflow.
  */
 export const RELEASES: Release[] = [
+  // DRAFT: the Liquid Glass release (RELEASE.md section 2 item 4), from
+  // docket-2026-10-24/whatsnew-lg/registry-release.ts, written 2026-11-09
+  // against feat/liquid-glass b64bd37cc and added here at cb4f4949d. A draft
+  // never leaves the server (logic.ts visibleReleases and registryFingerprint;
+  // registry.liquid-glass-draft.test.ts). Publish at G5 only, after the G3
+  // phone update shows iOS launches: status 'published', publishedAt the whole
+  // minute at or after both the web default deployment going live and the
+  // first iOS launch, the re-pins of RELEASE.md R-6, and every line marked
+  // RECHECK below read again at the release head and the marker removed
+  // (RECHECK is deliberately not a word the publish guard looks for, so grep
+  // this block for it before publishing).
+  {
+    id: 'liquid-glass-2026-11',
+    revision: 1,
+    // Liquid Glass: web G2b (NEXT_PUBLIC_LIQUID_GLASS=default) and phone G3 (OTA for runtime 1.4.0 with
+    // EXPO_PUBLIC_LIQUID_GLASS=default). Claims checked against b64bd37cc:
+    // - Design and Theme words: apps/web/src/components/theme/appearance-select.tsx:51-77 (Liquid Glass, Classic;
+    //   Light, Dark, System); phone apps/mobile/src/lib/appearance/labels.ts:31-44.
+    // - Day/Night by Theme: appearance-select.tsx:55 ("Day or Night follows your Theme"); plan D3 (revised R1, R2).
+    // - Account menu: components/dashboard/user-menu.tsx:182-204 (Design above Theme, only when the build has glass);
+    //   trigger named "Account menu for ..." (:104). Header menu: components/theme/theme-toggle.tsx:79-94; in the
+    //   dashboard top bar only from 680 px of bar width (components/dashboard/topbar.tsx:329-331); on the sign-in pages
+    //   ((auth)/layout.tsx:72,80), invite, onboarding, marketing headers, external pages (external-shell.tsx:132:
+    //   RECHECK until stage 4 lane L2a is merged and walked; README RECHECK 3).
+    // - Settings > Profile > Appearance: settings/profile/page.tsx:101-110, components/settings/appearance-panel.tsx
+    //   (status lines appearance-select.tsx:135-150).
+    // - Intro notice: appearance-provider.tsx:207-211 (web), phone labels.ts:108-114 (Home card).
+    // - Crash fallback and recovery: appearance-provider.tsx:207 ("Liquid Glass hit a problem, so StockPilot opened in
+    //   the classic look."), the error boundaries' Use classic design (app/error.tsx:57, (dashboard)/error.tsx:101,
+    //   global-error.tsx:253).
+    // - Account sync: server/actions/appearance.ts (self row only); the web reads the row when the dashboard names the
+    //   person (appearance-provider.tsx:166-171); the phone reads it at the first start of the new JS within the 4 s
+    //   cap and later at a calm moment (REVISION-DEFAULT R9). RECHECK on the lab walk: a Theme chosen on the phone is
+    //   adopted by the web, and the reverse.
+    // - Print and documents never glass: EXEMPT_PATHS (appearance-flag.ts:47) for the order print page; the signature
+    //   pad and label sheet carry data-appearance-exempt; emails and server PDFs are not rendered by the web app's CSS
+    //   (plan Q15, 4.8). RECHECK stage 4 kept every print, PDF, export and signature output unchanged.
+    // - Accessibility (web): styles/liquid-glass/materials.css:73-91 (prefers-reduced-transparency or
+    //   prefers-contrast: more: no blur, opaque materials), :92-107 (the same under data-lg-material="reduced"),
+    //   :109 on (forced-colors: system colours); the reduced attribute is set only on browsers that report
+    //   deviceMemory, at 2 GB or less or 2 cores or less (appearance-script.ts:80-84), i.e. Chromium browsers.
+    //   Safari and Firefox do not report Reduce transparency (REVISION-DEFAULT R11, verified there).
+    // - Phone material: apps/mobile/src/lib/appearance/material.ts selectMaterial (glass on iOS 26+ with the module;
+    //   blur below; opaque with Reduce Transparency, a low-end device: year class before 2019 or under 3 GB, Android).
+    //   RECHECK until the REAL iOS 26 iPhone walk after G3 (RELEASE.md section 6 step 6; DECISIONS "RELEASE PREP
+    //   REVIEW" item 3): "On iOS 26 and later the bars use Apple's Liquid Glass" rests on build 54 linking
+    //   expo-glass-effect, which is inferred (expo-router's native stack needs it), not yet seen on a real device. If
+    //   the walk shows frosted bars on iOS 26, drop the sentence here and in appstore-whats-new.txt (README RECHECK 10).
+    // - "Chrome and Edge ... little memory or few processor cores": isLowPowerBrowser (appearance-script.ts:80-84):
+    //   deviceMemory reported AND (2 GB or less OR 2 cores or less).
+    //   Tab bar capsule and round Scan button: plan 5.2 / IosTabBar board, built in stage 4 lane native-core: RECHECK.
+    // - Phone Theme now forces Light or Dark: labels.ts:41-43 and os-scheme.ts (REVISION-DEFAULT R9, "Dark or Light
+    //   fixes the OS scheme in both designs"): RECHECK on the simulator.
+    // - Phone footnote: labels.ts:88-89.
+    // - Phones before 1.4.0: runtimeVersion appVersion (app.config.ts:51-53), the OTA targets 1.4.0 only (R9).
+    // - "Every page ... still there": BRIEF (every feature stays) and the stage 5 parity and coverage checks: RECHECK
+    //   when stage 4 and 5 are done.
+    // - The stockroom picture: the scene illustrations (stage3/scene-assets.md), shipped once lg/scene-assets is
+    //   merged: RECHECK.
+    // Who is told: every entry has no audience (every member sees the look); the one link is
+    // /dashboard/settings/profile, which registry.test.ts:561-570 lists as open to every member.
+    status: 'draft',
+    title:
+      'StockPilot opens in a new look, Liquid Glass, and the previous design is one choice away',
+    summary:
+      'StockPilot now opens in Liquid Glass, a new look on the web and, after the latest update, in the mobile app. Day glass goes with your Light theme and Night glass with Dark, and System follows your device. Every page and button is still there under the same name. To use the previous look, choose Design, Classic in your account menu on the web, or in Settings, Appearance in the mobile app. Your choice is saved to your account.',
+    // RECHECK at publish: the instant (see the header). This placeholder keeps the registry newest-first.
+    // Moved when main was merged in after #493 and #494 (2026-11-10; was: '2026-11-09T12:00:00Z'): the Add all
+    // release below is dated 2026-11-10T21:50:00Z, and dates must not increase going down, so the placeholder is
+    // that same minute. Move it again whenever a release is published below this draft.
+    // Moved again by docs/whatsnew-returns-1112 (2026-11-12; was: '2026-11-10T21:50:00Z'): the returns release
+    // below is dated 2026-11-12T08:42:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whatsnew-phone-1112 (2026-11-12; was: '2026-11-12T08:42:00Z'): the phone appearance and
+    // returns release below is dated 2026-11-12T19:30:00Z, so the placeholder is that same minute. If the
+    // integrator moves that release's minute, move this one with it.
+    publishedAt: '2026-11-12T19:30:00Z',
+    entries: [
+      {
+        id: 'liquid-glass-web',
+        category: 'new',
+        area: 'Web app',
+        title: 'The web app and the website open in Liquid Glass',
+        // RECHECK until stage 4 is merged and walked (lane L2a): "the pages people open from a link" have the glass look
+        // and show the appearance menu in their corner (external-shell.tsx:132 at b64bd37cc; README RECHECK 3).
+        whatChanged:
+          "The web app, the sign-in pages, the pages people open from a link and the public website now open in Liquid Glass: frosted panels over a soft picture of a stockroom, with a green accent. Day glass goes with the Light theme and Night glass with Dark. With System, StockPilot follows your device's light or dark setting, as before.",
+        whyItMatters:
+          'Liquid Glass is the new standard StockPilot design. The previous design stays available, unchanged, for anyone who prefers it.',
+        howItAffectsYou:
+          'Some pages are laid out differently, but every page, tab, filter, button, export and setting is still there under the same name, and what each member can do has not changed. Printed pages, PDFs, labels and emails keep their current look. Your Light, Dark or System choice is kept and now picks Day or Night glass.',
+        whatToDo:
+          'No action needed. To use the previous look, open your account menu at the top right and choose Design, Classic.',
+      },
+      {
+        id: 'liquid-glass-design-choice',
+        category: 'new',
+        area: 'Appearance',
+        title: 'Choose Liquid Glass or Classic in your account menu or in Settings',
+        whatChanged:
+          'A Design choice, Liquid Glass or Classic, now sits above Theme in your account menu at the top right, in the appearance menu at the top of the sign-in and public pages (and of the app on wider screens), and in Settings, Profile, under Appearance. Classic is the previous design. The first time you see Liquid Glass after signing in, a message offers Use classic design and Keep Liquid Glass.',
+        whyItMatters:
+          'Some people prefer the previous design, and switching back should take one choice, not a search through Settings.',
+        howItAffectsYou:
+          'A choice applies at once, without reloading the page. When you are signed in it is saved to your account, so StockPilot uses it when you sign in on another computer, and Settings, Profile says whether it was saved. If Liquid Glass ever fails to show a page, StockPilot opens it in Classic once and says so, and error pages offer Use classic design.',
+        whatToDo:
+          'No action needed. To switch, open your account menu and choose Design, then Classic or Liquid Glass.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
+      },
+      {
+        id: 'liquid-glass-accessibility',
+        category: 'new',
+        area: 'Accessibility',
+        title: 'Liquid Glass follows your accessibility settings',
+        whatChanged:
+          'With Increase contrast turned on, or Reduce transparency in Chrome or Edge, Liquid Glass shows solid panels with nothing blurred behind them, and with a Windows contrast theme it uses your system colours. Chrome and Edge also show the solid panels on their own on computers with little memory or few processor cores.',
+        whyItMatters:
+          'Frosted panels can be harder to read for some people, and they take more work for older computers to draw.',
+        howItAffectsYou:
+          "Safari and Firefox do not tell websites when Reduce transparency is on. If you use one of them and want solid panels, turn on Increase contrast in your computer's accessibility settings, or choose Classic.",
+        whatToDo: 'No action needed.',
+      },
+      // The two phone entries are true only once phones have the G3 update: publish this release after the iOS
+      // launches show (G5). For a web-first publish use registry-release-web-only.ts instead.
+      // RECHECK at G5: partly announced in 'phone-appearance-returns-2026-11' on 2026-11-12 (the opt-in phone
+      // update: Liquid Glass is in the app as a choice, Classic unless chosen, and a Design chosen on the website
+      // is used by the app). Reword this entry at G5 so it tells only what the default rollout changes (the app
+      // opens in Liquid Glass for people who chose nothing, the Home card), and does not announce again what
+      // that release already told.
+      {
+        id: 'liquid-glass-mobile-app',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'The mobile app opens in Liquid Glass after the latest update',
+        // RECHECK until the real iOS 26 walk after G3: the sentence "On iOS 26 and later the bars use Apple's Liquid
+        // Glass" (see the Phone material note in the header; README RECHECK 10).
+        whatChanged:
+          "After the latest update, the mobile app on iPhone and iPad opens in Liquid Glass too, with the tab bar floating above the screen and Scan as a round button beside it when Scan is one of your tabs. On iOS 26 and later the bars use Apple's Liquid Glass, and on earlier versions they are frosted. With Reduce Transparency on, and on older iPhones and iPads with less memory, they are solid.",
+        whyItMatters:
+          'The mobile app and the web now share one look, and the previous design stays available in the app too.',
+        howItAffectsYou:
+          'The look changes when the app restarts for the update, never in the middle of a scan or a count. Your tabs, screens and steps are the same. If you chose Classic on the web, the app uses it once it has read your account, usually as it opens. Home shows a one-time card with Use classic design and Keep Liquid Glass. Phones on app versions before 1.4.0 keep the previous look until they update from the App Store.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To use the previous look, open Settings, Appearance and choose Classic.',
+      },
+      // RECHECK at G5: partly announced in 'phone-appearance-returns-2026-11' on 2026-11-12 (its entry
+      // app-appearance-design-theme told every member that Settings, Appearance replaces the Theme row, with
+      // Design and Theme, saved to the account and shared with the website). Reword this entry at G5 (or fold it
+      // into liquid-glass-mobile-app) so it does not announce that page as new a second time.
+      {
+        id: 'mobile-appearance-settings',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Settings in the mobile app has an Appearance page with Design and Theme',
+        whatChanged:
+          'In the mobile app, Settings, Appearance replaces the Theme row. It has Design (Liquid Glass or Classic) and Theme (Light, Dark or System). Light and Dark now keep the app light or dark whatever your phone is set to, and System follows your phone, as the app always did.',
+        whyItMatters:
+          "Before, the app always followed your phone's light or dark setting, with no way to choose.",
+        howItAffectsYou:
+          'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-appearance-returns-2026-11',
+    revision: 1,
+    // The phone update of 2026-11-12 and two web fixes live the same day.
+    // - Phone: one over-the-air update for runtime 1.4.0 (app.config.ts:38
+    //   version '1.4.0', runtimeVersion policy appVersion :51-53), EAS update
+    //   group 181611cd, published about 19:22Z from main dd2c349b8 with
+    //   EXPO_PUBLIC_LIQUID_GLASS=opt-in. The group, the minute and the flag
+    //   value are the integrator's facts, not readable from the code. It
+    //   carries #498's phone half (Send return request), which the release
+    //   'returns-request-email-names-2026-11' said the mobile app gets with
+    //   its next update: announced here, that release's revision is not
+    //   bumped. It also turns on the phone's Settings, Appearance (#486,
+    //   switched off until now: every earlier phone bundle was built without
+    //   the flag, so 'off').
+    // - Web, live since 19:18Z: #504 (Liquid Glass toasts bottom right) and
+    //   #502 (one draft per double click on Email return request).
+    // DATED 19:30Z: the update group (181611cd, opt-in, published about
+    // 19:22Z) had its first iOS launch, 0 failures, in EAS insights, and the
+    // owner's phone showed it running at 19:29Z; 19:30Z is the whole minute
+    // after both. The Liquid Glass draft's placeholder above moved with it.
+    // If the phone update is rolled back while the web stays, the phone
+    // entries are no longer true: withdraw this release or correct it.
+    // Claims checked against the code at dd2c349b8 (web paths under
+    // apps/web/src, phone paths under apps/mobile, core under
+    // packages/core/src):
+    // - Phone button words: the section's button is RETURN_REQUEST_COPY.primary
+    //   "Email return request" (core returns/return-request-email.ts:147;
+    //   src/components/return-request-section.tsx:134-144) under the heading
+    //   "RETURN REQUEST" (core :169). The website's "Send return request" is
+    //   RETURN_REQUEST_COPY.title (core :144), the button that opens its
+    //   dialog, whose own button is also "Email return request"
+    //   (components/returns/return-request-action.tsx:214-216). So the phone
+    //   is said to have Email return request, "as Send return request does on
+    //   the website".
+    // - Own order: app/order/[id].tsx:3841-3862, under each request of
+    //   "Your requests on this order" (RETURNS_COPY.requesterYourRequests,
+    //   :3843); the requester gate is the web order page's rule (own order,
+    //   Returns on, no returns:manage: requesterReturnGate :808-815, with
+    //   canManageReturns :757-758), so "If you manage returns, use the button
+    //   on the return screen". Mailboxes and facts from the server
+    //   (:846-865, getReturnRequestEmailForOrder).
+    // - "while the return is still open", "only when your organization has
+    //   set its delivery request mailboxes": returnRequestContentForTracking
+    //   and returnRequestContentForWorkbench return null unless
+    //   canSendReturnRequest (src/lib/return-request-actions.ts:156-172), and
+    //   the section renders only with recipients (order/[id].tsx:3852,
+    //   src/components/return-workbench-view.tsx:673).
+    // - Return screen: return-workbench-view.tsx:667-705, Email return
+    //   request (:673-687) and Report a problem (:688-705, RETURN_PROBLEM_LABEL
+    //   return-request-actions.ts:257) for maintenance_requests:submit where
+    //   Maintenance is on (:152-158); the order attached and "Return <number>: "
+    //   as the subject (returnProblemLaunchParams :260-267; app/maintenance/
+    //   new.tsx:245, :257). The phone's return screens open for returns:read
+    //   or returns:manage where Returns is on (app/(drawer)/returns.tsx:65-66,
+    //   :113). The phone shows no mailbox note for admins (no noRoutingAdmin
+    //   in apps/mobile), so the words say only where the mailboxes are set
+    //   (the website's Settings, Email routing,
+    //   /dashboard/settings/email-routing).
+    // - "Outlook or your email app": openReturnRequestDraft opens through
+    //   openMeasuredDraft('outlook', ...) (return-request-actions.ts:196-202),
+    //   native Outlook when installed, else the mail link
+    //   (src/lib/outlook-transport.ts:217-258); the success line names which
+    //   opened (return-request-actions.ts:229-231).
+    // - "StockPilot does not send it ... press Send yourself", no ticket:
+    //   RETURN_REQUEST_COPY.honesty (core :150-151), shown in the section
+    //   (return-request-section.tsx:150-152).
+    // - "Copy details shows the whole message to select and copy": the copy
+    //   button opens a read-only box of prepared.clipboardText with "Press and
+    //   hold inside the box to select and copy." (return-request-section.tsx:
+    //   185-206; core :148, :167). No clipboard module on the phone.
+    // - Settings, Appearance replaces the Theme row: app/(drawer)/settings.tsx
+    //   :478-503 (Appearance row when glassEnabled, else the old "Theme /
+    //   Auto" alert); glassEnabled is rollout !== 'off'
+    //   (src/lib/appearance/controller.ts:162, :209), and opt-in is not 'off'
+    //   (src/lib/appearance/flag.ts:11-12; core appearance/parse.ts:48-50).
+    // - Design and Theme words: src/lib/appearance/labels.ts:31-44 (Liquid
+    //   Glass, Classic; Light, Dark, System); the screen
+    //   app/(drawer)/settings/appearance.tsx:114-153.
+    // - "Classic unless you choose Liquid Glass": defaultStyle is Classic for
+    //   every rollout but 'default' (core appearance/types.ts:45-47), the
+    //   checked Design (appearance.tsx:73) and what is drawn (core
+    //   parse.ts:60-67).
+    // - No Home card under opt-in: introVisible needs rollout === 'default'
+    //   (controller.ts:210-215), so the card (src/components/
+    //   appearance-intro-notice.tsx; INTRO_NOTICE labels.ts:108) is not
+    //   mentioned.
+    // - "Light and Dark keep the app light or dark whatever your phone is set
+    //   to ... System follows your phone": labels.ts:41-43; src/lib/
+    //   use-theme.ts:17-24, :35; src/lib/appearance/os-scheme.ts:26-28.
+    // - Saved to the account and shared with the website: the phone reads and
+    //   upserts public.user_appearance, style and theme
+    //   (src/lib/appearance/account.ts:42-80); the website's Theme and Design
+    //   menus save through the provider's chooseTheme and chooseStyle
+    //   (web components/theme/theme-toggle.tsx:58, :89-97;
+    //   components/dashboard/user-menu.tsx:103), the same row
+    //   (server/actions/appearance.ts). A row value is adopted on a device that
+    //   never synced with this person (core appearance/reconcile.ts:61-62,
+    //   rule 4c), which every phone is at its first start of this update (the
+    //   layer was 'off' before and wrote nothing, controller.ts:41-43). The
+    //   first start waits for the row within the 4 s cap (controller.ts:50-58),
+    //   hence "usually as it opens"; a Design adopted later waits for a calm
+    //   moment (controller.ts:60-66).
+    // - "since 11 November": the website saves a Theme to the account only
+    //   while its rollout is not 'off' (web appearance-provider.tsx, inert
+    //   under 'off', :395-396), and the web opt-in went live 2026-11-11
+    //   21:01Z (integrator's record, not readable from the code). A Theme
+    //   chosen on the website before then stayed in that browser (rule 4d,
+    //   reconcile.ts:63-64), so the words name the date instead of "if you
+    //   chose Light or Dark on the website".
+    // - The line under the choices and Try again: syncLine (labels.ts:63-84;
+    //   appearance.tsx:155-169).
+    // - Reduce Transparency: the provider reads it (src/lib/appearance/
+    //   provider.tsx:51) and selectMaterial returns opaque with it
+    //   (src/lib/appearance/material.ts:47). Reduce Motion is NOT said: the
+    //   Appearance footnote names it (labels.ts:88-89), but no glass component
+    //   reads the shared useReduceMotion hook (src/lib/appearance/
+    //   use-reduce-motion.ts has no caller at dd2c349b8).
+    // - Update words: the B44 Update ready message with Restart now, the
+    //   words every phone release since 2026-11-02 uses.
+    // - Web toasts: styles/liquid-glass/globals.glass.css:33-50 at dd2c349b8
+    //   (#504): the rule that centred the toaster from 601 px wide is gone, so
+    //   sonner's bottom right placement holds in both looks; Classic unchanged
+    //   (glass CSS only).
+    // - Web one draft: components/returns/return-request-action.tsx:51-62
+    //   (RETURN_REQUEST_PRESS_BURST_MS = 1000), :128 (a second click in that
+    //   time opens nothing), :214 (the button disabled meanwhile) (#502). The
+    //   duplicate warning still shows after one draft (RETURN_REQUEST_COPY.
+    //   duplicate, core :154-155).
+    // Left out: #503's five Liquid Glass phone fixes (the Scan tab bar,
+    // VoiceOver buttons, the typeface on switch, "1 item", the Appearance
+    // re-measure): no phone had Liquid Glass before this update, so nobody
+    // saw what they fix. #502's mailbox HTML and lower-case order id changes
+    // (nothing a member sees). Not said: any look of Liquid Glass on the
+    // phone beyond its name (the draft release holds those words, with
+    // RECHECKs), any speed, any number of people.
+    // Who is told: the two phone returns entries as the model release's two
+    // (own order: orders:request where Returns is on; return screen:
+    // returns:read or returns:manage where Returns is on, the gate of the
+    // linked page, returns/page.tsx:75, :80); the Appearance entry and the
+    // toast fix have no audience (a personal setting every member has, and a
+    // look any member may choose); the one-draft fix reaches whoever sees
+    // either button (the union of the two returns audiences).
+    status: 'published',
+    title:
+      'In the mobile app, email a return request, and choose your Design and Theme in Settings, Appearance',
+    summary:
+      'In the mobile app, after the latest update, an open return has an Email return request button on your own order and on the return screen. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. Settings, Appearance now has Design (Classic, or Liquid Glass if you choose it) and Theme, saved to your account and shared with the website. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-12T19:30:00Z',
+    entries: [
+      {
+        id: 'app-return-request-own-order',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'In the mobile app, email a return request from your own order',
+        whatChanged:
+          'In the mobile app, after the latest update, on an order you placed, each open request under Your requests on this order has an Email return request button, as Send return request does on the website. It opens an email to the mailboxes your organization set for delivery requests, already filled in with the return number, the order and the items.',
+        whyItMatters:
+          'The button was on the website only, so on a phone you had to write the email yourself and copy the details in.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, you check it and press Send yourself, and StockPilot does not create a ticket. If the email does not open, Copy details shows the whole message to select and copy. The button shows while the return is still open, and only when your organization has set its delivery request mailboxes. If you manage returns, use the button on the return screen.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'app-return-request-return-screen',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'In the mobile app, Email return request and Report a problem on a return',
+        whatChanged:
+          'In the mobile app, after the latest update, the return screen has Email return request while the return is still open. It opens the same prefilled email about that return. Report a problem is there too if you can send maintenance requests: it opens a new maintenance request with the order attached and the return number in its subject.',
+        whyItMatters:
+          'Writing to another team about a return from a phone meant starting an email or a request from nothing.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, and you press Send yourself. If your organization has not set its delivery request mailboxes, the button is not shown; they are set on the website in Settings, Email routing.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'app-appearance-design-theme',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Settings in the mobile app has an Appearance page with Design and Theme',
+        whatChanged:
+          'In the mobile app, after the latest update, Settings, Appearance replaces the Theme row. It has Design, Liquid Glass or Classic, and Theme, Light, Dark or System. The app stays in Classic unless you choose Liquid Glass, as on the website. Light and Dark keep the app light or dark whatever your phone is set to, and System follows your phone, as the app did before.',
+        whyItMatters:
+          "Before, the app followed your phone's light or dark setting with no way to choose, and Liquid Glass was on the website only.",
+        howItAffectsYou:
+          'Your choices are saved to your account and shared with the website: a Design or Theme chosen on one is used on the other. If you chose Liquid Glass, Light or Dark on the website since 11 November, the app now uses that choice too, once it has read your account, usually as it opens. The line under the choices says whether they were saved to your account or on this phone only, with Try again when a save did not go through. With Reduce Transparency on in iOS Settings, Accessibility, Liquid Glass is solid.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To change your Design or Theme in the app, open Settings, Appearance.',
+      },
+      {
+        id: 'web-return-request-one-draft',
+        category: 'fixed',
+        area: 'Returns',
+        title: 'A double click on Email return request opens one email, not two',
+        whatChanged:
+          'On the website, a double click on Email return request now opens one email draft, not two. After a press, the button is unavailable for a second.',
+        whyItMatters:
+          'A double click opened two drafts, and sending both would give the warehouse the same request twice.',
+        howItAffectsYou:
+          'To open another draft on purpose, press the button again after a moment. The note that you have already opened a draft for this return still shows.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['orders:request', 'returns:read', 'returns:manage'],
+          modules: ['returns'],
+        },
+      },
+      {
+        id: 'web-glass-messages-bottom-right',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'In Liquid Glass on the website, pop-up messages are back in the bottom right corner',
+        whatChanged:
+          'On the website, in Liquid Glass, the short messages that pop up after an action now appear in the bottom right corner, where Classic shows them. In wider windows they had appeared near the bottom center of the page.',
+        whyItMatters: 'Messages should appear in the same place whichever design you use.',
+        howItAffectsYou: 'Nothing changes in Classic.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'returns-request-email-names-2026-11',
+    revision: 1,
+    // Two web changes, live on production since 2026-11-12:
+    // - #498 (squash 8d0b832fd, live 08:38Z): "Send return request". The
+    //   phone's half is in the same merge but reaches phones only with the
+    //   next phone update, so the words say "on the website" and that the
+    //   mobile app gets the button with its next update. When that update is
+    //   out, say so in a new release; do not bump this revision for it.
+    // - #499 (squash fcce4e66f, live 08:42Z): the Returns list and the return
+    //   page name the person the order was for; Returns search finds them by
+    //   name or email. Server only for the names and the search: the phone's
+    //   list and return screen already show the server's requesterName (see
+    //   below), so the phone is named for the names and the search, and not
+    //   for the new no-name words, which are phone code (returns-view.ts).
+    // Dated 08:42Z, the minute the later of the two went live.
+    // Claims checked against the code at a772f898e (paths under apps/web/src
+    // unless named):
+    // - "each open request under Your requests on this order": the order page
+    //   passes returnRequest to RequesterTracking only for
+    //   requesterTrackingEligible (app/(dashboard)/dashboard/orders/[id]/
+    //   page.tsx:1186-1187: own order, no returns:manage, returnable, Returns
+    //   on) with resolved mailboxes (:484, :837-838, :1894-1916); the heading is
+    //   RETURNS_COPY.requesterYourRequests (packages/core/src/returns/
+    //   returns-copy.ts:333); the button sits in each request
+    //   (components/returns/requester-tracking.tsx:142-150).
+    // - "while the return is still open": SendReturnRequestButton draws
+    //   nothing unless canSendReturnRequest (send-return-request-button.tsx:
+    //   49-50): status requested, approved or received, with a number
+    //   (packages/core/src/returns/return-request-email.ts:44, :48-54).
+    // - "the mailboxes your organization set for delivery requests", "not
+    //   shown when they are not set": the delivery_request routing, and only
+    //   a pair the organization saved (server/services/
+    //   return-request-email.ts returnRequestRecipientsDto); a null pair draws
+    //   no button (send-return-request-button.tsx:49).
+    // - "the return number, the order and the items": the draft's content
+    //   type (core return-request-email.ts:89-105).
+    // - "in Outlook or in your email app", "Copy details": the dialog's three
+    //   buttons (components/returns/return-request-action.tsx:184-197;
+    //   RETURN_REQUEST_COPY.primary/copy/defaultApp, core :147-149), Outlook
+    //   by window.open(outlookUrl) (:109), the email app by mailtoUrl
+    //   (:148, :157).
+    // - "StockPilot does not send it ... press Send yourself": core
+    //   RETURN_REQUEST_COPY.honesty (:150-151); nothing in #498 sends mail or
+    //   creates a ticket (PUBLISHING.md: it prepares an email the person
+    //   reviews and sends).
+    // - Return page: "Send return request" in the header for every viewer the
+    //   page opens for (returns/[id]/page.tsx:52, :102; return-workbench.tsx:
+    //   943-970, :976 PageHeader actions); "Report a problem" for who may submit maintenance requests
+    //   where Maintenance is on (page.tsx:63, return-workbench.tsx:948), with
+    //   the order attached and the return in the subject (:961-966).
+    // - "people who can change your organization's settings see a note with
+    //   a link to Settings, Email routing": showRoutingHint is
+    //   organization:update (returns/[id]/page.tsx:122), drawn only without
+    //   mailboxes on an open return (return-workbench.tsx:949, :1012-1025).
+    // - "If you manage returns ... on the return page": the order page leaves
+    //   returns:manage out (orders/[id]/page.tsx:484, :1187), and the return
+    //   page opens for returns:read or returns:manage (returns/[id]/page.tsx:52).
+    // - Names: requesterLabelOf (server/services/returns-workbench.ts:406-430):
+    //   the typed name, else the profile name of the member who placed the
+    //   order for themselves, else that profile's email (readNames :351); used
+    //   by the list (:1190) and the return page (:896), which shows it in the
+    //   "Against order" line (components/returns/return-workbench.tsx:991-1001)
+    //   and the list's Requester column (returns/page.tsx:214, :265).
+    // - "Opened by staff or Opened by the requester": returns/page.tsx:265-268
+    //   (website list only).
+    // - Search: searchRequesterMembers matches profile name or email
+    //   (returns-workbench.ts:990-1015) beside the RMA, typed name, email and
+    //   SO number terms (:1102-1117); placeholder "Search RMA, SO number or
+    //   requester" (core returns-copy.ts:270). Over RETURN_SEARCH_MAX_MEMBERS
+    //   (:974, 500) people, or a failed read, the list says so (returns/
+    //   page.tsx:163-169; core returns-copy.ts:273-276: "Type more of the name").
+    // - The mobile app: the Returns list shows requesterName ?? requesterEmail
+    //   (apps/mobile/src/lib/returns-view.ts:112-116) and the return screen
+    //   too (apps/mobile/src/components/return-workbench-view.tsx:405), both
+    //   since #322 (dab3a07d2, 2026-10-05) and so in the phone bundle that is
+    //   live; both read GET /api/v1/returns and /api/v1/returns/[id]
+    //   (apps/mobile/src/lib/returns-api.ts:247-262), whose answers come from
+    //   the same two loaders (server/services/returns.ts:682-712), and the
+    //   phone's search sends q to the list route ((drawer)/returns.tsx:150).
+    // Not said: the order timeline line (audit readers only), the one-per-hour
+    // limit, any number of people, any speed.
+    // Who is told: entry 1, who places orders where Returns is on (the
+    // pattern of returns-requester-exchange, which this section belongs to;
+    // no link: the button is on one order's page). Entries 2 and 3, returns
+    // readers where Returns is on, the gate of the linked page
+    // (returns/page.tsx:75, :80).
+    status: 'published',
+    title: 'Send a return request by email, and see who each return is for',
+    summary:
+      'On the website, an open return now has a Send return request button, on your own order and on the return page. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. The mobile app gets the button with its next update. Returns now name the person each order was for, and Returns search finds returns by that person’s name or email.',
+    publishedAt: '2026-11-12T08:42:00Z',
+    entries: [
+      {
+        id: 'returns-send-request-own-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Send a return request by email from your own order',
+        whatChanged:
+          'On the website, on an order you placed, each open request under Your requests on this order now has a Send return request button. It opens an email to the mailboxes your organization set for delivery requests, already filled in with the return number, the order and the items.',
+        whyItMatters:
+          'To ask the warehouse about a return, you had to write the email yourself and copy the details in.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, you check it and press Send yourself, and StockPilot does not create a ticket. Copy details copies the same text if the email does not open. The button shows while the return is still open, and only when your organization has set its delivery request mailboxes. If you manage returns, use the button on the return page. The mobile app gets the button with its next update.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-send-request-return-page',
+        category: 'new',
+        area: 'Returns',
+        title: 'Send return request and Report a problem on a return',
+        whatChanged:
+          'On the website, the return page now has Send return request at the top while the return is still open. It opens the same prefilled email about that return. Report a problem is there too if you can send maintenance requests: it opens a new maintenance request with the order attached and the return number in its subject.',
+        whyItMatters:
+          'Writing to another team about a return meant starting an email or a request from nothing.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, and you press Send yourself. If your organization has not set its delivery request mailboxes, the button is not shown, and people who can change your organization’s settings see a note with a link to Settings, Email routing. The mobile app gets the button with its next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-requester-names',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Returns name the person each order was for, and search finds them by name or email',
+        whatChanged:
+          'The Returns list and the return page now name the person the order was for, also when they placed the order themselves. A person with no name on their profile shows as their email. Typing part of a person’s name or email into the Returns search now finds their returns, as well as RMA and SO numbers.',
+        whyItMatters:
+          'Returns on orders people placed themselves said Staff or Requester instead of a name, and searching for the person did not find them.',
+        howItAffectsYou:
+          'The Returns list and return screen in the mobile app show the same names, and its search finds the same returns. On the website, a return with no name or email to show now says Opened by staff or Opened by the requester. If a search matches too many people, the list says so: type more of the name.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
+    id: 'order-add-all-2026-11',
+    revision: 1,
+    // "Add all" on Place an order (owner request 2026-11-10). Published with
+    // the pull request that ships it: the release is announced by the
+    // deployment that holds it, so never before the button is live.
+    // Platform: the website. The phone's code is in the same pull request
+    // (the item details sheet and the quantity sheet) but reaches phones only
+    // with the next phone update, so the words say "on the website" and that
+    // the mobile app gets it with its next update. When that update is out,
+    // say so in a new release; do not bump this revision for it.
+    // Claims checked against the code:
+    // - "each item and book with 2 or more available": SfAddControl
+    //   (components/orders/storefront/storefront-cards.tsx) draws the button
+    //   unless core's addAllState is 'hidden', which is fewer than 2
+    //   (packages/core/src/orders/storefront/logic.ts); a book is the same
+    //   catalog row and card.
+    // - "on the cards, in Compact view and in Quick view": SfAddControl's
+    //   three call sites (ProductCard, CompactRow, QuickViewDrawer).
+    // - "the line becomes everything available; it does not add on top": a
+    //   press calls onSetQty(item.id, addAllTarget(available)), the cart's
+    //   set-qty.
+    // - "Available": on hand minus what open orders already hold
+    //   (availableOf), the number the card already shows.
+    // - "Add 10,000 ... the most one order can hold": addAllTarget stops at
+    //   ORDER_MAX_UNITS_PER_LINE (core orders/place-order.ts), and the words
+    //   are addAllButtonCopy's.
+    // - "dimmed once everything available is in your cart": the 'full' state,
+    //   aria-disabled.
+    // - "Each size is its own item": the catalog has one row per item and no
+    //   size picker.
+    // - "Stock is held when the order is approved, as before": nothing in
+    //   placing changed; the button asks for what the stepper already allows.
+    // Not said: any speed, and nothing about the public order link, the
+    // customer portal, kits or Frequently ordered, which do not have it.
+    // Who is told: who may place orders where Orders is on, the page's own
+    // gate (orders/new/page.tsx: can(ctx, 'orders:request') and
+    // checkModuleAccess('orders')).
+    status: 'published',
+    title: 'Place an order has an Add all button for each item and book',
+    summary:
+      'On the website, Place an order now has an Add all button beside Add to cart on each item and book with 2 or more available. One press puts everything available in your cart, so you no longer type the number. The mobile app gets the button with its next update.',
+    publishedAt: '2026-11-10T21:50:00Z',
+    entries: [
+      {
+        id: 'order-add-all',
+        category: 'new',
+        area: 'Orders',
+        title: 'Add all puts everything available of an item or book in your cart in one press',
+        whatChanged:
+          'On the website, in Place an order, each item and book with 2 or more available has an Add all button beside Add to cart: on the cards, in Compact view and in Quick view. One press sets that item in your cart to everything available, the number its card shows. If your cart already holds some of it, the line becomes everything available; it does not add on top. Each size is its own item, so each has its own button. An item with more than 10,000 available shows Add 10,000 in its place, the most one order can hold.',
+        whyItMatters:
+          'To order all of an item you had to add it and then type the number shown on its card.',
+        howItAffectsYou:
+          'Press Add all to take everything available of an item. The button is dimmed once everything available is in your cart. You can still type a number or use plus and minus to change it. Stock is held when the order is approved, as before. The mobile app does not have the button yet; it comes with the app’s next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'count-sheet-long-names-2026-11',
+    revision: 1,
+    // #492 (squash 80c3bf114; web only, no phone code, no migration), live on
+    // production since 2026-11-10 19:41Z; the owner confirmed the printed
+    // sheet. This release needs a web deploy only. From #492's draft, with
+    // the second fix added (below).
+    // Claims checked against the code at 80c3bf114 (lib/pdf/cycle-count.tsx):
+    // - "wraps ... with space before the Location column": every row cell
+    //   takes ccCell() (:202-208), a gutter of 0.25pt per CC_COLS share
+    //   (:201): Description 7.75pt, SKU 4.5pt, Location 3.5pt.
+    // - "broken onto lines that fit": breakOverwideWords on the Description
+    //   (:444), the Location (:451) and the group name (:389), and
+    //   breakIdentifierLines on the SKU (:436) (lib/pdf/identifier-lines.ts);
+    //   cycle-count.render.test.tsx reads the printed text back.
+    // - "kept on one page unless it is extremely long": wrap is false unless
+    //   the row's description, SKU and location hold more than 400 characters
+    //   (CC_KEEP_ROW_TOGETHER_MAX_CHARS :236, :421-424), so not "never".
+    // - "keep the same columns": cycle-count.render.test.tsx, "does not move
+    //   any column on a sheet of short titles".
+    // - The buttons: Print count sheet and Variance report PDF
+    //   (app/(dashboard)/dashboard/cycle-counts/[id]/page.tsx:193).
+    // The second fix, found by #492's review and reproduced for this release
+    // (2026-11-10) with the component as it was at 7dacbd7aa and the
+    // installed @react-pdf/renderer: with one-line rows only, every sheet and
+    // every variance report of 27 to 70 rows, and of 85, 100, 150, 250 and
+    // 400 rows, printed row 1 on page 1, placed rows 2 to 26 far below the
+    // page (so they were on no page) and printed the rest from page 2 on. A
+    // sheet of 1 to 26 such rows printed every row. A 40-row sheet with one
+    // two-line row among its first 26 printed every row; with the two-line
+    // row at 27 or 35 it lost rows 2 to 26. At 80c3bf114 each of these
+    // prints every row, 26 on page 1. Rows kept whole (wrap false) is what
+    // fixed it; cycle-count.rows-across-pages.render.test.tsx pins it and
+    // fails on the old component. The review of this release rendered the
+    // same old component three more ways: a count with a one-line note lost
+    // rows 2 to 25 from 25 rows on, one with a three-line note rows 2 to 24
+    // from 24 rows on, and sheets of 27, 30 and 41 one-line rows in product
+    // groups of 6 (size runs) lost no row; an organisation logo changed
+    // nothing. So the words give no row count: "longer than one page",
+    // "every item on the first page took a single line", "about 25", "could",
+    // and "not grouped by product". Not said: how long this lasted (not
+    // measured).
+    // "those items now print", "they now print" and "the first page no
+    // longer leaves items out" speak of the first page only, so they stay
+    // true for a count over 10,000 lines, which is cut at PDF_MAX_LINES with
+    // a banner on its first page saying so (lib/pdf/count-sheet-cap.ts:18);
+    // nothing here says every item of a count prints.
+    // Changed from the draft: the sentence on the missing rows in the
+    // summary and whatChanged, its reprint in whatToDo, "the first page no
+    // longer leaves items out" in howItAffectsYou, and "look exactly as
+    // before" is now "keep the same columns", since a long sheet of short
+    // names now prints rows it used to leave out.
+    // Who is told: whoever can open the PDF, where Cycle Counts is on: the
+    // route asks cycle_counts:read, else stock:adjust
+    // (app/api/cycle-counts/[id]/pdf/route.tsx:48-51), and the linked page
+    // asks the module and the same two (cycle-counts/page.tsx:74, :83).
+    status: 'published',
+    title:
+      'Printed cycle count sheets keep long item names in their column and no longer leave items off the first page',
+    summary:
+      'On a printed cycle count sheet or variance report, a long item name now wraps inside its own column instead of running into the location or the next column. A sheet or report longer than one page, not grouped by product, where every item on the first page took a single line, could print only the first item on page 1 and leave out the rest of that page’s items (about 25); those items now print.',
+    publishedAt: '2026-11-10T20:02:00Z',
+    entries: [
+      {
+        id: 'count-sheet-long-names',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title:
+          'Long item names no longer run into the next column on printed count sheets, and page 1 no longer leaves items out',
+        whatChanged:
+          'On the printed cycle count sheet and the variance report (Print count sheet and Variance report PDF on a cycle count), a long item name now wraps onto more lines inside the Description column, with space before the Location column. A name or SKU with a long run of letters and numbers and no spaces is broken onto lines that fit. A row is kept on one page unless it is extremely long. A sheet longer than one page, not grouped by product, where every item on the first page took one line, could print only the first item on page 1 and leave out the rest of that page (about 25 items); they now print.',
+        whyItMatters:
+          'A long name used to print right up against the location, or straight over it, so the sheet was hard to read on the warehouse floor. On a long sheet of short names, about 25 items could be missing from the paper to be counted.',
+        howItAffectsYou:
+          'Every name, SKU and location prints in full and stays in its own column, and the first page no longer leaves items out. Sheets of short names keep the same columns as before.',
+        whatToDo:
+          'No action needed. Print the sheet again if you printed one with a long name, or one whose first page showed a single item.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'approver-controls-own-warehouses-2026-11',
+    revision: 1,
+    // S2, security slice E, both halves in one release:
+    // - #378 (squash bae51d8e6; web and migration 0416, on the web and in the
+    //   database since 2026-11-03 01:47Z);
+    // - #487 (squash ebabb2772; the phone order screen waits for the saved
+    //   permissions and shows only its newest load, so a fresh open offers
+    //   nothing on another warehouse's order).
+    // Web build 82033659d53a (main ebabb2772) is live. The phone halves reached
+    // phones in EAS update group b0ba5d7e-e17a-4a1b-ba7e-84476c1f2a1c (runtime
+    // 1.4.0, published 2026-11-05 07:35Z from ebabb2772); the integrator
+    // merges this only after iOS launches of that group show in EAS insights.
+    // This release needs a web deploy only. If the phone update is rolled back
+    // (to group 9cf9ecf7) while the web stays, the phone clauses are no longer
+    // true: withdraw this release or correct it.
+    // No What's New for S2 was published before: at ebabb2772 no release
+    // names #378, #487 or 0416, and #487 has none of its own (its description:
+    // #378's draft covers it). From #378's draft, corrected below.
+    // Walks (lab, synthetic users and orders, a staff approver and a staff
+    // picker who work in one warehouse, and a manager):
+    // - walk-s2-phone-1103 (2026-11-03), web half: on the other warehouse's
+    //   orders no Manager actions card before picking, Print pick slip only in
+    //   picking and at picking complete, Print customer slip (and View
+    //   signature on a signed order) from the packing slips on, no Print
+    //   warehouse slip, internal notes, Hold, needed-by Change, Add items or
+    //   line control; an own pending request offers Cancel request only; the
+    //   manager's set unchanged. Direct call PASS: the route answered 403 and
+    //   the function 42501, each with the sentence quoted below.
+    // - walk-s2b-phone-1105 (2026-11-05), phone at ebabb2772, iPhone and iPad,
+    //   Large and AX5: 145 fresh opens of the other warehouse's orders, 0 with
+    //   a control; picking statuses: no Claim picking, pick or Release for the
+    //   approver or the picker; own pending request: Cancel request only, and
+    //   cancelled; View signature shown; in their own warehouse Approve, Claim
+    //   picking and Release done; the manager's set unchanged. Independent
+    //   check PASS.
+    // Claims checked against the code at ebabb2772:
+    // - Who: staff work in their assigned warehouses (lib/auth/warehouse.ts
+    //   :221-229); owners, admins and managers in every one by role
+    //   (roleSeesEveryWarehouse :76-78; the phone's seesEveryHolding,
+    //   apps/mobile/src/lib/holdings-elsewhere.ts:80-84).
+    // - Web (app/(dashboard)/dashboard/orders/[id]/page.tsx): approverWritesHere
+    //   and approverReadsHere :310-312; the panel's steps follow
+    //   approverWritesHere (:1966; components/orders/manager-actions-panel.tsx
+    //   :341, Approve and Deny :780, internal notes :1210); Cancel through core
+    //   orderCancelOffer (:1408; packages/core/src/orders/order-cancel.ts
+    //   :48-49); Hold available stock :1001; Add items and the line controls
+    //   viewerMayChangeLines :344 and :351. The panel shows for such an
+    //   approver only where it carries a read (:397-402,
+    //   lib/orders/actions-panel-reads.ts:38): Print pick slip (panel :902,
+    //   :957), Print customer slip :976 and View signature :987; Print
+    //   warehouse slip only with canPrintWarehouseSlip (:978), which the page
+    //   passes as viewerMayHandOver (:1200, :1992), mayHandOverOrder's rule.
+    //   Not changed on the web by #378, so told for the phone only: the
+    //   needed-by Change already asked write access to the order's warehouse
+    //   (lib/orders/needed-by-change.ts:92-96, F2-4), and so did Claim picking
+    //   and Release (page.tsx:793-796).
+    // - Phone (apps/mobile/app/order/[id].tsx): orderWarehouseAccessAsShown
+    //   :946 (src/lib/order-warehouse-scope.ts:112-124 and :142-161);
+    //   Approve, Deny and every step through orderManagerActions
+    //   (src/lib/order-manager-actions.ts:124, writesOrderWarehouse :2462);
+    //   Cancel :2505-2508; Hold :2285-2289; the needed-by Change :2318-2323;
+    //   Add items and the line edits :970-976; Claim picking and Release
+    //   :960, :2411 and :2441; the wait for the saved permissions :697-705
+    //   (#487); the View signature card :3816. The phone has no internal notes.
+    // - The sentence: core ORDER_WAREHOUSE_WRITE_REFUSED_COPY
+    //   (packages/core/src/guards/db-guard-copy.ts:37-38), said by the order
+    //   service (server/services/order-requests.ts:5151) and by 0416's six
+    //   functions (supabase/migrations/0416_order_functions_warehouse_scope.sql
+    //   :164, :265, :353, :421, :539, :736), returned by the routes
+    //   (app/api/v1/orders/[id]/transition/route.ts:227-228). "for most of
+    //   them": the hand-over and Print warehouse slip refuse in their own
+    //   words (app/api/orders/[id]/packing-slip-warehouse.pdf/route.tsx:56).
+    // - An own pending request: the service asks no warehouse for that cancel
+    //   (order-requests.ts:3186-3188), nor does 0416's cancel_order_request;
+    //   the line edits ask read access of everyone (loadEditableOrderHeader,
+    //   order-requests.ts:2108).
+    // - A delivery's driver: the hand-over rule lets the assigned driver
+    //   through first (server/lib/order-secrets.ts:266), the web card keeps
+    //   their hand-over (page.tsx:402, panel :1095-1096) and Print warehouse
+    //   slip (viewerMayHandOver), and the phone theirs (driverHere,
+    //   order-manager-actions.ts:126), so the card is not "only the prints"
+    //   for them: said in howItAffectsYou.
+    // Changed from the draft: the internal notes are named for the web and
+    // the needed-by Change for the phone only (above); the card is said to
+    // show only when the order has a print or a signature to offer; "each of
+    // these was refused" is "for most of them"; the other steps that move an
+    // order on are named; a delivery's driver keeps the hand-over; the
+    // update words are the current ones; whyItMatters ends on "these
+    // controls", not "only what you can do on it"; and the audience leaves
+    // out viewers (below).
+    // Left out: #487's Orders list and Returns list changes (a read started
+    // before a permission change or a workspace switch no longer lands after
+    // it): only seen while a permission or the workspace changes during a
+    // read, so there is nothing a member will notice to tell. The database
+    // refusing what the app already refused is not visible to anyone using
+    // the app, so it has no entry. A phone whose warehouse read fails offers
+    // as before, and the server refuses.
+    // Not every control follows the warehouse, so whyItMatters says "these
+    // controls", not every one: Create return on a completed order asks no
+    // warehouse on the web (page.tsx:1105-1113; returnableLinesForOrder,
+    // server/services/returns.ts:729) or the phone (showCreateReturn
+    // :759-760), and create_return_request refuses it there
+    // (0394_returns_lifecycle_original_rack.sql:1293-1295).
+    // Who is told: owners, admins, managers and staff who approve orders or
+    // pick (orders:approve or items:update) where Orders is on, the people the
+    // entry speaks of; owners, admins and managers are told that nothing
+    // changes for them. Not a viewer, even one granted orders:approve or
+    // items:update: neither app offered a viewer Approve, Deny or the other
+    // steps, before #378 or after (panel :341, order-manager-actions.ts:124),
+    // and the warehouse write that Cancel, Hold and Claim picking now ask is
+    // never a viewer's on any order (page.tsx:310-311 approverWritesHere,
+    // lib/auth/warehouse.ts:222; order-warehouse-scope.ts:118), so the words
+    // would be wrong for them. The 2026-10-06 entry on the same subject
+    // (order-other-warehouse-words) limits its audience by role too.
+    status: 'published',
+    title:
+      'Approve, Cancel and the other order steps show only on orders of your warehouses, on the web and in the mobile app',
+    summary:
+      'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, changes to its items or the other steps that move it on, on the web or in the mobile app. In the mobile app, Claim picking and Release show only on orders of your warehouses, as on the web. Owners, admins and managers see no change. In the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-05T13:54:00Z',
+    entries: [
+      {
+        id: 'approver-controls-own-warehouses',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Approve, Cancel and the other order steps show only on orders of your warehouses',
+        whatChanged:
+          'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, Add items, changes to its items or the other steps that move it on, on the web or in the mobile app. On the web, its internal notes are hidden too, and its Manager actions card, when it shows, offers only Print pick slip, Print customer slip and View signature. In the mobile app, Change beside its needed-by date is hidden too, and Claim picking and Release show only on orders of your warehouses, as on the web, for everyone who picks.',
+        whyItMatters:
+          "Before, these controls were offered on such an order and every tap was refused, for most of them with “This order is in a warehouse you don't work in, so you can't change it. Ask a manager.” Now these controls show only on orders of the warehouses you work in.",
+        howItAffectsYou:
+          'Owners, admins and managers work in every warehouse, so nothing changes for them. A request you placed yourself can still be cancelled while it waits for approval, wherever it is, but its items can be changed only in a warehouse you work in. As the driver of a delivery, you can still hand it over, wherever it is. When an order of another warehouse needs a change, ask a manager.',
+        whatToDo:
+          'No action needed on the web. To load the latest update in the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: {
+          roles: ['owner', 'admin', 'manager', 'staff'],
+          anyPermission: ['orders:approve', 'items:update'],
+          modules: ['orders'],
+        },
+      },
+    ],
+  },
   {
     id: 'export-items-permission-2026-11',
     revision: 1,

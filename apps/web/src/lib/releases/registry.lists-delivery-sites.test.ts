@@ -91,6 +91,16 @@ const RETRIES_ID = 'integration-retries-2026-11';
  * audience), so they are read or seen with the releases below them.
  */
 const NIGHT_IDS = [
+  // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+  // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by feat/order-add-all (2026-11-10; was: without it): the Add all release is published later, at the top, and reaches whoever may place orders where Orders is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'phone-appearance-returns-2026-11',
+  'returns-request-email-names-2026-11',
+  'order-add-all-2026-11',
+  'count-sheet-long-names-2026-11',
+  'approver-controls-own-warehouses-2026-11',
   'export-items-permission-2026-11',
   'mobile-app-fixes-2026-11-02',
   'clearer-web-messages-2026-11',
@@ -127,19 +137,30 @@ describe('the lists, delivery sites and fixes release (2026-11-02)', () => {
     expect(release().revision).toBe(1);
     // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft at 0, a draft, the two newer releases at 1 and 2, ID at 3 and the export fixes release at 4): the two newer releases and ID each move up one place, the update-ready-and-fixes release takes 3, and the export fixes release stays at 4.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
-    expect(RELEASES[6]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[6]?.status).toBe('published');
-    expect(RELEASES[7]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[7]?.status).toBe('published');
-    expect(RELEASES[8]?.id).toBe(ID);
-    expect(RELEASES[8]?.status).toBe('published');
-    expect(RELEASES[9]?.id).toBe('update-ready-and-fixes-2026-11');
-    expect(RELEASES[10]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[12]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[12]?.status).toBe('published');
+    expect(RELEASES[13]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[13]?.status).toBe('published');
+    expect(RELEASES[14]?.id).toBe(ID);
+    expect(RELEASES[14]?.status).toBe('published');
+    expect(RELEASES[15]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[16]?.id).toBe('export-fixes-2026-10');
     expect(
       // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: slice(0, 3)): the web fixes and archived charters releases are published later, at the top.
       // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: slice(2, 5)): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
+      // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: slice(6, 9)): the S2 release is published later, at the top.
+      // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: slice(7, 10)): the count sheet release is published later, at the top.
       RELEASES.filter((r) => r.status === 'published')
-        .slice(6, 9)
+        // Re-pinned by feat/order-add-all (2026-11-10; was: slice(8, 11)): the Add all release is published later, at the top.
+        // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: slice(9, 12)): the returns request and names release is published later, at the top.
+        // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: slice(10, 13)): the phone appearance and returns release is published later, at the top, and reaches every member.
+        .slice(11, 14)
         .map((r) => r.id),
     ).toEqual([AUTH_CODE_ID, RETRIES_ID, ID]);
   });

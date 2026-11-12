@@ -75,6 +75,28 @@ import { Card, Hair } from '@/components/ui/card';
 import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import {
+  GLASS_SHEET_CARD,
+  GLASS_SHEET_PADDING,
+  glassFieldBox,
+  glassFieldInput,
+  glassFieldLabel,
+  glassScrim,
+  glassSegLabel,
+  glassSegment,
+  glassSegTrack,
+  glassTintedStep,
+  glassTintedStepLabel,
+} from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import {
+  GLASS_ITEM,
+  GlassItemFigures,
+  glassItemStyles,
+  sentenceCase,
+} from '@/components/ui/glass/screens/item';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { PHOTO_BACKGROUND, pillTone, type PillStatus } from '@/components/ui/tones';
 import { api } from '@/lib/api';
@@ -523,6 +545,7 @@ export default function ItemDetail() {
   const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
   const router = useRouter();
   const { c } = useTheme();
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { role } = useRole();
   // The three tabs stack, one per line, when Movements at the user's text size
@@ -1756,15 +1779,28 @@ export default function ItemDetail() {
   const inventoryValue = item.unit_cost * item.quantity_on_hand;
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_ITEM.nav : styles.topbar}>
           <IconChip
             icon={ChevronLeft}
             onPress={() => leaveItemScreen(router)}
             accessibilityLabel="Back"
             minTap
           />
+          {/* Liquid Glass: the item's name as the nav title (.ios-nav .ttl);
+              the name under it is the one VoiceOver reads. */}
+          {lg ? (
+            <Text
+              style={glassItemStyles(lg).navTitle}
+              numberOfLines={1}
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+            >
+              {item.name}
+            </Text>
+          ) : null}
           <IconChip icon={Edit3} onPress={openEdit} accessibilityLabel="Edit item" minTap />
         </View>
       </SafeAreaView>
@@ -1779,14 +1815,22 @@ export default function ItemDetail() {
             the SKU in mono over the 26pt name, then category and barcode. The
             SKU and the meta line are information, so they read in the muted
             ink (ink4 held them at 3.2-3.6:1, under AA). */}
-        <View key={`hero-${scaleKey}`} style={styles.hero}>
-          <Mono size={11.5} tracking={0.12} upper color={c.ink3}>
-            — {item.sku}
-          </Mono>
-          <Display size={26} style={{ marginTop: 6 }}>
+        <View key={`hero-${scaleKey}`} style={lg ? GLASS_ITEM.hero : styles.hero}>
+          {lg ? null : (
+            <Mono size={11.5} tracking={0.12} upper color={c.ink3}>
+              — {item.sku}
+            </Mono>
+          )}
+          <Display size={26} style={lg ? GLASS_ITEM.name : { marginTop: 6 }}>
             {item.name}
           </Display>
-          {item.category_name || item.barcode ? (
+          {/* Liquid Glass: the SKU, category and barcode on the board's one
+              mono line under the name. */}
+          {lg ? (
+            <Mono size={12.5} tracking={0.04} color={c.ink3} style={glassItemStyles(lg).metaLine}>
+              {[item.sku, item.category_name, item.barcode].filter(Boolean).join(' · ')}
+            </Mono>
+          ) : item.category_name || item.barcode ? (
             <Mono size={12.5} tracking={0.04} color={c.ink3} style={{ marginTop: 6 }}>
               {[item.category_name, item.barcode].filter(Boolean).join(' · ')}
             </Mono>
@@ -1868,7 +1912,7 @@ export default function ItemDetail() {
             the REPLACE pill is its own sibling Pressable stacked above, so
             replace never hijacks the view tap. With no photo the whole tile
             keeps opening the add sheet. photoBusy disables both paths. */}
-        <View style={{ paddingHorizontal: 20, marginTop: 10 }}>
+        <View style={lg ? GLASS_ITEM.photoBlock : { paddingHorizontal: 20, marginTop: 10 }}>
           <View>
             <Pressable
               onPress={item.imageUrl ? () => setPhotoViewerOpen(true) : openPhotoActions}
@@ -1878,20 +1922,26 @@ export default function ItemDetail() {
               accessibilityLabel={item.imageUrl ? 'View photo' : 'Add photo'}
             >
               <View
-                style={{
-                  aspectRatio: 4 / 3,
-                  borderRadius: 14,
-                  overflow: 'hidden',
-                  borderWidth: 1,
-                  borderColor: c.hair,
-                  // A photo sits on white in both modes (DESIGN-SPEC 6.14), so a
-                  // photo shot on white reads the same in light and dark; the
-                  // empty tile is the recessed fill (paper2 is the card colour
-                  // in dark, so it showed nothing there).
-                  backgroundColor: item.imageUrl ? PHOTO_BACKGROUND : c.sunk,
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                }}
+                style={[
+                  {
+                    aspectRatio: 4 / 3,
+                    borderRadius: 14,
+                    overflow: 'hidden',
+                    borderWidth: 1,
+                    borderColor: c.hair,
+                    // A photo sits on white in both modes (DESIGN-SPEC 6.14), so a
+                    // photo shot on white reads the same in light and dark; the
+                    // empty tile is the recessed fill (paper2 is the card colour
+                    // in dark, so it showed nothing there).
+                    backgroundColor: item.imageUrl ? PHOTO_BACKGROUND : c.sunk,
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                  },
+                  // Liquid Glass: the grouped tile's corner and line; an empty
+                  // tile is the content glass.
+                  lg && glassItemStyles(lg).photoTile,
+                  lg && (item.imageUrl ? null : glassItemStyles(lg).photoEmpty),
+                ]}
               >
                 {item.imageUrl ? (
                   <CachedImage
@@ -1931,6 +1981,8 @@ export default function ItemDetail() {
                         borderWidth: 1,
                         borderColor: c.hair2,
                         backgroundColor: c.card,
+                        // The chip's glass fill and edge (a code palette, never a stored colour).
+                        ...(lg && glassItemStyles(lg).photoChip),
                         alignItems: 'center',
                         justifyContent: 'center',
                       }}
@@ -1960,8 +2012,10 @@ export default function ItemDetail() {
                   backgroundColor: c.card,
                   borderWidth: 1,
                   borderColor: c.hair2,
-                  paddingHorizontal: 12,
-                  borderRadius: 10,
+                  // The chip's glass fill and edge (a code palette, never a stored colour).
+                  ...(lg && glassItemStyles(lg).photoChip),
+                  paddingHorizontal: lg ? 14 : 12,
+                  borderRadius: lg ? MIN_TAP / 2 : 10,
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 6,
@@ -1987,6 +2041,9 @@ export default function ItemDetail() {
             styles.tabsRow,
             stackTabs ? styles.tabsStacked : null,
             { backgroundColor: c.sunk, borderColor: c.hair },
+            // Liquid Glass: the iOS segmented track (.ios-seg).
+            lg && glassSegTrack(lg),
+            lg && GLASS_ITEM.tabsTrack,
           ]}
         >
           <TabButton
@@ -2010,32 +2067,50 @@ export default function ItemDetail() {
         </View>
 
         {tab === 'overview' ? (
-          <View style={{ paddingHorizontal: 20, gap: 14 }}>
+          <View style={lg ? GLASS_ITEM.column : { paddingHorizontal: 20, gap: 14 }}>
+            {/* Liquid Glass: the board's figure tiles over the stock card,
+                which then holds the doubts, the steps and the actions. */}
+            {lg ? (
+              <GlassItemFigures
+                lg={lg}
+                onHand={item.quantity_on_hand}
+                unit={item.unit_of_measure}
+                status={status}
+                reorderPoint={item.reorder_point}
+                reorderQuantity={item.reorder_quantity}
+              />
+            ) : null}
             {/* Stock card */}
-            <Card hero style={{ padding: 20 }}>
-              <Eyebrow>ON HAND</Eyebrow>
-              <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 }}>
-                {/* capTo(56, 48) resolves to exactly 1 — no growth, by design.
-                    56pt is already ~4x body; doubling it evicts the unit of
-                    measure and the status pill from the hero card entirely. */}
-                <Mono
-                  size={56}
-                  tracking={-0.025}
-                  color={c.ink}
-                  maxFontSizeMultiplier={capTo(56, TYPE_CEILING.display)}
-                  style={{ fontFamily: FONT.display }}
+            {/* Liquid Glass: the figures sit over the card, so it opens 4pt
+                under its edge (the steps' own 16 above them, or a doubt's 6). */}
+            <Card hero style={{ padding: lg ? 16 : 20, paddingTop: lg ? 4 : undefined }}>
+              {lg ? null : <Eyebrow>ON HAND</Eyebrow>}
+              {lg ? null : (
+                <View
+                  style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, marginTop: 8 }}
                 >
-                  {item.quantity_on_hand}
-                </Mono>
-                <Body size={16} color={c.ink3}>
-                  {item.unit_of_measure}
-                </Body>
-                <View style={{ marginLeft: 'auto' }}>
-                  {status === 'ok' ? <Pill status="ok">OK</Pill> : null}
-                  {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
-                  {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
+                  {/* capTo(56, 48) resolves to exactly 1 — no growth, by design.
+                      56pt is already ~4x body; doubling it evicts the unit of
+                      measure and the status pill from the hero card entirely. */}
+                  <Mono
+                    size={56}
+                    tracking={-0.025}
+                    color={c.ink}
+                    maxFontSizeMultiplier={capTo(56, TYPE_CEILING.display)}
+                    style={{ fontFamily: FONT.display }}
+                  >
+                    {item.quantity_on_hand}
+                  </Mono>
+                  <Body size={16} color={c.ink3}>
+                    {item.unit_of_measure}
+                  </Body>
+                  <View style={{ marginLeft: 'auto' }}>
+                    {status === 'ok' ? <Pill status="ok">OK</Pill> : null}
+                    {status === 'warn' ? <Pill status="warn">LOW</Pill> : null}
+                    {status === 'crit' ? <Pill status="crit">OUT</Pill> : null}
+                  </View>
                 </View>
-              </View>
+              )}
               {/* The doubt over the number, and what waits in the outbox, in the
                   mode's warning ink (5.40:1 on the light card, 9.33:1 on the
                   dark one; the single-mode amber was 3.58:1 on the light card). */}
@@ -2049,9 +2124,11 @@ export default function ItemDetail() {
                   {queuedOnHandLabel(queuedAdjust)}
                 </Mono>
               ) : null}
-              <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 6 }}>
-                Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
-              </Mono>
+              {lg ? null : (
+                <Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 6 }}>
+                  Reorder at {item.reorder_point} · suggested reorder {item.reorder_quantity}
+                </Mono>
+              )}
 
               {canQuickAdjust ? (
                 <>
@@ -2348,7 +2425,7 @@ export default function ItemDetail() {
         ) : null}
 
         {tab === 'movements' ? (
-          <View style={{ paddingHorizontal: 20 }}>
+          <View style={{ paddingHorizontal: lg ? 16 : 20 }}>
             {movementsError ? (
               <Body
                 size={12.5}
@@ -2394,7 +2471,7 @@ export default function ItemDetail() {
         ) : null}
 
         {tab === 'activity' ? (
-          <View style={{ paddingHorizontal: 20 }}>
+          <View style={{ paddingHorizontal: lg ? 16 : 20 }}>
             {activityError ? (
               <Body
                 size={12.5}
@@ -2536,6 +2613,7 @@ function TabButton({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     // A tab that says which one is open (it was a bare Pressable with no role
     // or state, so VoiceOver read three plain words). The open tab sits on the
@@ -2554,6 +2632,8 @@ function TabButton({
           backgroundColor: active ? c.card : 'transparent',
           opacity: pressed ? 0.7 : 1,
         },
+        // Liquid Glass: the iOS segment, its ring kept on the open one.
+        lg && glassSegment(lg, active),
       ]}
     >
       {/* Chrome cap: three equal `flex: 1` columns with no break opportunity
@@ -2569,7 +2649,7 @@ function TabButton({
         numberOfLines={1}
         maxFontSizeMultiplier={TAB_CAP}
         color={active ? c.ink : c.ink3}
-        style={{ fontFamily: active ? FONT.displaySemi : FONT.display }}
+        style={lg ? glassSegLabel(lg) : { fontFamily: active ? FONT.displaySemi : FONT.display }}
       >
         {label}
       </Body>
@@ -2604,6 +2684,7 @@ function QuickBtn({
   disabled?: boolean;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -2616,6 +2697,8 @@ function QuickBtn({
           borderColor: c.hair2,
           opacity: disabled ? 0.4 : pressed ? 0.85 : 1,
         },
+        // Liquid Glass: the board's tinted step (.ios-btn.tinted).
+        lg && glassTintedStep(lg),
       ]}
     >
       {/* Four fixed `flex: 1` columns of pinned chrome — capped at the control
@@ -2627,7 +2710,7 @@ function QuickBtn({
         numberOfLines={1}
         maxFontSizeMultiplier={capTo(17, TYPE_CEILING.control)}
         color={c.ink}
-        style={{ fontFamily: FONT.display, flexShrink: 1 }}
+        style={lg ? glassTintedStepLabel(lg) : { fontFamily: FONT.display, flexShrink: 1 }}
       >
         {label}
       </Mono>
@@ -2637,6 +2720,7 @@ function QuickBtn({
 
 function MetaRow({ label, value, dot }: { label: string; value: string; dot?: string | null }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   // Reflow, not a cap: label and value are both content (LOCATION / a rack
   // name, SUPPLIER / a vendor name) and `justify: space-between` gives neither
@@ -2645,20 +2729,31 @@ function MetaRow({ label, value, dot }: { label: string; value: string; dot?: st
   const stacked = shouldStackRow(fontScale);
   return (
     <View
-      style={{
-        flexDirection: stacked ? 'column' : 'row',
-        justifyContent: 'space-between',
-        alignItems: stacked ? 'flex-start' : 'center',
-        gap: stacked ? 4 : 0,
-        paddingVertical: 14,
-        paddingHorizontal: 16,
-      }}
+      style={[
+        {
+          flexDirection: stacked ? 'column' : 'row',
+          justifyContent: 'space-between',
+          alignItems: stacked ? 'flex-start' : 'center',
+          gap: stacked ? 4 : 0,
+          paddingVertical: 14,
+          paddingHorizontal: 16,
+        },
+        // Liquid Glass: the iOS row (56 at least, 10/16).
+        lg && GLASS_ITEM.metaRow,
+      ]}
     >
       {/* The label names the value beside it: muted ink, the reference's
-          key colour (ink4 held it under AA). */}
-      <Mono size={10.5} tracking={0.12} upper color={c.ink3} style={{ flexShrink: 1 }}>
-        {label}
-      </Mono>
+          key colour (ink4 held it under AA). Liquid Glass: an iOS row's key
+          in the ink and the system face, in sentence case. */}
+      {lg ? (
+        <Text style={[glassItemStyles(lg).metaLabel, { flexShrink: 1 }]}>
+          {sentenceCase(label)}
+        </Text>
+      ) : (
+        <Mono size={10.5} tracking={0.12} upper color={c.ink3} style={{ flexShrink: 1 }}>
+          {label}
+        </Mono>
+      )}
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 }}>
         {dot ? (
           // The crate colour's dot, ringed in muted ink so a white or a pale
@@ -2674,7 +2769,11 @@ function MetaRow({ label, value, dot }: { label: string; value: string; dot?: st
             }}
           />
         ) : null}
-        <Body size={15} color={c.ink} style={{ fontFamily: FONT.display }}>
+        <Body
+          size={15}
+          color={c.ink}
+          style={lg ? glassItemStyles(lg).metaValue : { fontFamily: FONT.display }}
+        >
           {value}
         </Body>
       </View>
@@ -2933,6 +3032,7 @@ function MovementNoteModalContent({
   onSaved: (note: string | null) => void;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   const [text, setText] = React.useState(initialNote ?? '');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -2986,6 +3086,8 @@ function MovementNoteModalContent({
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+              // Liquid Glass: the --scrim tint (it never blurs the page).
+              lg && glassScrim(lg),
             ]}
           />
           <View
@@ -2999,10 +3101,14 @@ function MovementNoteModalContent({
                 paddingHorizontal: 22,
               },
               SHADOW.sheet,
+              // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+              lg && GLASS_SHEET_CARD,
+              lg && GLASS_SHEET_PADDING,
             ]}
           >
-            <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+            {lg ? <GlassSheetBackdrop /> : null}
+            <View style={{ alignItems: 'center', marginBottom: lg ? 12 : 18 }}>
+              <View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />
             </View>
             <Eyebrow>{hadNote ? 'EDIT NOTE' : 'ADD NOTE'}</Eyebrow>
             <Body muted size={12} style={{ marginTop: 6 }}>
@@ -3273,6 +3379,7 @@ function AdjustModalContent({
   onConfirm: (delta: number, reason: string) => Promise<void>;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   const [delta, setDelta] = React.useState('');
   const [reason, setReason] = React.useState('');
   // Which box is being typed in: its border deepens to ink, as the shared
@@ -3329,6 +3436,8 @@ function AdjustModalContent({
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+              // Liquid Glass: the --scrim tint (it never blurs the page).
+              lg && glassScrim(lg),
             ]}
           />
           <View
@@ -3342,10 +3451,14 @@ function AdjustModalContent({
                 paddingHorizontal: 22,
               },
               SHADOW.sheet,
+              // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+              lg && GLASS_SHEET_CARD,
+              lg && GLASS_SHEET_PADDING,
             ]}
           >
-            <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+            {lg ? <GlassSheetBackdrop /> : null}
+            <View style={{ alignItems: 'center', marginBottom: lg ? 12 : 18 }}>
+              <View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />
             </View>
             <Eyebrow>ADJUST STOCK</Eyebrow>
             <Display size={24} style={{ marginTop: 10 }}>
@@ -3368,7 +3481,13 @@ function AdjustModalContent({
 
             <View style={{ marginTop: 20, gap: 14 }}>
               <View style={{ gap: 6 }}>
-                <Mono size={10} tracking={0.12} upper color={c.ink3}>
+                <Mono
+                  size={10}
+                  tracking={0.12}
+                  upper
+                  color={c.ink3}
+                  style={lg ? glassFieldLabel(lg) : undefined}
+                >
                   CHANGE (+ ADDS, − REMOVES)
                 </Mono>
                 <TextInput
@@ -3386,22 +3505,33 @@ function AdjustModalContent({
                   // clipped value or caret here is a stock error. The box is
                   // the recessed fill with the control border (paper2 is the
                   // card colour in dark, so the box did not show there).
-                  style={{
-                    fontFamily: FONT.display,
-                    fontSize: 18,
-                    minHeight: 52,
-                    paddingHorizontal: 14,
-                    paddingVertical: 12,
-                    borderWidth: 1,
-                    borderColor: focusedBox === 'delta' ? c.ink : c.hair2,
-                    borderRadius: 8,
-                    color: c.ink,
-                    backgroundColor: c.sunk,
-                  }}
+                  style={[
+                    {
+                      fontFamily: FONT.display,
+                      fontSize: 18,
+                      minHeight: 52,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
+                      borderWidth: 1,
+                      borderColor: focusedBox === 'delta' ? c.ink : c.hair2,
+                      borderRadius: 8,
+                      color: c.ink,
+                      backgroundColor: c.sunk,
+                    },
+                    // Liquid Glass: the field with the 3:1 line, in the system face.
+                    lg && glassFieldBox(lg, focusedBox === 'delta'),
+                    lg && glassFieldInput(lg),
+                  ]}
                 />
               </View>
               <View style={{ gap: 6 }}>
-                <Mono size={10} tracking={0.12} upper color={c.ink3}>
+                <Mono
+                  size={10}
+                  tracking={0.12}
+                  upper
+                  color={c.ink3}
+                  style={lg ? glassFieldLabel(lg) : undefined}
+                >
                   REASON (OPTIONAL)
                 </Mono>
                 <TextInput
@@ -3416,18 +3546,23 @@ function AdjustModalContent({
                   onFocus={() => setFocusedBox('reason')}
                   onBlur={() => setFocusedBox(null)}
                   // minHeight for the same reason as the CHANGE box above.
-                  style={{
-                    fontFamily: FONT.displayRegular,
-                    fontSize: 15,
-                    minHeight: 50,
-                    paddingHorizontal: 14,
-                    paddingVertical: 12,
-                    borderWidth: 1,
-                    borderColor: focusedBox === 'reason' ? c.ink : c.hair2,
-                    borderRadius: 8,
-                    color: c.ink,
-                    backgroundColor: c.sunk,
-                  }}
+                  style={[
+                    {
+                      fontFamily: FONT.displayRegular,
+                      fontSize: 15,
+                      minHeight: 50,
+                      paddingHorizontal: 14,
+                      paddingVertical: 12,
+                      borderWidth: 1,
+                      borderColor: focusedBox === 'reason' ? c.ink : c.hair2,
+                      borderRadius: 8,
+                      color: c.ink,
+                      backgroundColor: c.sunk,
+                    },
+                    // Liquid Glass: the field with the 3:1 line, in the system face.
+                    lg && glassFieldBox(lg, focusedBox === 'reason'),
+                    lg && glassFieldInput(lg),
+                  ]}
                 />
               </View>
               <View
@@ -3438,7 +3573,13 @@ function AdjustModalContent({
                   marginTop: 4,
                 }}
               >
-                <Mono size={10.5} tracking={0.12} upper color={c.ink3}>
+                <Mono
+                  size={10.5}
+                  tracking={0.12}
+                  upper
+                  color={c.ink3}
+                  style={lg ? glassFieldLabel(lg) : undefined}
+                >
                   NEW TOTAL
                 </Mono>
                 {/* Below zero in the mode's refusal red, at zero in its warning
@@ -3447,7 +3588,7 @@ function AdjustModalContent({
                   size={28}
                   tracking={-0.022}
                   color={preview < 0 ? c.critText : preview === 0 ? c.warnText : c.ink}
-                  style={{ fontFamily: FONT.display }}
+                  style={lg ? glassItemStyles(lg).newTotal : { fontFamily: FONT.display }}
                 >
                   {preview}
                 </Mono>
@@ -3876,6 +4017,7 @@ function SerialStatusSheet({
   onSelect: (status: SerialStatus) => void;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   return (
     <Modal
       visible={!!row}
@@ -3900,6 +4042,8 @@ function SerialStatusSheet({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            // Liquid Glass: the --scrim tint (it never blurs the page).
+            lg && glassScrim(lg),
           ]}
         />
         <View
@@ -3913,10 +4057,14 @@ function SerialStatusSheet({
               paddingHorizontal: 22,
             },
             SHADOW.sheet,
+            // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+            lg && GLASS_SHEET_CARD,
+            lg && GLASS_SHEET_PADDING,
           ]}
         >
-          <View style={{ alignItems: 'center', marginBottom: 18 }}>
-            <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+          {lg ? <GlassSheetBackdrop /> : null}
+          <View style={{ alignItems: 'center', marginBottom: lg ? 12 : 18 }}>
+            <View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />
           </View>
           <Eyebrow>SET STATUS</Eyebrow>
           <Mono size={14} tracking={-0.012} style={{ marginTop: 8 }} numberOfLines={1}>
@@ -4092,6 +4240,7 @@ function AddSerialsModalContent({
   onAdded: (added: number) => void;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   const [text, setText] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [submitError, setSubmitError] = React.useState<string | null>(null);
@@ -4157,6 +4306,8 @@ function AddSerialsModalContent({
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+              // Liquid Glass: the --scrim tint (it never blurs the page).
+              lg && glassScrim(lg),
             ]}
           />
           <View
@@ -4170,10 +4321,14 @@ function AddSerialsModalContent({
                 paddingHorizontal: 22,
               },
               SHADOW.sheet,
+              // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+              lg && GLASS_SHEET_CARD,
+              lg && GLASS_SHEET_PADDING,
             ]}
           >
-            <View style={{ alignItems: 'center', marginBottom: 18 }}>
-              <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+            {lg ? <GlassSheetBackdrop /> : null}
+            <View style={{ alignItems: 'center', marginBottom: lg ? 12 : 18 }}>
+              <View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />
             </View>
             <Eyebrow>ADD SERIALS</Eyebrow>
 

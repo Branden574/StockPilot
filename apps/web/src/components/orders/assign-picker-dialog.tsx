@@ -32,12 +32,7 @@ interface Props {
   trigger: React.ReactNode;
 }
 
-export function AssignPickerDialog({
-  orderId,
-  pickers,
-  currentPickerId,
-  trigger,
-}: Props) {
+export function AssignPickerDialog({ orderId, pickers, currentPickerId, trigger }: Props) {
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [selected, setSelected] = React.useState<string>(currentPickerId ?? '');
@@ -67,14 +62,14 @@ export function AssignPickerDialog({
       </span>
       <Dialog open={open} onOpenChange={(v) => !pending && setOpen(v)}>
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Assign picker</DialogTitle>
             <DialogDescription>
-              Pick the staff member who&apos;ll pick this order. It&apos;s locked to
-              them until they finish or a manager reassigns it.
+              Pick the staff member who&apos;ll pick this order. It&apos;s locked to them until they
+              finish or a manager reassigns it.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="space-y-2" data-glass="dialog-body">
             <Label htmlFor="picker">Picker</Label>
             <Select value={selected} onValueChange={setSelected}>
               <SelectTrigger id="picker">
@@ -90,7 +85,7 @@ export function AssignPickerDialog({
               </SelectContent>
             </Select>
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button variant="outline" onClick={() => setOpen(false)} disabled={pending}>
               Cancel
             </Button>

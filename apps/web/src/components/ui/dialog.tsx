@@ -16,6 +16,7 @@ export const DialogOverlay = React.forwardRef<
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Overlay>
 >(({ className, ...props }, ref) => (
   <DialogPrimitive.Overlay
+    data-glass="scrim"
     ref={ref}
     className={cn(
       // No backdrop-blur: on browsers without GPU acceleration a full-viewport
@@ -42,6 +43,7 @@ export const DialogContent = React.forwardRef<
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
+      data-glass="dialog"
       ref={ref}
       className={cn(
         'bg-card text-card-foreground fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-1rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 sm:p-6',

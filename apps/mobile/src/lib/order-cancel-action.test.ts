@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { cancelReasonForPost, phoneOrderCancel } from './order-cancel-action';
 
 /**
@@ -149,14 +150,25 @@ describe('order/[id].tsx wiring (L93)', () => {
     expect(addBtn).toMatch(/minHeight: 44,/);
     expect(addBtn).toMatch(/paddingVertical: 10,/);
     expect(addBtn).not.toMatch(/[^A-Za-z]height: 44/);
-    const helper = screen.slice(screen.indexOf('const actionBtn = ('), screen.indexOf('async function uploadOne('));
+    // Classic's helper, read off the Classic projection (Liquid Glass lays
+    // the iOS button over the same entries in branches of its own).
+    const classic = classicFlat(screen, 'app/order/[id].tsx');
+    const helper = classic.slice(
+      classic.indexOf(flatNorm('const actionBtn = (')),
+      classic.indexOf(flatNorm('async function uploadOne(')),
+    );
     expect(helper).toContain('styles.addBtn');
     // Re-pinned by the redesign (P5.7a, look only): the label is the shared
     // Button's display face (styles.actionLabel) in place of mono; it is
     // still uncapped and still wraps (flexShrink, centred).
-    expect(helper).toMatch(
-      /<Text style=\{\[styles\.actionLabel, \{ color: fg \}\]\}>\{label\}<\/Text>/,
+    expect(helper).toContain(
+      flatNorm('<Text style={[styles.actionLabel, { color: fg }]}>{label}</Text>'),
     );
+    // Liquid Glass keeps the same button and words, with no cap of its own.
+    const glass = screen.slice(screen.indexOf('const actionBtn = ('), screen.indexOf('async function uploadOne('));
+    expect(glass).toContain('lg && glassOrderStyles(lg).addBtn,');
+    expect(glass).toContain('lg && glassOrderStyles(lg).actionLabel,');
+    expect(glass).not.toMatch(/numberOfLines|maxFontSizeMultiplier/);
     const label = screen.match(/\n {2}actionLabel: \{[^}]*\}/)?.[0] ?? '';
     expect(label).toMatch(/flexShrink: 1/);
     expect(label).toMatch(/textAlign: 'center'/);

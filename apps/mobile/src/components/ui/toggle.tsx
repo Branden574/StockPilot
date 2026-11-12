@@ -4,6 +4,8 @@ import { Pressable, View } from 'react-native';
 // Relative imports on purpose (as in checkbox.tsx): touch-target.test.ts
 // loads this file in the node test runner, which does not resolve `@/`.
 import { useTheme } from '../../lib/use-theme';
+import { glassToggle } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { toggleTone } from './tones';
 
 /**
@@ -37,8 +39,10 @@ export function Toggle({
   accessibilityLabel?: string;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const inert = !onValueChange;
-  const { track, knob } = toggleTone(value, c);
+  // Liquid Glass: on is the accent track (the artifact's selected controls).
+  const { track, knob } = lg ? glassToggle(lg, value) : toggleTone(value, c);
   return (
     <Pressable
       onPress={() => onValueChange?.(!value)}

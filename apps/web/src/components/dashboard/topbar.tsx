@@ -9,6 +9,7 @@ import { openKeyboardShortcutsOverlay } from '@/components/dashboard/keyboard-sh
 import { NotificationBell } from '@/components/dashboard/notification-bell';
 import { SidebarToggleButton } from '@/components/dashboard/sidebar-toggle-button';
 import type { Density } from '@/components/dashboard/sidebar-pref';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { WarehouseFilterPicker } from '@/components/dashboard/warehouse-filter-picker';
 import { WhatsNewButton } from '@/components/updates/whats-new-button';
@@ -94,6 +95,9 @@ export function Topbar({
   const measureRef = React.useRef<HTMLDivElement>(null);
   const fit = useTrailFit(headerRef, measureRef, crumbs.map((c) => c.label).join('\u0000'));
   const firstShown = fit === 'current' ? crumbs.length - 1 : 0;
+  // The glass phone bar's title (see tb-title below): the current page's name.
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const currentLabel = crumbs[crumbs.length - 1]?.label ?? null;
 
   // NO LINK IN THE BAR PREFETCHES ITS PAGE ON SIGHT (PLAN 0.6). The bar is on
   // every dashboard page, so a default <Link> here costs a prefetch (two
@@ -155,6 +159,7 @@ export function Topbar({
   return (
     <header
       ref={headerRef}
+      data-glass="topbar"
       className="border-border bg-background @container sticky top-0 z-20 flex shrink-0 items-center gap-2 border-b px-4 max-[390px]:gap-1 sm:gap-3 sm:px-6"
       style={{ height: 56 }}
     >
@@ -175,7 +180,10 @@ export function Topbar({
           data-slot={TRAIL_SLOT}
           className="@min-[520px]:flex hidden min-w-0"
         >
-          <ol className="text-muted-foreground flex min-w-0 items-center gap-2 text-[13.5px] leading-5">
+          <ol
+            data-glass="crumbs"
+            className="text-muted-foreground flex min-w-0 items-center gap-2 text-[13.5px] leading-5"
+          >
             {crumbs.map((c, i) => {
               if (i < firstShown) return null;
               const isLast = i === crumbs.length - 1;
@@ -188,7 +196,11 @@ export function Topbar({
                   )}
                 >
                   {i > firstShown && (
-                    <span aria-hidden className="shrink-0 text-[var(--ed-ink-4)]">
+                    <span
+                      aria-hidden
+                      data-glass="crumb-sep"
+                      className="shrink-0 text-[var(--ed-ink-4)]"
+                    >
                       /
                     </span>
                   )}
@@ -216,6 +228,18 @@ export function Topbar({
         </nav>
       )}
 
+      {/* LIQUID GLASS ONLY: the phone bar's page title (Overview-Mobile,
+          AppTopbar .mob.h3): the current page's name, where the trail is not
+          on screen. Rendered only in a build that offers glass, and hidden
+          in Classic (styles/liquid-glass/visibility.css) and from 761 px
+          (shell.css), so Classic's bar is today's. Words only: the same name
+          the trail's last crumb carries, never a control. */}
+      {glassBuild && currentLabel ? (
+        <div data-glass-only="" data-glass="tb-title">
+          {currentLabel}
+        </div>
+      ) : null}
+
       {/* The whole trail's natural width, whichever step is drawn: a copy
           with the trail's type and spacing, out of the flow, invisible,
           hidden from screen readers and clipped to nothing, so it can never
@@ -238,7 +262,10 @@ export function Topbar({
       {/* Where the trail can show (520px up) the picker never shrinks, so
           "All warehouses" and a short name stay whole and a long one keeps
           its 160px; under 520px it is the one control that yields. */}
-      <div className="@min-[520px]:shrink-0 ml-auto flex min-w-0 items-center gap-2">
+      <div
+        className="@min-[520px]:shrink-0 ml-auto flex min-w-0 items-center gap-2"
+        data-glass="tb-tools"
+      >
         {warehouseFilter && warehouseFilter.warehouses.length > 0 && (
           <WarehouseFilterPicker
             warehouses={warehouseFilter.warehouses}
@@ -251,6 +278,8 @@ export function Topbar({
 
       <button
         type="button"
+        data-glass="tb-icon"
+        data-glass-variant="search"
         className={cn(ICON_BUTTON, '@min-[400px]:grid @min-[960px]:hidden hidden')}
         aria-label="Open command palette"
         onClick={openCommandPalette}
@@ -260,19 +289,23 @@ export function Topbar({
 
       <button
         type="button"
+        data-glass="tb-search"
         className="border-border bg-card text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background @min-[960px]:flex hidden h-8 min-w-[240px] max-w-[340px] flex-1 items-center gap-2 rounded-md border px-2.5 text-[13px] transition-colors hover:border-[var(--ed-line-strong)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
         aria-label="Open command palette"
         onClick={openCommandPalette}
       >
         <Search aria-hidden strokeWidth={1.8} className="size-3.5 shrink-0" />
         <span className="min-w-0 flex-1 truncate text-left">Search items, POs, suppliers…</span>
-        <span className="text-muted-foreground shrink-0 rounded border border-[var(--ed-line-strong)] px-[5px] py-px font-mono text-[11px] leading-4">
+        <span
+          data-glass="kbd"
+          className="text-muted-foreground shrink-0 rounded border border-[var(--ed-line-strong)] px-[5px] py-px font-mono text-[11px] leading-4"
+        >
           ⌘K
         </span>
       </button>
 
       {/* The icon cluster sits tight (2px), as one group, apart from the rest. */}
-      <div className="flex shrink-0 items-center gap-0.5">
+      <div className="flex shrink-0 items-center gap-0.5" data-glass="tb-cap">
         <NotificationBell userId={userId} organizationId={organizationId} />
 
         <WhatsNewButton />

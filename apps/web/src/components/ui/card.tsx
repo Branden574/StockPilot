@@ -11,6 +11,7 @@ export const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDi
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
+      data-glass="card"
       className={cn('bg-card text-card-foreground rounded-lg border', className)}
       {...props}
     />

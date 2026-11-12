@@ -9,6 +9,7 @@ import {
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_LINE_NOT_ORDERABLE_COPY,
   STOREFRONT_NONE_COPY,
+  addAllLabelCopy,
   availabilityLabel,
   availableOf,
   cartCountsCopy,
@@ -89,6 +90,11 @@ export const ITEM_ROW_HINT = 'Opens the item details.';
 
 export function addItemLabel(name: string): string {
   return `Add ${name} to your cart`;
+}
+/** "Add all": core's words, the website's too ("Add all 67 available: <name>",
+ *  or the order's limit when more than that is available). */
+export function addAllLabel(name: string, available: number, inCart: number): string {
+  return addAllLabelCopy(name, available, inCart);
 }
 export function increaseLabel(name: string): string {
   return `One more ${name}`;

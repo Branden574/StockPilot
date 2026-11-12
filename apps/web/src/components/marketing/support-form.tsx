@@ -4,6 +4,7 @@ import { CheckCircle2 } from 'lucide-react';
 import * as React from 'react';
 import { toast } from 'sonner';
 
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -29,6 +30,83 @@ const PRIORITIES: Array<{ value: string; label: string }> = [
 const selectClass =
   'bg-card focus-visible:ring-ring focus-visible:ring-offset-background h-10 w-full rounded-md border border-line-strong px-2.5 text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 max-sm:h-11 max-sm:text-base';
 
+/**
+ * The draft across a Design switch (Liquid Glass, plans/REVISION-DEFAULT.md
+ * R8). /support is served by two route trees, the classic page and its glass
+ * twin, so choosing the other Design there unmounts this form and mounts the
+ * other one. What was typed waits in sessionStorage for that one remount:
+ * written when the form unmounts while the address is still the one it
+ * mounted on (never after leaving the page, never after the ticket was sent,
+ * never the honeypot), read and removed by the next form on the same address
+ * within two minutes. Under the `off` rollout there is no twin and nothing is
+ * stored. The first render is unchanged: the server has no draft, and one is
+ * applied only after mount.
+ */
+export const SUPPORT_DRAFT_KEY = 'stockpilot:support-draft:v1';
+export const SUPPORT_DRAFT_MAX_AGE_MS = 2 * 60 * 1000;
+
+interface SupportDraft {
+  name: string;
+  email: string;
+  category: string;
+  priority: string;
+  subject: string;
+  message: string;
+}
+
+const EMPTY_DRAFT: SupportDraft = {
+  name: '',
+  email: '',
+  category: 'bug',
+  priority: 'normal',
+  subject: '',
+  message: '',
+};
+
+const text = (value: unknown, max: number) =>
+  typeof value === 'string' ? value.slice(0, max) : '';
+const oneOf = (value: unknown, options: Array<{ value: string }>, fallback: string) =>
+  options.some((o) => o.value === value) ? (value as string) : fallback;
+
+/** The draft left for this address, once: removed as it is read. */
+function takeSupportDraft(path: string, now: number): SupportDraft | null {
+  try {
+    const raw = window.sessionStorage.getItem(SUPPORT_DRAFT_KEY);
+    if (raw === null) return null;
+    window.sessionStorage.removeItem(SUPPORT_DRAFT_KEY);
+    const stored: unknown = JSON.parse(raw);
+    if (typeof stored !== 'object' || stored === null) return null;
+    const d = stored as Record<string, unknown>;
+    if (d.path !== path || typeof d.savedAt !== 'number') return null;
+    if (now - d.savedAt > SUPPORT_DRAFT_MAX_AGE_MS || d.savedAt > now) return null;
+    return {
+      name: text(d.name, 120),
+      email: text(d.email, 254),
+      category: oneOf(d.category, CATEGORIES, EMPTY_DRAFT.category),
+      priority: oneOf(d.priority, PRIORITIES, EMPTY_DRAFT.priority),
+      subject: text(d.subject, 200),
+      message: text(d.message, 8000),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function leaveSupportDraft(path: string, draft: SupportDraft) {
+  const typed = (Object.keys(EMPTY_DRAFT) as Array<keyof SupportDraft>).some(
+    (key) => draft[key] !== EMPTY_DRAFT[key],
+  );
+  if (!typed) return;
+  try {
+    window.sessionStorage.setItem(
+      SUPPORT_DRAFT_KEY,
+      JSON.stringify({ path, savedAt: Date.now(), ...draft }),
+    );
+  } catch {
+    /* storage full or blocked: the switch simply starts an empty form */
+  }
+}
+
 export function SupportForm() {
   const [busy, setBusy] = React.useState(false);
   const [done, setDone] = React.useState(false);
@@ -39,6 +117,34 @@ export function SupportForm() {
   const [subject, setSubject] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [company, setCompany] = React.useState(''); // honeypot
+
+  // The draft across a Design switch (see SUPPORT_DRAFT_KEY).
+  const keepsDraft = liquidGlassRollout() !== 'off';
+  const latest = React.useRef({ done, draft: EMPTY_DRAFT });
+  React.useEffect(() => {
+    latest.current = { done, draft: { name, email, category, priority, subject, message } };
+  });
+  React.useEffect(() => {
+    if (!keepsDraft) return;
+    const path = window.location.pathname;
+    const draft = takeSupportDraft(path, Date.now());
+    if (draft) {
+      /* eslint-disable react-hooks/set-state-in-effect -- applied once after mount: the server render has no draft */
+      setName(draft.name);
+      setEmail(draft.email);
+      setCategory(draft.category);
+      setPriority(draft.priority);
+      setSubject(draft.subject);
+      setMessage(draft.message);
+      /* eslint-enable react-hooks/set-state-in-effect */
+    }
+    return () => {
+      // Still on the same address: the page is being swapped (a Design
+      // switch or a refresh), not left.
+      if (latest.current.done || window.location.pathname !== path) return;
+      leaveSupportDraft(path, latest.current.draft);
+    };
+  }, [keepsDraft]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -58,6 +164,7 @@ export function SupportForm() {
       toast.error(res.error.message);
       return;
     }
+    latest.current = { ...latest.current, done: true };
     setDone(true);
   }
 

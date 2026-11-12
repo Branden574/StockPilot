@@ -35,6 +35,7 @@ function Bar({
   return (
     <div
       className={cn('bg-muted max-w-full shrink-0 animate-pulse', className)}
+      data-glass="skeleton"
       style={{
         ...(w === undefined ? {} : { width: typeof w === 'number' ? `${w}px` : w }),
         ...(h === undefined ? {} : { height: h }),
@@ -46,7 +47,7 @@ function Bar({
 
 export default function ReturnWorkbenchLoading() {
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass="skeleton-page" data-glass-width="wide">
       <div className="flex w-full max-w-[1040px] flex-col gap-4">
         {/* The header: the back link, the 28 px RMA number on its 42 px line
             beside its status, type and source badges, then the order line. */}
@@ -69,7 +70,11 @@ export default function ReturnWorkbenchLoading() {
 
         {/* The next-step bar: the ink primary and the secondaries on one
             wrapping row, "The item is here" at its end. */}
-        <div className={cn(CARD, 'px-[18px] py-3.5')} data-slot="workbench-loading-next-step">
+        <div
+          className={cn(CARD, 'px-[18px] py-3.5')}
+          data-slot="workbench-loading-next-step"
+          data-glass="card"
+        >
           <div className="flex flex-wrap items-center gap-2">
             <Bar w={124} h={32} radius={6} />
             <Bar w={64} h={32} radius={6} />
@@ -95,6 +100,7 @@ export default function ReturnWorkbenchLoading() {
               'grid grid-cols-[64px_minmax(0,1fr)] gap-4 p-4 sm:grid-cols-[96px_minmax(0,1fr)]',
             )}
             data-slot="workbench-loading-returning"
+            data-glass="card"
           >
             <Bar radius={8} className="size-16 sm:size-24" />
             <div className="min-w-0 space-y-3">
@@ -124,8 +130,11 @@ export default function ReturnWorkbenchLoading() {
 
         {/* History: the card header, then activity rows (what happened on the
             left, when on the right). */}
-        <div className={CARD} data-slot="workbench-loading-history">
-          <div className="border-border flex min-h-[49px] items-center border-b px-[18px]">
+        <div className={CARD} data-slot="workbench-loading-history" data-glass="card">
+          <div
+            className="border-border flex min-h-[49px] items-center border-b px-[18px]"
+            data-glass-role="skeleton-card-head"
+          >
             <Bar w={64} h={13} />
           </div>
           {[260, 180, 220].map((w, i) => (

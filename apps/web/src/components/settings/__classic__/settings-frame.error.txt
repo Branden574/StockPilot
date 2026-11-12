@@ -1,0 +1,141 @@
+<div>
+  <div class="xl:flex xl:items-start" data-slot="settings-frame">
+    <div class="px-4 pt-6 sm:px-8 sm:pt-7 xl:sticky xl:top-0 xl:max-h-[calc(100dvh-56px)] xl:w-[248px] xl:shrink-0 xl:overflow-y-auto xl:pb-8 xl:pr-0">
+      <nav aria-label="Settings" class="min-w-0" data-slot="settings-subnav">
+        <button aria-controls="«id1»" aria-expanded="false" class="bg-card hover:bg-muted flex min-h-11 w-full items-center gap-2 rounded-lg border px-3.5 text-left text-[13.5px] transition-colors xl:hidden" type="button">
+          <span class="text-muted-foreground shrink-0">
+            "Settings"
+          <span aria-hidden="true" class="text-ink-4 shrink-0">
+            "/"
+          <span class="text-foreground min-w-0 flex-1 truncate font-medium">
+            "Organization"
+          <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground size-4 shrink-0 transition-transform" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="m6 9 6 6 6-6">
+        <div class="hidden xl:mt-0 xl:block xl:rounded-none xl:border-0 xl:bg-transparent xl:p-0" id="«id1»">
+          <a class="text-ink-2 hover:bg-muted hover:text-foreground flex min-h-8 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11" href="/dashboard/settings">
+            "All settings"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-account">
+              "Account"
+            <ul aria-labelledby="«id1»-account" class="grid gap-px">
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/profile">
+                  "Profile"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/security">
+                  "Security"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/notifications">
+                  "Notifications"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-workspace">
+              "Workspace"
+            <ul aria-labelledby="«id1»-workspace" class="grid gap-px">
+              <li>
+                <a aria-current="page" class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 bg-muted text-foreground font-medium" href="/dashboard/settings/organization">
+                  "Organization"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/industry">
+                  "Industry template"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/modules">
+                  "Modules"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/navigation">
+                  "Navigation"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/dashboard">
+                  "Dashboard"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/custom-fields">
+                  "Custom fields"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/order-statuses">
+                  "Order statuses"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-access">
+              "Access"
+            <ul aria-labelledby="«id1»-access" class="grid gap-px">
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/roles">
+                  "Roles & permissions"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/audit">
+                  "Audit log"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-requests">
+              "Requests and email"
+            <ul aria-labelledby="«id1»-requests" class="grid gap-px">
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/public-requests">
+                  "Public requests"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/email-routing">
+                  "Email routing"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/maintenance">
+                  "Maintenance requests"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-data-safety">
+              "Data safety"
+            <ul aria-labelledby="«id1»-data-safety" class="grid gap-px">
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/recovery">
+                  "Recovery"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/restore-points">
+                  "Backups & restore"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/inventory-cleanup">
+                  "Archived item cleanup"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-connections">
+              "Connections"
+            <ul aria-labelledby="«id1»-connections" class="grid gap-px">
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/integrations">
+                  "Integrations"
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/ai">
+                  "AI"
+          <div class="mt-3 first:mt-0">
+            <p class="text-muted-foreground px-2.5 pb-1 pt-2 text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em]" id="«id1»-plan">
+              "Plan"
+            <ul aria-labelledby="«id1»-plan" class="grid gap-px">
+              <li>
+                <a class="flex min-h-8 items-center rounded-md px-2.5 py-1.5 text-[13.5px] leading-5 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-xl:min-h-11 [@media(pointer:coarse)]:min-h-11 text-ink-2 hover:bg-muted hover:text-foreground" href="/dashboard/settings/billing">
+                  "Billing"
+    <div class="min-w-0 flex-1">
+      <div class="flex w-full min-w-0 flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7 max-w-[944px]" data-slot="settings-page">
+        <div class="flex min-w-0 flex-col" data-slot="page-header">
+          <div class="mb-2">
+            <a class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px] transition-colors" href="/dashboard/settings">
+              "← Back to settings"
+          <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+            <div class="min-w-0 max-w-full">
+              <div class="min-w-0">
+                <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                  <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+                    "Organization"
+        <div class="flex w-full min-w-0 flex-col items-center justify-center text-center border-border bg-card rounded-lg border min-h-[320px] gap-3 px-6 py-14" data-slot="state-panel" data-state-kind="failed" role="alert">
+          <div aria-hidden="true" class="flex items-center justify-center rounded-full size-11 bg-destructive-wash text-destructive" data-slot="state-panel-icon">
+            <svg aria-hidden="true" class="lucide lucide-triangle-alert lucide-alert-triangle h-5 w-5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3">
+              <path d="M12 9v4">
+              <path d="M12 17h.01">
+          <p class="max-w-md text-foreground font-medium text-[14px] leading-5">
+            "We couldn't load this settings page"
+          <div class="text-muted-foreground max-w-md text-[13.5px] leading-[20.25px]">
+            "Something went wrong reading it. This is usually temporary, so try again in a moment."
+            " The other settings pages still work."
+            <span class="mt-1 block font-mono text-[11px]">
+              "Error id: "
+              "abc123"
+          <div class="flex flex-wrap items-center justify-center gap-2 mt-2">
+            <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]" type="button">
+              <svg aria-hidden="true" class="lucide lucide-refresh-cw" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8">
+                <path d="M21 3v5h-5">
+                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16">
+                <path d="M8 16H3v5">
+              " Try again"

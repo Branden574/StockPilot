@@ -9,7 +9,11 @@ import { Skeleton } from '@/components/ui/skeleton';
  */
 export default function SettingsLoading() {
   return (
-    <div className="flex w-full max-w-[944px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="settings"
+      data-glass-view="loading"
+      className="flex w-full max-w-[944px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <div className="min-w-0">
         <div className="flex h-[42px] items-center">
           <Skeleton className="h-[26px] w-[200px]" />
@@ -19,8 +23,11 @@ export default function SettingsLoading() {
         </div>
       </div>
       {[3, 2].map((rows, panel) => (
-        <div key={panel} className="bg-card rounded-lg border">
-          <div className="border-border space-y-2 border-b px-[18px] py-3.5">
+        <div key={panel} className="bg-card rounded-lg border" data-glass="panel">
+          <div
+            className="border-border space-y-2 border-b px-[18px] py-3.5"
+            data-glass-role="skeleton-card-head"
+          >
             <Skeleton className="h-3.5 w-[140px]" />
             <Skeleton className="h-3 w-[320px] max-w-full" />
           </div>

@@ -172,7 +172,7 @@ export function ApprovePartialDialog({
         data-testid="approve-partial-dialog"
         data-action={preview.action}
       >
-        <DialogHeader>
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>{copy?.title ?? PARTIAL_ACTION_TITLE[preview.action]}</DialogTitle>
           {!showPreview ? null : copy ? (
             <DialogDescription data-testid="approve-partial-summary">
@@ -260,7 +260,7 @@ export function ApprovePartialDialog({
           </p>
         )}
 
-        <DialogFooter>
+        <DialogFooter data-glass="dialog-footer">
           {state.step === 'done' || !copy || movedOn ? (
             <Button
               variant="outline"

@@ -24,6 +24,12 @@ import { charterCellLookup } from '@/lib/charter-display';
 import { requireOrgContext } from '@/lib/auth/session';
 import { listFilterActive } from '@/lib/inventory/list-filter-active';
 
+// The Liquid Glass list composition the Items page draws (Items.dc.html): the
+// rental items list is the same InventoryTable, and every rule is scoped to
+// the [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/items.css';
+
 const PAGE_SIZE = 50;
 
 type SortParam =
@@ -216,7 +222,10 @@ export default async function RentalItemsPage({
   return (
     // The page box every redesigned dashboard page shares (max 1320, 16 px
     // gutters on a phone).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="items"
+    >
       <PageHeader
         title="Rentals"
         subline={
