@@ -3,7 +3,7 @@
 // not set (Cookie among them), and the route receives them as the browser sent
 // them. The first test checks that the request handed to the route still has
 // them, so it cannot pass by never seeing a cookie.
-import { gunzipSync, gzipSync } from 'node:zlib';
+import { gzipSync } from 'node:zlib';
 
 import { autoImplementMethods } from 'next/dist/server/route-modules/app-route/helpers/auto-implement-methods';
 import { HTTP_METHODS, type HTTP_METHOD } from 'next/dist/server/web/http';
@@ -12,12 +12,14 @@ import type { MockInstance } from 'vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * The /ingest analytics proxy (docket S34). PostHog's browser SDK sends
- * everything to /ingest on our own origin, so the browser attaches every
- * cookie of this host, the Supabase session among them. The next.config.ts
- * rewrites this route replaced forwarded the request's headers as they came,
- * on any path; the route builds a new request from lists, and only for the
- * requests the SDK makes, each by the method the SDK uses. fetch is a stub:
+ * The /ingest analytics proxy (dockets S34 and S38). PostHog's browser SDK
+ * sends everything to /ingest on our own origin, so the browser attaches
+ * every cookie of this host, the Supabase session among them. The
+ * next.config.ts rewrites this route replaced forwarded the request's headers
+ * as they came, on any path; the route builds a new request from lists, and
+ * only for the requests the SDK makes with this app's init options: each by
+ * the method the SDK uses, with the query parameters the SDK sends, and an
+ * event batch only for this app's own PostHog project. fetch is a stub:
  * nothing here reaches PostHog. Placeholder values only.
  */
 
@@ -61,22 +63,22 @@ const PERSONAL_BEARER = 'Bearer phx_placeholder';
 // Another PostHog project's key, and as a capture v1 SDK would send it.
 const OTHER_PROJECT = 'phc_other';
 const OTHER_PROJECT_BEARER = `Bearer ${OTHER_PROJECT}`;
-// The Conversations widget's value from the public remote config.
+// What a Conversations widget would send as its token, and a ticket id as
+// PostHog hands them out (a UUID): the provider switches Conversations off.
 const WIDGET_REF = 'placeholder-widget';
-// A Conversations ticket id, as PostHog hands them out (a UUID), and the
-// widget_session_id the SDK makes for a visitor (a UUID v7).
 const TICKET = '00000000-0000-4000-8000-000000000000';
-const WIDGET_VISIT = '00000000-0000-7000-8000-000000000000';
 const SDK_VERSION = '1.438.15';
 
 // Everything a signed-in member's browser sends with a same-origin request, and
 // what the platform adds on the way in: the member's credentials, where the
 // request came from (Origin, Referer, x-forwarded-host), the platform's own
-// headers, and the headers PostHog reads.
+// headers, the headers PostHog reads, and two the SDK never sets with this
+// app's init options: a Content-Encoding (PostHog would take it as a hint of
+// how the body is packed) and a Conversations token. A POST's content type
+// goes with its body (packed below), so it is not here.
 const BROWSER_HEADERS: Record<string, string> = {
   cookie: MEMBER_COOKIE,
   authorization: MEMBER_BEARER,
-  'content-type': 'text/plain',
   'content-encoding': 'gzip',
   accept: '*/*',
   'user-agent': 'Mozilla/5.0 (placeholder)',
@@ -91,25 +93,19 @@ const BROWSER_HEADERS: Record<string, string> = {
   'x-vercel-id': 'iad1::placeholder',
 };
 // Of those, the only headers PostHog is sent: the ones it reads, and the
-// visitor address.
-const SENT_HEADERS = [
-  'accept',
-  'content-encoding',
-  'content-type',
-  'posthog-placeholder-header',
-  'user-agent',
-  'x-conversations-token',
-  'x-forwarded-for',
-];
+// visitor address; with a POST, its content type too.
+const SENT_HEADERS = ['accept', 'posthog-placeholder-header', 'user-agent', 'x-forwarded-for'];
+const SENT_HEADERS_POST = [...SENT_HEADERS, 'content-type'].sort();
 // Pieces of BROWSER_HEADERS that reach PostHog nowhere, not in the address,
 // any header or the body: the session cookie and its chunk, PostHog's own
-// cookie, the member's bearer token, and our host.
+// cookie, the member's bearer token, our host, and the widget's token.
 const NEVER_SENT = [
   'placeholder-session',
   'placeholder-chunk',
   'placeholder-ph',
   'eyJplaceholder',
   'app.example.com',
+  WIDGET_REF,
 ];
 
 const MIB = 1024 * 1024;
@@ -148,6 +144,63 @@ type Method = HTTP_METHOD;
 /** The methods whose requests carry a body here: a small one, which a refusal must not read. */
 const WITH_BODY: ReadonlySet<Method> = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+const SENT_AT = '2026-01-01T00:00:00.000Z';
+
+/** An event as posthog-js builds one: its project key is in properties.token (posthog-core.js:1811). */
+function eventFor(key: string, name = '$pageview'): Record<string, unknown> {
+  return { event: name, properties: { token: key, distinct_id: 'placeholder-visitor' } };
+}
+
+/**
+ * The JSON of an event batch as posthog-js 1.438.15 builds one for a project
+ * (lib/src/request.js:538-549 addSentAtToCaptureBody): api_key, batch and
+ * sent_at, and nothing else.
+ */
+function batchJson(key: string = PROJECT_REF, events: unknown[] = [eventFor(key)]): string {
+  return JSON.stringify({ api_key: key, batch: events, sent_at: SENT_AT });
+}
+
+/** How the SDK packs a batch (request.js:139-171 encodePostData, :533-537 buildRequestURL). */
+type Packing = 'gzip' | 'base64' | 'json';
+const PACKINGS: readonly Packing[] = ['gzip', 'base64', 'json'];
+
+interface Packed {
+  /** What the SDK adds to the address for this packing: compression=base64, or nothing. */
+  query: string;
+  contentType: string;
+  body: Uint8Array<ArrayBuffer>;
+}
+
+/** `text` as the bytes of a request body. */
+function bytes(text: string): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(new TextEncoder().encode(text));
+}
+
+/** The base64 form body: data=<base64 of the JSON>, as encodeURIComponent writes it. */
+function base64Form(json: string): Uint8Array<ArrayBuffer> {
+  return bytes(`data=${encodeURIComponent(Buffer.from(json, 'utf8').toString('base64'))}`);
+}
+
+/** A batch's JSON packed one of the three ways, with the address and the content type that go with it. */
+function packed(packing: Packing, json: string = batchJson()): Packed {
+  if (packing === 'gzip') {
+    return { query: '', contentType: 'text/plain', body: new Uint8Array(gzipSync(json)) };
+  }
+  if (packing === 'base64') {
+    return {
+      query: 'compression=base64',
+      contentType: 'application/x-www-form-urlencoded',
+      body: base64Form(json),
+    };
+  }
+  return { query: '', contentType: 'application/json', body: bytes(json) };
+}
+
+/** The packing an address asks for: base64 when it says so, else the SDK's default, gzip. */
+function packingOf(path: string): Packing {
+  return new URL(path, SITE).searchParams.get('compression') === 'base64' ? 'base64' : 'gzip';
+}
+
 function incoming(
   path: string,
   init: {
@@ -170,8 +223,30 @@ async function answerOf(request: NextRequest): Promise<Response> {
   return (await viaNext[request.method as Method](request, {})) as Response;
 }
 
-/** The answer to a request of this method; a POST, PUT, PATCH or DELETE carries a small body. */
+/**
+ * A POST of an event batch to `path`, as the SDK sends one: packed the way
+ * the address says, with the content type of that packing. `headers` are
+ * what else the request carries.
+ */
+function batchPost(
+  path: string,
+  json: string = batchJson(),
+  headers: Record<string, string> = {},
+): NextRequest {
+  const { contentType, body } = packed(packingOf(path), json);
+  return incoming(path, {
+    method: 'POST',
+    headers: { ...headers, 'content-type': contentType },
+    body,
+  });
+}
+
+/**
+ * The answer to a request of this method. A POST carries a batch of this
+ * app's events, as the SDK sends one; a PUT, PATCH or DELETE a small body.
+ */
 function ask(method: Method, path: string): Promise<Response> {
+  if (method === 'POST') return answerOf(batchPost(path));
   const body = WITH_BODY.has(method) ? new Uint8Array([1]) : undefined;
   return answerOf(incoming(path, { method, body }));
 }
@@ -239,20 +314,18 @@ function refusals() {
 
 describe('/ingest sends PostHog no member credential', () => {
   it('forwards no cookie and no member Authorization: only the headers PostHog reads, and the visitor address', async () => {
-    const req = incoming('/ingest/e/?ip=1&_=1700000000000', {
-      method: 'POST',
-      headers: BROWSER_HEADERS,
-      body: new Uint8Array([1, 2, 3]),
-    });
+    const req = batchPost('/ingest/e/', batchJson(), BROWSER_HEADERS);
     // The route is handed what the browser sent.
     expect(req.headers.get('cookie')).toBe(MEMBER_COOKIE);
     expect(req.headers.get('authorization')).toBe(MEMBER_BEARER);
+    expect(req.headers.get('content-encoding')).toBe('gzip');
+    expect(req.headers.get('x-conversations-token')).toBe(WIDGET_REF);
 
     await route.POST(req);
 
     expect(upstream).toHaveBeenCalledTimes(1);
     const sent = await sentToPostHog();
-    expect([...sent.headers.keys()].sort()).toEqual(SENT_HEADERS);
+    expect([...sent.headers.keys()].sort()).toEqual(SENT_HEADERS_POST);
     expect(sent.headers.get('cookie')).toBeNull();
     expect(sent.headers.get('authorization')).toBeNull();
     // The first hop: the visitor, as Vercel recorded it.
@@ -260,7 +333,10 @@ describe('/ingest sends PostHog no member credential', () => {
     expect(sent.headers.get('content-type')).toBe('text/plain');
     expect(sent.headers.get('user-agent')).toBe('Mozilla/5.0 (placeholder)');
     expect(sent.headers.get('posthog-placeholder-header')).toBe('kept');
-    expect(sent.headers.get('x-conversations-token')).toBe(WIDGET_REF);
+    // Neither of the two the SDK never sets here: PostHog would unpack the
+    // body by a Content-Encoding, and a Conversations token picks a project.
+    expect(sent.headers.get('content-encoding')).toBeNull();
+    expect(sent.headers.get('x-conversations-token')).toBeNull();
     // Nowhere else either: not in the address, any header or the body.
     for (const piece of NEVER_SENT) {
       expect(everythingIn(sent)).not.toContain(piece);
@@ -275,49 +351,30 @@ describe('/ingest sends PostHog no member credential', () => {
       OTHER_PROJECT_BEARER,
       `${PROJECT_BEARER}x`,
     ]) {
-      await route.POST(incoming('/ingest/i/v0/e/', { method: 'POST', headers: { authorization } }));
+      await route.POST(batchPost('/ingest/i/v0/e/', batchJson(), { authorization }));
     }
-    // With no project key set, not even this app's.
-    postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = '';
-    await route.POST(
-      incoming('/ingest/i/v0/e/', { method: 'POST', headers: { authorization: PROJECT_BEARER } }),
-    );
+    for (const authorization of [PROJECT_BEARER, OTHER_PROJECT_BEARER]) {
+      await route.GET(
+        incoming(`/ingest/api/surveys/?token=${PROJECT_REF}`, { headers: { authorization } }),
+      );
+    }
 
-    expect(upstream).toHaveBeenCalledTimes(6);
+    expect(upstream).toHaveBeenCalledTimes(7);
     expect((await sentToPostHog(0)).headers.get('authorization')).toBe(PROJECT_BEARER);
-    for (const call of [1, 2, 3, 4, 5]) {
+    for (const call of [1, 2, 3, 4]) {
       expect((await sentToPostHog(call)).headers.get('authorization'), `call ${call}`).toBeNull();
     }
-  });
-
-  it("sends no other project's key as Authorization to the console logs intake, which takes its project from that header before the query's token", async () => {
-    // PostHog's logs intake (capture-logs, authorizer.rs resolve_token) reads
-    // Authorization first, so another project's key there would undo the
-    // token check on /i/v1/logs.
-    await route.POST(
-      incoming(`/ingest/i/v1/logs?token=${PROJECT_REF}`, {
-        method: 'POST',
-        headers: { authorization: OTHER_PROJECT_BEARER },
-        body: new Uint8Array([1]),
-      }),
-    );
-
-    expect(upstream).toHaveBeenCalledTimes(1);
-    const sent = await sentToPostHog();
-    expect(sent.url).toBe(`https://us.i.posthog.com/i/v1/logs?token=${PROJECT_REF}`);
-    expect(sent.headers.get('authorization')).toBeNull();
-    expect(everythingIn(sent)).not.toContain(OTHER_PROJECT);
+    expect((await sentToPostHog(5)).headers.get('authorization')).toBe(PROJECT_BEARER);
+    const other = await sentToPostHog(6);
+    expect(other.headers.get('authorization')).toBeNull();
+    expect(everythingIn(other)).not.toContain(OTHER_PROJECT);
   });
 
   it('takes the visitor address from x-real-ip when x-forwarded-for is missing, and off Vercel never from an x-forwarded-for the client could have typed (lib/client-ip.ts)', async () => {
-    await route.POST(
-      incoming('/ingest/e/', { method: 'POST', headers: { 'x-real-ip': '203.0.113.8' } }),
-    );
-    await route.POST(incoming('/ingest/e/', { method: 'POST' }));
+    await route.POST(batchPost('/ingest/e/', batchJson(), { 'x-real-ip': '203.0.113.8' }));
+    await route.POST(batchPost('/ingest/e/'));
     vi.stubEnv('VERCEL', '');
-    await route.POST(
-      incoming('/ingest/e/', { method: 'POST', headers: { 'x-forwarded-for': '203.0.113.9' } }),
-    );
+    await route.POST(batchPost('/ingest/e/', batchJson(), { 'x-forwarded-for': '203.0.113.9' }));
 
     expect((await sentToPostHog(0)).headers.get('x-forwarded-for')).toBe('203.0.113.8');
     // No address known: none is made up.
@@ -332,51 +389,31 @@ describe('/ingest sends PostHog no member credential', () => {
 // host for /static/ and /array/).
 const API = 'https://us.i.posthog.com';
 const ASSETS = 'https://us-assets.i.posthog.com';
-// The bundles it can load by name. Not toolbar, recorder or recorder-v2: the
-// route refuses those (the refusal table below says why).
+// The bundles it can load by name. Not toolbar, recorder or recorder-v2, and
+// not the bundles of what the provider switches off (conversations,
+// lazy-recorder, posthog-recorder): the route refuses those (the refusal
+// table below says why).
 const BUNDLES = [
   'surveys',
   'product-tours',
-  'conversations',
   'logs',
   'dead-clicks-autocapture',
   'exception-autocapture',
   'web-vitals-with-attribution',
-  'lazy-recorder',
-  'posthog-recorder',
 ];
 const SDK_REQUESTS: Array<['GET' | 'POST', string, string]> = [
   // Events: the SDK's own path, and the one this project's remote config
-  // names. A gzip batch carries no query flag, a base64 one does, a retry
-  // counts itself; an older SDK in a tab still open sent more.
+  // names. A gzip batch carries no query, a base64 one says so, a retry
+  // counts itself (up to ten).
   ['POST', '/e/', API],
   ['POST', '/e/?compression=base64', API],
   ['POST', '/e/?retry_count=1', API],
-  ['POST', `/e/?ip=0&_=1700000000000&ver=${SDK_VERSION}&compression=gzip-js`, API],
-  ['POST', '/i/v0/e/?_=1700000000000', API],
-  ['POST', '/flags/?v=2', API],
-  ['POST', `/flags/?v=2&_=1700000000000&ver=${SDK_VERSION}&compression=base64`, API],
-  ['POST', '/flags/?v=2&only_evaluate_survey_feature_flags=true', API],
-  ['POST', '/s/?_=1700000000000', API],
-  ['POST', '/s/?compression=base64&retry_count=2', API],
-  ['POST', `/i/v1/logs?token=${PROJECT_REF}`, API],
-  ['POST', `/i/v1/logs?token=${PROJECT_REF}&compression=base64`, API],
+  ['POST', '/e/?retry_count=3&compression=base64', API],
+  ['POST', '/i/v0/e/', API],
+  ['POST', '/i/v0/e/?compression=base64', API],
+  ['POST', '/i/v0/e/?retry_count=10', API],
   ['GET', `/api/surveys/?token=${PROJECT_REF}&_=1700000000000`, API],
   ['GET', `/api/product_tours/?token=${PROJECT_REF}&_=1700000000000`, API],
-  ['POST', '/api/conversations/v1/widget/message', API],
-  [
-    'GET',
-    `/api/conversations/v1/widget/messages/${TICKET}?limit=50&widget_session_id=${WIDGET_VISIT}&after=2026-01-01T00%3A00%3A00Z&_=1700000000000`,
-    API,
-  ],
-  ['POST', `/api/conversations/v1/widget/messages/${TICKET}/read`, API],
-  [
-    'GET',
-    `/api/conversations/v1/widget/tickets?limit=20&offset=0&widget_session_id=${WIDGET_VISIT}&_=1700000000000`,
-    API,
-  ],
-  ['POST', '/api/conversations/v1/widget/restore', API],
-  ['POST', '/api/conversations/v1/widget/restore/request', API],
   ['GET', `/array/${PROJECT_REF}/config.js`, ASSETS],
   ['GET', `/array/${PROJECT_REF}/config`, ASSETS],
   ...BUNDLES.map((name): ['GET', string, string] => [
@@ -393,6 +430,7 @@ const SDK_REQUESTS: Array<['GET' | 'POST', string, string]> = [
   // A tab still running an older or a pre-release SDK.
   ['GET', '/static/1.433.5/surveys.js', ASSETS],
   ['GET', '/static/1.439.0-beta.1/surveys.js', ASSETS],
+  ['GET', '/static/surveys.js?v=1.439.0-beta.1', ASSETS],
 ];
 
 describe('/ingest passes on the requests posthog-js makes, to the host the SDK itself uses', () => {
@@ -407,33 +445,39 @@ describe('/ingest passes on the requests posthog-js makes, to the host the SDK i
     expect(sent.method).toBe(method);
   });
 
-  it('passes a gzip body through byte for byte, with the method (posthog-js sends gzip as text/plain)', async () => {
-    const json = JSON.stringify({ api_key: PROJECT_REF, batch: [{ event: '$pageview' }] });
-    const gzip = new Uint8Array(gzipSync(json));
-    // Every byte value too, so no text decoding can pass unnoticed.
-    const everyByte = Uint8Array.from({ length: 256 }, (_, i) => i);
+  it.each(PACKINGS)(
+    'passes a %s batch through byte for byte, with its method and its content type',
+    async (packing) => {
+      // An event that holds every character a byte can spell, so no text
+      // decoding on the way can pass unnoticed.
+      const everyChar = String.fromCharCode(...Array.from({ length: 256 }, (_, i) => i));
+      const json = batchJson(PROJECT_REF, [
+        eventFor(PROJECT_REF),
+        { ...eventFor(PROJECT_REF, 'placeholder_event'), note: everyChar },
+      ]);
+      const { query, contentType, body } = packed(packing, json);
 
-    await route.POST(
-      incoming('/ingest/e/?_=1700000000000', {
-        method: 'POST',
-        headers: { 'content-type': 'text/plain' },
-        body: gzip,
-      }),
-    );
-    await route.POST(
-      incoming('/ingest/s/', {
-        method: 'POST',
-        headers: { 'content-type': 'text/plain' },
-        body: everyByte,
-      }),
-    );
+      for (const path of ['/e/', '/i/v0/e/']) {
+        upstream.mockClear();
+        const at = `${path}${query ? `?${query}` : ''}`;
+        const res = await route.POST(
+          incoming(`/ingest${at}`, {
+            method: 'POST',
+            headers: { 'content-type': contentType },
+            body,
+          }),
+        );
 
-    const first = await sentToPostHog(0);
-    expect(first.method).toBe('POST');
-    expect(first.body).toEqual(gzip);
-    expect(gunzipSync(first.body).toString('utf8')).toBe(json);
-    expect((await sentToPostHog(1)).body).toEqual(everyByte);
-  });
+        expect(res.status, at).toBe(200);
+        expect(upstream).toHaveBeenCalledTimes(1);
+        const sent = await sentToPostHog();
+        expect(sent.url, at).toBe(`${API}${at}`);
+        expect(sent.method).toBe('POST');
+        expect(sent.headers.get('content-type')).toBe(contentType);
+        expect(sent.body).toEqual(body);
+      }
+    },
+  );
 
   it('asks PostHog without following a redirect, without a cache, and with a 10 second limit', async () => {
     const timeout = vi.spyOn(AbortSignal, 'timeout');
@@ -492,11 +536,10 @@ describe('/ingest sends no member credential and passes back no cookie, on every
 
     const methods: Method[] = sdkMethod === 'GET' ? ['GET', 'HEAD'] : ['POST'];
     for (const [call, method] of methods.entries()) {
-      const req = incoming(`/ingest${path}`, {
-        method,
-        headers: BROWSER_HEADERS,
-        body: method === 'POST' ? new Uint8Array([1]) : undefined,
-      });
+      const req =
+        method === 'POST'
+          ? batchPost(`/ingest${path}`, batchJson(), BROWSER_HEADERS)
+          : incoming(`/ingest${path}`, { method, headers: BROWSER_HEADERS });
       // The route is handed the member's cookie: this cannot pass by never seeing one.
       expect(req.headers.get('cookie'), method).toBe(MEMBER_COOKIE);
 
@@ -504,7 +547,9 @@ describe('/ingest sends no member credential and passes back no cookie, on every
 
       const sent = await sentToPostHog(call);
       expect(sent.method).toBe(method);
-      expect([...sent.headers.keys()].sort(), method).toEqual(SENT_HEADERS);
+      expect([...sent.headers.keys()].sort(), method).toEqual(
+        method === 'POST' ? SENT_HEADERS_POST : SENT_HEADERS,
+      );
       for (const piece of NEVER_SENT) {
         expect(everythingIn(sent), `${method} ${piece}`).not.toContain(piece);
       }
@@ -521,8 +566,8 @@ describe('/ingest sends no member credential and passes back no cookie, on every
 });
 
 describe('/ingest takes each path only by the method the SDK uses for it', () => {
-  // POST for events, flags, replay, logs and the Conversations writes; GET
-  // (and HEAD) for the lists, the remote config and the bundles. Every other
+  // POST for events; GET (and HEAD) for the lists, the remote config and the
+  // bundles. Every other
   // method Next hands to a route is the route's to refuse, OPTIONS, PUT,
   // PATCH and DELETE included: left to Next, OPTIONS would get Next's 204
   // with one Allow for every path, and the others a 405 with no Allow and no
@@ -545,7 +590,10 @@ describe('/ingest takes each path only by the method the SDK uses for it', () =>
       expect(upstream).not.toHaveBeenCalled();
       const pathname = new URL(`/ingest${path}`, SITE).pathname;
       expect(refusals()).toEqual(
-        others.map((method) => ['[ingest] refused', { status: 405, method, path: pathname }]),
+        others.map((method) => [
+          '[ingest] refused',
+          { status: 405, reason: 'method', method, path: pathname },
+        ]),
       );
     },
   );
@@ -595,8 +643,7 @@ describe('/ingest refuses every other path with 404, no body and no request to P
       `/ingest/static/toolbar.js?v=${SDK_VERSION}&t=1700000000000`,
     ],
     // recorder and recorder-v2 define no initSessionRecording, so with
-    // posthog-js 1.438.15 they cannot record: only lazy-recorder and
-    // posthog-recorder can.
+    // posthog-js 1.438.15 they cannot record at all.
     ['a recorder bundle that cannot record', `/ingest/static/${SDK_VERSION}/recorder.js`],
     [
       'a recorder bundle that cannot record, unversioned',
@@ -626,39 +673,45 @@ describe('/ingest refuses every other path with 404, no body and no request to P
       'early access features (never asked for)',
       `/ingest/api/early_access_features/?token=${PROJECT_REF}`,
     ],
-    ['a second segment after a ticket', `/ingest/api/conversations/v1/widget/messages/${TICKET}/x`],
-    // A ticket id is a UUID: PostHog issues them, and the SDK sends back the
-    // one it was given.
-    ['a ticket id that is no id', '/ingest/api/conversations/v1/widget/messages/undefined'],
+    // What the provider's init switches off (components/analytics/
+    // posthog-provider.tsx), so the SDK never asks for it: feature flags
+    // (advanced_disable_feature_flags), session replay
+    // (disable_session_recording), console logs (logs.beforeSend drops every
+    // record) and Conversations (disable_conversations), each with the
+    // bundles only it loads.
+    ['feature flags', '/ingest/flags/?v=2'],
+    ['feature flags, with no query', '/ingest/flags/'],
     [
-      'a ticket id that is no id, before /read',
-      '/ingest/api/conversations/v1/widget/messages/undefined/read',
+      'feature flags, for surveys only',
+      '/ingest/flags/?v=2&only_evaluate_survey_feature_flags=true',
+    ],
+    ['replay snapshots', '/ingest/s/'],
+    ['replay snapshots, base64', '/ingest/s/?compression=base64'],
+    ['console logs', `/ingest/i/v1/logs?token=${PROJECT_REF}`],
+    ['a Conversations message', '/ingest/api/conversations/v1/widget/message'],
+    ["a Conversations ticket's messages", `/ingest/api/conversations/v1/widget/messages/${TICKET}`],
+    [
+      'marking a Conversations ticket read',
+      `/ingest/api/conversations/v1/widget/messages/${TICKET}/read`,
+    ],
+    ['the Conversations tickets', '/ingest/api/conversations/v1/widget/tickets?limit=20'],
+    ['a Conversations restore', '/ingest/api/conversations/v1/widget/restore'],
+    ['a Conversations restore link', '/ingest/api/conversations/v1/widget/restore/request'],
+    ['the Conversations bundle', `/ingest/static/${SDK_VERSION}/conversations.js`],
+    ['the Conversations bundle, unversioned', `/ingest/static/conversations.js?v=${SDK_VERSION}`],
+    ['the recorder', `/ingest/static/${SDK_VERSION}/lazy-recorder.js`],
+    ['the recorder, unversioned', `/ingest/static/lazy-recorder.js?v=${SDK_VERSION}`],
+    [
+      'the recorder the remote config can name',
+      `/ingest/static/${SDK_VERSION}/posthog-recorder.js`,
     ],
     [
-      'a ticket id of letters, digits, _ and - that is not a UUID',
-      '/ingest/api/conversations/v1/widget/messages/abc_DEF-123',
+      'the recorder the remote config can name, unversioned',
+      `/ingest/static/posthog-recorder.js?v=${SDK_VERSION}`,
     ],
-    ['a UUID with a character too many', `/ingest/api/conversations/v1/widget/messages/${TICKET}0`],
-    [
-      'a UUID without its dashes',
-      `/ingest/api/conversations/v1/widget/messages/${TICKET.replaceAll('-', '')}`,
-    ],
-    [
-      'a UUID with a dash out of place',
-      '/ingest/api/conversations/v1/widget/messages/0000000-00000-4000-8000-000000000000',
-    ],
-    // The ticket id and the version under /static/ are the only segments not
-    // spelled out whole. Each takes only the characters those ids are made of,
-    // never a '%', so no encoded slash inside one reaches PostHog.
-    [
-      'an encoded traversal as a ticket id',
-      '/ingest/api/conversations/v1/widget/messages/..%2F..%2F..%2Fapi%2Fprojects%2F',
-    ],
-    [
-      'an encoded traversal as a ticket id, before /read',
-      '/ingest/api/conversations/v1/widget/messages/%2E%2E%2Fx/read',
-    ],
-    ['a ticket id with a dot in it', '/ingest/api/conversations/v1/widget/messages/a.b'],
+    // The version under /static/ is the only segment not spelled out whole.
+    // It takes only the characters a version is made of, never a '%', so no
+    // encoded slash inside one reaches PostHog.
     [
       "an encoded traversal in a version's pre-release part",
       `/ingest/static/${SDK_VERSION}-${encodedWhole('x/../../array/other/config.js?')}/surveys.js`,
@@ -681,7 +734,12 @@ describe('/ingest refuses every other path with 404, no body and no request to P
     }
     expect(upstream).not.toHaveBeenCalled();
     expect(refusals().map(([, line]) => line)).toEqual(
-      HTTP_METHODS.map((method) => expect.objectContaining({ status: 404, method })),
+      HTTP_METHODS.map((method) => ({
+        status: 404,
+        reason: 'path',
+        method,
+        path: new URL(path, SITE).pathname,
+      })),
     );
   });
 
@@ -701,49 +759,133 @@ describe('/ingest refuses every other path with 404, no body and no request to P
   });
 });
 
-describe("/ingest passes on a query only where the SDK sends one, and no other project's key in it", () => {
-  it('asks for the remote config with no query, whatever the request carried (the SDK sends none)', async () => {
-    for (const path of [`/array/${PROJECT_REF}/config.js`, `/array/${PROJECT_REF}/config`]) {
-      for (const method of ['GET', 'HEAD'] as const) {
-        upstream.mockClear();
-        const res = await ask(method, `/ingest${path}?callback=placeholder&token=${OTHER_PROJECT}`);
+describe('/ingest passes on only the query parameters the SDK sends to each path', () => {
+  // Per path, the names posthog-js 1.438.15 puts in a query, each once and
+  // with a value of the form the SDK gives it:
+  //   /e/, /i/v0/e/                      compression=base64, retry_count=<n>
+  //   /api/surveys/, /api/product_tours/ token=<this app's key>, _=<ms>
+  //   /static/<name>.js                  v=<version>
+  //   /static/<version>/<name>.js, /array/<key>/config(.js)   none
+  // Any other name, a name twice or a value of another form answers 404, and
+  // PostHog is not asked.
+  const BUNDLE = `/static/${SDK_VERSION}/surveys.js`;
+  const FALLBACK = '/static/surveys.js';
+  const SURVEYS = '/api/surveys/';
+  const TOURS = '/api/product_tours/';
+  const CONFIG_JS = `/array/${PROJECT_REF}/config.js`;
+  const CONFIG = `/array/${PROJECT_REF}/config`;
 
-        expect(res.status, `${method} ${path}`).toBe(200);
-        expect((await sentToPostHog()).url, `${method} ${path}`).toBe(`${ASSETS}${path}`);
-      }
-    }
+  it.each([
+    // A batch in the query. PostHog's capture reads one from data= before
+    // the body, so it never goes on, whatever the body is.
+    ['POST', '/e/?data=placeholder'],
+    ['POST', `/e/?data=${encodeURIComponent(batchJson(OTHER_PROJECT))}`],
+    ['POST', '/i/v0/e/?data=placeholder'],
+    ['POST', '/e/?compression=base64&data=placeholder'],
+    ['POST', '/e/?%64ata=placeholder'],
+    ['POST', '/e/?data='],
+    // Names that would pick a project, or a person, on some PostHog endpoint.
+    ['POST', '/e/?personal_api_key=phx_placeholder'],
+    ['POST', '/e/?temporary_token=placeholder'],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&personal_api_key=phx_placeholder`],
+    ['GET', `${TOURS}?token=${PROJECT_REF}&temporary_token=placeholder`],
+    // A name the SDK does not send to that path, though it sends it to
+    // another, or older SDKs did.
+    ['POST', '/e/?placeholder_name=1'],
+    ['POST', '/e/?_=1700000000000'],
+    ['POST', '/e/?sent_at=1700000000000'],
+    ['POST', `/e/?ver=${SDK_VERSION}`],
+    ['POST', '/e/?ip=0'],
+    ['POST', '/e/?beacon=1'],
+    ['POST', '/e/?v=2'],
+    ['POST', `/i/v0/e/?token=${PROJECT_REF}`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&compression=base64`],
+    ['GET', `${TOURS}?token=${PROJECT_REF}&v=2`],
+    ['GET', `${BUNDLE}?v=${SDK_VERSION}`],
+    ['GET', `${BUNDLE}?t=1700000000000`],
+    ['GET', `${FALLBACK}?v=${SDK_VERSION}&t=1700000000000`],
+    ['GET', `${FALLBACK}?token=${PROJECT_REF}`],
+    ['GET', `${CONFIG_JS}?callback=placeholder`],
+    ['GET', `${CONFIG_JS}?token=${PROJECT_REF}`],
+    ['HEAD', `${CONFIG_JS}?_=1700000000000`],
+    ['GET', `${CONFIG}?callback=placeholder`],
+    ['HEAD', `${CONFIG}?v=2`],
+    // No name at all, and a name of escapes only.
+    ['POST', '/e/?=1'],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&=1`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&%00=1`],
+    // A name twice: PostHog's services differ on which value they read.
+    ['POST', '/e/?compression=base64&compression=base64'],
+    ['POST', '/e/?retry_count=1&retry_count=2'],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&_=1&_=2`],
+    ['GET', `${FALLBACK}?v=${SDK_VERSION}&v=${SDK_VERSION}`],
+    // A value of another form than the SDK's.
+    ['POST', '/e/?compression=gzip-js'],
+    ['POST', '/e/?compression=gzip'],
+    ['POST', '/e/?compression=lz64'],
+    ['POST', '/e/?compression=Base64'],
+    ['POST', '/e/?compression='],
+    ['POST', '/e/?compression'],
+    ['POST', '/e/?retry_count=one'],
+    ['POST', '/e/?retry_count=-1'],
+    ['POST', '/e/?retry_count=12345'],
+    ['POST', '/e/?retry_count='],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&_=now`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&_=1700000000000%26token%3D${OTHER_PROJECT}`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&_=1;token=${OTHER_PROJECT}`],
+    ['GET', `${FALLBACK}?v=latest`],
+    ['GET', `${FALLBACK}?v=`],
+    ['GET', `${FALLBACK}?v=${SDK_VERSION}%2F..%2F..%2Farray`],
+  ] as const)('refuses %s /ingest%s with 404', async (method, path) => {
+    const res = await ask(method, `/ingest${path}`);
+
+    expect(res.status).toBe(404);
+    expect(await res.text()).toBe('');
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(upstream).not.toHaveBeenCalled();
+    expect(refusals()).toEqual([
+      [
+        '[ingest] refused',
+        {
+          status: 404,
+          reason: 'query',
+          method,
+          path: new URL(`/ingest${path}`, SITE).pathname,
+        },
+      ],
+    ]);
   });
 
   it.each([
-    ['GET', `/api/surveys/?token=${OTHER_PROJECT}&_=1700000000000`],
-    ['GET', `/api/product_tours/?token=${OTHER_PROJECT}&_=1700000000000`],
-    ['POST', `/i/v1/logs?token=${OTHER_PROJECT}`],
-    ['POST', `/i/v1/logs?compression=base64&token=${OTHER_PROJECT}`],
+    ['GET', `${SURVEYS}?token=${OTHER_PROJECT}&_=1700000000000`],
+    ['GET', `${TOURS}?token=${OTHER_PROJECT}&_=1700000000000`],
+    ['HEAD', `${SURVEYS}?token=${OTHER_PROJECT}`],
     // A second token, an empty one, ours with a space, a name spelled encoded.
-    ['GET', `/api/surveys/?token=${PROJECT_REF}&token=${OTHER_PROJECT}`],
-    ['GET', '/api/surveys/?token=&_=1700000000000'],
-    ['GET', `/api/surveys/?token=${PROJECT_REF}%20`],
-    ['GET', `/api/surveys/?%74oken=${OTHER_PROJECT}`],
-    // A token on a path the SDK sends none on is held to the same rule.
-    ['POST', `/e/?token=${OTHER_PROJECT}`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&token=${OTHER_PROJECT}`],
+    ['GET', `${SURVEYS}?token=${OTHER_PROJECT}&token=${PROJECT_REF}`],
+    ['GET', `${SURVEYS}?token=&_=1700000000000`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}%20`],
+    ['GET', `${SURVEYS}?%74oken=${OTHER_PROJECT}`],
     // PostHog takes a GET's project from api_key when the query has no token
-    // (posthog/api/utils.py get_token, which the product tours view uses; the
-    // surveys service's extract_token: token, then api_key), so api_key is
-    // held to the same rule: alone, by HEAD, after an empty token, next to
-    // our token, after ours (Django reads the last value), spelled encoded,
-    // empty, and on the POST paths.
-    ['GET', `/api/surveys/?api_key=${OTHER_PROJECT}&_=1700000000000`],
-    ['GET', `/api/product_tours/?api_key=${OTHER_PROJECT}&_=1700000000000`],
-    ['HEAD', `/api/surveys/?api_key=${OTHER_PROJECT}`],
-    ['GET', `/api/product_tours/?token=&api_key=${OTHER_PROJECT}`],
-    ['GET', `/api/surveys/?token=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
-    ['GET', `/api/product_tours/?api_key=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
-    ['GET', `/api/surveys/?%61pi_key=${OTHER_PROJECT}`],
-    ['GET', '/api/product_tours/?api_key=&_=1700000000000'],
-    ['POST', `/i/v1/logs?token=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
+    // (posthog/api/utils.py get_token; the surveys service's extract_token:
+    // token, then api_key). The SDK never sends that name, so it is refused
+    // whatever its value: another project's, alone, after an empty token,
+    // next to our token, spelled encoded, empty, and this app's own.
+    ['GET', `${SURVEYS}?api_key=${OTHER_PROJECT}&_=1700000000000`],
+    ['GET', `${TOURS}?api_key=${OTHER_PROJECT}&_=1700000000000`],
+    ['HEAD', `${SURVEYS}?api_key=${OTHER_PROJECT}`],
+    ['GET', `${TOURS}?token=&api_key=${OTHER_PROJECT}`],
+    ['GET', `${SURVEYS}?token=${PROJECT_REF}&api_key=${OTHER_PROJECT}`],
+    ['GET', `${SURVEYS}?%61pi_key=${OTHER_PROJECT}`],
+    ['GET', `${TOURS}?api_key=&_=1700000000000`],
+    ['GET', `${SURVEYS}?api_key=${PROJECT_REF}&_=1700000000000`],
+    ['GET', `${TOURS}?token=${PROJECT_REF}&api_key=${PROJECT_REF}`],
+    // On the event paths the project is named in the batch, never the query.
+    ['POST', `/e/?token=${OTHER_PROJECT}`],
     ['POST', `/e/?api_key=${OTHER_PROJECT}`],
+    ['POST', `/e/?api_key=${PROJECT_REF}`],
   ] as const)(
-    "refuses %s /ingest%s with 404: a project key in the query that is not this app's",
+    "refuses %s /ingest%s with 404: a project key in the query that is not this app's own, under the name the SDK sends it",
     async (method, path) => {
       const res = await ask(method, `/ingest${path}`);
 
@@ -752,65 +894,488 @@ describe("/ingest passes on a query only where the SDK sends one, and no other p
       expect(res.headers.get('x-content-type-options')).toBe('nosniff');
       expect(upstream).not.toHaveBeenCalled();
       expect(refusals()).toHaveLength(1);
+      expect(refusals()[0]![1]).toMatchObject({ status: 404, reason: 'query' });
     },
   );
-
-  it("passes on a query whose token and api_key are this app's own key", async () => {
-    // The SDK sends no api_key in a query; one that names this app's project
-    // is held to the rule a token is, not refused for its name.
-    for (const path of [
-      `/api/surveys/?api_key=${PROJECT_REF}&_=1700000000000`,
-      `/api/product_tours/?token=${PROJECT_REF}&api_key=${PROJECT_REF}`,
-    ]) {
-      upstream.mockClear();
-      const res = await ask('GET', `/ingest${path}`);
-
-      expect(res.status, path).toBe(200);
-      expect((await sentToPostHog()).url, path).toBe(`${API}${path}`);
-    }
-  });
 
   it('refuses every token when no project key is set', async () => {
     postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = '';
 
     for (const [method, path] of [
-      ['GET', `/ingest/api/surveys/?token=${PROJECT_REF}`],
-      ['GET', '/ingest/api/product_tours/?token=&_=1700000000000'],
-      ['POST', '/ingest/i/v1/logs?token=&compression=base64'],
-      ['GET', `/ingest/api/surveys/?api_key=${PROJECT_REF}`],
-      ['GET', '/ingest/api/product_tours/?api_key=&_=1700000000000'],
+      ['GET', `/ingest${SURVEYS}?token=${PROJECT_REF}`],
+      ['GET', `/ingest${TOURS}?token=&_=1700000000000`],
+      ['HEAD', `/ingest${SURVEYS}?token=`],
     ] as const) {
       const res = await ask(method, path);
       expect(res.status, path).toBe(404);
     }
     expect(upstream).not.toHaveBeenCalled();
   });
+
+  it('asks PostHog with the pairs it checked, written again: a name spelled with escapes goes on plain', async () => {
+    for (const [method, path, asked] of [
+      [
+        'GET',
+        `${SURVEYS}?%74oken=${PROJECT_REF}&%5F=1700000000000`,
+        `${API}${SURVEYS}?token=${PROJECT_REF}&_=1700000000000`,
+      ],
+      ['GET', `${FALLBACK}?%76=${SDK_VERSION}`, `${ASSETS}${FALLBACK}?v=${SDK_VERSION}`],
+      [
+        'POST',
+        '/e/?retry_count=%32&%63ompression=base64',
+        `${API}/e/?retry_count=2&compression=base64`,
+      ],
+      // No parameter at all: no '?' either.
+      ['GET', `${SURVEYS}?`, `${API}${SURVEYS}`],
+      ['POST', '/e/?&', `${API}/e/`],
+    ] as const) {
+      upstream.mockClear();
+      const res = await ask(method, `/ingest${path}`);
+
+      expect(res.status, path).toBe(200);
+      expect((await sentToPostHog()).url, path).toBe(asked);
+    }
+  });
+});
+
+describe("/ingest passes on an event batch only for this app's own PostHog project", () => {
+  // PostHog files a batch under the project its body names. The SDK builds
+  // one as { api_key, batch, sent_at } and packs it one of three ways; the
+  // route unpacks it that one way and passes it on, bytes unchanged, only if
+  // it names this app's project and no other. (That each packing of our own
+  // batch goes on byte for byte is tested with the SDK's requests above.)
+  const EVENT_PATHS = ['/ingest/e/', '/ingest/i/v0/e/'] as const;
+  const ours = eventFor(PROJECT_REF);
+  const theirs = eventFor(OTHER_PROJECT);
+
+  /** A batch written field by field, for the ones the SDK would not build. */
+  function batchOf(fields: Record<string, unknown>): string {
+    return JSON.stringify(fields);
+  }
+
+  async function expectRefused(requests: NextRequest[]): Promise<void> {
+    for (const request of requests) {
+      const res = await route.POST(request);
+      const at = `${new URL(request.url).pathname}${new URL(request.url).search}`;
+
+      expect(res.status, at).toBe(404);
+      expect(await res.text(), at).toBe('');
+      expect(res.headers.get('x-content-type-options'), at).toBe('nosniff');
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    expect(refusals()).toEqual(
+      requests.map((request) => [
+        '[ingest] refused',
+        { status: 404, reason: 'body', method: 'POST', path: new URL(request.url).pathname },
+      ]),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(OTHER_PROJECT);
+  }
+
+  it.each([
+    ["another project's batch", batchJson(OTHER_PROJECT)],
+    [
+      "another project's key on the batch, over our own events",
+      batchOf({ api_key: OTHER_PROJECT, batch: [ours], sent_at: SENT_AT }),
+    ],
+    [
+      "our batch with another project's event in it (properties.token)",
+      batchJson(PROJECT_REF, [ours, theirs]),
+    ],
+    [
+      'our batch with an event that names another project as token',
+      batchJson(PROJECT_REF, [{ ...ours, token: OTHER_PROJECT }]),
+    ],
+    [
+      'our batch with an event that names another project as api_key',
+      batchJson(PROJECT_REF, [{ ...ours, api_key: OTHER_PROJECT }]),
+    ],
+    [
+      'our batch with an event that names another project as $token',
+      batchJson(PROJECT_REF, [{ ...ours, $token: OTHER_PROJECT }]),
+    ],
+    ['a batch with no key', batchOf({ batch: [ours], sent_at: SENT_AT })],
+    ['a batch whose key is empty', batchOf({ api_key: '', batch: [ours], sent_at: SENT_AT })],
+    ['a batch whose key is null', batchOf({ api_key: null, batch: [ours], sent_at: SENT_AT })],
+    [
+      'a batch whose key is a list holding ours',
+      batchOf({ api_key: [PROJECT_REF], batch: [ours], sent_at: SENT_AT }),
+    ],
+    [
+      'a batch whose key is ours with a space after it',
+      batchOf({ api_key: `${PROJECT_REF} `, batch: [ours], sent_at: SENT_AT }),
+    ],
+    [
+      'a batch keyed as token, which the SDK never writes',
+      batchOf({ token: PROJECT_REF, batch: [ours], sent_at: SENT_AT }),
+    ],
+    [
+      'our batch that names another project as token beside its api_key',
+      batchOf({ api_key: PROJECT_REF, token: OTHER_PROJECT, batch: [ours], sent_at: SENT_AT }),
+    ],
+    [
+      'our batch that names another project as $token beside its api_key',
+      batchOf({ api_key: PROJECT_REF, $token: OTHER_PROJECT, batch: [ours], sent_at: SENT_AT }),
+    ],
+    // PostHog reads a body that fails as a batch as one event instead. With
+    // nothing at the top but the SDK's three fields, there is no such
+    // second reading.
+    [
+      "our batch that also reads as one event of another project's",
+      batchOf({
+        api_key: PROJECT_REF,
+        batch: [ours],
+        sent_at: SENT_AT,
+        event: '$pageview',
+        properties: { token: OTHER_PROJECT },
+      }),
+    ],
+    [
+      'our batch that also reads as one event, with a sent_at no batch has',
+      batchOf({
+        api_key: PROJECT_REF,
+        batch: [ours],
+        sent_at: 1700000000000,
+        event: '$pageview',
+        properties: { token: OTHER_PROJECT },
+      }),
+    ],
+    [
+      'our batch with one more field at the top',
+      batchOf({
+        api_key: PROJECT_REF,
+        batch: [ours],
+        sent_at: SENT_AT,
+        historical_migration: true,
+      }),
+    ],
+    ['our events as a list, with no batch around them', JSON.stringify([ours])],
+    ['one event of ours, with no batch around it', JSON.stringify(ours)],
+    ['our batch of no events', batchJson(PROJECT_REF, [])],
+    [
+      'our batch whose events are one object, not a list',
+      batchOf({ api_key: PROJECT_REF, batch: ours, sent_at: SENT_AT }),
+    ],
+    ['our batch with an event that is text', batchJson(PROJECT_REF, [ours, 'placeholder'])],
+    ['our batch with an event that is null', batchJson(PROJECT_REF, [null])],
+    ['our batch with an event that is a list', batchJson(PROJECT_REF, [[ours]])],
+    [
+      'our batch with an event whose properties are text',
+      batchJson(PROJECT_REF, [{ event: '$pageview', properties: 'token' }]),
+    ],
+    [
+      'our batch with an event whose properties are a list',
+      batchJson(PROJECT_REF, [{ event: '$pageview', properties: [{ token: PROJECT_REF }] }]),
+    ],
+    [
+      "our batch with its key written twice, another project's last",
+      `{"api_key":"${PROJECT_REF}","batch":[${JSON.stringify(ours)}],"api_key":"${OTHER_PROJECT}"}`,
+    ],
+    ['JSON that is null', 'null'],
+    ['JSON that is our key as text', JSON.stringify(PROJECT_REF)],
+    ['JSON that is a number', '1'],
+    ['text that is not JSON', `{"api_key":"${PROJECT_REF}","batch":[`],
+    ['nothing', ''],
+    ['our batch with a byte order mark before it', `﻿${batchJson()}`],
+    ["our batch with another project's after it", `${batchJson()}${batchJson(OTHER_PROJECT)}`],
+  ])('refuses %s, however it is packed, on both event paths', async (_label, json) => {
+    await expectRefused(
+      EVENT_PATHS.flatMap((path) =>
+        PACKINGS.map((packing) => {
+          const { query, contentType, body } = packed(packing, json);
+          return incoming(`${path}${query ? `?${query}` : ''}`, {
+            method: 'POST',
+            headers: { 'content-type': contentType },
+            body,
+          });
+        }),
+      ),
+    );
+  });
+
+  it("passes on our batch whose events carry our key under every name, or none of their own: PostHog files those under the batch's", async () => {
+    const json = batchJson(PROJECT_REF, [
+      { event: 'placeholder_bare' },
+      { event: 'placeholder_empty', properties: {} },
+      {
+        ...ours,
+        token: PROJECT_REF,
+        api_key: PROJECT_REF,
+        $token: PROJECT_REF,
+      },
+    ]);
+    const withoutSentAt = batchOf({ api_key: PROJECT_REF, batch: [ours] });
+
+    for (const packing of PACKINGS) {
+      for (const text of [json, withoutSentAt]) {
+        const { query, contentType, body } = packed(packing, text);
+        const res = await route.POST(
+          incoming(`/ingest/e/${query ? `?${query}` : ''}`, {
+            method: 'POST',
+            headers: { 'content-type': contentType },
+            body,
+          }),
+        );
+        expect(res.status, packing).toBe(200);
+      }
+    }
+    expect(upstream).toHaveBeenCalledTimes(PACKINGS.length * 2);
+    expect(refusals()).toEqual([]);
+  });
+
+  // Each packing is told by all of its marks together: the compression
+  // parameter, the content type by its exact text, and how the body starts.
+  // PostHog's capture is more lenient than that (it looks for base64 or a
+  // form inside a body, and takes hints from more places), so a body between
+  // two packings could read one way here and another way there. Each of
+  // these carries OUR batch, or ours where the route would look and another
+  // project's where a lenient reader would.
+  const toBase64 = (json: string) => Buffer.from(json, 'utf8').toString('base64');
+  // A batch of ours whose base64 has each character encodeURIComponent
+  // escapes: '+', '/' and the '=' padding.
+  const oursJson = [0, 1, 2]
+    .flatMap((lead) => [0, 1, 2].map((tail) => ['~'.repeat(lead), '~'.repeat(tail)]))
+    .map(([lead, tail]) => batchJson(PROJECT_REF, [{ ...ours, note: `${lead}>>>???${tail}` }]))
+    .find(
+      (json) => /\+/.test(toBase64(json)) && /\//.test(toBase64(json)) && /=$/.test(toBase64(json)),
+    )!;
+  const gzipOurs = packed('gzip', oursJson).body;
+  const jsonOurs = packed('json', oursJson).body;
+  const formOurs = packed('base64', oursJson).body;
+  const base64Ours = toBase64(oursJson);
+  /**
+   * The same bytes in base64 no encoder writes: the last character before
+   * the padding, with one of the bits it does not use set.
+   */
+  function looseBase64(base64: string): string {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const last = base64.indexOf('=') - 1;
+    const loose = `${base64.slice(0, last)}${alphabet[alphabet.indexOf(base64[last]!) + 1]}${base64.slice(last + 1)}`;
+    expect(Buffer.from(loose, 'base64')).toEqual(Buffer.from(base64, 'base64'));
+    expect(loose).not.toBe(base64);
+    return loose;
+  }
+  const base64Theirs = toBase64(batchJson(OTHER_PROJECT));
+  const FORM = 'application/x-www-form-urlencoded';
+  const BASE64 = '?compression=base64';
+
+  it('the three packings these are built from pass, so each refusal below is for the one thing changed', async () => {
+    for (const escaped of ['%2B', '%2F', '%3D']) {
+      expect(Buffer.from(formOurs).toString('latin1')).toContain(escaped);
+    }
+    for (const [query, contentType, body] of [
+      ['', 'text/plain', gzipOurs],
+      ['', 'application/json', jsonOurs],
+      [BASE64, FORM, formOurs],
+    ] as const) {
+      const res = await route.POST(
+        incoming(`/ingest/e/${query}`, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body,
+        }),
+      );
+      expect(res.status, contentType).toBe(200);
+    }
+  });
+
+  it.each<[string, string, string | null, Uint8Array<ArrayBuffer>]>([
+    ['gzip sent as application/json', '', 'application/json', gzipOurs],
+    ['gzip sent as a form', '', FORM, gzipOurs],
+    ['gzip with no content type', '', null, gzipOurs],
+    ['gzip as text/plain with a charset', '', 'text/plain; charset=utf-8', gzipOurs],
+    ['gzip as Text/Plain', '', 'Text/Plain', gzipOurs],
+    ['gzip marked base64', BASE64, FORM, gzipOurs],
+    ['gzip marked base64, as text/plain', BASE64, 'text/plain', gzipOurs],
+    ['gzip of gzip', '', 'text/plain', new Uint8Array(gzipSync(gzipOurs))],
+    [
+      'gzip with bytes after it',
+      '',
+      'text/plain',
+      new Uint8Array(Buffer.concat([gzipOurs, Buffer.from(batchJson(OTHER_PROJECT))])),
+    ],
+    ['gzip cut short', '', 'text/plain', gzipOurs.slice(0, gzipOurs.byteLength - 4)],
+    ['the two bytes gzip starts with, and no more', '', 'text/plain', new Uint8Array([0x1f, 0x8b])],
+    ['raw JSON sent as text/plain', '', 'text/plain', jsonOurs],
+    [
+      'raw JSON as application/json with a charset',
+      '',
+      'application/json; charset=utf-8',
+      jsonOurs,
+    ],
+    ['raw JSON as Application/JSON', '', 'Application/JSON', jsonOurs],
+    ['raw JSON with no content type', '', null, jsonOurs],
+    ['raw JSON sent as a form', '', FORM, jsonOurs],
+    ['raw JSON marked base64', BASE64, FORM, jsonOurs],
+    ['raw JSON marked base64, as application/json', BASE64, 'application/json', jsonOurs],
+    [
+      'raw JSON that is not UTF-8',
+      '',
+      'application/json',
+      new Uint8Array(
+        Buffer.concat([
+          Buffer.from(`{"api_key":"${PROJECT_REF}","batch":[{"event":"`),
+          Buffer.from([0xff]),
+          Buffer.from('"}]}'),
+        ]),
+      ),
+    ],
+    ['the base64 form with no compression parameter', '', FORM, formOurs],
+    ['the base64 form sent as text/plain', BASE64, 'text/plain', formOurs],
+    ['the base64 form sent as application/json', BASE64, 'application/json', formOurs],
+    ['the base64 form with a charset on its type', BASE64, `${FORM}; charset=UTF-8`, formOurs],
+    ['the base64 form with no content type', BASE64, null, formOurs],
+    ['base64 with no data= before it', BASE64, FORM, bytes(encodeURIComponent(base64Ours))],
+    [
+      'the base64 form with a second data field',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(base64Ours)}&data=${encodeURIComponent(base64Theirs)}`),
+    ],
+    [
+      'the base64 form with a field before data',
+      BASE64,
+      FORM,
+      bytes(`ver=${SDK_VERSION}&data=${encodeURIComponent(base64Ours)}`),
+    ],
+    [
+      'the base64 form with a compression field after data',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(base64Ours)}&compression=gzip-js`),
+    ],
+    ['the base64 form with its + / = not escaped', BASE64, FORM, bytes(`data=${base64Ours}`)],
+    [
+      'the base64 form with its + written as a space',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(base64Ours).replaceAll('%2B', '+')}`),
+    ],
+    [
+      'the base64 form with lower-case escapes',
+      BASE64,
+      FORM,
+      bytes(
+        `data=${encodeURIComponent(base64Ours).replace(/%[0-9A-F]{2}/g, (e) => e.toLowerCase())}`,
+      ),
+    ],
+    [
+      'the base64 form with a line break in its base64',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(`${base64Ours.slice(0, 8)}\n${base64Ours.slice(8)}`)}`),
+    ],
+    [
+      'the base64 form with its padding left off',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(base64Ours.replace(/=+$/, ''))}`),
+    ],
+    [
+      'the base64 form with bits set after its last byte',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(looseBase64(base64Ours))}`),
+    ],
+    [
+      'the base64 form in the URL-safe alphabet',
+      BASE64,
+      FORM,
+      bytes(`data=${Buffer.from(oursJson, 'utf8').toString('base64url')}`),
+    ],
+    [
+      'the base64 form of a gzip batch',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(Buffer.from(gzipOurs).toString('base64'))}`),
+    ],
+    [
+      'the base64 form of the base64 of our batch',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(Buffer.from(base64Ours).toString('base64'))}`),
+    ],
+  ])('refuses our own batch as %s', async (_label, query, contentType, body) => {
+    await expectRefused(
+      EVENT_PATHS.map((path) =>
+        incoming(`${path}${query}`, {
+          method: 'POST',
+          headers: contentType === null ? {} : { 'content-type': contentType },
+          body,
+        }),
+      ),
+    );
+  });
+
+  it('refuses every batch when no project key is set: ours, and one that names no project', async () => {
+    postHogEnv.NEXT_PUBLIC_POSTHOG_KEY = '';
+
+    await expectRefused(
+      [
+        batchJson(PROJECT_REF),
+        batchJson(''),
+        batchOf({ batch: [{ event: '$pageview' }], sent_at: SENT_AT }),
+      ].flatMap((json) => EVENT_PATHS.map((path) => batchPost(path, json))),
+    );
+  });
 });
 
 describe('/ingest takes a request body up to the platform limit on every POST path, and no more', () => {
   // posthog-js caps no request body by size and never retries a 4xx, so a
-  // cap below the platform's would drop batches the SDK sent for good: event
-  // batches (raw JSON after a failed remote config), the console log drain at
-  // unload (the whole queue in one POST), a replay snapshot (never split).
-  const OVER: Array<[string]> = [
-    ['/ingest/e/'],
-    [`/ingest/i/v1/logs?token=${PROJECT_REF}`],
-    ['/ingest/s/'],
-  ];
+  // cap below the platform's would drop batches the SDK sent for good: an
+  // event batch has no size limit (raw JSON after a failed remote config;
+  // $exception events are never cut).
+  const OVER: Array<[string]> = [['/ingest/e/'], ['/ingest/i/v0/e/']];
 
-  it('passes on a body just under the limit and one of exactly the limit on /e/ and /i/v1/logs, by Content-Length and in chunks', async () => {
+  /** The raw JSON of a batch of this app's events that is exactly `size` bytes. */
+  function batchJsonOfSize(size: number): Uint8Array<ArrayBuffer> {
+    const without = batchJson(PROJECT_REF, [{ ...eventFor(PROJECT_REF), pad: '' }]);
+    const json = batchJson(PROJECT_REF, [
+      { ...eventFor(PROJECT_REF), pad: 'a'.repeat(size - without.length) },
+    ]);
+    const body = bytes(json);
+    expect(body).toHaveLength(size);
+    return body;
+  }
+
+  /** `body` sent in chunks of `chunkSize` with no Content-Length. */
+  function inChunks(body: Uint8Array<ArrayBuffer>, chunkSize: number): ReadableStream<Uint8Array> {
+    let offset = 0;
+    return new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          if (offset >= body.byteLength) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(body.slice(offset, offset + chunkSize));
+          offset += chunkSize;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+  }
+
+  const JSON_TYPE = { 'content-type': 'application/json' };
+
+  it('passes on a batch just under the limit and one of exactly the limit, by Content-Length and in chunks', async () => {
     const sizes: number[] = [];
-    for (const path of ['/ingest/e/', `/ingest/i/v1/logs?token=${PROJECT_REF}`]) {
+    for (const [path] of OVER) {
       for (const size of [CAP - 1, CAP]) {
+        const body = batchJsonOfSize(size);
         const declared = await route.POST(
           incoming(path, {
             method: 'POST',
-            headers: { 'content-length': String(size) },
-            body: new Uint8Array(size),
+            headers: { ...JSON_TYPE, 'content-length': String(size) },
+            body,
           }),
         );
         const chunked = await route.POST(
-          incoming(path, { method: 'POST', body: chunkedBody(size, 256 * 1024).stream }),
+          incoming(path, {
+            method: 'POST',
+            headers: JSON_TYPE,
+            body: inChunks(body, 256 * 1024),
+          }),
         );
 
         for (const res of [declared, chunked]) {
@@ -833,7 +1398,7 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
       const res = await route.POST(
         incoming(path, {
           method: 'POST',
-          headers: { 'content-length': String(CAP + 1) },
+          headers: { ...JSON_TYPE, 'content-length': String(CAP + 1) },
           body: stream,
         }),
       );
@@ -850,14 +1415,18 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
     'answers 413 to a body with no Content-Length one byte over the limit on %s, and stops reading at the first byte over',
     async (path) => {
       const typed = await route.POST(
-        incoming(path, { method: 'POST', body: new Uint8Array(CAP + 1) }),
+        incoming(path, { method: 'POST', headers: JSON_TYPE, body: batchJsonOfSize(CAP + 1) }),
       );
       // The limit in 256 KiB chunks and then one byte.
       const oneOver = chunkedBody(CAP + 1, 256 * 1024);
-      const chunked = await route.POST(incoming(path, { method: 'POST', body: oneOver.stream }));
+      const chunked = await route.POST(
+        incoming(path, { method: 'POST', headers: JSON_TYPE, body: oneOver.stream }),
+      );
       // Two chunks more than the limit: the first one over is the last one read.
       const longer = chunkedBody(CAP + 2 * 256 * 1024, 256 * 1024);
-      const stopped = await route.POST(incoming(path, { method: 'POST', body: longer.stream }));
+      const stopped = await route.POST(
+        incoming(path, { method: 'POST', headers: JSON_TYPE, body: longer.stream }),
+      );
 
       for (const res of [typed, chunked, stopped]) {
         expect(res.status).toBe(413);
@@ -870,6 +1439,59 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
       expect(upstream).not.toHaveBeenCalled();
     },
   );
+
+  it.each(OVER)(
+    'holds what a gzip batch unpacks to on %s to the same limit: exactly the limit passes, one byte over answers 413',
+    async (path) => {
+      // A batch of this app's events either way; a few kilobytes as sent.
+      const atLimit = new Uint8Array(gzipSync(batchJsonOfSize(CAP)));
+      const oneOver = new Uint8Array(gzipSync(batchJsonOfSize(CAP + 1)));
+      expect(oneOver.byteLength).toBeLessThan(64 * 1024);
+
+      const passed = await route.POST(
+        incoming(path, {
+          method: 'POST',
+          headers: { 'content-type': 'text/plain' },
+          body: atLimit,
+        }),
+      );
+      const refused = await route.POST(
+        incoming(path, {
+          method: 'POST',
+          headers: { 'content-type': 'text/plain' },
+          body: oneOver,
+        }),
+      );
+
+      expect(passed.status).toBe(200);
+      expect(refused.status).toBe(413);
+      expect(await refused.text()).toBe('');
+      expect(refused.headers.get('x-content-type-options')).toBe('nosniff');
+      expect(upstream).toHaveBeenCalledTimes(1);
+      expect((await sentToPostHog()).body).toEqual(atLimit);
+      expect(refusals()).toEqual([
+        ['[ingest] refused', { status: 413, reason: 'size', method: 'POST', path }],
+      ]);
+    },
+  );
+
+  it('answers 413 to a small gzip body that unpacks to many times the limit', async () => {
+    // 64 MiB of one character: some tens of kilobytes as sent.
+    const small = new Uint8Array(gzipSync(Buffer.alloc(64 * MIB, 0x61)));
+    expect(small.byteLength).toBeLessThan(MIB / 4);
+
+    const res = await route.POST(
+      incoming('/ingest/e/', {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: small,
+      }),
+    );
+
+    expect(res.status).toBe(413);
+    expect(await res.text()).toBe('');
+    expect(upstream).not.toHaveBeenCalled();
+  });
 
   it('answers 400 with no body when the request body breaks off, and asks PostHog nothing', async () => {
     const broken = new ReadableStream<Uint8Array>({
@@ -886,31 +1508,41 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
   });
 });
 
-describe('/ingest logs each request it refuses, with the path only', () => {
+describe('/ingest logs each request it refuses, with the path and which part of the request it was', () => {
   // The SDK drops what is refused without retrying, so a remote config that
-  // moves /i/v0/e/ or /s/ shows here instead of events vanishing. Never the
-  // query (it can carry a token), a header or the body.
+  // moves /i/v0/e/, or an SDK update that sends something new, shows here
+  // instead of events vanishing. Never the query (it can carry a token), a
+  // header or the body: only which of them it was.
   it.each([
-    [404, 'GET', `/ingest/api/projects/1/?token=${OTHER_PROJECT}&q=placeholder-query`],
-    [404, 'POST', `/ingest/i/v1/logs?token=${OTHER_PROJECT}`],
-    [404, 'HEAD', `/ingest/static/toolbar.js?v=${SDK_VERSION}&t=1700000000000`],
-    [405, 'GET', '/ingest/e/?compression=base64'],
-    [405, 'HEAD', '/ingest/s/'],
-    [405, 'POST', `/ingest/array/${PROJECT_REF}/config.js?callback=placeholder-query`],
-    [404, 'GET', `/ingest/api/surveys/?api_key=${OTHER_PROJECT}&q=placeholder-query`],
+    [404, 'path', 'GET', `/ingest/api/projects/1/?token=${OTHER_PROJECT}&q=placeholder-query`],
+    [404, 'path', 'POST', `/ingest/i/v1/logs?token=${OTHER_PROJECT}`],
+    [404, 'path', 'HEAD', `/ingest/static/toolbar.js?v=${SDK_VERSION}&t=1700000000000`],
+    [405, 'method', 'GET', '/ingest/e/?compression=base64'],
+    [405, 'method', 'HEAD', '/ingest/i/v0/e/'],
+    [405, 'method', 'POST', `/ingest/array/${PROJECT_REF}/config.js?callback=placeholder-query`],
+    [404, 'query', 'GET', `/ingest/api/surveys/?api_key=${OTHER_PROJECT}&q=placeholder-query`],
+    [404, 'query', 'GET', `/ingest/api/surveys/?token=${OTHER_PROJECT}`],
+    [404, 'query', 'POST', '/ingest/e/?data=placeholder-query'],
+    [404, 'query', 'GET', `/ingest/array/${PROJECT_REF}/config.js?callback=placeholder-query`],
+    // A POST whose body is not a batch of this app's events.
+    [404, 'body', 'POST', '/ingest/e/'],
+    [404, 'body', 'POST', '/ingest/i/v0/e/?retry_count=1'],
     // Methods the SDK never sends, which Next would otherwise answer itself.
-    [405, 'PUT', '/ingest/e/?q=placeholder-query'],
-    [405, 'PATCH', '/ingest/s/'],
-    [405, 'DELETE', `/ingest/api/surveys/?token=${PROJECT_REF}&q=placeholder-query`],
-    [405, 'OPTIONS', `/ingest/array/${PROJECT_REF}/config.js?q=placeholder-query`],
-    [404, 'OPTIONS', '/ingest/login?q=placeholder-query'],
-    [404, 'DELETE', `/ingest/api/projects/1/?token=${OTHER_PROJECT}`],
-  ] as const)('a %i to %s %s writes one line', async (status, method, path) => {
+    [405, 'method', 'PUT', '/ingest/e/?q=placeholder-query'],
+    [405, 'method', 'PATCH', '/ingest/i/v0/e/'],
+    [405, 'method', 'DELETE', `/ingest/api/surveys/?token=${PROJECT_REF}&q=placeholder-query`],
+    [405, 'method', 'OPTIONS', `/ingest/array/${PROJECT_REF}/config.js?q=placeholder-query`],
+    [404, 'path', 'OPTIONS', '/ingest/login?q=placeholder-query'],
+    [404, 'path', 'DELETE', `/ingest/api/projects/1/?token=${OTHER_PROJECT}`],
+  ] as const)('a %i (%s) to %s %s writes one line', async (status, reason, method, path) => {
     const res = await answerOf(
       incoming(path, {
         method,
-        headers: BROWSER_HEADERS,
-        body: WITH_BODY.has(method) ? new TextEncoder().encode('placeholder-body') : undefined,
+        headers: { ...BROWSER_HEADERS, 'content-type': 'application/json' },
+        // Another project's batch, with a mark of its own in it.
+        body: WITH_BODY.has(method)
+          ? bytes(batchJson(OTHER_PROJECT, [eventFor(OTHER_PROJECT, 'placeholder-body')]))
+          : undefined,
       }),
     );
 
@@ -918,6 +1550,7 @@ describe('/ingest logs each request it refuses, with the path only', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith('[ingest] refused', {
       status,
+      reason,
       method,
       path: new URL(path, SITE).pathname,
     });
@@ -929,7 +1562,7 @@ describe('/ingest logs each request it refuses, with the path only', () => {
 
   it('logs a 413 once, by Content-Length and by the bytes read, with the path only', async () => {
     await route.POST(
-      incoming(`/ingest/i/v1/logs?token=${PROJECT_REF}`, {
+      incoming('/ingest/i/v0/e/?retry_count=1', {
         method: 'POST',
         headers: { ...BROWSER_HEADERS, 'content-length': String(CAP + 1) },
         body: chunkedBody(16, 16).stream,
@@ -944,8 +1577,11 @@ describe('/ingest logs each request it refuses, with the path only', () => {
     );
 
     expect(warn.mock.calls).toEqual([
-      ['[ingest] refused', { status: 413, method: 'POST', path: '/ingest/i/v1/logs' }],
-      ['[ingest] refused', { status: 413, method: 'POST', path: '/ingest/e/' }],
+      [
+        '[ingest] refused',
+        { status: 413, reason: 'size', method: 'POST', path: '/ingest/i/v0/e/' },
+      ],
+      ['[ingest] refused', { status: 413, reason: 'size', method: 'POST', path: '/ingest/e/' }],
     ]);
   });
 
@@ -1009,9 +1645,7 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
         }),
     );
 
-    const res = await route.POST(
-      incoming('/ingest/e/', { method: 'POST', body: new Uint8Array([1]) }),
-    );
+    const res = await route.POST(batchPost('/ingest/e/'));
 
     expect(res.status).toBe(429);
     expect(res.headers.get('retry-after')).toBe('30');
@@ -1025,9 +1659,7 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
         new Response(null, { status: 204, headers: { 'set-cookie': 'ph_placeholder=1; Path=/' } }),
     );
 
-    const res = await route.POST(
-      incoming('/ingest/e/', { method: 'POST', body: new Uint8Array([1]) }),
-    );
+    const res = await route.POST(batchPost('/ingest/e/'));
 
     expect(res.status).toBe(204);
     expect(await res.text()).toBe('');
@@ -1062,9 +1694,7 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
   ])('answers 502 with no body when %s', async (_label, failure) => {
     upstream.mockImplementationOnce(failure);
 
-    const res = await route.POST(
-      incoming('/ingest/e/', { method: 'POST', body: new Uint8Array([1]) }),
-    );
+    const res = await route.POST(batchPost('/ingest/e/'));
 
     expect(res.status).toBe(502);
     expect(await res.text()).toBe('');
@@ -1075,9 +1705,26 @@ describe("/ingest answers with PostHog's answer, minus what is not PostHog's to 
   });
 });
 
-describe('/ingest serves nothing of PostHog as a page of ours', () => {
+describe('/ingest answers each path with the kind of content that path has, and nothing of PostHog as a page of ours', () => {
   // Bytes, not a string: a string body would bring a content type of its own.
   const PAGE = new TextEncoder().encode('<script>placeholder()</script>');
+  const PLAIN = 'text/plain; charset=utf-8';
+
+  // Every kind of path the route passes on: the scripts (a bundle by both of
+  // its addresses, the remote config script) and the JSON answers (events,
+  // the lists, the remote config as JSON).
+  const SCRIPT_PATHS: Array<['GET' | 'POST', string]> = [
+    ['GET', `/ingest/static/${SDK_VERSION}/surveys.js`],
+    ['GET', `/ingest/static/surveys.js?v=${SDK_VERSION}`],
+    ['GET', `/ingest/array/${PROJECT_REF}/config.js`],
+  ];
+  const JSON_PATHS: Array<['GET' | 'POST', string]> = [
+    ['POST', '/ingest/e/'],
+    ['POST', '/ingest/i/v0/e/'],
+    ['GET', `/ingest/api/surveys/?token=${PROJECT_REF}`],
+    ['GET', `/ingest/api/product_tours/?token=${PROJECT_REF}`],
+    ['GET', `/ingest/array/${PROJECT_REF}/config`],
+  ];
 
   function postHogAnswers(contentType: string | null) {
     upstream.mockImplementation(
@@ -1089,6 +1736,20 @@ describe('/ingest serves nothing of PostHog as a page of ours', () => {
     );
   }
 
+  it('covers every kind of path the route passes on', () => {
+    const covered = new Set(
+      [...SCRIPT_PATHS, ...JSON_PATHS].map(([, path]) =>
+        new URL(path, SITE).pathname.replace(/\/static\/.*$/, '/static/'),
+      ),
+    );
+    const passed = new Set(
+      SDK_REQUESTS.map(([, path]) =>
+        new URL(`/ingest${path}`, SITE).pathname.replace(/\/static\/.*$/, '/static/'),
+      ),
+    );
+    expect([...covered].sort()).toEqual([...passed].sort());
+  });
+
   it.each([
     ['text/html; charset=utf-8'],
     ['text/html'],
@@ -1099,47 +1760,73 @@ describe('/ingest serves nothing of PostHog as a page of ours', () => {
     ['application/octet-stream'],
     ['text/plain, text/html'],
     ['text/plain; x=1, text/html'],
+    ['application/json, text/html'],
+    ['application/javascript, text/html'],
     ['application/jsonp'],
+    ['text/plain'],
     [''],
-  ])("answers 'text/plain; charset=utf-8', nosniff, when PostHog answers %j", async (type) => {
-    postHogAnswers(type);
+    [null],
+  ])(
+    "answers 'text/plain; charset=utf-8', nosniff, on every path when PostHog answers %j",
+    async (type) => {
+      postHogAnswers(type);
 
-    for (const [method, path] of [
-      ['GET', `/ingest/static/${SDK_VERSION}/surveys.js`],
-      ['GET', `/ingest/array/${PROJECT_REF}/config.js`],
-      ['POST', '/ingest/e/'],
-    ] as const) {
-      const res = await ask(method, path);
-      expect(res.headers.get('content-type'), path).toBe('text/plain; charset=utf-8');
-      expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
-    }
-  });
-
-  it("answers 'text/plain; charset=utf-8' when PostHog names no content type", async () => {
-    postHogAnswers(null);
-
-    const res = await route.POST(
-      incoming('/ingest/e/', { method: 'POST', body: new Uint8Array([1]) }),
-    );
-
-    expect(res.headers.get('content-type')).toBe('text/plain; charset=utf-8');
-    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
-  });
+      for (const [method, path] of [...SCRIPT_PATHS, ...JSON_PATHS]) {
+        const res = await ask(method, path);
+        expect(res.status, path).toBe(200);
+        expect(res.headers.get('content-type'), path).toBe(PLAIN);
+        expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      }
+    },
+  );
 
   it.each([
-    ['application/json'],
-    ['application/json; charset=utf-8'],
     ['application/javascript'],
     ['Application/JavaScript; charset=UTF-8'],
     ['text/javascript; charset=utf-8'],
-    ['text/plain'],
-  ])("keeps PostHog's %j as it is", async (type) => {
-    postHogAnswers(type);
+  ])(
+    "keeps PostHog's %j on a script path, and answers plain text with it on a JSON path",
+    async (type) => {
+      postHogAnswers(type);
 
-    const res = await route.GET(incoming(`/ingest/static/${SDK_VERSION}/surveys.js`));
+      for (const [method, path] of SCRIPT_PATHS) {
+        const res = await ask(method, path);
+        expect(res.headers.get('content-type'), path).toBe(type);
+        expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      }
+      for (const [method, path] of JSON_PATHS) {
+        const res = await ask(method, path);
+        expect(res.headers.get('content-type'), path).toBe(PLAIN);
+        expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      }
+    },
+  );
 
-    expect(res.headers.get('content-type')).toBe(type);
-    expect(res.headers.get('x-content-type-options')).toBe('nosniff');
+  it.each([['application/json'], ['application/json; charset=utf-8'], ['Application/JSON']])(
+    "keeps PostHog's %j on a JSON path, and answers plain text with it on a script path",
+    async (type) => {
+      postHogAnswers(type);
+
+      for (const [method, path] of JSON_PATHS) {
+        const res = await ask(method, path);
+        expect(res.headers.get('content-type'), path).toBe(type);
+        expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      }
+      for (const [method, path] of SCRIPT_PATHS) {
+        const res = await ask(method, path);
+        expect(res.headers.get('content-type'), path).toBe(PLAIN);
+        expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      }
+    },
+  );
+
+  it('answers a HEAD with the same content type as its GET', async () => {
+    postHogAnswers('application/javascript');
+    const script = await ask('HEAD', `/ingest/static/${SDK_VERSION}/surveys.js`);
+    const list = await ask('HEAD', `/ingest/api/surveys/?token=${PROJECT_REF}`);
+
+    expect(script.headers.get('content-type')).toBe('application/javascript');
+    expect(list.headers.get('content-type')).toBe(PLAIN);
   });
 });
 
