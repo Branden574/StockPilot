@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import * as React from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // The PHONE's decision module for the same feature, imported by path so this
@@ -158,6 +159,7 @@ vi.mock('@/server/services/returns-requester', () => ({
 const exchangeSwitch = vi.hoisted(() => ({ on: true }));
 vi.mock('@/lib/returns/exchange-switch', () => ({ exchangeCreateEnabled: () => exchangeSwitch.on }));
 
+import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { getOrgEmailRouting } from '@/lib/dashboard/cached-org';
 
 import OrderDetailPage from './page';
@@ -1085,6 +1087,51 @@ describe("(i) the requester's own request carries Send return request (F14)", ()
     const { container } = await renderPage();
     expect(buttons(container)).toHaveLength(0);
     expect(getOrgEmailRouting).not.toHaveBeenCalled();
+  });
+
+  // RequesterTracking is a client component: whatever the page hands it is
+  // written into the page's HTML, button or not. So the props are read off
+  // the page's element tree, not off the rendered DOM.
+  function requesterTrackingProps(node: unknown): Record<string, unknown> | null {
+    if (Array.isArray(node)) {
+      for (const child of node) {
+        const found = requesterTrackingProps(child);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (!React.isValidElement(node)) return null;
+    const props = node.props as Record<string, unknown>;
+    if (node.type === RequesterTracking) return props;
+    for (const value of Object.values(props)) {
+      const found = requesterTrackingProps(value);
+      if (found) return found;
+    }
+    return null;
+  }
+  const pageTree = () => OrderDetailPage({ params: Promise.resolve({ id: ORDER_ID }) });
+
+  it('the mailboxes reach the client only when a card draws the button: none with no request, or with only closed or unnumbered ones', async () => {
+    // The skeptic round (2026-11-12, replay.log lines 17 and 18): the HTML of
+    // a requester's own completed order with no return named the mailboxes.
+    for (const tracking of [
+      [],
+      [request({ returnNumber: 'RMA-D', returnStatus: 'closed' }), request({ returnNumber: 'RMA-E', returnStatus: 'denied' })],
+      [request({ returnNumber: 'RMA-F', returnStatus: 'cancelled' }), request({ returnNumber: null, returnStatus: 'requested' })],
+    ]) {
+      trackingForOrderMock.mockResolvedValue(tracking);
+      const props = requesterTrackingProps(await pageTree());
+      expect(props, JSON.stringify(tracking)).not.toBeNull();
+      expect(props!.returnRequest, JSON.stringify(tracking)).toBeNull();
+      expect(JSON.stringify(props), JSON.stringify(tracking)).not.toContain('intake@warehouse.test');
+    }
+    // Control: one open request among closed ones hands the mailboxes over.
+    trackingForOrderMock.mockResolvedValue([
+      request({ returnNumber: 'RMA-D', returnStatus: 'closed' }),
+      request({ returnNumber: 'RMA-B', returnStatus: 'approved' }),
+    ]);
+    const props = requesterTrackingProps(await pageTree());
+    expect((props!.returnRequest as { recipients: { to: string } }).recipients.to).toBe('intake@warehouse.test');
   });
 
   it('no button while Returns is switched off', async () => {

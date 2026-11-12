@@ -12,7 +12,7 @@ import { returnRequestRecipientsDto } from '@/server/services/return-request-ema
 import { RMAService } from '@/server/services/returns';
 import { ShippingService } from '@/server/services/shipping';
 
-import { can, type OrgEmailRoutingReadState } from '@stockpilot/core';
+import { can, canSendReturnRequest, type OrgEmailRoutingReadState } from '@stockpilot/core';
 
 // The Liquid Glass operations composition (stage 4: pages/ops.css, the
 // shared frame, and the board's own file where there is one): every rule is
@@ -98,8 +98,17 @@ export default async function ReturnDetailPage({ params }: { params: Promise<{ i
   // The fallback matrix of the delivery request (core
   // deliveryRecipientsForRouting, through the helper the phone's routes share):
   // the stored pair when valid, nothing when unset or invalid, as plain
-  // strings for the client, which re-validates them at its own seam.
-  const returnRequestRecipients = returnRequestRecipientsDto(deliveryRouting);
+  // strings for the client, which re-validates them at its own seam. Only
+  // while the return is open with a number (core canSendReturnRequest, the
+  // header button's own rule): the workbench is a client component, so a
+  // closed, denied or cancelled return's page would otherwise carry the
+  // mailboxes in its HTML with no button to use them.
+  const returnRequestRecipients = canSendReturnRequest(
+    workbenchResult.w.return.status,
+    workbenchResult.w.return.returnNumber,
+  )
+    ? returnRequestRecipientsDto(deliveryRouting)
+    : null;
 
   // The page box every redesigned page shares (DESIGN-SPEC 4 and 5.3), its
   // left edge level with the other pages'; the workbench keeps one column at

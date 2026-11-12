@@ -65,6 +65,7 @@ import {
   BOOK_REPORT_BACK_TO_REPORT,
   can,
   canDraftShortfallPo,
+  canSendReturnRequest,
   deliveryRecipientsForRouting,
   describeCompletionConfirm,
   describeLineReturnRefs,
@@ -1266,6 +1267,14 @@ export default async function OrderDetailPage({
     showTracking: requesterTrackingEligible,
     viewerCanReadReturns: returnsLinkable,
   });
+  // F14: the mailboxes reach the browser only when at least one card will
+  // draw "Send return request" (the button's own rule, core
+  // canSendReturnRequest). RequesterTracking is a client component, so every
+  // prop it is handed is written into the page's HTML even where it renders
+  // no button: a requester with no request, or only closed ones, gets none.
+  const returnRequestSendable = returnsShown.tracking.some((r) =>
+    canSendReturnRequest(r.returnStatus, r.returnNumber),
+  );
   const returnsAnchor =
     returnsShown.orderReturns.length > 0
       ? '#order-returns'
@@ -1892,7 +1901,7 @@ export default async function OrderDetailPage({
               density="compact"
               className="bg-card rounded-lg border p-[18px]"
               returnRequest={
-                requesterTrackingEligible && returnRequestRecipients
+                requesterTrackingEligible && returnRequestSendable && returnRequestRecipients
                   ? {
                       orderId: id,
                       recipients: returnRequestRecipients,
