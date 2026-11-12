@@ -25,6 +25,7 @@ import {
 } from '@stockpilot/core';
 
 import { getWarehouseAccess } from '@/lib/auth/warehouse';
+import { chunkInFilterValues, IN_FILTER_DEFAULT_CONCURRENCY, mapWithConcurrency } from '@/lib/supabase/in-filter';
 
 import { ServiceError, type ServiceContext } from './context';
 import { ItemImagesService } from './item-images';
@@ -214,7 +215,19 @@ export interface ReturnListPage {
   rows: ReturnListRow[];
   nextCursor: string | null;
   pageSize: number;
+  /**
+   * How far a search looked for PEOPLE (B117). 'full': every member of this
+   * organisation whose profile name or email matches, and whose profile the
+   * viewer may read, was matched against the orders they placed for
+   * themselves (also the answer when nothing is searched). 'too_many': more
+   * than RETURN_SEARCH_MAX_MEMBERS matched, so only the typed columns were
+   * searched. 'unavailable': the people read failed, the same fallback. The
+   * list says so in both cases.
+   */
+  requesterSearch: ReturnRequesterSearch;
 }
+
+export type ReturnRequesterSearch = 'full' | 'too_many' | 'unavailable';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -950,6 +963,90 @@ type OverviewRow = {
   replacement_owed?: number | string | null;
 };
 
+/**
+ * The most members one search matches by name (B117). 500 people are five
+ * reads of the view at 100 a read, one wave (IN_FILTER_DEFAULT_CONCURRENCY).
+ * Past it the search keeps to the typed columns and the page says so.
+ */
+export const RETURN_SEARCH_MAX_MEMBERS = 500;
+
+/**
+ * The members a search text names (B117): members of THIS organisation whose
+ * profile name or email contains the text. Read with the viewer's own
+ * session, so `organization_members` answers only for an organisation the
+ * viewer belongs to and the inner profile embed drops every member whose
+ * profile the viewer may not read (user_profiles_select_orgmates, 0003): a
+ * name the viewer cannot see matches nothing, the same as a name nobody has.
+ * The embed and its filter are the platform members search's
+ * (platform/orgs.ts). `q` is already sanitizeReturnSearch's output.
+ *
+ * More than RETURN_SEARCH_MAX_MEMBERS: nobody is matched ('too_many'), not an
+ * arbitrary first few. A failed read: nobody ('unavailable'), reported; the
+ * list still answers from the typed columns.
+ */
+async function searchRequesterMembers(
+  ctx: ServiceContext,
+  q: string,
+): Promise<{ ids: string[]; state: ReturnRequesterSearch }> {
+  try {
+    const { data, error } = await ctx.supabase
+      .from('organization_members')
+      .select('user_id, user_profiles:user_id!inner (id)')
+      .eq('organization_id', ctx.organizationId)
+      .or(`full_name.ilike.%${q}%,email.ilike.%${q}%`, { referencedTable: 'user_profiles' })
+      .order('user_id', { ascending: true })
+      .range(0, RETURN_SEARCH_MAX_MEMBERS);
+    if (error) throw new Error(error.message);
+    const ids = [
+      ...new Set(
+        ((data as Array<{ user_id: string | null }> | null) ?? [])
+          .map((r) => r.user_id)
+          .filter((id): id is string => typeof id === 'string' && UUID_RE.test(id)),
+      ),
+    ];
+    if (ids.length > RETURN_SEARCH_MAX_MEMBERS) return { ids: [], state: 'too_many' };
+    return { ids, state: 'full' };
+  } catch (err) {
+    reportDegradedRead('returns.list.requester-search', err, {});
+    return { ids: [], state: 'unavailable' };
+  }
+}
+
+/** A timestamptz as PostgREST prints it, in microseconds; NaN when it is not one. */
+function instantMicros(v: string | null | undefined): number {
+  const m = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(Z|[+-]\d{2}:\d{2})$/.exec(v ?? '');
+  if (!m) return Number.NaN;
+  return Date.parse(`${m[1]}${m[3]}`) * 1000 + Number((m[2] ?? '').padEnd(6, '0'));
+}
+
+/**
+ * The list's order, for merging several reads of it: the sort column as an
+ * instant (text would put ".5+00:00" and "+00:00" in the wrong order), then
+ * the id, both in the list's direction, as `.order(sortCol).order('id')`
+ * gives. Ids compare as lowercase text, which is how Postgres orders uuids.
+ */
+export function compareReturnListRows(
+  a: Pick<OverviewRow, 'id' | 'created_at' | 'approved_at'>,
+  b: Pick<OverviewRow, 'id' | 'created_at' | 'approved_at'>,
+  sortCol: 'created_at' | 'approved_at',
+  ascending: boolean,
+): number {
+  const ka = instantMicros(a[sortCol]);
+  const kb = instantMicros(b[sortCol]);
+  let c = 0;
+  if (Number.isNaN(ka) || Number.isNaN(kb)) {
+    const sa = a[sortCol] ?? '';
+    const sb = b[sortCol] ?? '';
+    c = sa < sb ? -1 : sa > sb ? 1 : 0;
+  } else c = ka < kb ? -1 : ka > kb ? 1 : 0;
+  if (c === 0) {
+    const ia = a.id.toLowerCase();
+    const ib = b.id.toLowerCase();
+    c = ia < ib ? -1 : ia > ib ? 1 : 0;
+  }
+  return ascending ? c : -c;
+}
+
 export async function buildReturnListPage(ctx: ServiceContext, query: ReturnListQuery): Promise<ReturnListPage> {
   const filterId: ReturnListFilterId = query.filter ?? 'all';
   const filter = returnListFilter(filterId);
@@ -959,58 +1056,93 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
   const sortCol = filter.sort === 'approved_asc' ? 'approved_at' : 'created_at';
   const ascending = filter.sort === 'approved_asc';
 
-  let req = ctx.supabase
-    .from('return_overview')
-    .select(
-      'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, requester_user_id, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed',
-    )
-    .eq('organization_id', ctx.organizationId);
-  if (filter.statuses) {
-    // in-list-bound: return statuses are a fixed enum of a few values
-    req = req.in('status', [...filter.statuses]);
-  }
-  if (filter.sort === 'approved_asc') req = req.not('approved_at', 'is', null);
-  // RX-2: returns only, exchanges, and the two replacement views (plan 3.10, G5).
-  if (filter.kind) req = req.eq('kind', filter.kind);
-  if (filter.exchangeStatuses && !filter.orRequestedShort) {
-    // in-list-bound: exchange statuses are a fixed enum of fifteen codes
-    req = req.in('exchange_status', [...filter.exchangeStatuses]);
-  }
+  // B117: the members the search text names, matched below against the
+  // orders they placed for themselves.
+  const people = q ? await searchRequesterMembers(ctx, q) : { ids: [], state: 'full' as const };
 
-  const clauses: string[] = [];
-  if (filter.exchangeStatuses && filter.orRequestedShort) {
-    // "Replacement unavailable": unavailable, or a requested exchange whose
-    // requested item is short right now (advice).
-    // in-list-bound: exchange statuses are a fixed enum of fifteen codes
-    clauses.push(
-      `or(exchange_status.in.(${filter.exchangeStatuses.join(',')}),and(exchange_status.eq.requested,requested_short.is.true))`,
+  /** One read of the view; `memberBatch` adds "the order was this member's own". */
+  const readOverview = async (memberBatch: readonly string[] | null): Promise<OverviewRow[]> => {
+    let req = ctx.supabase
+      .from('return_overview')
+      .select(
+        'id, return_number, status, source, reason_code, order_request_id, order_number, requester_name, requester_email, requester_user_id, created_at, approved_at, waiting_days, line_count, unit_count, lines, requested_by, deleted_users, kind, exchange_status, replacement_order_number, replacement_status, replacement_owed',
+      )
+      .eq('organization_id', ctx.organizationId);
+    if (filter.statuses) {
+      // in-list-bound: return statuses are a fixed enum of a few values
+      req = req.in('status', [...filter.statuses]);
+    }
+    if (filter.sort === 'approved_asc') req = req.not('approved_at', 'is', null);
+    // RX-2: returns only, exchanges, and the two replacement views (plan 3.10, G5).
+    if (filter.kind) req = req.eq('kind', filter.kind);
+    if (filter.exchangeStatuses && !filter.orRequestedShort) {
+      // in-list-bound: exchange statuses are a fixed enum of fifteen codes
+      req = req.in('exchange_status', [...filter.exchangeStatuses]);
+    }
+
+    const clauses: string[] = [];
+    if (filter.exchangeStatuses && filter.orRequestedShort) {
+      // "Replacement unavailable": unavailable, or a requested exchange whose
+      // requested item is short right now (advice).
+      // in-list-bound: exchange statuses are a fixed enum of fifteen codes
+      clauses.push(
+        `or(exchange_status.in.(${filter.exchangeStatuses.join(',')}),and(exchange_status.eq.requested,requested_short.is.true))`,
+      );
+    }
+    if (cursor) {
+      const op = ascending ? 'gt' : 'lt';
+      clauses.push(`or(${sortCol}.${op}."${cursor.k}",and(${sortCol}.eq."${cursor.k}",id.${op}.${cursor.i}))`);
+    }
+    if (q) {
+      // Unquoted %…% like the other searches: the sanitized term holds no
+      // comma, parenthesis, quote, percent or backslash.
+      const terms = [
+        `return_number.ilike.%${q}%`,
+        `requester_name.ilike.%${q}%`,
+        `requester_email.ilike.%${q}%`,
+      ];
+      const n = orderNumberFromSearch(q);
+      if (n !== null) terms.push(`order_number.eq.${n}`);
+      if (memberBatch && memberBatch.length > 0) {
+        // B117: an order one of the matching members placed for themselves.
+        // Only where no name was typed: a typed name is what the row shows
+        // (requesterLabelOf), and the term above already searched it. The
+        // ids are uuids read from the database, checked again by shape.
+        // in-list-bound: one batch of chunkInFilterValues (below), at most 100 uuids
+        terms.push(`and(requester_user_id.in.(${memberBatch.join(',')}),requester_name.is.null)`);
+      }
+      clauses.push(`or(${terms.join(',')})`);
+    }
+    if (clauses.length > 0) req = req.or(`and(${clauses.join(',')})`);
+
+    const { data, error } = await req
+      .order(sortCol, { ascending })
+      .order('id', { ascending })
+      .range(0, pageSize);
+    if (error) throw new ServiceError('internal_error', error.message);
+    return (data as OverviewRow[] | null) ?? [];
+  };
+
+  // The matching members ride in the request URL, so at most 100 per read
+  // (lib/supabase/in-filter). One read is the usual case. With more, each
+  // read answers ITS first page (pageSize + 1 rows in the list's order), and
+  // the first page of all of them together is the first pageSize + 1 of those
+  // rows merged: the page and its cursor are exact, however many people match.
+  const memberBatches = chunkInFilterValues(people.ids);
+  let fetched: OverviewRow[];
+  if (memberBatches.length <= 1) {
+    fetched = await readOverview(memberBatches[0] ?? null);
+  } else {
+    const perBatch = await mapWithConcurrency(memberBatches, IN_FILTER_DEFAULT_CONCURRENCY, (batch) =>
+      readOverview(batch),
     );
+    const byId = new Map<string, OverviewRow>();
+    for (const rows of perBatch) for (const r of rows) byId.set(r.id, r);
+    fetched = [...byId.values()]
+      .sort((a, b) => compareReturnListRows(a, b, sortCol, ascending))
+      .slice(0, pageSize + 1);
   }
-  if (cursor) {
-    const op = ascending ? 'gt' : 'lt';
-    clauses.push(`or(${sortCol}.${op}."${cursor.k}",and(${sortCol}.eq."${cursor.k}",id.${op}.${cursor.i}))`);
-  }
-  if (q) {
-    // Unquoted %…% like the other searches: the sanitized term holds no
-    // comma, parenthesis, quote, percent or backslash.
-    const terms = [
-      `return_number.ilike.%${q}%`,
-      `requester_name.ilike.%${q}%`,
-      `requester_email.ilike.%${q}%`,
-    ];
-    const n = orderNumberFromSearch(q);
-    if (n !== null) terms.push(`order_number.eq.${n}`);
-    clauses.push(`or(${terms.join(',')})`);
-  }
-  if (clauses.length > 0) req = req.or(`and(${clauses.join(',')})`);
 
-  const { data, error } = await req
-    .order(sortCol, { ascending })
-    .order('id', { ascending })
-    .range(0, pageSize);
-  if (error) throw new ServiceError('internal_error', error.message);
-
-  const fetched = (data as OverviewRow[] | null) ?? [];
   const pageRows = fetched.slice(0, pageSize);
   const last = pageRows.at(-1);
   const lastSort = last ? (ascending ? last.approved_at : last.created_at) : null;
@@ -1041,6 +1173,7 @@ export async function buildReturnListPage(ctx: ServiceContext, query: ReturnList
     q,
     pageSize,
     nextCursor,
+    requesterSearch: people.state,
     rows: pageRows.map((r) => {
       const total = (r.lines ?? []).length;
       return {

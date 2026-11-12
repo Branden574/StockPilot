@@ -157,6 +157,17 @@ export default async function ReturnsPage({
         />
       </form>
 
+      {/* B117: a search that could not match people by their profile name
+          says so (more than 500 people matched, or the people read failed).
+          Nothing is drawn for a full search, so the page is as it was. */}
+      {page.q && page.requesterSearch && page.requesterSearch !== 'full' ? (
+        <p role="status" className="text-muted-foreground max-w-3xl text-sm" data-returns-search-note>
+          {page.requesterSearch === 'too_many'
+            ? RETURNS_COPY.listSearchTooManyPeople
+            : RETURNS_COPY.listSearchPeopleUnavailable}
+        </p>
+      ) : null}
+
       {/* The nine filters as filter chips (DESIGN-SPEC 6.6, the Movements
           type chips), wrapping. They stay links in a navigation landmark
           named "Return filters" with aria-current on the open one. */}

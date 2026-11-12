@@ -230,6 +230,29 @@ describe('returns list (redesign)', () => {
     expect(within(requesterRow!).queryByText('Requester')).toBeNull();
   });
 
+  it('says when a search could not match people by their profile name, and says nothing for a full search (B117)', async () => {
+    listPage.mockResolvedValueOnce(answer({ q: 'a', requesterSearch: 'too_many' }));
+    const { unmount } = await renderPage({ q: 'a' });
+    expect(screen.getByRole('status')).toHaveTextContent(RETURNS_COPY.listSearchTooManyPeople);
+    expect(screen.getByRole('link', { name: 'RMA-20261018-ABCDEF' })).toBeInTheDocument();
+    unmount();
+
+    listPage.mockResolvedValueOnce(answer({ q: 'a', requesterSearch: 'unavailable' }));
+    const second = await renderPage({ q: 'a' });
+    expect(screen.getByRole('status')).toHaveTextContent(RETURNS_COPY.listSearchPeopleUnavailable);
+    second.unmount();
+
+    listPage.mockResolvedValueOnce(answer({ q: 'pat', requesterSearch: 'full' }));
+    const third = await renderPage({ q: 'pat' });
+    expect(screen.queryByRole('status')).toBeNull();
+    third.unmount();
+
+    // No search: nothing, whatever the answer carries (and an older answer without the field).
+    listPage.mockResolvedValueOnce(answer());
+    await renderPage();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
   it('pages by cursor with the same words and URLs, in the table card footer', async () => {
     listPage.mockResolvedValueOnce(answer({ filter: 'closed', nextCursor: 'c2' }));
     await renderPage({ filter: 'closed', cursor: 'c1' });
