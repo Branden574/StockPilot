@@ -2,13 +2,10 @@ import { NextRequest } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { withApiContext } from '@/lib/auth/api-context';
-import { checkRateLimit } from '@/lib/rate-limit';
-
 import { POST } from './route';
 
 vi.mock('@/lib/auth/api-context', () => ({ withApiContext: vi.fn() }));
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
-vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: vi.fn() }));
 const record = vi.fn(async (..._a: unknown[]) => ({ recorded: true }));
 vi.mock('@/server/services/return-request-draft', () => ({
   recordReturnRequestDrafted: (...a: unknown[]) => record(...a),
@@ -29,7 +26,6 @@ function post(id: string, body: unknown, raw?: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(withApiContext).mockResolvedValue(CTX as never);
-  vi.mocked(checkRateLimit).mockResolvedValue({ allowed: true, remaining: 10, resetAt: Date.now() + 1000 } as never);
 });
 
 describe('POST /api/v1/orders/[id]/return-request-drafted', () => {
@@ -43,15 +39,6 @@ describe('POST /api/v1/orders/[id]/return-request-drafted', () => {
   it('400 for an order id that is not a uuid', async () => {
     const res = await post('not-a-uuid', { returnNumber: 'RMA-1', isCondensed: false, surface: 'order' });
     expect(res.status).toBe(400);
-    expect(record).not.toHaveBeenCalled();
-  });
-
-  it('429 past the per-member limit, keyed to the member', async () => {
-    vi.mocked(checkRateLimit).mockResolvedValueOnce({ allowed: false, remaining: 0, resetAt: Date.now() + 5000 } as never);
-    const res = await post(ORDER, { returnNumber: 'RMA-1', isCondensed: false, surface: 'order' });
-    expect(res.status).toBe(429);
-    expect(vi.mocked(checkRateLimit).mock.calls[0]![0]).toBe('return-request-drafted:u-1');
-    expect(vi.mocked(checkRateLimit).mock.calls[0]![3]).toBe('closed');
     expect(record).not.toHaveBeenCalled();
   });
 

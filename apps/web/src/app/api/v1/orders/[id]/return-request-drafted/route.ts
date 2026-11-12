@@ -3,7 +3,6 @@ import { z } from 'zod';
 
 import { withApiContext } from '@/lib/auth/api-context';
 import { reportError } from '@/lib/error-reporter';
-import { checkRateLimit } from '@/lib/rate-limit';
 import type { ServiceContext } from '@/server/services/context';
 import { recordReturnRequestDrafted } from '@/server/services/return-request-draft';
 
@@ -11,9 +10,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const NO_STORE = { 'Cache-Control': 'private, no-store' } as const;
-const ONE_HOUR_MS = 60 * 60 * 1000;
-/** One member opens a handful of drafts; 60 an hour is far above any real use. */
-export const RETURN_REQUEST_DRAFTED_PER_HOUR = 60;
 
 /**
  * POST /api/v1/orders/[id]/return-request-drafted (F14, the phone).
@@ -25,14 +21,14 @@ export const RETURN_REQUEST_DRAFTED_PER_HOUR = 60;
  *
  *   401  not signed in (or a disabled account)
  *   400  the order id is not a uuid
- *   429  more than 60 an hour by one member
  *   200  { recorded: true }  the row was written
  *   200  { recorded: false } nothing was written: the module is off, the
  *        order is not in the caller's organization, the caller is neither
  *        the order's requester nor a returns reader, the return is not on
- *        that order or is no longer open, or the body is malformed. One
- *        answer for all of them, so the route tells nobody which orders or
- *        return numbers exist.
+ *        that order or is no longer open, the session owes a two-step
+ *        sign-in, the member is past 60 an hour, or the body is malformed.
+ *        One answer for all of them, so the route tells nobody which orders
+ *        or return numbers exist.
  *
  * Every check is the service's (services/return-request-draft.ts), the same
  * function the website's action calls.
@@ -55,22 +51,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     );
   }
 
-  const rl = await checkRateLimit(
-    `return-request-drafted:${ctx.userId}`,
-    RETURN_REQUEST_DRAFTED_PER_HOUR,
-    ONE_HOUR_MS,
-    'closed',
-  );
-  if (!rl.allowed) {
-    return NextResponse.json(
-      { error: 'rate_limited', message: 'Too many requests. Wait a moment and try again.' },
-      {
-        status: 429,
-        headers: { ...NO_STORE, 'Retry-After': String(Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000))) },
-      },
-    );
-  }
-
   let body: unknown = null;
   try {
     body = await req.json();
@@ -79,7 +59,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   const fields = body !== null && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
 
-  // The service never throws; the order id is the path's, never the body's.
+  // The service never throws, and holds the limit and every check; the order
+  // id is the path's, never the body's.
   const res = await recordReturnRequestDrafted(ctx, {
     orderId: id,
     returnNumber: fields.returnNumber,

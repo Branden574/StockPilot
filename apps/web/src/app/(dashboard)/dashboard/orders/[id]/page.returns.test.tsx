@@ -1063,8 +1063,8 @@ describe("(i) the requester's own request carries Send return request (F14)", ()
     expect(buttons(container)).toHaveLength(3);
   });
 
-  it('no button when the mailboxes are not set, or the saved value is invalid (the requests still show)', async () => {
-    for (const state of [{ state: 'unset' as const }, { state: 'invalid' as const }]) {
+  it('no button when the mailboxes are not set, the saved value is invalid, or only the compiled fallback pair exists (the requests still show)', async () => {
+    for (const state of [{ state: 'unset' as const }, { state: 'invalid' as const }, { state: 'fallback' as const }]) {
       vi.mocked(getOrgEmailRouting).mockResolvedValue(state as never);
       const { container, unmount } = await renderPage();
       expect(container.querySelector('#your-requests')).not.toBeNull();

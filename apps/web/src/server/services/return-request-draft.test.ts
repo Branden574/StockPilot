@@ -8,6 +8,9 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 const auditSpy = vi.fn(async (..._args: unknown[]) => {});
 vi.mock('@/server/services/audit', () => ({ audit: (...a: unknown[]) => auditSpy(...a) }));
 
+const checkRateLimit = vi.fn(async (..._a: unknown[]) => ({ allowed: true, count: 1, resetAt: Date.now() + 1000 }));
+vi.mock('@/lib/rate-limit', () => ({ checkRateLimit: (...a: unknown[]) => checkRateLimit(...a) }));
+
 import { recordReturnRequestDrafted } from './return-request-draft';
 
 const ORDER = 'b3f1c2d4-1111-4222-8333-444455556666';
@@ -46,6 +49,7 @@ function filtersOf(stub: ReturnType<typeof makeSupabaseStub>, key: string): unkn
 
 beforeEach(() => {
   vi.clearAllMocks();
+  checkRateLimit.mockResolvedValue({ allowed: true, count: 1, resetAt: Date.now() + 1000 });
 });
 
 describe('recordReturnRequestDrafted', () => {
@@ -186,6 +190,51 @@ describe('recordReturnRequestDrafted', () => {
     for (const forbidden of ['example.test', 'BODY TEXT', 'outlook', 'mailto:']) {
       expect(serialized).not.toContain(forbidden);
     }
+  });
+
+  it('a session that owes a two-step sign-in records nothing, as requester or as returns reader', async () => {
+    for (const over of [
+      { role: 'staff' as const, userId: REQUESTER },
+      { role: 'manager' as const, userId: 'someone-else' },
+    ]) {
+      const stub = stubFor();
+      const ctx = ctxFor(stub.client, { ...over, mfaRequired: true, mfaSatisfied: false });
+      expect(await recordReturnRequestDrafted(ctx as never, INPUT)).toEqual({ recorded: false });
+      // Refused before the limit is counted or anything is read.
+      expect(stub.fromCalls).toEqual([]);
+    }
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(auditSpy).not.toHaveBeenCalled();
+    // The same member, stepped up, records.
+    const stub = stubFor();
+    const ctx = ctxFor(stub.client, { role: 'manager', mfaRequired: true, mfaSatisfied: true });
+    expect(await recordReturnRequestDrafted(ctx as never, INPUT)).toEqual({ recorded: true });
+  });
+
+  it('one limit for both callers: 60 an hour per member, fail-closed, and past it nothing is read or written', async () => {
+    const stub = stubFor();
+    const ctx = ctxFor(stub.client, { role: 'staff', userId: REQUESTER });
+    await recordReturnRequestDrafted(ctx as never, INPUT);
+    expect(checkRateLimit).toHaveBeenCalledWith(`return-request-drafted:${REQUESTER}`, 60, 60 * 60 * 1000, 'closed');
+
+    auditSpy.mockClear();
+    checkRateLimit.mockResolvedValueOnce({ allowed: false, count: 61, resetAt: Date.now() + 5000 });
+    const limited = stubFor();
+    expect(
+      await recordReturnRequestDrafted(ctxFor(limited.client, { role: 'staff', userId: REQUESTER }) as never, INPUT),
+    ).toEqual({ recorded: false });
+    expect(limited.fromCalls).toEqual([]);
+    expect(auditSpy).not.toHaveBeenCalled();
+  });
+
+  it('a malformed input or a switched-off module is refused before the limit is counted', async () => {
+    const stub = stubFor();
+    await recordReturnRequestDrafted(ctxFor(stub.client) as never, { ...INPUT, orderId: 'nope' });
+    await recordReturnRequestDrafted(
+      ctxFor(stub.client, { enabledModules: new Set<ModuleId>(['orders'] as ModuleId[]) }) as never,
+      INPUT,
+    );
+    expect(checkRateLimit).not.toHaveBeenCalled();
   });
 
   it('never throws: a failed read is nothing recorded', async () => {

@@ -18,6 +18,11 @@ vi.mock('./order-requests', () => ({
   },
 }));
 
+const resolveMemberOrder = vi.fn();
+vi.mock('./returns', () => ({ resolveMemberOrder: (...a: unknown[]) => resolveMemberOrder(...a) }));
+const ADMIN = { tag: 'service-role' };
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => ADMIN }));
+
 import { ServiceError } from './context';
 import {
   loadReturnRequestEmailForOrder,
@@ -46,6 +51,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   getOrgEmailRouting.mockResolvedValue(VALID);
   orderGet.mockResolvedValue(detail());
+  // The door is open by default: the caller's own, returnable, non-portal order.
+  resolveMemberOrder.mockResolvedValue({ orderRequestId: ORDER, organizationId: 'org-a' });
 });
 
 describe('returnRequestRecipientsDto', () => {
@@ -53,6 +60,9 @@ describe('returnRequestRecipientsDto', () => {
     expect(returnRequestRecipientsDto(VALID)).toEqual({ to: 'intake@warehouse.test', cc: 'copy@warehouse.test', toName: 'Intake' });
     expect(returnRequestRecipientsDto({ state: 'unset' })).toBeNull();
     expect(returnRequestRecipientsDto({ state: 'invalid', reason: 'bad' } as never)).toBeNull();
+    // Never the compiled pair the delivery request falls back to on a
+    // database that predates the routing column.
+    expect(returnRequestRecipientsDto({ state: 'fallback' })).toBeNull();
     expect(
       returnRequestRecipientsDto({ state: 'valid', recipients: { to: 'not-an-address', cc: 'copy@warehouse.test' } }),
     ).toBeNull();
@@ -96,6 +106,57 @@ describe('loadReturnRequestEmailForOrder', () => {
     expect(getOrgEmailRouting).toHaveBeenCalledWith('org-a', 'delivery_request');
     // No delivery site on the order: the charters table is not read.
     expect(stub.fromCalls).toEqual([]);
+    // The door is the member return request's own, scoped by the context.
+    expect(resolveMemberOrder).toHaveBeenCalledWith(ADMIN, {
+      organizationId: 'org-a',
+      userId: 'u-req',
+      orderRequestId: ORDER,
+    });
+  });
+
+  it('the answer is an allow-list: these keys and no others, with no id but the link', async () => {
+    orderGet.mockResolvedValue(
+      detail({
+        request: {
+          id: ORDER,
+          requester_user_id: 'u-req',
+          order_number: 85,
+          delivery_charter_id: 'ch-1',
+          internal_notes: 'STAFF NOTE',
+          warehouse_id: 'wh-1',
+        },
+        lines: [{ unit_cost_at_request: 12.34 }],
+        reservations: [{ id: 'res-1' }],
+        assignedPickerName: 'A Picker',
+      }),
+    );
+    const stub = makeSupabaseStub({
+      'charters.select': { data: { id: 'ch-1', name: 'North Campus', code: 'NC', address: { line1: '1 Example Way' } }, error: null },
+    });
+    const res = (await loadReturnRequestEmailForOrder(ctxFor(stub) as never, ORDER))!;
+    expect(Object.keys(res).sort()).toEqual(['order', 'recipients']);
+    expect(Object.keys(res.order).sort()).toEqual([
+      'link',
+      'orderNumber',
+      'requestedBy',
+      'requesterEmail',
+      'site',
+      'warehouseName',
+    ]);
+    expect(Object.keys(res.order.site!).sort()).toEqual(['address', 'code', 'name']);
+    const text = JSON.stringify(res);
+    for (const never of ['STAFF NOTE', '12.34', 'res-1', 'A Picker', 'wh-1', 'ch-1', 'org-a', 'u-req']) {
+      expect(text, never).not.toContain(never);
+    }
+  });
+
+  it('the door closed (a portal order, one not handed over, another member\'s, another organization\'s): nothing, and nothing more is read', async () => {
+    resolveMemberOrder.mockResolvedValue(null);
+    const stub = makeSupabaseStub({});
+    expect(await loadReturnRequestEmailForOrder(ctxFor(stub) as never, ORDER)).toBeNull();
+    expect(orderGet).not.toHaveBeenCalled();
+    expect(getOrgEmailRouting).not.toHaveBeenCalled();
+    expect(stub.fromCalls).toEqual([]);
   });
 
   it('falls back to the display name, and reads the delivery site inside the organization', async () => {
@@ -113,7 +174,7 @@ describe('loadReturnRequestEmailForOrder', () => {
     });
     const res = await loadReturnRequestEmailForOrder(ctxFor(stub) as never, ORDER);
     expect(res?.order.requestedBy).toBe('Sample Requester · School');
-    expect(res?.order.site).toEqual({ id: 'ch-1', name: 'North Campus', code: 'NC', address: { line1: '1 Example Way' } });
+    expect(res?.order.site).toEqual({ name: 'North Campus', code: 'NC', address: { line1: '1 Example Way' } });
     const methods = stub.chains.get('charters.select') ?? [];
     const args = stub.chainArgs.get('charters.select') ?? [];
     const eqs = methods.map((m, i) => [m, ...(args[i] ?? [])]).filter(([m]) => m === 'eq');

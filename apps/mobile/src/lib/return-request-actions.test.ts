@@ -134,7 +134,8 @@ describe('the server answers, read defensively', () => {
     });
     expect(e.order).toEqual({
       ...ORDER_FACTS,
-      site: { id: 's1', name: 'North Campus', code: 'NC', address: { line1: '1 Example Way' } },
+      // An id, were one sent, is not kept.
+      site: { name: 'North Campus', code: 'NC', address: { line1: '1 Example Way' } },
       warehouseName: null,
     });
     expect(returnRequestEmailFromOrderAnswer({ recipients: PAIR }).order).toEqual({

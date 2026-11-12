@@ -7,11 +7,11 @@ import {
   returnRequestContentFromTracking,
   returnRequestContentFromWorkbench,
   type DeliveryRequestRecipients,
-  type DeliveryRequestSite,
   type PreparedReturnRequestEmail,
   type RequesterTrackingReturn,
   type ReturnRequestEmailContent,
   type ReturnRequestOrderFacts,
+  type ReturnRequestSite,
   type ReturnRequestWorkbenchSource,
 } from '@stockpilot/core';
 
@@ -73,15 +73,16 @@ function readRecipients(raw: unknown): DeliveryRequestRecipients | null {
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v : null);
 
-function readSite(raw: unknown): DeliveryRequestSite | null {
+/** Name, code and address: the server sends no id and the draft prints none. */
+function readSite(raw: unknown): ReturnRequestSite | null {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const s = raw as Record<string, unknown>;
-  if (typeof s.id !== 'string' || typeof s.name !== 'string') return null;
+  if (typeof s.name !== 'string' || !s.name.trim()) return null;
   const address =
     s.address !== null && typeof s.address === 'object' && !Array.isArray(s.address)
-      ? (s.address as DeliveryRequestSite['address'])
+      ? (s.address as ReturnRequestSite['address'])
       : null;
-  return { id: s.id, name: s.name, code: typeof s.code === 'string' ? s.code : null, address };
+  return { name: s.name, code: typeof s.code === 'string' ? s.code : null, address };
 }
 
 /** The return screen's `returnRequestEmail` field. */

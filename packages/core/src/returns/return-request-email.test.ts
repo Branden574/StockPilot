@@ -33,7 +33,6 @@ const CONTENT: ReturnRequestEmailContent = {
   requestedBy: 'Sample Requester',
   requesterEmail: 'requester@school.test',
   site: {
-    id: 's1',
     name: 'North Campus',
     code: 'NC',
     address: { line1: '1 Example Way', city: 'Sampletown', region: 'CA', postalCode: '90000' },

@@ -207,8 +207,8 @@ describe('the RMA workbench page: Send return request and Report a problem (F14)
     expect(hint()).not.toBeInTheDocument();
   });
 
-  it('mailboxes not set, invalid or unreadable: no button; the page still opens', async () => {
-    for (const state of [{ state: 'unset' }, { state: 'invalid', reason: 'x' }, 'throw']) {
+  it('mailboxes not set, invalid, unreadable or only the compiled fallback pair: no button; the page still opens', async () => {
+    for (const state of [{ state: 'unset' }, { state: 'invalid', reason: 'x' }, { state: 'fallback' }, 'throw']) {
       routing.value = state;
       workbench.mockResolvedValueOnce(bench());
       const { container, unmount } = render(await ReturnDetailPage(args));

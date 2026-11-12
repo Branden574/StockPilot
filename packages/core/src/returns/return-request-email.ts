@@ -69,6 +69,13 @@ export function isReturnNumberShape(value: unknown): value is string {
   );
 }
 
+/**
+ * The delivery site as the draft prints it: its name, its code and its
+ * address. No id: the draft never prints one, so no answer or prop that
+ * feeds this builder has to carry one.
+ */
+export type ReturnRequestSite = Pick<DeliveryRequestSite, 'name' | 'code' | 'address'>;
+
 /** One line of the item list, already in the words the sender's screen shows. */
 export interface ReturnRequestEmailItem {
   /** "Staff Polo, M ×2" (core itemQuantityLabel over returnLineLabel). */
@@ -90,7 +97,7 @@ export interface ReturnRequestEmailContent {
   requestedBy: string | null;
   requesterEmail: string | null;
   /** The order's delivery site, where the sender's screen already has it. */
-  site: DeliveryRequestSite | null;
+  site: ReturnRequestSite | null;
   warehouseName: string | null;
   items: readonly ReturnRequestEmailItem[];
   /** A link back into StockPilot that the sender can open. */
@@ -182,7 +189,7 @@ export function returnRequestDraftedLine(returnNumber: string | null | undefined
 
 const clean = (v: string | null | undefined): string => (typeof v === 'string' ? toPlainTextLine(v) : '');
 
-function siteLabel(site: DeliveryRequestSite): string {
+function siteLabel(site: ReturnRequestSite): string {
   const name = clean(site.name);
   const code = clean(site.code);
   return code ? `${name} (${code})` : name;
@@ -308,7 +315,7 @@ export interface ReturnRequestOrderFacts {
   orderNumber: string | null;
   requestedBy: string | null;
   requesterEmail: string | null;
-  site: DeliveryRequestSite | null;
+  site: ReturnRequestSite | null;
   warehouseName: string | null;
   link: string | null;
 }

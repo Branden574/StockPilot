@@ -25,6 +25,7 @@ import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReplacementBanner } from '@/components/orders/replacement-banner';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { returnRequestOrderLink } from '@/lib/returns/return-request-link';
+import { returnRequestRecipientsDto } from '@/server/services/return-request-email';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
 import {
@@ -828,6 +829,13 @@ export default async function OrderDetailPage({
         ccName: deliveryRequestRecipientsValue.ccName,
       }
     : null;
+
+  // F14: the return request draft goes to the same saved mailboxes, by a
+  // stricter rule (services/return-request-email.ts): only a pair this
+  // organization saved, never the compiled pair the pre-migration 'fallback'
+  // state gives the delivery request above.
+  const returnRequestRecipients =
+    returnRequestGate && deliveryRequestRouting ? returnRequestRecipientsDto(deliveryRequestRouting) : null;
 
   // Readiness, as the page shows it. The stock-dependent actions come from
   // the same result (core readinessStockFlags + orderStockGates, the phone's
@@ -1884,15 +1892,22 @@ export default async function OrderDetailPage({
               density="compact"
               className="bg-card rounded-lg border p-[18px]"
               returnRequest={
-                requesterTrackingEligible && deliveryRequestRecipientsDto
+                requesterTrackingEligible && returnRequestRecipients
                   ? {
                       orderId: id,
-                      recipients: deliveryRequestRecipientsDto,
+                      recipients: returnRequestRecipients,
                       order: {
                         orderNumber: orderNumberLabel,
                         requestedBy: detail.requesterName ?? requesterDisplay,
                         requesterEmail: detail.requesterEmail,
-                        site: deliveryRequestCharter,
+                        // Name, code and address: the draft prints no id.
+                        site: deliveryRequestCharter
+                          ? {
+                              name: deliveryRequestCharter.name,
+                              code: deliveryRequestCharter.code,
+                              address: deliveryRequestCharter.address,
+                            }
+                          : null,
                         warehouseName: warehouseName ?? null,
                         link: returnRequestOrderLink(id),
                       },

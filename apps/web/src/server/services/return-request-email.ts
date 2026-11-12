@@ -1,20 +1,22 @@
 import 'server-only';
 
 import {
-  deliveryRecipientsForRouting,
+  brandDeliveryRecipients,
   formatOrderNumber,
   type DeliveryRequestAddress,
-  type DeliveryRequestSite,
   type OrgEmailRoutingReadState,
   type OrgEmailRoutingRecipientsDto,
   type ReturnRequestOrderFacts,
+  type ReturnRequestSite,
 } from '@stockpilot/core';
 
 import { getOrgEmailRouting } from '@/lib/dashboard/cached-org';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { returnRequestOrderLink, returnRequestReturnLink } from '@/lib/returns/return-request-link';
 
 import { isModuleEnabled, ServiceError, type ServiceContext } from './context';
 import { OrderRequestsService } from './order-requests';
+import { resolveMemberOrder } from './returns';
 
 /**
  * What the phone needs to offer "Email return request" (F14), resolved on the
@@ -31,12 +33,27 @@ import { OrderRequestsService } from './order-requests';
  * is shared with the return page.
  */
 
-/** The resolved pair as plain strings, or null: the button's whole gate. */
+/**
+ * The resolved pair as plain strings, or null: the button's whole gate.
+ *
+ * Only a pair the organization SAVED and that passes the validating factory.
+ * Unlike the delivery request (core deliveryRecipientsForRouting), the
+ * 'fallback' state gives nothing: that state exists for a database that
+ * predates the routing column, where the delivery request falls back to
+ * compiled sample addresses it shipped with. The return request is newer
+ * than the column and has no compiled pair to fall back to, so it never
+ * addresses a draft to a mailbox the organization did not save.
+ */
 export function returnRequestRecipientsDto(
   routing: OrgEmailRoutingReadState,
 ): OrgEmailRoutingRecipientsDto | null {
-  const r = deliveryRecipientsForRouting(routing);
-  if (!r) return null;
+  if (routing.state !== 'valid') return null;
+  let r;
+  try {
+    r = brandDeliveryRecipients(routing.recipients);
+  } catch {
+    return null;
+  }
   const dto: OrgEmailRoutingRecipientsDto = { to: r.to, cc: r.cc };
   if (r.toName) dto.toName = r.toName;
   if (r.ccName) dto.ccName = r.ccName;
@@ -75,7 +92,8 @@ export interface ReturnRequestEmailForOrder {
   order: ReturnRequestOrderFacts;
 }
 
-function siteFromCharterRow(row: unknown): DeliveryRequestSite | null {
+/** Name, code and address only: the draft prints no id, so none is sent. */
+function siteFromCharterRow(row: unknown): ReturnRequestSite | null {
   const c = row as { id?: unknown; name?: unknown; code?: unknown; address?: unknown } | null;
   if (!c || typeof c.id !== 'string') return null;
   const raw = c.address;
@@ -84,7 +102,6 @@ function siteFromCharterRow(row: unknown): DeliveryRequestSite | null {
   const address =
     raw !== null && typeof raw === 'object' && !Array.isArray(raw) ? (raw as DeliveryRequestAddress) : null;
   return {
-    id: c.id,
     name: typeof c.name === 'string' ? c.name : '',
     code: typeof c.code === 'string' ? c.code : null,
     address,
@@ -93,20 +110,44 @@ function siteFromCharterRow(row: unknown): DeliveryRequestSite | null {
 
 /**
  * The requester's own order (GET /api/v1/orders/[id]/return-request-email).
- * Null, which the route answers as its one 404, unless: the returns module is
- * on, the order is in the caller's organization (OrderRequestsService.get
- * filters on it), and the caller is the order's own requester.
+ * Null, which the route answers as its one 404, on every closed door.
  *
- * The facts are the ones the website's order page passes for the same
- * viewer, from the same service read: the order number, the requester's name
- * (the resolved name, else the display name) and email, the warehouse name,
- * and the delivery site when the order has one.
+ * THE DOOR is the member return request's own (returns.ts resolveMemberOrder,
+ * the one GET .../return-request opens with): the order of the caller's
+ * organization whose requester is the caller, never a B2B portal order, in a
+ * status that can come back, with the returns module on. So this route opens
+ * for exactly the orders the sheet beside it opens for, and for nobody else.
+ *
+ * WHAT IT ANSWERS is an allow-list (pinned by test): the mailboxes, and six
+ * facts about the caller's own order. Each is a fact this member already
+ * reads about this order with their own session: their own name and email,
+ * the order number, the warehouse name (the order page's header) and the
+ * delivery site they chose when they placed it (the delivery request draft
+ * for this same order printed it for them, orders/[id]/page.tsx
+ * `destination`). The requester SHEET keeps emails, warehouses and sites out
+ * (core forbiddenRequesterKeys) because the public return link and the
+ * portal serve it to people with no member session; this route is never
+ * served there. No id beyond the order's own, no notes, no costs, no staff
+ * names.
+ *
+ * The facts come from the service read the website's order page uses, so
+ * both apps say the same thing: the requester's name (the resolved name,
+ * else the display name) and email, the warehouse name, the order number.
+ *
+ * A read, like the sheet's GET: it asks no two-step sign-in (the record of
+ * an opened draft does, services/return-request-draft.ts).
  */
 export async function loadReturnRequestEmailForOrder(
   ctx: ServiceContext,
   orderId: string,
 ): Promise<ReturnRequestEmailForOrder | null> {
   if (!isModuleEnabled(ctx, 'returns')) return null;
+  const door = await resolveMemberOrder(createAdminClient(), {
+    organizationId: ctx.organizationId,
+    userId: ctx.userId,
+    orderRequestId: orderId,
+  });
+  if (!door) return null;
   let detail;
   try {
     detail = await new OrderRequestsService(ctx).get(orderId);

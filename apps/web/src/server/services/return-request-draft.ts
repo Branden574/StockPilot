@@ -5,9 +5,14 @@ import { z } from 'zod';
 import { can, canSendReturnRequest, isReturnNumberShape } from '@stockpilot/core';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { checkRateLimit } from '@/lib/rate-limit';
 
 import { audit } from './audit';
 import { isModuleEnabled, type ServiceContext } from './context';
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+/** One member opens a handful of drafts; 60 an hour is far above any real use. */
+export const RETURN_REQUEST_DRAFTED_PER_HOUR = 60;
 
 const schema = z.object({
   orderId: z.string().uuid(),
@@ -27,6 +32,12 @@ const schema = z.object({
  * everything on the server, from the caller's own context:
  *
  *  - the returns module is on for the caller's organization;
+ *  - the caller does not owe a two-step sign-in (the MFA floor every other
+ *    member write has: assertPermission, and the member return request's
+ *    POST): a session that owes it records nothing, by either branch below;
+ *  - no more than 60 an hour by one member (fail-closed), counted here so
+ *    the website's action and the phone's route share one limit and neither
+ *    can fill the audit log;
  *  - the order is in the caller's organization (an explicit organization
  *    filter on top of row level security, so another organization's id finds
  *    no row);
@@ -56,6 +67,14 @@ export async function recordReturnRequestDrafted(
 
   try {
     if (!isModuleEnabled(ctx, 'returns')) return { recorded: false };
+    if (ctx.mfaRequired && !ctx.mfaSatisfied) return { recorded: false };
+    const rl = await checkRateLimit(
+      `return-request-drafted:${ctx.userId}`,
+      RETURN_REQUEST_DRAFTED_PER_HOUR,
+      ONE_HOUR_MS,
+      'closed',
+    );
+    if (!rl.allowed) return { recorded: false };
 
     const { data: order } = await ctx.supabase
       .from('order_requests')
