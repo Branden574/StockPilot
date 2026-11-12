@@ -278,31 +278,9 @@ const ENTRIES: Entry[] = [
     'animation',
     'lg-rise var(--lg-d-2) var(--lg-ease) both',
   ],
-  // The toast dock, centred on the workspace pane and above its foot (.toast-dock in .app-main).
-  [
-    'toast dock centre',
-    GLOBALS,
-    '(min-width: 601px)',
-    S("ol[data-sonner-toaster][data-y-position='bottom']"),
-    'left',
-    'calc(50% + var(--lg-dock-shift, 0px))',
-  ],
-  [
-    'dock: sidebar panel',
-    GLOBALS,
-    '(min-width: 761px)',
-    `${ROOT}:has([data-glass='shell'] > [data-glass='sidebar'])`,
-    '--lg-dock-col',
-    '266px',
-  ],
-  [
-    'dock: rail',
-    GLOBALS,
-    RAIL,
-    `${ROOT}:has([data-glass='shell'] > [data-glass='sidebar'])`,
-    '--lg-dock-col',
-    '94px',
-  ],
+  // The toast dock sits bottom right, where Classic puts it (owner 2026-11-12);
+  // toast-position.guard.test.ts pins that no glass rule moves it sideways.
+  // The pane foot's lift is still added while the selection bar floats.
   [
     'dock: pane foot',
     GLOBALS,
