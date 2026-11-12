@@ -383,6 +383,15 @@ function firstStatementFindings(web: Map<string, string>): string[] {
   return found;
 }
 
+/**
+ * The two tests that parse every source file take 1 to 2 s each alone on a
+ * quiet machine. A whole-tree parse ran more than nine times slower inside a
+ * full suite while other suites ran on the same machine, which would reach
+ * this suite's 15 s default, so they have the limit its other whole-tree
+ * scans have.
+ */
+const SCAN = { timeout: 60_000 };
+
 describe('the marker has one emitter (guard 2)', () => {
   // src/test holds the test helpers; the core marker module is allowed below.
   const WEB = sourceFiles(WEB_SRC, ['test']);
@@ -403,9 +412,13 @@ describe('the marker has one emitter (guard 2)', () => {
     ).toBeGreaterThan(0);
   });
 
-  it('only the gate builds the body; no web code spells nothingWritten; in core only the marker module does', () => {
-    expect(oneEmitterFindings(WEB, CORE)).toEqual([]);
-  });
+  it(
+    'only the gate builds the body; no web code spells nothingWritten; in core only the marker module does',
+    SCAN,
+    () => {
+      expect(oneEmitterFindings(WEB, CORE)).toEqual([]);
+    },
+  );
 
   it('plants: a second caller of the body and a nothingWritten literal in a route both fail it', () => {
     // The real gate and core module beside the plants: what they spell is allowed.
@@ -446,7 +459,7 @@ describe('the marker has one emitter (guard 2)', () => {
 describe('a route that uses the gate calls it first, and only the reviewed routes use it (guard 3)', () => {
   const WEB = sourceFiles(WEB_SRC, ['test']);
 
-  it('the three routes, each handler starting with the gate on its own request', () => {
+  it('the three routes, each handler starting with the gate on its own request', SCAN, () => {
     expect(firstStatementFindings(WEB)).toEqual([]);
     for (const route of GATED_ROUTES) expect(WEB.has(route), route).toBe(true);
   });
