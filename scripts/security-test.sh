@@ -122,10 +122,10 @@ PGTAP_TESTS=(
   # Function privilege posture (the P0 class).
   supabase/tests/0318_secdef_grants.test.sql
   supabase/tests/0329_function_grants_and_search_path.test.sql
-  # 0341 also carries the behaviour change, but the SECURITY DEFINER
-  # self-authorization inside publish_outbox is the security property: before it,
-  # every non-admin's outbox event was silently dropped by RLS inside a
-  # best-effort try/catch, so connectors only ever heard admins.
+  # 0341 also carries the behaviour change. It made publish_outbox SECURITY
+  # DEFINER so that a member's outbox event was no longer dropped by the
+  # admin-only table rule; since publish_outbox_service_role_only (docket S67)
+  # only the service role executes it, and its tests 8-10 pin that.
   supabase/tests/0341_manual_writeoff_any_mode_and_outbox_secdef.test.sql
   # Stock writers: post_shipment_shipped (no caller since Shipments was
   # removed) and putaway_transfer (never had a caller) closed to every user
@@ -847,6 +847,20 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0419_release_race.sh; the
   # lock footprint is scripts/db-concurrency/0419_migration_lock_footprint.sh.
   supabase/tests/0419_release_cycle_count_assignee_check.test.sql
+  # Connector export events (docket S67, the database half): publish_outbox
+  # executes for the service role only and its body refuses every other
+  # caller (a signed-in subject, the anon claim, no service_role claim);
+  # outbox_events keeps its manager read rule, has no member write rule, anon
+  # holds no privilege on it and authenticated SELECT alone. The web app
+  # records every event through its service client (the web guard is
+  # src/test/outbox-publish-sites.guard.test.ts below). The lock footprint is
+  # scripts/db-concurrency/0440_migration_lock_footprint.sh.
+  supabase/tests/0440_publish_outbox_service_role_only.test.sql
+  # Who may write the connector tables: no function anon or authenticated may
+  # execute writes or names one, and the member write rules on them are
+  # exactly a named list (each with its reason), so a new one fails; planted
+  # probes prove each detector.
+  supabase/tests/0440_export_queue_writers.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

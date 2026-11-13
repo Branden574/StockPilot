@@ -69,7 +69,16 @@
      in INV-B6 were read on a local Postgres with migrations 0001-0418
      applied; the assertion count in section 10 was re-derived from
      `select plan(58)`, and the two file counts beside it were counted from
-     the manifests in `scripts/security-test.sh` on that date. -->
+     the manifests in `scripts/security-test.sh` on that date.
+
+     AMENDED 2026-11-13 (docket S67, migration
+     publish_outbox_service_role_only): INV-C10 added. Its facts were read
+     from migrations 0016, 0140, 0341, 0402 and the new file, and checked by
+     its two pgTAP files on a local Postgres with migrations 0001-0419 and
+     the new file applied. The two file counts in section 10 were moved by
+     the files added since the last count: two pgTAP files here, and the two
+     vitest files of the web change before it (server/lib/outbox-events);
+     the assertion count beside them was not re-derived. -->
 
 # Security invariants
 
@@ -1409,6 +1418,46 @@ actually fire.
   route tests, and core `return-actions.test.ts`, `exchange-status.test.ts`
   and `exchange-view.test.ts`.
 
+### INV-C10 — export events are recorded by the service role only
+
+- **Invariant**: `public.publish_outbox`, the one writer of the connector
+  export queue `outbox_events`, executes for `service_role` only, and its
+  body refuses (42501 `forbidden`) every caller that is not the service
+  role: a signed-in subject, the anon claim, and a session with no
+  `service_role` claim. `outbox_events` has row security on, keeps its
+  manager read rule (`outbox_events_select`) and has no member write rule;
+  anon holds no privilege on the table and authenticated holds `SELECT`
+  alone, for that rule. On the other connector tables (`connection_sync_log`,
+  `connection_mappings`, `integration_deliveries`, `org_connections`,
+  `integration_endpoints`, `carrier_shipments`) no function anon or
+  authenticated may execute writes or names one of them, and their member
+  write rules are exactly a named list, each with its reason; a separate
+  change replaces those rules.
+- **Why it matters**: the connector drain sends what the queue holds to the
+  organization's accounting system and help desk. An event belongs in the
+  queue only after the action it reports, done by someone allowed to do it.
+  The app checks that action's permission and then records the event through
+  its service client (`apps/web/src/server/lib/outbox-events.ts`), so the
+  database leaves recording to the service role.
+- **Enforced by**: the function's grants and the check at the top of its
+  body, the table's privileges and its one rule (migration
+  publish_outbox_service_role_only). App side: every export event goes
+  through the one helper, on the service client, after the action and its
+  permission check.
+- **Tested at**:
+  [`0440_publish_outbox_service_role_only.test.sql`](../../supabase/tests/0440_publish_outbox_service_role_only.test.sql)
+  (F: the function's grants and contract; R: every rank, anon and a
+  session without claims refused, by the body too with EXECUTE granted
+  back; V: the service role records each topic the app sends, once; T: the
+  table's rule and privileges, an admin's insert, update, delete and
+  truncate refused, a manager still reads; A: the migration's preflight and
+  lock prelude),
+  [`0440_export_queue_writers.test.sql`](../../supabase/tests/0440_export_queue_writers.test.sql)
+  (the class, with planted probes for each detector) and the re-pinned
+  [`0341_manual_writeoff_any_mode_and_outbox_secdef.test.sql`](../../supabase/tests/0341_manual_writeoff_any_mode_and_outbox_secdef.test.sql)
+  (tests 8-10). App side: `src/test/outbox-publish-sites.guard.test.ts` and
+  `src/server/lib/outbox-events.test.ts`.
+
 ---
 
 ## 4. Storage — path shape and bucket exposure
@@ -2158,8 +2207,8 @@ checked.
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 100 other pgTAP
-  files and the 341 vitest files on the manifests of
+  `supabase/tests/security_invariants.test.sql`, plus the 102 other pgTAP
+  files and the 343 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a
