@@ -3,7 +3,7 @@
 // not set (Cookie among them), and the route receives them as the browser sent
 // them. The first test checks that the request handed to the route still has
 // them, so it cannot pass by never seeing a cookie.
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 
 import { autoImplementMethods } from 'next/dist/server/route-modules/app-route/helpers/auto-implement-methods';
 import { HTTP_METHODS, type HTTP_METHOD } from 'next/dist/server/web/http';
@@ -32,6 +32,11 @@ const { PROJECT_REF, postHogEnv } = vi.hoisted(() => {
   return { PROJECT_REF, postHogEnv: { NEXT_PUBLIC_POSTHOG_KEY: PROJECT_REF } };
 });
 vi.mock('@/lib/env.client', () => ({ env: postHogEnv }));
+// gunzipSync as it is, watched: what the route unpacks a gzip body to.
+vi.mock('node:zlib', async (importOriginal) => {
+  const zlib = await importOriginal<typeof import('node:zlib')>();
+  return { ...zlib, gunzipSync: vi.fn(zlib.gunzipSync) };
+});
 
 import * as route from './route';
 
@@ -111,6 +116,17 @@ const NEVER_SENT = [
 const MIB = 1024 * 1024;
 // The platform's request body limit (Vercel: "4.5 MB"), as the route reads it.
 const CAP = 4.5 * MIB;
+// The most an event batch's JSON may be, however it is packed, and the most
+// names it may hold, as the route reads them.
+const MOST_BATCH_BYTES = MIB;
+const MOST_NAMES = 65_536;
+
+/** How many names a value read from JSON holds: every member of every object in it. */
+function namesIn(value: unknown): number {
+  if (value === null || typeof value !== 'object') return 0;
+  const members = Array.isArray(value) ? [] : Object.keys(value);
+  return members.length + Object.values(value).reduce<number>((sum, v) => sum + namesIn(v), 0);
+}
 
 const upstream = vi.fn<typeof fetch>();
 // The route's log lines. Quiet here; the refusal line is asserted on below.
@@ -1260,10 +1276,9 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
    * Our batch whose one event holds `levels` levels in all, the batch's own
    * four among them; `before` is written into its properties first.
    */
-  const nestedTo = (levels: number, before = '') =>
-    withEvent(
-      `{"event":"$pageview","properties":{"token":"${PROJECT_REF}"${before},"deep":${'['.repeat(levels - 4)}0${']'.repeat(levels - 4)}}}`,
-    );
+  const eventNestedTo = (levels: number, before = '') =>
+    `{"event":"$pageview","properties":{"token":"${PROJECT_REF}"${before},"deep":${'['.repeat(levels - 4)}0${']'.repeat(levels - 4)}}}`;
+  const nestedTo = (levels: number, before = '') => withEvent(eventNestedTo(levels, before));
   /** The same, nested in objects. */
   const objectsTo = (levels: number) =>
     withEvent(
@@ -1290,24 +1305,42 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
       nestedTo(MOST_LEVELS + 1, ',"note":"placeholder \\\\"'),
     ],
     [
-      'deeper than the most, many times over, as large as each packing takes',
+      'deeper than the most, many times over, as large as a batch may be',
       (() => {
         const unit = `${'['.repeat(MOST_LEVELS)}${']'.repeat(MOST_LEVELS)}`;
         const one = nestedTo(5);
-        // Its base64 form, the largest packing, is a third larger.
-        const count = Math.floor((CAP * 0.74 - one.length) / (unit.length + 1));
+        const count = Math.floor((MOST_BATCH_BYTES - one.length) / (unit.length + 1));
         return one.replace('"deep":[0]', `"deep":[${Array(count).fill(unit).join(',')}]`);
+      })(),
+    ],
+    [
+      'deeper than the most after text that holds closing brackets and braces',
+      nestedTo(MOST_LEVELS + 1, `,"note":"${']'.repeat(MOST_LEVELS)}${'}'.repeat(MOST_LEVELS)}"`),
+    ],
+    [
+      'deeper than the most in its last event only, after many ordinary ones',
+      withEvent(`${Array(MOST_LEVELS).fill(oursText).join(',')},${eventNestedTo(MOST_LEVELS + 1)}`),
+    ],
+    [
+      'deeper than the most only at the end of a batch as large as a batch may be',
+      (() => {
+        const last = eventNestedTo(MOST_LEVELS + 1);
+        const room = MOST_BATCH_BYTES - withEvent(last).length - 1;
+        const count = Math.floor(room / (oursText.length + 1));
+        return withEvent(`${Array(count).fill(oursText).join(',')},${last}`);
       })(),
     ],
   ])(
     'refuses, before reading it, our batch nested %s, however it is packed, on both event paths',
     async (_, json) => {
+      expect(Buffer.byteLength(json)).toBeLessThanOrEqual(MOST_BATCH_BYTES);
       for (const packing of PACKINGS) {
         expect(packed(packing, json).body.byteLength).toBeLessThanOrEqual(CAP);
       }
-      // It is our batch, written as JSON.stringify writes it: only how deep
-      // it is nested sets it apart.
+      // It is our batch, written as JSON.stringify writes it, with no more
+      // names than the most: only how deep it is nested sets it apart.
       expect(JSON.stringify(JSON.parse(json))).toBe(json);
+      expect(namesIn(JSON.parse(json))).toBeLessThanOrEqual(MOST_NAMES);
       const parse = vi.spyOn(JSON, 'parse');
 
       await expectRefused(everyWay(json));
@@ -1338,6 +1371,92 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
       },
     ]);
     for (const json of [...atTheMost, manyEvents, marksInText]) {
+      for (const request of everyWay(json)) {
+        upstream.mockClear();
+        const at = `${request.url} ${json.length}`;
+        const res = await route.POST(request);
+
+        expect(res.status, at).toBe(200);
+        expect(upstream, at).toHaveBeenCalledTimes(1);
+      }
+    }
+    expect(refusals()).toEqual([]);
+  });
+
+  // A batch holds at most MOST_NAMES names, counting every member of every
+  // object in it, the batch's own among them. posthog-js 1.438.15's events
+  // hold about one name for every 45 bytes or more.
+  /** The seven names of our batch with one event, before what its properties list holds. */
+  const OWN_NAMES = 7;
+  /** Our batch holding `names` names in all: its own, then objects of one name each. */
+  const namesTo = (names: number, name = (_: number) => 'a', before = '') =>
+    withEvent(
+      `{"event":"$pageview","properties":{"token":"${PROJECT_REF}"${before},"list":[${Array.from(
+        { length: names - OWN_NAMES - (before ? 1 : 0) },
+        (_, i) => `{"${name(i)}":0}`,
+      ).join(',')}]}}`,
+    );
+  /** Our batch of ordinary events and, last, one that holds the rest of `names` names. */
+  const namesInLastEvent = (names: number) => {
+    const ordinary = Array(1000).fill(oursText).join(',');
+    // The batch's own three, the ordinary events', and the last event's own four.
+    const restOf = names - 3 - 1000 * namesIn(ours) - 4;
+    return withEvent(
+      `${ordinary},{"event":"$pageview","properties":{"token":"${PROJECT_REF}","list":[${Array(restOf).fill('{"a":0}').join(',')}]}}`,
+    );
+  };
+
+  it.each([
+    ['one more name than the most', namesTo(MOST_NAMES + 1)],
+    [
+      'one more name than the most, each a name of its own',
+      namesTo(MOST_NAMES + 1, (i) => `n${i.toString(36)}`),
+    ],
+    [
+      'one more name than the most, after text that ends in a backslash',
+      namesTo(MOST_NAMES + 1, undefined, ',"note":"placeholder \\\\"'),
+    ],
+    [
+      'one more name than the most, the last of them in its last event',
+      namesInLastEvent(MOST_NAMES + 1),
+    ],
+  ])(
+    'refuses, before reading it, our batch with %s, however it is packed, on both event paths',
+    async (_, json) => {
+      expect(Buffer.byteLength(json)).toBeLessThanOrEqual(MOST_BATCH_BYTES);
+      // It is our batch, written as JSON.stringify writes it, nested no
+      // deeper than the most: only how many names it holds sets it apart.
+      const read = JSON.parse(json) as unknown;
+      expect(JSON.stringify(read)).toBe(json);
+      expect(namesIn(read)).toBe(MOST_NAMES + 1);
+      const parse = vi.spyOn(JSON, 'parse');
+
+      await expectRefused(everyWay(json));
+      // Refused on the count alone: the text is never read as JSON.
+      expect(parse).not.toHaveBeenCalled();
+    },
+  );
+
+  it('passes on our batch with the most names, spread over many events, and one with any number of colons inside its text', async () => {
+    const atTheMost = [
+      namesTo(MOST_NAMES),
+      namesTo(MOST_NAMES, (i) => `n${i.toString(36)}`),
+      namesInLastEvent(MOST_NAMES),
+    ];
+    const colonsInText = withEvent(
+      JSON.stringify({
+        ...ours,
+        properties: {
+          ...(ours.properties as Record<string, unknown>),
+          colons: ':'.repeat(MOST_NAMES * 2),
+          quoted: `\\" ${'":'.repeat(MOST_NAMES)} \\\\`,
+          names: { [':'.repeat(MOST_NAMES)]: '":'.repeat(MOST_NAMES) },
+        },
+      }),
+    );
+    for (const json of [...atTheMost, colonsInText]) {
+      expect(Buffer.byteLength(json)).toBeLessThanOrEqual(MOST_BATCH_BYTES);
+      expect(namesIn(JSON.parse(json))).toBeLessThanOrEqual(MOST_NAMES);
       for (const request of everyWay(json)) {
         upstream.mockClear();
         const at = `${request.url} ${json.length}`;
@@ -1642,10 +1761,10 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
 });
 
 describe('/ingest takes a request body up to the platform limit on every POST path, and no more', () => {
-  // posthog-js caps no request body by size and never retries a 4xx, so a
-  // cap below the platform's would drop batches the SDK sent for good: an
-  // event batch has no size limit (raw JSON after a failed remote config;
-  // $exception events are never cut).
+  // The route reads a request body up to the platform's own limit, so that
+  // it answers, and logs, every body the platform lets through; past that
+  // it answers 413 before reading on. What a batch may unpack to is held
+  // lower (the next describe), so a body this large answers 404 once read.
   const OVER: Array<[string]> = [['/ingest/e/'], ['/ingest/i/v0/e/']];
 
   /** The raw JSON of a batch of this app's events that is exactly `size` bytes. */
@@ -1679,8 +1798,8 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
 
   const JSON_TYPE = { 'content-type': 'application/json' };
 
-  it('passes on a batch just under the limit and one of exactly the limit, by Content-Length and in chunks', async () => {
-    const sizes: number[] = [];
+  it('reads a body just under the limit and one of exactly the limit, by Content-Length and in chunks, and refuses the batch in it by its size', async () => {
+    const refused: Array<[string, Record<string, unknown>]> = [];
     for (const [path] of OVER) {
       for (const size of [CAP - 1, CAP]) {
         const body = batchJsonOfSize(size);
@@ -1699,17 +1818,19 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
           }),
         );
 
+        // Read to the end, not refused as too large a request: the batch
+        // it holds is larger than a batch may be.
         for (const res of [declared, chunked]) {
-          expect(res.status, `${path} ${size}`).toBe(200);
+          expect(res.status, `${path} ${size}`).toBe(404);
+          expect(await res.text()).toBe('');
           expect(res.headers.get('x-content-type-options')).toBe('nosniff');
         }
-        sizes.push(size, size);
+        const line = { status: 404, reason: 'size', method: 'POST', path };
+        refused.push(['[ingest] refused', line], ['[ingest] refused', line]);
       }
     }
-    expect(upstream).toHaveBeenCalledTimes(sizes.length);
-    for (const [call, size] of sizes.entries()) {
-      expect((await sentToPostHog(call)).body, `call ${call}`).toHaveLength(size);
-    }
+    expect(upstream).not.toHaveBeenCalled();
+    expect(refusals()).toEqual(refused);
   });
 
   it.each(OVER)(
@@ -1761,59 +1882,6 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
     },
   );
 
-  it.each(OVER)(
-    'holds what a gzip batch unpacks to on %s to the same limit: exactly the limit passes, one byte over answers 413',
-    async (path) => {
-      // A batch of this app's events either way; a few kilobytes as sent.
-      const atLimit = new Uint8Array(gzipSync(batchJsonOfSize(CAP)));
-      const oneOver = new Uint8Array(gzipSync(batchJsonOfSize(CAP + 1)));
-      expect(oneOver.byteLength).toBeLessThan(64 * 1024);
-
-      const passed = await route.POST(
-        incoming(path, {
-          method: 'POST',
-          headers: { 'content-type': 'text/plain' },
-          body: atLimit,
-        }),
-      );
-      const refused = await route.POST(
-        incoming(path, {
-          method: 'POST',
-          headers: { 'content-type': 'text/plain' },
-          body: oneOver,
-        }),
-      );
-
-      expect(passed.status).toBe(200);
-      expect(refused.status).toBe(413);
-      expect(await refused.text()).toBe('');
-      expect(refused.headers.get('x-content-type-options')).toBe('nosniff');
-      expect(upstream).toHaveBeenCalledTimes(1);
-      expect((await sentToPostHog()).body).toEqual(atLimit);
-      expect(refusals()).toEqual([
-        ['[ingest] refused', { status: 413, reason: 'size', method: 'POST', path }],
-      ]);
-    },
-  );
-
-  it('answers 413 to a small gzip body that unpacks to many times the limit', async () => {
-    // 64 MiB of one character: some tens of kilobytes as sent.
-    const small = new Uint8Array(gzipSync(Buffer.alloc(64 * MIB, 0x61)));
-    expect(small.byteLength).toBeLessThan(MIB / 4);
-
-    const res = await route.POST(
-      incoming('/ingest/e/', {
-        method: 'POST',
-        headers: { 'content-type': 'text/plain' },
-        body: small,
-      }),
-    );
-
-    expect(res.status).toBe(413);
-    expect(await res.text()).toBe('');
-    expect(upstream).not.toHaveBeenCalled();
-  });
-
   it('answers 400 with no body when the request body breaks off, and asks PostHog nothing', async () => {
     const broken = new ReadableStream<Uint8Array>({
       pull(controller) {
@@ -1826,6 +1894,160 @@ describe('/ingest takes a request body up to the platform limit on every POST pa
     expect(await res.text()).toBe('');
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
     expect(upstream).not.toHaveBeenCalled();
+  });
+});
+
+describe('/ingest reads an event batch only up to a set size, however it is packed', () => {
+  // The route reads every batch it passes on, and what reading costs grows
+  // with what is read; a batch that unpacks to more than MOST_BATCH_BYTES is
+  // refused before it is read, and is not unpacked past that size.
+  const EVENT_PATHS = ['/ingest/e/', '/ingest/i/v0/e/'] as const;
+
+  /** The JSON of a batch of this app's events that is exactly `size` bytes. */
+  function batchOfSize(size: number): string {
+    const without = batchJson(PROJECT_REF, [{ ...eventFor(PROJECT_REF), pad: '' }]);
+    const json = batchJson(PROJECT_REF, [
+      { ...eventFor(PROJECT_REF), pad: 'a'.repeat(size - without.length) },
+    ]);
+    expect(Buffer.byteLength(json)).toBe(size);
+    return json;
+  }
+
+  /** `json` packed each way, to each event path. */
+  function everyWay(json: string): NextRequest[] {
+    return EVENT_PATHS.flatMap((path) =>
+      PACKINGS.map((packing) => {
+        const { query, contentType, body } = packed(packing, json);
+        return incoming(`${path}${query ? `?${query}` : ''}`, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body,
+        });
+      }),
+    );
+  }
+
+  it('passes on, bytes unchanged, a batch of exactly the size and one just under it, however it is packed', async () => {
+    const sent: Uint8Array[] = [];
+    for (const size of [MOST_BATCH_BYTES - 1, MOST_BATCH_BYTES]) {
+      for (const request of everyWay(batchOfSize(size))) {
+        const body = new Uint8Array(await request.clone().arrayBuffer());
+        const res = await route.POST(request);
+
+        expect(res.status, `${request.url} ${size}`).toBe(200);
+        sent.push(body);
+      }
+    }
+    expect(upstream).toHaveBeenCalledTimes(sent.length);
+    for (const [call, body] of sent.entries()) {
+      // Compared as bytes in one step: a deep compare of a mebibyte is slow.
+      const onward = Buffer.from((await sentToPostHog(call)).body);
+      expect(onward.equals(Buffer.from(body)), `call ${call}`).toBe(true);
+    }
+    expect(refusals()).toEqual([]);
+  });
+
+  it('refuses a batch one byte over the size, however it is packed, before reading it, and logs it as too large', async () => {
+    const requests = everyWay(batchOfSize(MOST_BATCH_BYTES + 1));
+    const parse = vi.spyOn(JSON, 'parse');
+    const decode = vi.spyOn(TextDecoder.prototype, 'decode');
+
+    for (const request of requests) {
+      const res = await route.POST(request);
+      const at = `${new URL(request.url).pathname}${new URL(request.url).search}`;
+
+      expect(res.status, at).toBe(404);
+      expect(await res.text(), at).toBe('');
+      expect(res.headers.get('x-content-type-options'), at).toBe('nosniff');
+    }
+    expect(upstream).not.toHaveBeenCalled();
+    expect(parse).not.toHaveBeenCalled();
+    expect(decode).not.toHaveBeenCalled();
+    expect(refusals()).toEqual(
+      requests.map((request) => [
+        '[ingest] refused',
+        { status: 404, reason: 'size', method: 'POST', path: new URL(request.url).pathname },
+      ]),
+    );
+  });
+
+  it('unpacks a gzip body no further than the size, however much more it holds', async () => {
+    // A batch a byte over the size, one twice the size, and 64 MiB of one
+    // character: each some kilobytes as sent.
+    const bodies = [
+      new Uint8Array(gzipSync(batchOfSize(MOST_BATCH_BYTES + 1))),
+      new Uint8Array(gzipSync(batchOfSize(2 * MOST_BATCH_BYTES))),
+      new Uint8Array(gzipSync(Buffer.alloc(64 * MIB, 0x61))),
+    ];
+    const atTheSize = new Uint8Array(gzipSync(batchOfSize(MOST_BATCH_BYTES)));
+    const gunzip = vi.mocked(gunzipSync);
+    gunzip.mockClear();
+
+    for (const [i, body] of bodies.entries()) {
+      expect(body.byteLength, `body ${i}`).toBeLessThan(MIB / 4);
+      const res = await route.POST(
+        incoming(EVENT_PATHS[i % 2]!, {
+          method: 'POST',
+          headers: { 'content-type': 'text/plain' },
+          body,
+        }),
+      );
+
+      expect(res.status, `body ${i}`).toBe(404);
+      expect(await res.text()).toBe('');
+    }
+    // Each stopped at the size, with nothing unpacked handed on.
+    expect(gunzip.mock.results.map((result) => result.type)).toEqual(['throw', 'throw', 'throw']);
+    const passed = await route.POST(
+      incoming('/ingest/e/', {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: atTheSize,
+      }),
+    );
+    expect(passed.status).toBe(200);
+    expect(gunzip.mock.results.at(-1)).toMatchObject({ type: 'return' });
+    expect((gunzip.mock.results.at(-1)!.value as Uint8Array).byteLength).toBe(MOST_BATCH_BYTES);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    expect(refusals()).toEqual(
+      bodies.map((_, i) => [
+        '[ingest] refused',
+        { status: 404, reason: 'size', method: 'POST', path: EVENT_PATHS[i % 2] },
+      ]),
+    );
+  });
+
+  it('decodes a base64 body only when its text decodes to no more than the size', async () => {
+    const over = packed('base64', batchOfSize(MOST_BATCH_BYTES + 1));
+    const atTheSize = packed('base64', batchOfSize(MOST_BATCH_BYTES));
+    const from = vi.spyOn(Buffer, 'from');
+    const decodedBase64 = () =>
+      from.mock.calls.flatMap((call, i) =>
+        call[1] === 'base64' ? [(from.mock.results[i]!.value as Buffer).byteLength] : [],
+      );
+
+    const refused = await route.POST(
+      incoming(`/ingest/e/?${over.query}`, {
+        method: 'POST',
+        headers: { 'content-type': over.contentType },
+        body: over.body,
+      }),
+    );
+    expect(refused.status).toBe(404);
+    expect(decodedBase64()).toEqual([]);
+
+    const passed = await route.POST(
+      incoming(`/ingest/i/v0/e/?${atTheSize.query}`, {
+        method: 'POST',
+        headers: { 'content-type': atTheSize.contentType },
+        body: atTheSize.body,
+      }),
+    );
+    expect(passed.status).toBe(200);
+    expect(decodedBase64()).toEqual([MOST_BATCH_BYTES]);
+    expect(refusals()).toEqual([
+      ['[ingest] refused', { status: 404, reason: 'size', method: 'POST', path: '/ingest/e/' }],
+    ]);
   });
 });
 

@@ -58,11 +58,13 @@ export const dynamic = 'force-dynamic';
  *     as the SDK spelled it).
  *   - the body: a POST is an event batch, and only one that names this app's
  *     project and no other, in one of the three ways the SDK packs it,
- *     written as the SDK writes it and nested no deeper than a set number of
- *     levels (eventBatch, ownBatch, asJsonWritesIt and MOST_LEVELS below).
- *     Its bytes go on as they came, up to the platform's request
- *     body limit (BODY_CAP below); a larger one, or one that unpacks to
- *     more, answers 413.
+ *     written as the SDK writes it, no larger than a set size once unpacked,
+ *     and nested no deeper and holding no more names than set numbers
+ *     (eventBatch, ownBatch, asJsonWritesIt, MOST_BATCH_BYTES, MOST_LEVELS
+ *     and MOST_NAMES below). Its bytes go on as they came. A request body
+ *     over the platform's limit (BODY_CAP below) answers 413; a batch that
+ *     unpacks to more than MOST_BATCH_BYTES answers 404, and is not unpacked
+ *     past it.
  *
  * So every place a request names a PostHog project is held to this app's
  * key: the /array/ path, the query's token, Authorization, and the batch.
@@ -75,8 +77,8 @@ export const dynamic = 'force-dynamic';
  * (Target.shared). Every answer is nosniff. fetch has already decoded the
  * body, so Content-Encoding and Content-Length are not copied. A failure of
  * ours answers with no body: 404 for a path, a query or a batch not on the
- * list, 405 for another method, 413 for a body over the cap (each of these
- * logged with its path and which of them it was: refuse below), 400 for a
+ * list, 405 for another method, 413 for a request body over the cap (each of
+ * these logged with its path and which of them it was: refuse below), 400 for a
  * body that could not be read, 502 when PostHog does not answer within 10
  * seconds. Analytics is never worth an error page.
  *
@@ -92,12 +94,9 @@ const PREFIX = '/ingest';
 const TIMEOUT_MS = 10_000;
 
 /**
- * The largest request body taken; past it the answer is 413. It is the
- * platform's own limit, because posthog-js 1.438.15 caps no request body by
- * size and never retries a 4xx (retry-queue.js:110), so any lower cap would
- * drop, for good, batches the SDK legitimately sends: an event batch has no
- * size limit (raw JSON once a remote config fails, posthog-core.js:1097;
- * $exception events are never cut, posthog-exceptions.js:168).
+ * The largest request body taken; past it the answer is 413, before the body
+ * is read. It is the platform's own limit, so that this route answers every
+ * request body the platform lets through itself, and logs it.
  *
  * The limit: "The maximum payload size for the request body or the response
  * body of a Vercel Function is 4.5 MB", and a larger one is answered 413
@@ -105,13 +104,31 @@ const TIMEOUT_MS = 10_000;
  * limits, Request body size). The docs give no byte count, so 4.5 MB is
  * read as 4.5 MiB, the larger reading: the route refuses nothing the
  * platform lets through, and stops reading there wherever no platform
- * limit applies (next start).
- *
- * It is also the most a batch may unpack to (eventBatch): the same events
- * sent as raw JSON would have been held to it, and a gzip body unpacks to
- * many times its size.
+ * limit applies (next start). What an event batch may unpack to is held
+ * lower (MOST_BATCH_BYTES).
  */
 const BODY_CAP = 4.5 * 1024 * 1024;
+
+/**
+ * The most bytes an event batch's JSON may be, however it is packed
+ * (eventBatch): a gzip body is unpacked no further than this, a base64 body is
+ * not decoded when its text would decode to more, and a raw JSON body larger
+ * than this is not read. Such a batch answers 404 and is logged (refuse,
+ * reason 'size').
+ *
+ * The route reads every batch it passes on (ownBatch), and what reading
+ * costs grows with what is read; this bounds it. posthog-js 1.438.15 caps no
+ * batch by size and never retries a 4xx (retry-queue.js:110), so a batch past
+ * this is lost for good. It sits above what the SDK built with this app's
+ * options in a stress test: 100 events at once, the most its client rate
+ * limit lets go in one flush (rate-limiter.js:11-12; request-queue.js:54),
+ * came to about a third of it, and ten $exception events (the most of one
+ * type the exception autocapture lets through at once) of 50 stack frames
+ * each (@posthog/core error-tracking parsers STACKTRACE_FRAME_LIMIT) to under
+ * a fifth. Exceptions that each carry a long chain of causes can come to
+ * more; the refusal log line (reason 'size') shows each one.
+ */
+const MOST_BATCH_BYTES = 1024 * 1024;
 
 /**
  * A posthog.version, the segment the SDK puts in /static/<version>/. Any
@@ -410,8 +427,8 @@ const BASE64_FORM = /^data=((?:[0-9A-Za-z]|%2B|%2F|%3D)*)$/;
 
 /**
  * The JSON of an event batch, unpacked the one way its request says it is
- * packed; 'size' when it unpacks to more than BODY_CAP; null when it is not
- * packed as the SDK packs one. The three ways posthog-js 1.438.15 sends a
+ * packed; 'size' when it would unpack to more than MOST_BATCH_BYTES (it is not
+ * unpacked past that); null when it is not packed as the SDK packs one. The three ways posthog-js 1.438.15 sends a
  * batch (request.js:139-171 encodePostData, :533-537 buildRequestURL):
  *
  *   - gzip, its default (posthog-core.js:658, :1100-1105): the gzip bytes
@@ -442,6 +459,8 @@ function eventBatch(
     const field = BASE64_FORM.exec(text);
     if (!field) return null;
     const base64 = decodeURIComponent(field[1]!);
+    // What these characters decode to, counted before they are decoded.
+    if (Buffer.byteLength(base64, 'base64') > MOST_BATCH_BYTES) return 'size';
     const decoded = Buffer.from(base64, 'base64');
     // Node skips what is not base64 and takes loose endings; only the one
     // spelling of these bytes that an encoder writes is taken.
@@ -454,7 +473,7 @@ function eventBatch(
   } else if (body[0] === 0x1f && body[1] === 0x8b) {
     if (contentType !== 'text/plain') return null;
     try {
-      json = gunzipSync(body, { maxOutputLength: BODY_CAP });
+      json = gunzipSync(body, { maxOutputLength: MOST_BATCH_BYTES });
     } catch (err) {
       // Node's own error for output past maxOutputLength; any other is a
       // body that is not gzip after all.
@@ -462,6 +481,7 @@ function eventBatch(
     }
   } else {
     if (contentType !== 'application/json') return null;
+    if (body.byteLength > MOST_BATCH_BYTES) return 'size';
     json = body;
   }
   try {
@@ -523,22 +543,30 @@ function asJsonWritesIt(json: string, read: unknown): boolean {
  * app's own events carry flat properties (lib/analytics.ts callers,
  * lib/perf/rum.ts emit). PostHog reads a batch with serde_json
  * (rust/capture v0_request.rs from_bytes), which stops at 128 levels.
- *
- * Writing a value out again (asJsonWritesIt) costs more the deeper it is
- * nested, so a text past this is refused on the count (nestedAtMost),
- * before it is read: what one batch costs is then bounded by its size.
  */
 const MOST_LEVELS = 64;
 
 /**
- * Whether a JSON text opens no more than `most` lists and objects inside one
- * another, counted in one pass over its text: a bracket or a brace counts
- * outside a string only, and a backslash in a string takes the character
- * after it with it. Exact for a text JSON.parse takes; any other is refused
- * by JSON.parse after.
+ * The most names a batch's JSON holds, counting every member of every object
+ * in it. A batch of posthog-js 1.438.15's ordinary events holds about one
+ * name for every 60 bytes, and its $exception events, the densest it builds,
+ * one for every 45, so a batch of MOST_BATCH_BYTES holds no more than about a
+ * third of this.
  */
-function nestedAtMost(json: string, most: number): boolean {
+const MOST_NAMES = 65_536;
+
+/**
+ * Whether a batch's JSON text is nested no deeper than MOST_LEVELS and holds
+ * no more than MOST_NAMES names, counted in one pass over its text, before
+ * it is read: what reading it and writing it again cost grows with both, as
+ * well as with its size (MOST_BATCH_BYTES). A bracket, a brace or a colon
+ * counts outside a string only, and a backslash in a string takes the
+ * character after it with it. Exact for a text JSON.parse takes; any other
+ * is refused by JSON.parse after.
+ */
+function withinReadBounds(json: string): boolean {
   let levels = 0;
+  let names = 0;
   let inString = false;
   for (let at = 0; at < json.length; at++) {
     const code = json.charCodeAt(at);
@@ -547,8 +575,10 @@ function nestedAtMost(json: string, most: number): boolean {
       else if (code === 0x22) inString = false;
     } else if (code === 0x22) {
       inString = true;
+    } else if (code === 0x3a) {
+      if (++names > MOST_NAMES) return false;
     } else if (code === 0x5b || code === 0x7b) {
-      if (++levels > most) return false;
+      if (++levels > MOST_LEVELS) return false;
     } else if (code === 0x5d || code === 0x7d) {
       levels--;
     }
@@ -560,9 +590,9 @@ function nestedAtMost(json: string, most: number): boolean {
  * Whether a batch's JSON is one the SDK builds for this app's project: an
  * object of api_key, batch and sent_at and nothing else, whose api_key is
  * this app's key, with at least one event, and no event naming another
- * project, written as the SDK writes it (asJsonWritesIt), and nested no
- * deeper than MOST_LEVELS. With no key set, analytics is off and no batch
- * passes.
+ * project, written as the SDK writes it (asJsonWritesIt), nested no deeper
+ * than MOST_LEVELS and holding no more than MOST_NAMES names. With no key set,
+ * analytics is off and no batch passes.
  *
  * PostHog files a batch under its api_key, before any key an event carries
  * (rust/capture utils.rs extract_and_verify_token), so that field must be
@@ -579,7 +609,7 @@ function ownBatch(json: string): boolean {
   if (key === '') return false;
   // First: it is one pass over the text, and bounds what reading it and
   // writing it again cost.
-  if (!nestedAtMost(json, MOST_LEVELS)) return false;
+  if (!withinReadBounds(json)) return false;
   let batch: unknown;
   try {
     batch = JSON.parse(json);
@@ -630,8 +660,9 @@ function emptyAnswer(status: 400 | 404 | 405 | 413 | 502, allow?: string): Respo
 
 /**
  * What a refused request had that the list does not: its path, its method
- * (405), its query, its size (413: a body over the cap, as sent or once
- * unpacked) or its body (a batch that is not one of this app's).
+ * (405), its query, its size (413: a request body over BODY_CAP; 404: a batch
+ * that unpacks to more than MOST_BATCH_BYTES) or its body (a batch that is not
+ * one of this app's).
  */
 type Reason = 'path' | 'method' | 'query' | 'size' | 'body';
 
@@ -684,7 +715,7 @@ async function proxy(request: NextRequest): Promise<Response> {
       incoming.searchParams.get('compression'),
       read,
     );
-    if (batch === 'size') return refuse(413, 'size', method, path);
+    if (batch === 'size') return refuse(404, 'size', method, path);
     if (batch === null || !ownBatch(batch)) return refuse(404, 'body', method, path);
     requestBody = read;
   }
