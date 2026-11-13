@@ -9,6 +9,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * module rows unreadable, and the real route runs behind it. Every route in
  * the table must answer one of exactly three ways:
  *   - '5xx': a server error the phone retries, never a 2xx and never a 4xx;
+ *     where a tag is given, the fixed try-again sentence, reported once under
+ *     that tag at warning level (internalErrorResponse);
  *   - 'marker': the API context gate's 503 marked as refused before any write
  *     (the two routes the phone cannot send twice), with no table read past
  *     the context;
@@ -76,6 +78,7 @@ import { POST as scanPOST } from './po-imports/scan/route';
 import { POST as escalatePOST } from './v1/exceptions/[id]/escalate/route';
 import { GET as upcGET } from './v1/items/upc-lookup/route';
 import { GET as announcementsGET } from './v1/me/announcements/route';
+import { GET as releasesGET } from './v1/me/releases/route';
 import { GET as snapshotGET } from './v1/mobile/snapshot/route';
 import { POST as receiveLinePOST } from './v1/po/[id]/receive-line/route';
 import { GET as borrowersGET } from './v1/rentals/borrowers/route';
@@ -125,8 +128,22 @@ function scan(mode: 'separate' | 'combined'): Request {
 
 type Expected = '5xx' | 'marker' | 'no-ai';
 
-const ROUTES: Array<[string, Expected, () => Promise<Response>]> = [
-  ['GET /api/v1/mobile/snapshot', '5xx', () => snapshotGET(get('/api/v1/mobile/snapshot'))],
+/** The sentence internalErrorResponse answers for this error. */
+const FIXED_SENTENCE = 'Your access could not be checked. Please try again.';
+
+const ROUTES: Array<[string, Expected, () => Promise<Response>, string?]> = [
+  [
+    'GET /api/v1/mobile/snapshot',
+    '5xx',
+    () => snapshotGET(get('/api/v1/mobile/snapshot')),
+    'mobile.snapshot.module_state',
+  ],
+  [
+    'GET /api/v1/me/releases',
+    '5xx',
+    () => releasesGET(get('/api/v1/me/releases')),
+    'api.v1.me.releases',
+  ],
   [
     'POST /api/v1/rentals (checkout)',
     'marker',
@@ -175,11 +192,27 @@ const ROUTES: Array<[string, Expected, () => Promise<Response>]> = [
         { params: Promise.resolve({ id: PO }) },
       );
     },
+    'po.receive-line.module_state',
   ],
   ['GET /api/v1/rentals/borrowers', '5xx', () => borrowersGET(get('/api/v1/rentals/borrowers'))],
-  ['GET /api/v1/me/announcements', '5xx', () => announcementsGET(get('/api/v1/me/announcements'))],
-  ['POST /api/po-imports/scan (separate)', '5xx', () => scanPOST(scan('separate'))],
-  ['POST /api/po-imports/scan (combined)', '5xx', () => scanPOST(scan('combined'))],
+  [
+    'GET /api/v1/me/announcements',
+    '5xx',
+    () => announcementsGET(get('/api/v1/me/announcements')),
+    'api.v1.me.announcements',
+  ],
+  [
+    'POST /api/po-imports/scan (separate)',
+    '5xx',
+    () => scanPOST(scan('separate')),
+    'po-imports.scan.separate',
+  ],
+  [
+    'POST /api/po-imports/scan (combined)',
+    '5xx',
+    () => scanPOST(scan('combined')),
+    'po-imports.scan',
+  ],
   [
     'GET /api/v1/items/upc-lookup',
     'no-ai',
@@ -188,7 +221,7 @@ const ROUTES: Array<[string, Expected, () => Promise<Response>]> = [
 ];
 
 describe('routes with the module state unreadable', () => {
-  it.each(ROUTES)('%s answers %s', async (_route, expected, send) => {
+  it.each(ROUTES)('%s answers %s', async (_route, expected, send, tag) => {
     const res = await send();
     if (expected === '5xx') {
       expect(res.status).toBeGreaterThanOrEqual(500);
@@ -197,6 +230,14 @@ describe('routes with the module state unreadable', () => {
       expect(
         vi.mocked(reportError).mock.calls.some(([e]) => e instanceof ModulesUnavailableError),
       ).toBe(true);
+      if (tag) {
+        expect(((await res.json()) as { message?: unknown }).message).toBe(FIXED_SENTENCE);
+        const reports = vi
+          .mocked(reportError)
+          .mock.calls.filter(([e]) => e instanceof ModulesUnavailableError);
+        expect(reports).toHaveLength(1);
+        expect(reports[0]![1]).toEqual(expect.objectContaining({ tag, level: 'warning' }));
+      }
       return;
     }
     if (expected === 'marker') {

@@ -104,6 +104,30 @@ export function internalErrorResponse(
 }
 
 /**
+ * A module state the API context could not read (ModulesUnavailableError,
+ * docket S81), answered as internalErrorResponse answers it: the route's 5xx
+ * with the class's fixed try-again sentence, reported once as a warning under
+ * the route's tag. Anything else is thrown again unchanged, so a catch that
+ * calls this changes nothing but this one answer:
+ *
+ *   } catch (e) {
+ *     return answerModuleState(e, 'api.v1.example', { headers: NO_STORE });
+ *   }
+ *
+ * Route handlers have no shared wrapper around their bodies, so each path that
+ * can ask about a module ends in a catch like this or in internalErrorResponse
+ * (app/api/module-state-reach.guard.test.ts holds every route to it).
+ */
+export function answerModuleState(
+  e: unknown,
+  tag: string,
+  opts: InternalErrorResponseOptions = {},
+): NextResponse {
+  if (e instanceof ModulesUnavailableError) return internalErrorResponse(e, tag, opts);
+  throw e;
+}
+
+/**
  * internalErrorResponse, except for assertWarehouseAccess's refusal
  * (ForbiddenError, lib/auth/warehouse.ts), which is not a ServiceError. The
  * phone's count routes meet it through CycleCountsService.assertSessionAccess:

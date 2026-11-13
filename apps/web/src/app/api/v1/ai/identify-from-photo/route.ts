@@ -13,6 +13,7 @@ import { env } from '@/lib/env';
 import { MIME_FOR_KIND, sniffImage } from '@/lib/image-signature';
 import { checkRateLimit } from '@/lib/rate-limit';
 import {
+  answerModuleState,
   internalErrorResponse,
   unreadableRequestResponse,
   VISION_FAILED_MESSAGE,
@@ -76,7 +77,9 @@ export async function POST(req: NextRequest) {
     if (e instanceof ServiceError && e.code === 'module_disabled') {
       return NextResponse.json({ error: 'module_disabled', message: e.message }, { status: 403 });
     }
-    throw e;
+    // A module state that could not be read (docket S81); anything else is
+    // thrown on, as before.
+    return answerModuleState(e, 'ai.identify-from-photo.module_state');
   }
   // 30 cover-IDs per minute per user is way over the realistic mobile
   // capture cadence; a tighter cap is fine here because Vision calls
