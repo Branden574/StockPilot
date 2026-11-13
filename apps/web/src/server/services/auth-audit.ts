@@ -73,40 +73,78 @@ export async function emitAuthAudit(params: {
   }
 }
 
+const UNRESOLVED = { organizationId: null, role: null } as const;
+
 /**
- * Resolves a user's default organization + role for audit attribution
- * and ServiceContext construction. Returns nulls if the lookup fails —
- * the audit row is still written (organization_id is nullable). Uses
- * the admin client because the user may be on a freshly-issued or
- * recovery session with limited RLS context.
+ * A read the resolver needed did not answer: no organization, and the failure
+ * reported. The code only, never the message, which can quote request details.
+ */
+function unresolved(
+  step: 'profile' | 'default_membership' | 'any_membership' | 'thrown',
+  failure: unknown,
+): { organizationId: null; role: null } {
+  const code =
+    failure && typeof failure === 'object' && 'code' in failure
+      ? String((failure as { code: unknown }).code ?? '') || null
+      : null;
+  void reportError(new Error('Audit organization could not be resolved'), {
+    tag: 'audit.organization_unresolved',
+    level: 'warning',
+    extra: {
+      step,
+      code,
+      thrown: step === 'thrown' && failure instanceof Error ? failure.name : null,
+    },
+  });
+  return UNRESOLVED;
+}
+
+/**
+ * Resolves the organization (and role) an audit row about this person is
+ * filed under, for a row written outside an organization context: sign-in,
+ * sign-out, recovery codes, email change.
+ *
+ * The profile's default organization is a preference the person sets on
+ * their own row, never proof of membership. It is used only when it is an
+ * ACCEPTED membership of this person; otherwise the person's oldest accepted
+ * membership (the tie-break of every other membership resolver, 0355);
+ * otherwise none. A row with no organization is still written
+ * (audit_logs.organization_id is nullable) and is in no organization's log.
+ *
+ * Fails closed: when a read it needs fails, it answers no organization and
+ * reports the failure, rather than file the row under an organization it
+ * could not confirm. Uses the admin client because the user may be on a
+ * freshly-issued or recovery session with limited RLS context.
  */
 export async function resolveDefaultOrgAndRole(
   userId: string,
 ): Promise<{ organizationId: string | null; role: string | null }> {
   try {
     const admin = createAdminClient();
-    const { data: profile } = await admin
+    const { data: profile, error: profileError } = await admin
       .from('user_profiles')
       .select('default_organization_id')
       .eq('id', userId)
       .maybeSingle();
+    if (profileError) return unresolved('profile', profileError);
     const defaultOrgId =
       (profile as { default_organization_id: string | null } | null)
         ?.default_organization_id ?? null;
 
     if (defaultOrgId) {
-      const { data: member } = await admin
+      const { data: member, error: memberError } = await admin
         .from('organization_members')
         .select('organization_id, role')
         .eq('user_id', userId)
         .eq('organization_id', defaultOrgId)
         .not('accepted_at', 'is', null)
         .maybeSingle();
+      if (memberError) return unresolved('default_membership', memberError);
       const row = member as { organization_id: string; role: string } | null;
       if (row) return { organizationId: row.organization_id, role: row.role };
     }
 
-    const { data: anyMember } = await admin
+    const { data: anyMember, error: anyError } = await admin
       .from('organization_members')
       .select('organization_id, role')
       .eq('user_id', userId)
@@ -116,12 +154,13 @@ export async function resolveDefaultOrgAndRole(
       .order('organization_id', { ascending: true })
       .limit(1)
       .maybeSingle();
+    if (anyError) return unresolved('any_membership', anyError);
     const row = anyMember as { organization_id: string; role: string } | null;
     return {
       organizationId: row?.organization_id ?? null,
       role: row?.role ?? null,
     };
-  } catch {
-    return { organizationId: null, role: null };
+  } catch (e) {
+    return unresolved('thrown', e);
   }
 }
