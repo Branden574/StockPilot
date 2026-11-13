@@ -926,6 +926,33 @@ describe('GET /auth/confirm for each email-change link, by who this browser is s
       expect(html).not.toContain('Continuing signs you in as');
     });
   });
+
+  // The pending address is whatever GoTrue's admin read returns for the
+  // account. The app's own change-email form takes none of < > " &, so this is
+  // the stored value as the route receives it: a quoted local part carrying
+  // markup characters. It is printed escaped, in the same marked span as every
+  // other address, and no markup from it reaches the page.
+  it('signed in as another account, a pending address with markup characters: the notice and the line show it escaped and marked like every other address', async () => {
+    const pending = `"</span><b title='t'>x&y</b>"@example.com`;
+    const escaped =
+      '&quot;&lt;/span&gt;&lt;b title=&#39;t&#39;&gt;x&amp;y&lt;/b&gt;&quot;@example.com';
+    signedInAs(USER_B, EMAIL_B);
+    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: pending }));
+    const res = await GET(getReq(linkQuery({ type: 'email_change' })));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(
+      `<p class="note">You're signed in as ${see(EMAIL_B)} on this browser. If the other address has not confirmed the change yet, continuing signs no one in and you stay signed in as ${see(EMAIL_B)}. If it has, continuing completes the change and signs you in as ${see(escaped)} instead. If you didn't ask for this link, close this page.</p>`,
+    );
+    expect(html).toContain(
+      `This link changes the sign-in email of ${see('old@example.com')} to ${see(escaped)}.`,
+    );
+    expect(html).not.toContain(pending);
+    expect(html).not.toMatch(/<b\b/i);
+    // Two addresses in the line and three in the notice, each in its own span.
+    expect(html.match(/<span class="addr" data-press-gate-see>/g)).toHaveLength(5);
+    expect(html.match(/<\/span>/g)).toHaveLength(5);
+  });
 });
 
 // Every link the app writes carries r (lib/auth/confirm-link.ts, and the
