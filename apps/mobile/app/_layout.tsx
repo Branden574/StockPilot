@@ -228,15 +228,33 @@ function RootGate() {
   const router = useRouter();
   const { c } = useTheme();
 
-  usePushNotifications(session?.user ?? null);
-  useSync(session?.user ?? null);
+  // WHO THE DATA HOOKS RUN FOR (docket S43b): nobody, until the session has
+  // entered its authenticator code. A session that still owes the code is a
+  // password and nothing more, so push, the sync, the held order requests and
+  // the "last seen" beacon below are handed no user while `mfaRequired` is
+  // true, and start the moment the code is accepted. mfaRequired is worked out
+  // from the session in the same render it arrives in (auth-context.tsx), so
+  // there is no render in which they see a session that owes its code.
+  //
+  // The account gate and the session revocation listener further down keep
+  // the session itself: a disabled or signed-out account must still reach a
+  // phone that is sitting on the code screen.
+  const dataUser = session && !mfaRequired ? session.user : null;
+
+  // Push: no permission prompt, no registration and no tap handler at the
+  // code screen. The registration also reads the session's level itself right
+  // before it writes (use-push-notifications.ts registerThisDevice), which
+  // covers the one caller outside this hook (push-unbind.ts, after a sign-out
+  // the session survived).
+  usePushNotifications(dataUser);
+  useSync(dataUser);
   // Order requests held at this account's last sign-out (phone ordering
   // PO-4): checked at sign-in and on foreground, reads only.
   const seeOrders = React.useCallback(() => router.navigate('/orders' as Href), [router]);
-  useHeldOrderSubmissions(session?.user?.id ?? null, seeOrders);
+  useHeldOrderSubmissions(dataUser?.id ?? null, seeOrders);
   // "Last seen" for the platform console (web mig 0352): foreground + navigation,
   // never a timer. Silent on every failure.
-  useActivityBeacon(session?.user?.id ?? null, segments.join('/'));
+  useActivityBeacon(dataUser?.id ?? null, segments.join('/'));
 
   // Mounted HERE, not in DrawerContent: a user sitting on an auth-group screen,
   // a pushed card screen, a full-screen modal or the pre-drawer cold-launch
@@ -263,6 +281,10 @@ function RootGate() {
     // redirect below cannot fight the disabled screen (the session-restoration
     // loop this gate exists to prevent).
     if (loading || accountGate.state === 'disabled') return;
+    // The code screen has replaced the navigator (below), so there is nothing
+    // to navigate: the way back from the auth group runs once the code is
+    // accepted and the Stack is mounted again.
+    if (session && mfaRequired) return;
     const inAuthGroup = segments[0] === '(auth)';
     if (!session && !inAuthGroup) {
       // WHERE depends on WHY. An ordinary signed-out launch gets the marketing
@@ -286,7 +308,7 @@ function RootGate() {
       clearSessionEnded();
       router.replace('/');
     }
-  }, [session, loading, segments, router, accountGate.state]);
+  }, [session, loading, mfaRequired, segments, router, accountGate.state]);
 
   // The account gate outranks every other gate, and deliberately does NOT
   // require a session: a disabled user is rejected AT sign-in, so there is no
@@ -306,7 +328,12 @@ function RootGate() {
   //
   // MFA gate takes precedence over the biometric lock: a fresh password
   // sign-in that owes a TOTP code must complete it before anything else.
-  if (!loading && session && mfaRequired) {
+  //
+  // It does NOT wait for `loading` (docket S43b): a session that owes its
+  // code is never handed the navigator, at any point of a launch or a
+  // sign-in. The code screen replaces the Stack from the render the session
+  // arrives in, under the splash on a cold launch.
+  if (session && mfaRequired) {
     return <MfaChallengeScreen />;
   }
 

@@ -8,6 +8,17 @@ import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
 // as before (admin.generateLink, NEVER inviteUserByEmail) and deliver the
 // es portal-invite — branded "<Org> via StockPilot", replies to the
 // inviting supplier user.
+//
+// Docket S25: the link carries `r`, the account it is for, signed with the
+// link's own type (invite, or magiclink for an existing account) for the user
+// id GoTrue returned (checked with the app's own checker). A link that cannot
+// be signed is refused BEFORE the person is mapped to the customer. The
+// signing value is a dull one under a neutral name, set before @/lib/env reads
+// the environment (src/test/secret-shaped-fixtures.guard.test.ts).
+vi.hoisted(() => {
+  const SIGNING_INPUT = 'test-only-signing-input';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_INPUT;
+});
 
 const sendEmail = vi.fn();
 const generateLink = vi.fn();
@@ -26,7 +37,16 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => adminStub.client,
 }));
 
+import { env } from '@/lib/env';
+import { emailedConfirmLink } from '@/test/confirm-link-check';
+
 import { CustomersService } from './customers';
+
+/** The invitee's auth user, as GoTrue's generateLink returns it. */
+const INVITEE_ID = '33333333-3333-4333-8333-333333333333';
+/** GoTrue's hashed token is a sha224 in hex: 56 characters. */
+const LINK_HASH = 'ab'.repeat(28);
+const SIGNING_COPY = env.SUPABASE_SERVICE_ROLE_KEY;
 
 function makeService() {
   const stub = makeSupabaseStub({
@@ -53,9 +73,10 @@ function makeService() {
 describe('CustomersService.inviteUser — es portal-invite wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_COPY;
     sendEmail.mockResolvedValue({ ok: true, id: 'test' });
     generateLink.mockResolvedValue({
-      data: { properties: { hashed_token: 'hash999' }, user: { id: 'auth-user-1' } },
+      data: { properties: { hashed_token: LINK_HASH }, user: { id: INVITEE_ID } },
       error: null,
     });
   });
@@ -75,6 +96,7 @@ describe('CustomersService.inviteUser — es portal-invite wiring', () => {
       to: string;
       subject: string;
       html: string;
+      text: string;
       from?: string;
       replyTo?: string;
     };
@@ -87,9 +109,55 @@ describe('CustomersService.inviteUser — es portal-invite wiring', () => {
       'You’re invited to order from L4L North Region’s supplier portal',
     );
     // The magic link still routes through our server-verified confirm page.
-    expect(msg.html).toContain('/auth/confirm?token_hash=hash999&amp;type=invite');
+    expect(msg.html).toContain(`/auth/confirm?token_hash=${LINK_HASH}&amp;type=invite`);
     expect(msg.html).toContain('How this link works');
+    // S25: the page will name the invitee, the account GoTrue made the link for.
+    expect(emailedConfirmLink(msg.text)).toMatchObject({
+      type: 'invite',
+      next: '/portal',
+      recipient: INVITEE_ID,
+    });
   });
+
+  it('an existing account gets a sign-in link, signed as one (never valid as an invite)', async () => {
+    generateLink
+      .mockResolvedValueOnce({
+        data: { properties: null, user: null },
+        error: { message: 'A user with this email address has already been registered' },
+      })
+      .mockResolvedValueOnce({
+        data: { properties: { hashed_token: LINK_HASH }, user: { id: INVITEE_ID } },
+        error: null,
+      });
+    const { svc } = makeService();
+    await svc.inviteUser('cust-1', 'maya@harborpine.example');
+    expect(generateLink).toHaveBeenNthCalledWith(2, {
+      type: 'magiclink',
+      email: 'maya@harborpine.example',
+    });
+    const link = emailedConfirmLink((sendEmail.mock.calls[0]![0] as { text: string }).text);
+    expect(link).toMatchObject({ type: 'magiclink', next: '/portal', recipient: INVITEE_ID });
+  });
+
+  it.each([
+    ['no service key to sign with', () => (env.SUPABASE_SERVICE_ROLE_KEY = ''), INVITEE_ID],
+    ['a user id that is not a UUID', () => {}, 'auth-user-1'],
+  ])(
+    'refuses before mapping the person to the customer, and sends nothing, when the link cannot be signed: %s',
+    async (_label, arrange, userId) => {
+      arrange();
+      generateLink.mockResolvedValue({
+        data: { properties: { hashed_token: LINK_HASH }, user: { id: userId } },
+        error: null,
+      });
+      const { svc, stub } = makeService();
+      await expect(svc.inviteUser('cust-1', 'maya@harborpine.example')).rejects.toMatchObject({
+        code: 'internal_error',
+      });
+      expect(stub.fromCalls).not.toContain('customer_users');
+      expect(sendEmail).not.toHaveBeenCalled();
+    },
+  );
 
   it('throws when the invite email fails to send (was silently fail-open)', async () => {
     sendEmail.mockResolvedValue({ ok: false, error: 'resend down' });
@@ -110,9 +178,10 @@ describe('CustomersService.inviteUser — es portal-invite wiring', () => {
 describe('CustomersService.inviteUser — email validity is the core emailSchema rule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_COPY;
     sendEmail.mockResolvedValue({ ok: true, id: 'test' });
     generateLink.mockResolvedValue({
-      data: { properties: { hashed_token: 'hash999' }, user: { id: 'auth-user-1' } },
+      data: { properties: { hashed_token: LINK_HASH }, user: { id: INVITEE_ID } },
       error: null,
     });
   });

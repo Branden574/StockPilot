@@ -18551,10 +18551,16 @@ describe('the unsubscribe, new rack question and other-website fixes release (un
       );
       expect(entry(id).howItAffectsYou, id).not.toContain('UTC');
     }
-    // The confirmation page's notice.
+    // The confirmation page's notice. Docket S25 rewrote it for a link that
+    // names its account: the page now names both accounts. The published entry
+    // keeps its quote (S25's own entry supersedes its howItAffectsYou).
     const notice =
       "If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.";
-    expect(source('app/auth/confirm/route.ts')).toContain(notice);
+    const route = source('app/auth/confirm/route.ts');
+    expect(route).toContain("`You're signed in as ${addr(signedInEmail)} on this browser.`");
+    expect(route).toContain(
+      " Continuing signs you in as ${addr(recipientEmail)} instead. If you didn't ask for this link, close this page.</p>",
+    );
     expect(entry('reset-and-email-change-pages-name-your-account').whatChanged).toContain(
       `“${notice}”`,
     );

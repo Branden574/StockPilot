@@ -101,6 +101,25 @@ describe('zendeskConnector', () => {
     expect(ticket).toMatchObject({ subject: 'Return RMA-1', tags: ['stockpilot', 'return'] });
   });
 
+  it('a return.created ticket carries no free text from the payload', async () => {
+    createTicket.mockResolvedValueOnce(101);
+    const r = await zendeskConnector.handleOutboxEvent(
+      evt('return.created', {
+        returnId: 'r1',
+        returnNumber: 'RMA-1',
+        orderRequestId: 'o1',
+        reason: 'Some free text',
+      }),
+      conn,
+      secrets,
+      deps,
+    );
+    expect(r.ok).toBe(true);
+    const ticket = createTicket.mock.calls[0]![0] as { body: string };
+    expect(ticket.body).toBe('A return was created in StockPilot.\nReturn: RMA-1\nOrder: o1');
+    expect(ticket.body).not.toContain('Some free text');
+  });
+
   it('treats a 4xx as non-retryable (dead-letter)', async () => {
     createTicket.mockRejectedValueOnce(new ZendeskApiError(422));
     const r = await zendeskConnector.handleOutboxEvent(evt('order.problem', { reason: 'x' }), conn, secrets, deps);

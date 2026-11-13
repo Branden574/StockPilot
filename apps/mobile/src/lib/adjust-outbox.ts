@@ -1,3 +1,5 @@
+import { isRefusedBeforeAnyWrite } from '@stockpilot/core';
+
 import { classifyDrainFailure } from './drain-failure';
 import { UNCONFIRMED_SETTLE_MS } from './unconfirmed-stock';
 
@@ -35,11 +37,15 @@ import type { AdjustStockBody } from './stock-api';
  *     401 on a live account (withApiContext refuses first), a 429 (the rate
  *     limit runs first, and an edge 429 never reaches the route) or a
  *     framework 404 with no JSON code (no such route on that server).
+ *   • REFUSED BEFORE ANY WRITE (retried next pass, see below): the 503 the
+ *     server marks as such because it could not check the caller's access
+ *     (docket S26), recognised only by core's isRefusedBeforeAnyWrite. Not
+ *     written, so the row stays queued, as FAILED does.
  *   • UNCONFIRMED: handed to fetch, and then no answer that proves either
- *     way — a network error, api()'s timeout, a 5xx (the route can answer
- *     500 after the commit), anything else. It MAY have been saved. It is
- *     parked, never re-sent, with a message that says so and names the item,
- *     so the operator checks the on-hand before entering it again. A row
+ *     way — a network error, api()'s timeout, any other 5xx (the route can
+ *     answer 500 after the commit), anything else. It MAY have been saved. It
+ *     is parked, never re-sent, with a message that says so and names the
+ *     item, so the operator checks the on-hand before entering it again. A row
  *     found still 'sending' at app start (the app died mid-send) is parked
  *     the same way (db.ts initDb), where every other kind is re-queued.
  *
@@ -58,6 +64,22 @@ import type { AdjustStockBody } from './stock-api';
  * pass is the probe, and a lost answer closes the gate until the next pull
  * gets an answer. The drain also re-reads the phone's network state before
  * each adjustment (sync.ts).
+ *
+ * ═══ REFUSED BEFORE ANY WRITE: THE ROW WAITS, AND SO DO ITS OWN LATER ONES ═══
+ *
+ * When the server cannot read the caller's account status or permission
+ * overrides, it refuses the request before doing anything, and marks the
+ * refusal (core isRefusedBeforeAnyWrite). Such a row stays queued (failed,
+ * with the server's sentence as its last error), nothing is labelled "Not
+ * confirmed", and the send gate stays open: the server did answer. For the
+ * rest of that pass the drain hands off no later adjustment of the same
+ * organization and account (sync.ts drainQueue), so they still land in the
+ * order they were made: rows are read oldest first, and the refused one goes
+ * first again on the next pass. Other organizations' adjustments, and every
+ * other kind, go as before: the refusal is about one context (an owner, for
+ * instance, is served while a member of staff is not). There is no backoff:
+ * a held scope costs one request per pass, and the next pass after the fault
+ * clears sends everything.
  *
  * FREE OF NATIVE MODULES on purpose: sync.ts, db.ts and queue.ts need
  * expo-sqlite, and the decisions worth pinning live here so vitest can execute
@@ -139,7 +161,7 @@ export function parseQueuedAdjust(payload: Record<string, unknown>): QueuedAdjus
   };
 }
 
-export type AdjustDrainVerdict = 'rejected' | 'failed' | 'unconfirmed';
+export type AdjustDrainVerdict = 'rejected' | 'failed' | 'refused-before-write' | 'unconfirmed';
 
 /**
  * What one failed send of an `adjust_stock` row means. See the header for
@@ -152,6 +174,9 @@ export function adjustDrainVerdict(
 ): AdjustDrainVerdict {
   if (err instanceof QueuedAdjustInvalidError) return 'rejected';
   if (!opts.handedOff) return 'failed';
+  // Whatever the account's state: a disabled account's rows are rejected in
+  // bulk by the eviction, and this answer proves only that nothing was written.
+  if (isRefusedBeforeAnyWrite(err)) return 'refused-before-write';
   if (classifyDrainFailure(err, { accountDisabled: opts.accountDisabled }) === 'rejected') {
     return 'rejected';
   }

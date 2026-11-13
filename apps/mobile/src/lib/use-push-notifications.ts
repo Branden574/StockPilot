@@ -5,6 +5,8 @@ import * as Notifications from 'expo-notifications';
 import { useEffect } from 'react';
 import { Linking, Platform } from 'react-native';
 
+import { stepUpNoteHolds } from './mfa-level';
+import { stepUpForcedFor } from './mfa-reconcile';
 import { rewriteWebPath } from './web-path-rewrite';
 import { supabase } from './supabase';
 
@@ -100,11 +102,18 @@ export function rememberedPushToken(): Promise<string | null> {
  * the access token and reads session.user.factors; GoTrueClient.js
  * _getAuthenticatorAssuranceLevel), refreshing only a token near expiry: no
  * request of its own.
+ *
+ * The stored session's factors are as old as its last refresh. When the
+ * server's own list says this account owes a code the stored copy does not
+ * show yet, the code gate holds a note of it (mfa-reconcile.ts), and that
+ * note is read here by the gate's rule (mfa-level.ts stepUpNoteHolds, with
+ * the level just read): owed, unless the session is at aal2.
  */
-async function owesAuthenticatorCode(): Promise<boolean> {
+async function owesAuthenticatorCode(userId: string): Promise<boolean> {
   try {
     const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
     if (error || !data?.currentLevel) return true;
+    if (stepUpNoteHolds(stepUpForcedFor(), userId, data.currentLevel)) return true;
     return data.currentLevel === 'aal1' && data.nextLevel === 'aal2';
   } catch {
     return true;
@@ -160,7 +169,7 @@ export async function registerThisDevice(
     const token = tokenRes.data;
     if (!token || cancelled()) return;
 
-    if (await owesAuthenticatorCode()) return;
+    if (await owesAuthenticatorCode(user.id)) return;
     if (holds.size > 0 || cancelled()) return;
 
     // ═══ REBIND GOES THROUGH THE RPC, NOT A RAW UPSERT (0348) ═══
@@ -204,6 +213,11 @@ export async function registerThisDevice(
  * authenticator code upgrades the session. Also installs a tap handler that
  * opens the deep link sent with the notification (e.g.
  * /dashboard/inventory/{id}).
+ *
+ * RootGate hands it nobody while the session owes its authenticator code
+ * (app/_layout.tsx dataUser), so at the code screen nothing here runs: no
+ * permission prompt, no registration, no tap handler. It starts when the code
+ * is accepted, and stops again if the code screen comes back.
  */
 export function usePushNotifications(user: User | null) {
   useEffect(() => {

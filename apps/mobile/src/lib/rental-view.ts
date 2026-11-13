@@ -1,5 +1,6 @@
 import {
   formatRentalDateTime,
+  isRefusedBeforeAnyWrite,
   isRentalOverdue,
   overdueReminderListMark,
   overdueReminderState,
@@ -101,6 +102,14 @@ export const RENTAL_CHECKOUT_UNCONFIRMED =
   'The app could not confirm this checkout with the server, so this rental may or may not have been checked out. ' +
   'Check your connection, then look for it on the Rentals list before you check out again.';
 
+/**
+ * Said when the server could not check the caller's access and refused the
+ * Check out before doing anything (docket S26): nothing was checked out, and
+ * another try in a moment may work.
+ */
+export const RENTAL_CHECKOUT_ACCESS_NOT_CHECKED =
+  'Your access could not be checked just now, so nothing was checked out. Try again in a moment.';
+
 /** Ends a sentence that has no end mark. */
 function sentence(text: string): string {
   const t = text.trim();
@@ -124,9 +133,13 @@ function sentence(text: string): string {
  *     same units twice (there is no idempotency key yet, S6-B), so it never
  *     says "try again": it says to look first, the way the phone's order
  *     edits and stock adjustments do (add-order-items.ts, item-adjust.ts).
+ *   - Sent and refused before any write: the one 503 the server marks so,
+ *     because it could not check the caller's access (docket S26), read only
+ *     through core's isRefusedBeforeAnyWrite. Nothing was checked out, so it
+ *     says to try again in a moment.
  *   - Sent and refused (a 4xx): nothing was written; the service's own
  *     sentence, written for an operator.
- * Keyed on the status, never on the message text.
+ * Keyed on the status and that mark, never on the message text.
  */
 export function rentalCheckoutFailure(e: unknown, sent: boolean): { title: string; message: string } {
   if (!sent) {
@@ -135,6 +148,9 @@ export function rentalCheckoutFailure(e: unknown, sent: boolean): { title: strin
       title: 'Could not check out',
       message: `${sentence(reason)} Nothing was sent, so nothing was checked out.`,
     };
+  }
+  if (isRefusedBeforeAnyWrite(e)) {
+    return { title: 'Could not check out', message: RENTAL_CHECKOUT_ACCESS_NOT_CHECKED };
   }
   const status =
     e && typeof e === 'object' && typeof (e as { status?: unknown }).status === 'number'

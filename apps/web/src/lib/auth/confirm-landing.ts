@@ -29,7 +29,10 @@
  *              /portal          an existing account invited to a portal (customers.ts)
  * The first entry is where any other `next` lands, so it is the type's home,
  * not a page inside the account. A new email or tool that needs another landing
- * adds it here, with its builder.
+ * adds it here, with its builder. Every builder writes its link through
+ * lib/auth/confirm-link.ts (docket S25), which adds `r`, the account the link
+ * is for, so the page can name it; confirm-landing.test.ts holds each call's
+ * type, landing and user id.
  */
 export const CONFIRM_LANDINGS = {
   recovery: ['/reset/complete'],
