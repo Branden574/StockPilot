@@ -29,6 +29,10 @@
 --     when a later change drops or replaces one, this fails until the list
 --     follows.
 -- G5. Row security is on for all seven.
+-- G6. No trigger function outside the system schemas writes outbox_events or
+--     calls publish_outbox (G1 leaves trigger functions out, since they
+--     cannot be called through /rpc; a trigger on a table members write
+--     would still put rows in the queue on their behalf).
 -- C1-C3. Controls: planted probes, always undone, that each detector must
 --     report (each control reads only its probes' lines, so it stays true on
 --     a day the guard itself is red): a definer function granted to authenticated that inserts into
@@ -36,12 +40,15 @@
 --     (G1), a function that builds its write from the table's name (G2), and
 --     an insert rule for authenticated on outbox_events and an update rule
 --     for PUBLIC on integration_deliveries (G3).
+-- C5. Control: a trigger function that inserts into outbox_events and one
+--     that calls publish_outbox, planted and undone, are both reported by
+--     G6.
 --
 -- Catalog only: no fixtures, no roles switched. begin/rollback.
 
 begin;
 
-select plan(10);
+select plan(12);
 
 -- == The tables, the allowlist, the detectors ===============================
 create temporary table s67_q (tbl text) on commit drop;
@@ -118,6 +125,19 @@ create function pg_temp.q_rules(p_allow boolean) returns setof text language sql
      and not (p_allow and exists (select 1 from s67_rule_allow a where a.tbl = c.relname and a.polname = pol.polname))
 $$;
 
+-- G6's detector: '<schema>.<function>(<args>)' for every trigger function
+-- outside the system schemas whose body writes outbox_events or calls
+-- publish_outbox, whoever may execute it.
+create function pg_temp.q_trigger_writers() returns setof text language sql stable as $$
+  select format('%I.%I(%s)', n.nspname, p.proname, oidvectortypes(p.proargtypes))
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
+     and p.prorettype in ('trigger'::regtype, 'event_trigger'::regtype)
+     and (p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?(public\.)?outbox_events\M'
+          or p.prosrc ~* 'publish_outbox')
+$$;
+
 -- p_sql (DDL as the superuser) then p_check, ALWAYS undone: p_check's value.
 create function pg_temp.planted(p_sql text, p_check text) returns text language plpgsql as $$
 declare v text;
@@ -162,6 +182,9 @@ select is(
   'carrier_shipments=true,connection_mappings=true,connection_sync_log=true,integration_deliveries=true,integration_endpoints=true,org_connections=true,outbox_events=true',
   'G5: row security is on for every connector table');
 
+select is(pg_temp.list('select pg_temp.q_trigger_writers()'), 'none',
+  'G6: no trigger function writes outbox_events or calls publish_outbox');
+
 -- == Controls: each detector still reports a planted probe ==================
 select is(
   pg_temp.planted($p$
@@ -198,6 +221,19 @@ create policy s67_probe_update on public.integration_deliveries for update using
     $q$select pg_temp.list('select pg_temp.q_rules(true)', 's67_probe')$q$),
   'integration_deliveries.s67_probe_update, outbox_events.s67_probe_insert',
   'C3: G3 reports an insert rule for authenticated on the queue and an update rule for PUBLIC on the webhook deliveries');
+
+select is(
+  pg_temp.planted($p$
+create function public._s67_probe_trigger_insert() returns trigger
+  language plpgsql security definer set search_path = public
+  as $f$ begin insert into public.outbox_events (organization_id, topic, aggregate_type, payload)
+               values (new.organization_id, 'x', 'x', '{}'); return new; end $f$;
+create function public._s67_probe_trigger_publish() returns trigger
+  language plpgsql security definer set search_path = public
+  as $f$ begin perform public.publish_outbox(new.organization_id, 'x', 'x', null, '{}'::jsonb, null); return new; end $f$$p$,
+    $q$select pg_temp.list('select pg_temp.q_trigger_writers()', '_s67_probe')$q$),
+  'public._s67_probe_trigger_insert(), public._s67_probe_trigger_publish()',
+  'C5: G6 reports a trigger function that inserts into the queue and one that calls publish_outbox');
 
 -- The controls left nothing behind.
 select is(
