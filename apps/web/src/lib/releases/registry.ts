@@ -102,7 +102,9 @@ export const RELEASES: Release[] = [
     // Moved again by docs/whatsnew-phone-1112 (2026-11-12; was: '2026-11-12T08:42:00Z'): the phone appearance and
     // returns release below is dated 2026-11-12T19:30:00Z, so the placeholder is that same minute. If the
     // integrator moves that release's minute, move this one with it.
-    publishedAt: '2026-11-12T19:30:00Z',
+    // Moved again by docs/whats-new-2026-11-13 (2026-11-13; was: '2026-11-12T19:30:00Z'): the Release count
+    // release below is dated 2026-11-13T08:18:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-13T08:18:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -187,6 +189,237 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'cycle-count-already-released-2026-11',
+    revision: 1,
+    // #444 (squash 88c8382f2, web live 2026-11-13 07:54Z) and its migration
+    // 0419 (pushed to production 08:17:32Z). The words need both: the server
+    // answer below follows the database function's refusal, so the release is
+    // dated 08:18Z, the whole minute after the push. Both minutes are the
+    // integrator's record, not readable from the code.
+    // Claims checked against the code at 88c8382f2 (web paths under
+    // apps/web/src, phone paths under apps/mobile/src):
+    // - "This count was already released.": CycleCountsService.release answers
+    //   a conflict with that sentence after the function refused and
+    //   countIsAlreadyReleased finds the count in progress with no assignee
+    //   (server/services/cycle-counts.ts:750-755); the phone's route sends it
+    //   as 409 with the sentence as `message` (app/api/v1/cycle-counts/[id]/
+    //   release/route.ts:68-80).
+    // - "by you a moment earlier or by a manager": the 0419 header (supabase/
+    //   migrations/0419_release_cycle_count_assignee_check.sql:58-69): an
+    //   assignee who is not a manager, after a manager released the count, or
+    //   after their own release went through and its answer was lost; before,
+    //   a silent success and a second "released" audit row. No audit row now:
+    //   the conflict is thrown before audit() (cycle-counts.ts:754, :763).
+    // - "the release sheet shows ... and stays open": the sheet shows the
+    //   server's sentence as sent and only a success calls onReleased
+    //   (components/cycle-count-release-sheet.tsx:117-129, :232-235), pinned by
+    //   components/cycle-count-release-sheet.refusal.test.ts. The phone needs
+    //   no update for it. The web has no Release.
+    // - "Managers release counts as before": a manager's call goes through as
+    //   before (0419 header :56-57).
+    // Not said: the case where a manager reassigned the count to someone else
+    // (the answer is the earlier refusal, as before).
+    // Who is told: staff and viewers who can adjust stock where Cycle counts
+    // is on (managers and above are not refused, so nothing changes for them).
+    // The link is the page every sibling cycle count entry opens; it checks
+    // cycle_counts:read or stock:adjust where the module is on
+    // (app/(dashboard)/dashboard/cycle-counts/page.tsx:81, :90).
+    status: 'published',
+    title: 'Release count says when a count was already released',
+    summary:
+      'In the mobile app, if a count you are releasing was already released, by you a moment earlier or by a manager, Release now says so instead of appearing to work again. The release sheet shows "This count was already released." and stays open.',
+    publishedAt: '2026-11-13T08:18:00Z',
+    entries: [
+      {
+        id: 'release-count-already-released',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'Release count says when a count was already released',
+        whatChanged:
+          'In the mobile app, if a count you are releasing was already released, by you a moment earlier or by a manager, Release now says so instead of appearing to work again.',
+        whyItMatters: 'You can see that the count is already free and that nothing was done twice.',
+        howItAffectsYou:
+          'In the mobile app, the release sheet shows "This count was already released." and stays open. Managers release counts as before.',
+        whatToDo: 'No action needed. If you see it, close the sheet.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          roles: ['staff', 'viewer'],
+          anyPermission: ['stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'ai-assistant-plain-words-2026-11',
+    revision: 1,
+    // #509 (squash ac6bd3719), live on production 2026-11-13 07:07:42Z, so
+    // dated 07:08Z (the integrator's record, not readable from the code).
+    // From the reviewed draft of that change, release 1, entries 1 to 3. Its
+    // second release (the Slack and Teams alert text) is not published here:
+    // it waits on a hand check.
+    // Claims checked against the code at 88c8382f2 (paths under apps/web/src):
+    // - Entry 1: a search by meaning, the search data fill and the photo
+    //   reading each have three fixed sentences, not set up, not available
+    //   right now, could not finish (lib/ai/tool-errors.ts:30, :36-59), and
+    //   the model reads that sentence (lib/ai/chat.ts:119). Seven of the nine
+    //   say what to try (search by name, SKU or barcode, or try again); the two
+    //   "not set up" sentences of the search data and the photo do not, hence
+    //   "when there is something to try". Not said: that the assistant then
+    //   searches by name, SKU or barcode by itself (the production check did
+    //   not show it).
+    // - Entry 2: the classifier (lib/ai/chat.ts:118-169): a tool's own refusal
+    //   (ToolRefusal, :123) and a service's validation_error (:127-130) give
+    //   their own words; "not enough stock for that adjustment" is
+    //   InventoryService's validation_error (server/services/inventory.ts:6885);
+    //   the outside-text refusal names a public form submission, an outside
+    //   lookup or text read from an image and asks for the values from the
+    //   person (lib/ai/untrusted.ts:325-331; chat.ts:120-121); a permission
+    //   refusal (:124, :140), the multi-factor refusal (:136-139, sentences
+    //   :75-78), not found (:132, :56) and a clash with what is saved (:134,
+    //   :66-67) each give their own sentence.
+    // - Entry 3: the search data tool asks the multi-factor gate first
+    //   (lib/ai/tools.ts:3049), on the condition Settings, AI uses
+    //   (server/actions/embeddings.ts:19; the panel is on settings/ai/page.tsx:
+    //   68), then allows owners and admins only (tools.ts:3052-3055). The gate
+    //   is required for a member with a verified authenticator or under the
+    //   organization's policy (server/services/context.ts:144-154), and its
+    //   sentence asks to re-authenticate when an authenticator is set up, else
+    //   to set one up (context.ts:322-335). "Every change the AI Assistant
+    //   makes": every other write tool calls assertPermission, which asks the
+    //   same gate first (tools.ts:1050, :1206, :1399, :1577, :1689, :2368,
+    //   :2408, :2450, :3150; context.ts:344-345). Settings, Security is
+    //   components/settings/settings-nav.tsx:100.
+    // Who is told: entries 1 and 2, who can open the AI Assistant, the gate of
+    // the linked page (app/(dashboard)/dashboard/ai/page.tsx:25, :33), as every
+    // sibling AI Assistant entry; entry 3, owners and admins among them, the
+    // only roles the search data tool serves.
+    status: 'published',
+    title: 'The AI Assistant says plainly why it could not search or make a change',
+    summary:
+      'When the AI Assistant cannot search by what an item is, fill in its search data, read a photo or make a change you asked for, it says why in plain words and, when there is something to try, what to try next.',
+    publishedAt: '2026-11-13T07:08:00Z',
+    entries: [
+      {
+        id: 'ai-assistant-plain-failure-sentences',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'The AI Assistant says in one sentence why a search or a photo did not work',
+        whatChanged:
+          'When the AI Assistant cannot search by what an item is, fill in its search data or read a photo, it says why in one sentence (not set up, not available right now, or could not finish) and, when there is something to try, what to try next.',
+        whyItMatters:
+          'The sentence tells you whether to try again, wait a few minutes or ask an admin.',
+        howItAffectsYou:
+          'Answers that work are the same. When something cannot be done, the answer says what happened.',
+        whatToDo:
+          'No action needed. If it keeps saying a feature is not available, tell us through Support.',
+        link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        id: 'ai-assistant-says-why-refused',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'The AI Assistant says why it did not make a change',
+        whatChanged:
+          'When the AI Assistant does not make a change you asked for, it tells you why. When one of its own checks stops the change, or what you asked for is not valid, it gives the reason: for example, an item does not have enough stock for that adjustment, or a value came from outside your team (a public request form, an outside lookup or text read from a photo), so you need to type it yourself. When your permissions, multi-factor sign-in, a record that is not there or a clash with what is already saved stops the change, it says which one.',
+        whyItMatters:
+          'The reason tells you whether to change what you asked for, ask an admin, set up multi-factor sign-in or look at the record again.',
+        howItAffectsYou:
+          'The changes it can make are the same. When it does not make one, it tells you why.',
+        whatToDo: 'When it asks, type the values yourself, then confirm.',
+        link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        id: 'ai-assistant-search-data-multi-factor',
+        category: 'improved',
+        area: 'AI Assistant',
+        title: 'Filling in search data from the AI Assistant follows the multi-factor sign-in rule',
+        whatChanged:
+          'The AI Assistant fills in its search data under the same multi-factor rule as Settings, AI. An owner or admin who has set up an authenticator app is asked to re-authenticate with it first. Where your organization requires multi-factor sign-in, an owner or admin who has not set it up is asked to set it up first.',
+        whyItMatters: 'Every change the AI Assistant makes follows the same sign-in rule.',
+        howItAffectsYou:
+          'If your sign-in has not passed the authenticator code step, the AI Assistant asks you to re-authenticate before it fills in the search data. If your organization requires multi-factor sign-in and you have not set it up, it asks you to set it up.',
+        whatToDo:
+          'Re-authenticate with your authenticator app when asked, or set one up in Settings, Security.',
+        link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
+        audience: { roles: ['owner', 'admin'], anyPermission: ['items:update'], modules: ['ai'] },
+      },
+    ],
+  },
+  {
+    id: 'changes-that-did-not-happen-2026-11',
+    revision: 1,
+    // #507 (squash 968435cad), web only, live on production 2026-11-13
+    // 04:08:17Z, so dated 04:09Z (the integrator's record, not readable from
+    // the code). From the reviewed draft of that change.
+    // Claims checked against the code at 88c8382f2 (paths under apps/web/src;
+    // screen names from packages/core/src/modules/registry.ts):
+    // - Each action answers not found when its write changed no row, before
+    //   any audit row: bundle archive and restore (server/services/
+    //   bundles.ts:831, :855; the screen is Bundles, registry.ts:402, so the
+    //   draft's "kit" is "bundle"); warehouse save (warehouses.ts:337, :375;
+    //   Admin, Warehouses :203); charter save (charters.ts:247, :264; Admin,
+    //   Charters :319); tag delete (tags.ts:179; Tags :147); unit conversion
+    //   delete (uom-conversions.ts:185; Admin, UoM conversions :287); vendor
+    //   item mapping delete (vendor-item-mappings.ts:226; Admin, Vendor
+    //   mappings :286); schedule event delete (schedule.ts:774, :786;
+    //   Schedule :531); a warehouse's Open or Closed under Public-orderable
+    //   warehouses in Settings, Public requests (order-requests.ts:5329;
+    //   components/settings/public-requests-global-settings.tsx:71-79, :146);
+    //   invite revoke (team.ts:361; Team, Pending invites,
+    //   components/team/team-manager.tsx:233); API key revoke (api-keys.ts:126;
+    //   Settings, Integrations, API keys, components/settings/
+    //   api-keys-panel.tsx:86). Each screen shows the message
+    //   (archive-bundle-button.tsx:28, api-keys-panel.tsx:76, and the others'
+    //   error lines).
+    // - "the audit log": the screen's own name (registry.ts:294); the draft's
+    //   "activity log" is that screen.
+    // - Left out of the draft: switching a bundle on or off (BundlesService.
+    //   setActive has no screen that calls it), and the sentence on removing a
+    //   price, a catalog item or a portal user (the field was over its 600
+    //   characters; the screen is named Accounts, not Customers).
+    // Who is told: whoever can take one of these actions, by the permission
+    // each checks (bundles:manage, organization:update for warehouses,
+    // charters and the public request switch, categories:manage for tags,
+    // purchase_orders:manage for vendor mappings, schedule:manage,
+    // members:invite); unit conversions and API keys are on owner and admin
+    // screens, and owners and admins hold organization:update. No link: the
+    // entry spans many pages.
+    status: 'published',
+    title: 'A success message means the change was saved',
+    summary:
+      'When a bundle, warehouse, charter, tag, unit conversion, vendor item mapping, schedule event, invite or API key is no longer there to change, you are told it cannot be found.',
+    publishedAt: '2026-11-13T04:09:00Z',
+    entries: [
+      {
+        id: 'not-found-when-nothing-to-change',
+        category: 'fixed',
+        area: 'Web app',
+        title: '"Not found" when there is nothing to change',
+        whatChanged:
+          'These actions check that the change was saved before they say so: archiving or restoring a bundle, saving a warehouse or a charter, deleting a tag, a unit conversion, a vendor item mapping or a schedule event, opening or closing a warehouse for public requests, revoking an invite and revoking an API key. If the thing is no longer there, for example because someone else removed it a moment earlier or the page was left open from another organization, you are told it cannot be found.',
+        whyItMatters:
+          'A success message means the change was saved, and the audit log lists only changes that happened.',
+        howItAffectsYou:
+          'Everything you do in the organization you are working in works as before. When the thing you are changing is no longer there, you see "not found" and nothing is changed.',
+        whatToDo:
+          'If you see it, refresh the page. If you belong to more than one organization, switch back to the one the page belongs to and try again.',
+        audience: {
+          anyPermission: [
+            'bundles:manage',
+            'organization:update',
+            'categories:manage',
+            'purchase_orders:manage',
+            'schedule:manage',
+            'members:invite',
+          ],
+        },
       },
     ],
   },
