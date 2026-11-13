@@ -647,7 +647,14 @@ select ok(
                    and p.prosrc ~ $re$module_enabled\(p_organization_id, 'orders'\)$re$
                    and p.prosrc ~ $re$module_enabled\(p_organization_id, 'books'\)$re$
                    and p.prosrc !~ '40001|40P01'
-                   and p.prosrc !~* '\m(insert\s+into|update\s+public|delete\s+from|truncate)\M')
+                   -- The write forms are the security invariant suite's own
+                   -- (_sec_inv_writer_re in security_invariants.test.sql, proved
+                   -- form by form by its INV-30b); a guard test keeps this copy equal.
+                   -- The line after it is the form this pin held before: no
+                   -- UPDATE that names public, whatever follows the table (the
+                   -- suite's form reads an UPDATE as far as its SET).
+                   and p.prosrc !~* $w$\m(insert\s+into|merge\s+into|delete\s+from|truncate)\M|\mupdate\s+(only\s*\(?\s*)?(("([^"]|"")+"|[a-z_][a-z0-9_$]*)\s*\.\s*)*("([^"]|"")+"|[a-z_][a-z0-9_$]*)(\s*\))?(\s*\*)?(\s+(as\s+)?("([^"]|"")+"|[a-z_][a-z0-9_$]*))?\s+set\M$w$
+                   and p.prosrc !~* '\mupdate\s+public\M')
      from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname like 'book_order%'),
   'G3: every function holds its gates in its own body (signed in, member with reports:read, orders and books modules), writes nothing, and never raises 40001/40P01');
 

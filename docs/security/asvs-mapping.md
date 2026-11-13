@@ -112,7 +112,7 @@ allowlist required to justify itself (INV-2). Anon/PUBLIC-reachable write polici
 must consult identity or deny outright (INV-22). Policy-predicate hygiene sweeps
 for literal-true predicates (INV-11) and self-comparison tautologies (INV-12).
 
-_Evidence_: `supabase/tests/security_invariants.test.sql` (23 assertions),
+_Evidence_: `supabase/tests/security_invariants.test.sql`,
 `0318_secdef_grants.test.sql`, `0215_permission_override_no_escalation.test.sql`,
 `0217_crownjewel_critical_rls_fixes.test.sql`,
 `0220_org_members_insert_owner_guard.test.sql`,
