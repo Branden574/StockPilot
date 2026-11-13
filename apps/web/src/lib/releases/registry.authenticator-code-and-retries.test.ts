@@ -340,7 +340,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(phone('app/(drawer)/settings.tsx')).toContain('title="Unsent work"');
   });
 
-  it("quotes the phone's own words, and the phone goes in without the code only when it could not check", () => {
+  // Renamed by fix/phone-code-gate-s43b (S43b, 2026-11-13; was: "quotes the phone's own words, and the phone goes in without the code only when it could not check"): the phone no longer makes that check. Claim kept: the builds this release was written for went in without the code only when the check failed.
+  it("quotes the phone's own words, and the phone went in without the code only when it could not check, a check it no longer makes", () => {
     const text = readerText(release()).join(' ');
     expect(text).toContain('Unsent work');
     expect(text).toContain('your session has ended or expired');
@@ -370,12 +371,29 @@ describe('the authenticator code release (S43a, release 1)', () => {
     expect(signsInAgain.whatChanged).toContain(
       "now also refuses that phone's sync until you sign in again with the code, as it already refused its changes, such as collecting a signature.",
     );
-    // A failed check for an authenticator lets the app in without the code,
-    // at sign-in and when the app opens with a saved session.
+    // A failed check for an authenticator let the app in without the code,
+    // at sign-in and when the app opened with a saved session.
+    // Re-pinned by fix/phone-code-gate-s43b (S43b, 2026-11-13; was: auth-context.tsx contains "console.warn('[auth] MFA level check failed', e);" and the comment block "// A restored session may still owe an AAL2 challenge if it was / only ever AAL1 on disk. Check before exposing the app. / (checkMfa is already internally try/caught.) / await checkMfa();"): the phone no longer asks the server whether the code is owed. It works that out from the session itself, the token's level and the factors its user carries, by core's stepUpOwed, the rule the server refuses by, at sign-in and when the app opens with a saved session alike, and the root layout shows the code screen whenever it is owed. This published line keeps what the phone builds it was written for did, which stays true of them until their next phone update; for a phone with this update the case it describes no longer arises.
     const auth = phone('src/lib/auth-context.tsx');
-    expect(auth).toContain("console.warn('[auth] MFA level check failed', e);");
+    expect(auth).not.toContain("console.warn('[auth] MFA level check failed', e);");
+    expect(auth).not.toContain('checkMfa');
+    expect(auth).not.toContain('getAuthenticatorAssuranceLevel');
     expect(auth).toContain(
-      '// A restored session may still owe an AAL2 challenge if it was\n          // only ever AAL1 on disk. Check before exposing the app.\n          // (checkMfa is already internally try/caught.)\n          await checkMfa();',
+      'const stepUpForced = React.useSyncExternalStore(subscribeStepUpForced, stepUpForcedFor);\n  const mfaRequired = codeGateUp(session, stepUpForced);',
+    );
+    expect(auth).toContain(
+      '// A restored session that still owes its code needs no check here:\n          // the gate is worked out from the session set above, and RootGate\n          // has shown the code screen since that render.',
+    );
+    const level = phone('src/lib/mfa-level.ts');
+    expect(level).toContain("import { stepUpOwed } from '@stockpilot/core';");
+    expect(level).toContain(
+      'if (!session) return false;\n  if (stepUpOwedFor(session)) return true;',
+    );
+    expect(level).toContain(
+      'return stepUpOwed(session.user?.factors, tokenAal(session.access_token));',
+    );
+    expect(phone('app/_layout.tsx')).toContain(
+      'if (session && mfaRequired) {\n    return <MfaChallengeScreen />;',
     );
     expect(text).toContain(
       'could not check for your authenticator when you signed in or opened the app',

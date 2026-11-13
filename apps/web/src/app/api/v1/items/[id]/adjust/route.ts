@@ -1,10 +1,10 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { revalidateInventoryList } from '@/server/loaders/inventory-list';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
 import { ADJUST_WAREHOUSE_WRITE_REFUSED, InventoryService } from '@/server/services/inventory';
@@ -49,7 +49,10 @@ export const maxDuration = 30;
  *     called the RPC. A tap made with no connection is queued on the phone
  *     and replayed here from its outbox with the same body, AT MOST ONCE
  *     (apps/mobile/src/lib/adjust-outbox.ts): this route takes no idempotency
- *     key, so the phone never re-sends an attempt whose answer was lost.
+ *     key, so the phone never re-sends an attempt whose answer was lost. The
+ *     one 5xx it does send again is the 503 the API context gate marks as
+ *     refused before any write (docket S26): the caller's access could not be
+ *     checked, so the request was refused before anything below ran.
  *   • NOT phones still running an older bundle: they keep calling the RPC
  *     until they take that update, and the RPC still admits any staff+ member
  *     (0327). Nothing in the database closes that path.
@@ -103,7 +106,12 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  // First, before the rate limit, the body or the write: a context that could
+  // not be built because the caller's access could not be checked answers the
+  // 503 the phone may send again (server/lib/api-context-gate.ts).
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   // Per-user throttle — defense-in-depth on top of the service's stock:adjust
@@ -210,6 +218,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // must never become a 500: the phone reads a 5xx as "may or may not have
     // been saved" and the operator taps again. Its raw message names the
     // warehouse uuid, so the phone gets the fixed sentence instead.
+    //
+    // Nothing in this catch answers the gate's 503 marker, whatever it caught:
+    // by now the service may have written, and only a refusal made before the
+    // work may say nothing was written (docket S26). Even the gate's own two
+    // error classes, thrown in here, stay the 500 below, which the phone reads
+    // as not confirmed.
     if (e instanceof ForbiddenError) {
       return NextResponse.json(
         { error: 'forbidden', message: ADJUST_WAREHOUSE_WRITE_REFUSED },

@@ -274,7 +274,9 @@ export interface AdjustSendHooks {
  * warehouse write scope, the archived-item refusal, the audit row, the
  * stock.low webhook, and the invalidation of the web's cached Items view.
  * Every one of those refusals is a 4xx (the warehouse one was a 500 until
- * 2026-09-22), so a 5xx always means "may have been written".
+ * 2026-09-22), so a 5xx means "may have been written", except the one 503
+ * the server marks as refused before any write because it could not check
+ * the caller's access (docket S26, core isRefusedBeforeAnyWrite).
  *
  * Screens do not call this directly: submitItemAdjust (item-adjust.ts) wraps
  * it for both the item screen and the scan tab, and records what each outcome

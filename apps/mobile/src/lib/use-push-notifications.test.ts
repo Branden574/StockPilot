@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { accountScopedStorageKeys } from './account-eviction';
+import { setStepUpForcedFor } from './mfa-reconcile';
 
 /**
  * Push registration (S5, plans/S5.md 3.3 step 1), run against the real
@@ -124,6 +125,7 @@ beforeEach(() => {
   h.rpc.mockImplementation(() => rpcBuilder());
   h.effects.length = 0;
   while (held.length) releaseRegistration(held.pop()!);
+  setStepUpForcedFor(null);
 });
 
 function hold(): symbol {
@@ -183,6 +185,56 @@ describe('registerThisDevice', () => {
     h.isDevice = false;
     await registerThisDevice(USER);
     expect(h.rpc).not.toHaveBeenCalled();
+  });
+
+  // docket S43b: the stored session's factors are as old as its last refresh.
+  // When the server's own list says this account owes a code the stored copy
+  // does not show yet, the code gate holds a note (mfa-reconcile.ts), and the
+  // registration reads it by the gate's rule (mfa-level.ts stepUpNoteHolds).
+  describe("the server's word that this account owes a code, while the stored copy is behind", () => {
+    it('does not register at aal1, though the stored copy lists no authenticator', async () => {
+      h.aal = { data: { currentLevel: 'aal1', nextLevel: 'aal1' }, error: null };
+      setStepUpForcedFor('user-1');
+      await registerThisDevice(USER);
+      expect(h.rpc).not.toHaveBeenCalled();
+      // Settled (a refresh, the code, a sign-out): the registration goes.
+      setStepUpForcedFor(null);
+      await registerThisDevice(USER);
+      expect(h.rpc).toHaveBeenCalledTimes(1);
+    });
+
+    it('registers at aal2 whatever was noted: the code was entered', async () => {
+      setStepUpForcedFor('user-1');
+      await registerThisDevice(USER);
+      expect(h.rpc).toHaveBeenCalledTimes(1);
+    });
+
+    it('a note about another account says nothing about this one', async () => {
+      h.aal = { data: { currentLevel: 'aal1', nextLevel: 'aal1' }, error: null };
+      setStepUpForcedFor('user-9');
+      await registerThisDevice(USER);
+      expect(h.rpc).toHaveBeenCalledTimes(1);
+    });
+
+    it('is read with the level, after the last wait before the write', async () => {
+      h.aal = { data: { currentLevel: 'aal1', nextLevel: 'aal1' }, error: null };
+      let releaseToken!: () => void;
+      const tokenGate = new Promise<void>((r) => {
+        releaseToken = r;
+      });
+      const notifications = await import('expo-notifications');
+      vi.mocked(notifications.getExpoPushTokenAsync).mockImplementationOnce(async () => {
+        await tokenGate;
+        return { data: h.token } as never;
+      });
+      const run = registerThisDevice(USER);
+      await new Promise((r) => setTimeout(r, 0));
+      // Noted while the phone waits for its push token.
+      setStepUpForcedFor('user-1');
+      releaseToken();
+      await run;
+      expect(h.rpc).not.toHaveBeenCalled();
+    });
   });
 });
 
