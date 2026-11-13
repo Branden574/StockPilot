@@ -1,10 +1,10 @@
--- 0426_categories_select_category_sets.sql
+-- 0421_categories_select_category_sets.sql
 --
 -- categories_select reads the membership set stock_movements_select reads and
 -- the two category sets inventory_items_select reads, and
 -- public.user_can_see_item_category leaves the Data API (docket S49). Nothing
 -- a person does in the web app or on the phone changes: every member reads
--- the same categories as before (the equivalence matrix in the 0426 test). No
+-- the same categories as before (the equivalence matrix in the 0421 test). No
 -- row of any table changes.
 --
 -- ── WHAT WAS WRONG ─────────────────────────────────────────────────────────
@@ -60,7 +60,7 @@
 -- category reads, sign-ins, token refreshes, and storage and realtime
 -- requests wait for the hold. lock_timeout 900ms bounds anything unforeseen
 -- (a GRANT or REVOKE waits for another session's uncommitted DDL on the
--- same function). scripts/db-concurrency/0426_migration_lock_footprint.sh
+-- same function). scripts/db-concurrency/0421_migration_lock_footprint.sh
 -- measures all of this.
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────
@@ -225,7 +225,7 @@ grant execute on function public.user_can_see_item_category(uuid, uuid, uuid) to
 
 -- ═══ 4. Comments ════════════════════════════════════════════════════════════
 -- Neither text names this file's number, so a rename leaves them (and the
--- md5s the 0426 test pins) alone.
+-- md5s the 0421 test pins) alone.
 comment on policy categories_select on public.categories is
   'Members read their organization''s categories, and a viewer limited to some categories reads only those (S49). '
   'Membership is rls_member_org_ids, as in stock_movements_select. The category rule is rls_cat_unrestricted_org_ids '

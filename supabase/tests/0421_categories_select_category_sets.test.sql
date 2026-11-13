@@ -1,5 +1,5 @@
--- supabase/tests/0426_categories_select_category_sets.test.sql
--- pgTAP proof for migration 0426 (docket S49): categories_select reads the
+-- supabase/tests/0421_categories_select_category_sets.test.sql
+-- pgTAP proof for migration 0421 (docket S49): categories_select reads the
 -- membership set stock_movements_select reads and the two category sets
 -- inventory_items_select reads, and user_can_see_item_category leaves the
 -- Data API. Every member reads the same categories as before.
@@ -29,13 +29,13 @@
 --         auth.uid() in their code).
 -- E.  The row sets: 13 personas x 4 categories in 2 organizations. For each,
 --     the rows categories_select returns (a real authenticated read) equal a
---     hand-written list AND the rows the pre-0426 rule passes
+--     hand-written list AND the rows the pre-0421 rule passes
 --     (is_org_member AND user_can_see_item_category, evaluated as the
 --     superuser with the persona's claims: 0229's method). E14 repeats the
 --     restricted viewer with only the request.jwt.claims JSON PostgREST sets.
 -- A.  The migration's own preflight and lock prelude, replayed from the
 --     statements the CLI recorded (0415's method): the preflight refuses a
---     second run, passes on the pre-0426 state under the session's
+--     second run, passes on the pre-0421 state under the session's
 --     search_path and under an empty one (its deparse pins the path), and
 --     names each planted drift; the prelude takes ACCESS EXCLUSIVE on
 --     categories and on every table supautils.policy_grants lists for this
@@ -148,7 +148,7 @@ begin
   end;
   return case when v_state = 'XXT49' then v else 'error ' || v_state end;
 end $$;
--- The S49 categories the pre-0426 rule passes for p_sub: 0140's
+-- The S49 categories the pre-0421 rule passes for p_sub: 0140's
 -- categories_select predicate, evaluated as the superuser (no row security)
 -- with p_sub's claims set, ALWAYS undone.
 create function pg_temp.old_rule(p_sub uuid) returns text language plpgsql as $$
@@ -250,7 +250,7 @@ select ok(
 select is(
   md5(pg_temp.policy_text()),
   '4cede1f12b50f20376ddd02fdfe50e43',
-  'S3b: categories_select is exactly the 0426 rule: SELECT, permissive, to authenticated, the membership set AND (the unrestricted set OR the allowed pairs), no WITH CHECK');
+  'S3b: categories_select is exactly the 0421 rule: SELECT, permissive, to authenticated, the membership set AND (the unrestricted set OR the allowed pairs), no WITH CHECK');
 
 -- S4. Nothing evaluates the function as the user any more, so it needs no
 -- authenticated EXECUTE (INV-C1): no policy names it, nothing depends on it,
@@ -351,9 +351,9 @@ select is(
   ' | rls_cat_allowed_category_ids:0:true, rls_cat_unrestricted_org_ids:0:true, rls_member_org_ids:0:true',
   'S12: what the comments say holds: stock_movements_select reads rls_member_org_ids, inventory_items_select reads the two category sets and not rls_member_org_ids, and the three sets take no argument and call auth.uid() in their code');
 
--- ══ E. The row sets: live = the hand list = the pre-0426 rule ══════════════
+-- ══ E. The row sets: live = the hand list = the pre-0421 rule ══════════════
 select is(pg_temp.live(:p01) || ' | ' || pg_temp.old_rule(:p01), 'S49 A1,S49 A2 | S49 A1,S49 A2',
-  'E01: the owner of A reads A''s two categories (live | pre-0426 rule)');
+  'E01: the owner of A reads A''s two categories (live | pre-0421 rule)');
 select is(pg_temp.live(:p02) || ' | ' || pg_temp.old_rule(:p02), 'S49 A1,S49 A2 | S49 A1,S49 A2',
   'E02: a manager of A reads A''s two categories');
 select is(pg_temp.live(:p03) || ' | ' || pg_temp.old_rule(:p03), 'S49 A1,S49 A2 | S49 A1,S49 A2',
@@ -382,20 +382,20 @@ select is(pg_temp.live(:p04, true), 'S49 A1',
   'E14: the restricted viewer with only the request.jwt.claims JSON PostgREST sets still reads A1 only');
 
 -- ══ A. The migration's own preflight and lock prelude ══════════════════════
--- The statements the CLI recorded for version 0426 that contain p_tag. The
+-- The statements the CLI recorded for version 0421 that contain p_tag. The
 -- tags are the file's own, $pre_s49$ and $lock_s49$.
 create function pg_temp.mig(p_tag text) returns text language sql stable as $$
   select coalesce(string_agg(st, E';\n'), '')
     from supabase_migrations.schema_migrations m, unnest(m.statements) st
-   where m.version = '0426' and position(p_tag in st) > 0
+   where m.version = '0421' and position(p_tag in st) > 0
 $$;
 create function pg_temp.mig_count(p_tag text) returns bigint language sql stable as $$
   select count(*)
     from supabase_migrations.schema_migrations m, unnest(m.statements) st
-   where m.version = '0426' and position(p_tag in st) > 0
+   where m.version = '0421' and position(p_tag in st) > 0
 $$;
--- The pre-0426 state: 0140's categories_select and 0129's grant.
-create function pg_temp.pre_0426() returns text language sql immutable as $$
+-- The pre-0421 state: 0140's categories_select and 0129's grant.
+create function pg_temp.pre_0421() returns text language sql immutable as $$
   select $p$drop policy categories_select on public.categories;
 create policy categories_select on public.categories
   for select to authenticated
@@ -461,33 +461,33 @@ end $$;
 select is(
   pg_temp.mig_count('$pre_s49$')::text || '/' || pg_temp.mig_count('$lock_s49$')::text,
   '1/1',
-  'A1: the CLI recorded 0426''s preflight and lock prelude exactly once each (this section runs that text)');
+  'A1: the CLI recorded 0421''s preflight and lock prelude exactly once each (this section runs that text)');
 
 select is(
   pg_temp.try_pre(null),
   '55000:s49_preflight:SELECT policies, dependents, grants',
-  'A2: run again after 0426, the preflight stops before changing anything (55000) and names the policy, the dependents and the grants 0426 changed');
+  'A2: run again after 0421, the preflight stops before changing anything (55000) and names the policy, the dependents and the grants 0421 changed');
 
 select is(
-  pg_temp.try_pre(pg_temp.pre_0426()) || ' / ' || pg_temp.try_pre(pg_temp.pre_0426() || $p$;set local search_path = ''$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0426() || $p$;set local search_path = pg_catalog$p$),
+  pg_temp.try_pre(pg_temp.pre_0421()) || ' / ' || pg_temp.try_pre(pg_temp.pre_0421() || $p$;set local search_path = ''$p$)
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0421() || $p$;set local search_path = pg_catalog$p$),
   'ok / ok / ok',
-  'A3: on the pre-0426 state the preflight passes, under the session''s search_path, an empty one and pg_catalog alone (its policy text is deparsed under a pinned search_path)');
+  'A3: on the pre-0421 state the preflight passes, under the session''s search_path, an empty one and pg_catalog alone (its policy text is deparsed under a pinned search_path)');
 
 select is(
-  pg_temp.try_pre(pg_temp.pre_0426() || $p$;
+  pg_temp.try_pre(pg_temp.pre_0421() || $p$;
 create or replace function public.rls_member_org_ids() returns setof uuid
 language sql stable security definer set search_path = public as $f$
   select m.organization_id from public.organization_members m where m.user_id = auth.uid()
 $f$$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0426() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0421() || $p$;
 revoke all on function public.rls_cat_allowed_category_ids() from public, authenticated$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0426() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0421() || $p$;
 create policy s49_extra_read on public.categories for select to authenticated using (true)$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0426() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0421() || $p$;
 create policy s49_other_user on public.suppliers for select to authenticated
   using (public.user_can_see_item_category(auth.uid(), organization_id, null))$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0426() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0421() || $p$;
 grant execute on function public.user_can_see_item_category(uuid, uuid, uuid) to anon$p$),
   '55000:s49_preflight:public.rls_member_org_ids() drifted / '
   '55000:s49_preflight:public.rls_cat_allowed_category_ids() drifted / '

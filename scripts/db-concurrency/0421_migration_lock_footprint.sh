@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Lock footprint of migration 0426 (categories_select reads the category
+# Lock footprint of migration 0421 (categories_select reads the category
 # sets; user_can_see_item_category leaves the Data API, docket S49). The push
 # runs the whole file as one batch, so every table lock a statement takes is
 # held until the file commits. DROP POLICY and CREATE POLICY take ACCESS
@@ -50,11 +50,11 @@
 #       hazard analysis in the migration header needs re-reading).
 #
 # The migration sessions ALWAYS roll back, so the script changes nothing and
-# writes no rows. It needs the pre-0426 head. LOCAL stack only (docker
+# writes no rows. It needs the pre-0421 head. LOCAL stack only (docker
 # container supabase_db_stockpilot by default; CONTAINER=<name> for another
 # local stack). Exit status 0 = every check passed.
 #
-# Usage: bash scripts/db-concurrency/0426_migration_lock_footprint.sh
+# Usage: bash scripts/db-concurrency/0421_migration_lock_footprint.sh
 # (MIG=<path> runs it against the file under another number after a rename.)
 
 set -uo pipefail
@@ -97,7 +97,7 @@ STATE_SQL="select md5(coalesce((select pg_get_expr(pol.polqual, pol.polrelid) fr
 OLD_POLICY="$(q "select count(*) from pg_policy pol where pol.polrelid = 'public.categories'::regclass and pol.polname = 'categories_select' and pg_get_expr(pol.polqual, pol.polrelid) like '%user_can_see_item_category%'")"
 echo "local head $HEAD_NOW; categories_select still calls user_can_see_item_category: $OLD_POLICY; file $(basename "$MIG")"
 if [ "$OLD_POLICY" != "1" ]; then
-  echo "needs the pre-0426 head (supabase db reset --local --version <the migration before it>, then the QA reseed)"
+  echo "needs the pre-0421 head (supabase db reset --local --version <the migration before it>, then the QA reseed)"
   exit 1
 fi
 STATE_BEFORE="$(q "$STATE_SQL")"
@@ -180,16 +180,16 @@ LOCKS_OF_SLEEPING_FILE="select count(*) filter (where a.wait_event = 'PgSleep'):
   left join pg_locks l on l.pid = a.pid and l.locktype = 'relation' and l.granted
    and l.relation in (select c.oid from pg_class c join pg_namespace n on n.oid = c.relnamespace
                        where c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema'))
- where a.application_name like '0426-lock-file-%'"
+ where a.application_name like '0421-lock-file-%'"
 run_behind() { # run_behind <label> <holder sql> <holder seconds> <expect: fail|apply>
-  local label="$1" holder="$2" secs="$3" expect="$4" app="0426-lock-holder-$1"
+  local label="$1" holder="$2" secs="$3" expect="$4" app="0421-lock-holder-$1"
   printf "set application_name = '%s';\nbegin;\n%s\nselect pg_sleep(%s);\ncommit;\n" "$app" "$holder" "$secs" \
     | "${PSQL[@]}" > "$TMP/3-$label.h.out" 2>&1 &
   local hp=$!
   if ! wait_sleeping "$app"; then bad "3 $label: the holder never reached pg_sleep"; wait "$hp"; return; fi
   local t0 t1 rc
   t0="$(now_ms)"
-  { echo "set application_name = '0426-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
+  { echo "set application_name = '0421-lock-file-$label';"; echo "begin;"; cat "$MIG"; echo "rollback;"; } \
     | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/3-$label.m.out" 2> "$TMP/3-$label.m.err" &
   local mp=$!
   # Sample the file's locks while it runs: whenever it is paused between
@@ -234,14 +234,14 @@ run_behind 3b-short-categories-reader "select count(*) from public.categories;" 
 
 # ── 6. While the file holds its locks, new readers wait only for the hold ─
 {
-  echo "set application_name = '0426-lock-migration-6';"
+  echo "set application_name = '0421-lock-migration-6';"
   echo "begin;"
   cat "$MIG"
   echo "select pg_sleep(1);"
   echo "rollback;"
 } | "${PSQL[@]}" > "$TMP/6m.out" 2> "$TMP/6m.err" &
 BG+=("$!")
-if ! wait_sleeping 0426-lock-migration-6; then
+if ! wait_sleeping 0421-lock-migration-6; then
   bad "6: the migration session never reached pg_sleep: $(tr '\n' ' ' < "$TMP/6m.err")"
 else
   for target in public.categories auth.users; do
@@ -265,14 +265,14 @@ sed -e "${P0},${P1}d" -e "s/^set lock_timeout = '900ms';$/set lock_timeout = '5s
 if grep -q 'do \$lock_s49\$' "$TMP/no-prelude.sql" || ! grep -q "^set lock_timeout = '5s';$" "$TMP/no-prelude.sql"; then
   bad "7: could not build the no-prelude control file"
 else
-  printf "set application_name = '0426-lock-control-holder';\nbegin;\nselect count(*) from auth.users;\nselect pg_sleep(4);\ncommit;\n" \
+  printf "set application_name = '0421-lock-control-holder';\nbegin;\nselect count(*) from auth.users;\nselect pg_sleep(4);\ncommit;\n" \
     | "${PSQL[@]}" > "$TMP/7.h.out" 2>&1 &
   hp=$!
-  if ! wait_sleeping 0426-lock-control-holder; then
+  if ! wait_sleeping 0421-lock-control-holder; then
     bad "7: the auth.users holder never reached pg_sleep"
     wait "$hp"
   else
-    { echo "set application_name = '0426-lock-control-file';"; echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } \
+    { echo "set application_name = '0421-lock-control-file';"; echo "begin;"; cat "$TMP/no-prelude.sql"; echo "rollback;"; } \
       | "${PSQL[@]}" -v VERBOSITY=verbose > "$TMP/7.m.out" 2> "$TMP/7.m.err" &
     mp=$!
     # Wait until the file is blocked on a table, then read what it holds.
@@ -281,12 +281,12 @@ else
       WAITING_FOR="$(q "select string_agg(n.nspname || '.' || c.relname, ',') from pg_locks l
                           join pg_stat_activity a on a.pid = l.pid
                           join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
-                         where a.application_name = '0426-lock-control-file' and l.locktype = 'relation' and not l.granted")"
+                         where a.application_name = '0421-lock-control-file' and l.locktype = 'relation' and not l.granted")"
       if [ -n "$WAITING_FOR" ]; then
         HELD="$(q "select string_agg(distinct n.nspname || '.' || c.relname, ',' order by n.nspname || '.' || c.relname) from pg_locks l
                      join pg_stat_activity a on a.pid = l.pid
                      join pg_class c on c.oid = l.relation join pg_namespace n on n.oid = c.relnamespace
-                    where a.application_name = '0426-lock-control-file' and l.locktype = 'relation' and l.granted
+                    where a.application_name = '0421-lock-control-file' and l.locktype = 'relation' and l.granted
                       and c.relkind in ('r', 'p') and n.nspname not in ('pg_catalog', 'pg_toast', 'information_schema')")"
         break
       fi

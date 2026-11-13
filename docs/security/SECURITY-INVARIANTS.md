@@ -71,18 +71,18 @@
      `select plan(58)`, and the two file counts beside it were counted from
      the manifests in `scripts/security-test.sh` on that date.
 
-     AMENDED 2026-11-02 (docket S49, migration 0426): INV-B1, INV-B3 and
+     AMENDED 2026-11-02 (docket S49, migration 0421): INV-B1, INV-B3 and
      INV-B4 now say a gate counts only in code. INV-2, INV-25 and INV-31
      match the four gate names as whole words after removing comments and
      quoted strings (one shared expression, `_sec_inv_gate_re`); INV-4b and
      INV-29b were added, and INV-29 and INV-32 plant comment-only and
      string-only probes. INV-B3's grants paragraph gained the exception 0310
-     and 0426 use, INV-B2 names INV-22's string-literal residual and gives
+     and 0421 use, INV-B2 names INV-22's string-literal residual and gives
      the measured current state (18 policies, 15 gated; the figure it had
      carried since this document's first version was 19, 16 gated), and
      section 10 records the second recurrence. The census figures in those
      entries were read by a scratch pgTAP probe on a local Postgres at main
-     f584141ba with 0426 applied; the counts in section 10 were not
+     f584141ba with 0421 applied; the counts in section 10 were not
      re-derived. -->
 
 # Security invariants
@@ -390,7 +390,7 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
 - **Enforced by**: the predicate on each policy.
 - **Tested at**: INV-22, with INV-23 as the control that the population being
   judged is non-empty. Current state, measured on 2026-11-02 (main f584141ba
-  with 0426): 18 such policies — 15 gated, 3 explicit denies (the
+  with 0421): 18 such policies — 15 gated, 3 explicit denies (the
   `mfa_recovery_codes_no_*` idiom that makes that table trigger-write-only).
   One residual, named since S49: INV-22 searches the deparsed predicate,
   which carries no comment but can carry a string literal, so an identity
@@ -440,9 +440,9 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   names it, no `SECURITY INVOKER` function calls it, and no app path calls it.
   Revoking `authenticated`'s `EXECUTE` on such a helper breaks nothing, so it
   may lose the grant instead of gaining a gate. 0310 did that for
-  `account_is_disabled`, and 0426 (S49) for `user_can_see_item_category` once
+  `account_is_disabled`, and 0421 (S49) for `user_can_see_item_category` once
   `categories_select` stopped calling it. The condition is checked, not
-  assumed: 0426's test (S4) asserts that no policy names the function, that
+  assumed: 0421's test (S4) asserts that no policy names the function, that
   nothing depends on it and that no other function's code calls it, and S2
   and S5 that only `postgres` and `service_role` may execute it.
 - **Tested at**: INV-25 (the sweep), INV-26 (allowlist E polices itself: no
@@ -542,7 +542,7 @@ body, so a gate name anywhere counted, a comment included.
 `has_org_role` is in a comment (0310 says so itself), and it takes the user
 it answers about from its caller. Any signed-in account could ask it, by
 POST to its RPC, whether a person (any id) is a member of an organization
-(any id) and which categories a limited viewer holds. 0426 moved
+(any id) and which categories a limited viewer holds. 0421 moved
 `categories_select` onto zero-argument sets that read `auth.uid()`
 themselves: the two category sets `inventory_items_select` already read
 (0229) and the membership set `stock_movements_select` reads. It took
@@ -2232,7 +2232,7 @@ checked.
   permanent: the sweep that would have caught it did not exist on the day the
   first P0 was declared closed. S49 found a second instance that the sweep
   itself let through: `user_can_see_item_category` passed INV-25 on a gate
-  named only in a comment, closed by 0426, and INV-25 has read code only since.
+  named only in a comment, closed by 0421, and INV-25 has read code only since.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 58 class-wide assertions in
   `supabase/tests/security_invariants.test.sql`, plus the 100 other pgTAP

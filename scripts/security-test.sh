@@ -830,12 +830,12 @@ PGTAP_TESTS=(
   # own preflight is replayed from the recorded statements. The lock footprint
   # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
   supabase/tests/0417_recovery_codes_need_aal2.test.sql
-  # Category reads (0426, docket S49): categories_select reads the membership
+  # Category reads (0421, docket S49): categories_select reads the membership
   # set stock_movements_select reads and the two category sets
   # inventory_items_select reads (the same rows for 13 personas), and
   # user_can_see_item_category answers service_role only. The lock footprint
-  # is scripts/db-concurrency/0426_migration_lock_footprint.sh.
-  supabase/tests/0426_categories_select_category_sets.test.sql
+  # is scripts/db-concurrency/0421_migration_lock_footprint.sh.
+  supabase/tests/0421_categories_select_category_sets.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
