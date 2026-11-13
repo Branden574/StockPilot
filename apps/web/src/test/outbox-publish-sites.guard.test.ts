@@ -12,28 +12,31 @@
  * reports. This file holds the code to that.
  *
  * WHAT IS SCANNED. Every source file of the repository (.ts .tsx .js .jsx
- * .mjs .cjs .mts .cts) under its root, walked on disk: the web app (src,
- * scripts, tests' helpers), the phone (src, app, scripts, plugins, config),
- * packages (core, config), integrations/zapier, load-tests, scripts and the
- * design prototypes. Left out, each for a reason (SCAN_EXCLUDES): node_modules
- * and build output (dist, build, out, coverage, and every dot directory such
- * as .next, .expo, .turbo, .git), which are not source; declaration files
- * (.d.ts .d.mts .d.cts), which hold no code that runs; and test and spec
- * files, which never ship and run against stubs or a local lab. The SQL under
- * supabase/ is not JavaScript; its own pgTAP tests hold the database side.
+ * .mjs .cjs .mts .cts) that git lists from the repository root: tracked files
+ * and new files that are not ignored (`git ls-files --cached --others
+ * --exclude-standard`), so a source file not yet staged is scanned, and a
+ * source folder of any name (build, out, dist, coverage) is scanned like any
+ * other. Ignored files are not scanned: they never ship from a checkout CI
+ * builds (installed packages, build output, and files a dev or build step
+ * copies in, such as apps/web/public/maplibre/). Left out by name, each for a
+ * reason: declaration files (.d.ts .d.mts .d.cts), which hold no code that
+ * runs, and test and spec files, which never ship and run against stubs or a
+ * local lab. The SQL under supabase/ is not JavaScript; its own pgTAP tests
+ * hold the database side. Without git the guard fails with a message; it never
+ * passes on an empty list.
  *
  * THE RULES
  *   Rule 1. No scanned file names publish_outbox but the helper: not in a
  *   string, a template, a raw /rest/v1/rpc/ URL or a constant handed around.
- *   Rule 2. Every `.rpc(` call names its function as a literal, so a name
- *   built at run time ('publish_' + 'outbox', a variable) cannot reach
- *   publish_outbox unseen; and `rpc` is never read off a client except to
- *   call it there (no `client['rpc']`, `const { rpc } = client`,
- *   `client.rpc.call(...)`).
+ *   Rule 2. Every `.rpc(` call names its function as a literal, and `rpc` read
+ *   off a client is called right there (not indexed, kept in a variable,
+ *   destructured and handed on, or called through `.call`).
  *   Rule 3. No scanned file names the table outbox_events in a string or a
- *   template (a direct write through any client), and every insert, upsert,
- *   update or delete on a `.from(` whose table is not a literal is listed in
- *   DYNAMIC_FROM_WRITES with the tables it can name.
+ *   template unless TABLE_NAMED lists it, and every insert, upsert, update or
+ *   delete on a database client's `.from(` whose table is not a literal is
+ *   listed in DYNAMIC_FROM_WRITES with the tables it can name. A
+ *   `<x>.storage.from(bucket)` is a storage bucket, not a table, and is not
+ *   counted.
  *   Rule 4. In the helper, publish_outbox is called once, directly on
  *   `createAdminClient()` imported from '@/lib/supabase/admin', and the
  *   module exports only HELPER_EXPORTS.
@@ -41,8 +44,10 @@
  *   and only by a plain named import with no alias (no default, no namespace,
  *   no `as`); never re-exported, never loaded by `import(...)`, `require(...)`
  *   or `import x = require(...)`. A load whose path is not a literal is
- *   listed in DYNAMIC_LOADS. The helper's two functions are referenced only
- *   as the callee of a call (never kept in a variable or handed on).
+ *   listed in DYNAMIC_LOADS, except a template path that ends in a data
+ *   extension (.json .css .svg .png .jpg .jpeg .webp .txt .md), which cannot
+ *   load code. The helper's two functions are referenced only as the callee
+ *   of a call (never kept in a variable or handed on).
  *   Rule 6. The helper is called only at the sites in SITES, each with its
  *   topic. The event is an object literal with exactly topic, aggregateId and
  *   payload (no spread, no computed key), or a call of a named builder in the
@@ -53,22 +58,15 @@
  *   binding that argument reads is pinned to where it comes from (the link
  *   resolved by its token hash; the database function's answer).
  *
- * IF THIS FAILS
- *   - "names publish_outbox" / "names outbox_events": record the event with
- *     publishOutboxEvent(this.ctx, ...) after the action and its permission
- *     check; never call the function or write the table.
- *   - "is not a literal" / "reads rpc off a client": name the function in the
- *     `.rpc(` call itself.
- *   - "imports" / "loads" / "references": import the two functions by name,
- *     in a file with a site, and call them directly.
- *   - "new export-event site" / "moved" / "binding": read the new code. It
- *     must run after the service's own permission check and after the action
- *     it reports, and take its organization from the checked context or the
- *     server's own resolution; then update SITES with what it reads.
- *   - "before its gate": the event moved above the permission check, or the
- *     check was removed. Put the check back first.
+ * WHAT IT DOES NOT HOLD. It reads code as written. Code built to hide a call
+ * (names assembled across modules, eval or new Function, Reflect.get, a client
+ * passed through an untyped object) is a code-review matter, not this file's.
+ *
+ * IF THIS FAILS. Every failure ends with " -- fix: " and what to do for that
+ * failure (ADVICE).
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import ts from 'typescript';
@@ -89,14 +87,6 @@ const HELPER_EXPORTS = [
 const FN = 'publish_outbox';
 const TABLE = 'outbox_events';
 
-/** Directory names never walked, and why. */
-const SCAN_EXCLUDES: Record<string, string> = {
-  node_modules: 'installed packages, not this repository',
-  dist: 'build output',
-  build: 'build output',
-  out: 'build output',
-  coverage: 'test coverage output',
-};
 const SOURCE = /\.(tsx?|jsx?|mjs|cjs|mts|cts)$/;
 const DECLARATION = /\.d\.(ts|mts|cts)$/;
 const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$/;
@@ -112,6 +102,12 @@ const DYNAMIC_FROM_WRITES: Record<string, string> = {
   'apps/web/scripts/seed-demo-org.mjs#findOrCreate':
     "The owner-run Demo Co seed script's find-or-create; every table name is a literal at its call site.",
 };
+
+/** Files whose strings may name the export queue's table (a read or a message), and why. None today. */
+const TABLE_NAMED: Record<string, string> = {};
+
+/** A template load path ending in one of these loads data, never code. */
+const DATA_LOAD = /\.(json|css|svg|png|jpe?g|webp|txt|md)$/;
 
 /** `import(...)` or `require(...)` whose path is not a literal: `<path>` and why. */
 const DYNAMIC_LOADS: Record<string, string> = {
@@ -231,26 +227,55 @@ interface Tree {
   read(file: string): string;
 }
 
-function listFiles(dir: string, rel = ''): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    if (e.name.startsWith('.') || e.name in SCAN_EXCLUDES) continue;
-    const relPath = rel ? `${rel}/${e.name}` : e.name;
-    if (e.isDirectory()) out.push(...listFiles(path.join(dir, e.name), relPath));
-    else if (SOURCE.test(e.name) && !DECLARATION.test(e.name) && !TEST_FILE.test(e.name))
-      out.push(relPath);
-  }
-  return out.sort();
+/** The paths that are source the guard reads (the extension, declaration and test rules). */
+function isScannedSource(file: string): boolean {
+  return SOURCE.test(file) && !DECLARATION.test(file) && !TEST_FILE.test(file);
 }
 
-function diskTree(root: string): Tree {
+/** Every file git lists from the repository root: tracked, and new ones not ignored. */
+function gitListed(): string[] {
+  let out: string;
+  try {
+    out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+      cwd: REPO,
+      encoding: 'utf8',
+      maxBuffer: 256 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    throw new Error(
+      `outbox-publish-sites guard: git could not list the repository's files from ${REPO} ` +
+        `(${err instanceof Error ? err.message : String(err)}). The guard needs git and does not pass without it.`,
+    );
+  }
+  const files = [...new Set(out.split('\0').filter(Boolean))];
+  if (files.length === 0) {
+    throw new Error(
+      'outbox-publish-sites guard: git listed no files; the guard does not pass on an empty list.',
+    );
+  }
+  return files;
+}
+
+function gitTree(): Tree {
   const cache = new Map<string, string>();
+  const files = gitListed()
+    .filter(isScannedSource)
+    .filter((f) => {
+      try {
+        // A tracked file deleted from the checkout, or a link, is not read.
+        return lstatSync(path.join(REPO, f)).isFile();
+      } catch {
+        return false;
+      }
+    })
+    .sort();
   return {
-    files: listFiles(root),
+    files,
     read(f) {
       let text = cache.get(f);
       if (text === undefined) {
-        text = readFileSync(path.join(root, f), 'utf8');
+        text = readFileSync(path.join(REPO, f), 'utf8');
         cache.set(f, text);
       }
       return text;
@@ -258,7 +283,7 @@ function diskTree(root: string): Tree {
   };
 }
 
-const REAL = diskTree(REPO);
+const REAL = gitTree();
 
 function withFile(tree: Tree, file: string, source: string): Tree {
   return {
@@ -470,6 +495,58 @@ function literalEventTopic(o: ts.ObjectLiteralExpression, sf: ts.SourceFile): st
   return topic ?? '<not a literal>';
 }
 
+/**
+ * A storage bucket, not a table: `.from(` read off `<x>.storage` or off a
+ * name `storage`. Storage's `.update(path, file)` moves an object; a
+ * database client's `.from(` is never reached through `.storage`.
+ */
+function isStorageReceiver(receiver: ts.Expression): boolean {
+  const u = unwrap(receiver);
+  return (
+    (ts.isPropertyAccessExpression(u) && u.name.text === 'storage') ||
+    (ts.isIdentifier(u) && u.text === 'storage')
+  );
+}
+
+/** A template load path whose last piece ends in a data extension (cannot load code). */
+function isDataLoad(arg: ts.Expression | undefined): boolean {
+  if (!arg) return false;
+  const u = unwrap(arg);
+  if (!ts.isTemplateExpression(u)) return false;
+  const tail = u.templateSpans[u.templateSpans.length - 1]!.literal.text;
+  return DATA_LOAD.test(tail);
+}
+
+/**
+ * Whether a destructured `rpc` binding is used other than as `rpc('<literal>', ...)`
+ * inside the function or file that holds it.
+ */
+function bindingEscapes(binding: ts.BindingElement, local: ts.Identifier): boolean {
+  let scope: ts.Node = binding;
+  while (!ts.isSourceFile(scope) && !ts.isFunctionLike(scope)) scope = scope.parent;
+  let escapes = false;
+  const visit = (n: ts.Node) => {
+    if (escapes) return;
+    if (ts.isIdentifier(n) && n !== local && n.text === local.text) {
+      const p = n.parent;
+      const isName =
+        (ts.isPropertyAccessExpression(p) && p.name === n) ||
+        (ts.isPropertyAssignment(p) && p.name === n) ||
+        (ts.isBindingElement(p) && p.propertyName === n) ||
+        ((ts.isPropertySignature(p) || ts.isMethodDeclaration(p) || ts.isPropertyDeclaration(p)) &&
+          p.name === n);
+      if (!isName) {
+        const literalCall =
+          ts.isCallExpression(p) && p.expression === n && literalText(p.arguments[0]) !== null;
+        if (!literalCall) escapes = true;
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(scope);
+  return escapes;
+}
+
 const scans = new Map<string, { source: string; scan: ReturnType<typeof scanFileUncached> }>();
 
 /** Everything the rules need from one file (kept per file while its text is unchanged). */
@@ -525,19 +602,35 @@ function scanFileUncached(file: string, source: string) {
             receiver: flat(n.expression, sf),
             line: sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1,
           });
-      } else {
+      } else if (!(
+        ts.isBinaryExpression(parent) &&
+        parent.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        parent.left === n
+      )) {
+        // Setting `x.rpc = ...` (a stub, a wrapper being built) reads nothing.
         looseRpc.push(where(n));
       }
     }
-    if (ts.isBindingElement(n) && (n.propertyName ?? n.name).getText(sf) === 'rpc')
+    // A destructured `rpc` (variable or parameter) may only be called right
+    // there by a literal name; kept, handed on or called by a built name, it
+    // is a client's rpc escaping the scan. Destructured and never used, it is
+    // nothing.
+    if (
+      ts.isBindingElement(n) &&
+      (n.propertyName ?? n.name).getText(sf) === 'rpc' &&
+      ts.isIdentifier(n.name) &&
+      bindingEscapes(n, n.name)
+    ) {
       looseRpc.push(where(n));
+    }
     // Rule 3: a write on a `.from(` whose table is not a literal.
     if (
       ts.isCallExpression(n) &&
       ts.isPropertyAccessExpression(n.expression) &&
       n.expression.name.text === 'from' &&
       n.arguments.length === 1 &&
-      literalText(n.arguments[0]) === null
+      literalText(n.arguments[0]) === null &&
+      !isStorageReceiver(n.expression.expression)
     ) {
       let top: ts.Node = n;
       const ops: string[] = [];
@@ -575,7 +668,8 @@ function scanFileUncached(file: string, source: string) {
         (ts.isIdentifier(n.expression) && n.expression.text === 'require'))
     ) {
       if (isHelperPath(n.arguments[0])) badImports.push(where(n));
-      else if (literalText(n.arguments[0]) === null) dynamicLoads.push(file);
+      else if (literalText(n.arguments[0]) === null && !isDataLoad(n.arguments[0]))
+        dynamicLoads.push(file);
     }
     // Rules 5 and 6: the helper's functions, called directly or not at all.
     if (ts.isIdentifier(n) && HELPER_NAMES.has(n.text)) {
@@ -665,12 +759,53 @@ const WORTH_PARSING = [
   '.from(',
 ];
 
+/** What to do for each failure; every failure message ends with its line. */
+const ADVICE = {
+  helperNames:
+    'The helper names publish_outbox once, in its one .rpc( call; keep every other mention in comments.',
+  namesFn:
+    'Record the event with publishOutboxEvent(this.ctx, ...) after the action and its permission check (publishOutboxEventForResolvedOrganization at a site with no signed-in member); never call publish_outbox outside the helper.',
+  namesTable:
+    'The export queue is written only through the helper. If this string is a read or a message, name the table in a comment, or add the file to TABLE_NAMED with why, after reading that it writes nothing.',
+  rpcName: 'Name the database function as a string literal in the .rpc( call itself.',
+  rpcLoose:
+    'Call .rpc( on the client where you read it, with the function named as a literal; do not index, keep, destructure and hand on, or .call() it.',
+  fromWrite:
+    'Add this site to DYNAMIC_FROM_WRITES with the tables it can name, after reading that none can be the export queue. If .from( here is a storage bucket, reach it through `<client>.storage` or list it there as a bucket.',
+  dynamicLoad:
+    'Add this file to DYNAMIC_LOADS with the paths it can load, after reading that none can be the export-event helper.',
+  badImport:
+    'Import publishOutboxEvent or publishOutboxEventForResolvedOrganization by name, without an alias, only in a file that holds a SITES entry.',
+  looseHelper:
+    'Call the helper function directly where it is imported; do not keep it in a variable or hand it on.',
+  staleFrom: 'Remove the DYNAMIC_FROM_WRITES entry: that write is gone.',
+  staleLoad: 'Remove the DYNAMIC_LOADS entry: that load is gone.',
+  staleTable: 'Remove the TABLE_NAMED entry: that file no longer names the table.',
+  staleSite: 'Remove the SITES entry, or put back the export event the action reports.',
+  helperShape:
+    "Keep the helper's one publish_outbox call on createAdminClient() imported from '@/lib/supabase/admin', and its exports to HELPER_EXPORTS.",
+  newSite:
+    "Read the new site: it must run after the service's own permission check and after the action it reports, with the organization from the checked context or the server's own resolution; then add it to SITES with its gate.",
+  siteShape:
+    'Keep the site as SITES pins it: one call, the right helper function, the topic, and an event literal with exactly topic, aggregateId and payload (or the named builder).',
+  firstArg:
+    "Pass the first argument exactly as SITES pins it; the organization comes from the server's own resolution, never from the request.",
+  binding:
+    "The organization must come from the server's own resolution (the link by its token hash; the database function's answer). Put it back, or, after review, update the binding pin in SITES.",
+  context: "Pass this.ctx, the service's checked context, as the first argument.",
+  gate: 'Put the permission check back before the event; never move the event above it.',
+  moved: 'The member was renamed or removed: read it, then update the SITES key.',
+} as const;
+
 /** Every rule over a tree; the list of failures. */
 function verdict(tree: Tree): string[] {
   const failures: string[] = [];
+  const fail = (kind: keyof typeof ADVICE, message: string) =>
+    failures.push(`${message} -- fix: ${ADVICE[kind]}`);
   const seen = new Map<string, HelperCall[]>();
   const fromWrites = new Set<string>();
   const loads = new Set<string>();
+  const tableFiles = new Set<string>();
   let helperRpcs: Array<{ receiver: string; line: number }> = [];
 
   for (const file of tree.files) {
@@ -680,32 +815,37 @@ function verdict(tree: Tree): string[] {
     if (file === HELPER) {
       helperRpcs = scan.outboxRpcs;
       if (scan.named.length !== 1)
-        failures.push(
+        fail(
+          'helperNames',
           `${HELPER} names ${FN} ${scan.named.length} times (want once, in its one .rpc( call)`,
         );
     } else {
-      for (const at of scan.named) failures.push(`${at} names ${FN} outside ${HELPER}`);
+      for (const at of scan.named) fail('namesFn', `${at} names ${FN} outside ${HELPER}`);
     }
-    for (const at of scan.tableNamed) failures.push(`${at} names ${TABLE}`);
+    if (scan.tableNamed.length > 0) tableFiles.add(file);
+    if (!(file in TABLE_NAMED))
+      for (const at of scan.tableNamed) fail('namesTable', `${at} names ${TABLE}`);
     for (const at of scan.dynamicRpc)
-      failures.push(`${at} calls .rpc( with a function name that is not a literal`);
+      fail('rpcName', `${at} calls .rpc( with a function name that is not a literal`);
     for (const at of scan.looseRpc)
-      failures.push(`${at} reads rpc off a client without calling it there by name`);
+      fail('rpcLoose', `${at} reads rpc off a client without calling it there by name`);
     for (const w of new Set(scan.fromWrites)) {
       fromWrites.add(w);
       if (!(w in DYNAMIC_FROM_WRITES))
-        failures.push(`${w} writes through .from( a table that is not a literal`);
+        fail('fromWrite', `${w} writes through .from( a table that is not a literal`);
     }
     for (const at of scan.badImports)
-      failures.push(
+      fail(
+        'badImport',
         `${at} imports or loads ${HELPER} other than by a plain named import in a site's file`,
       );
     for (const f of scan.dynamicLoads) {
       loads.add(f);
-      if (!(f in DYNAMIC_LOADS)) failures.push(`${f} loads a module whose path is not a literal`);
+      if (!(f in DYNAMIC_LOADS))
+        fail('dynamicLoad', `${f} loads a module whose path is not a literal`);
     }
     for (const at of scan.looseHelper)
-      failures.push(`${at} references the helper other than by calling it`);
+      fail('looseHelper', `${at} references the helper other than by calling it`);
     for (const call of scan.helperCalls) {
       const list = seen.get(call.key) ?? [];
       list.push(call);
@@ -713,68 +853,79 @@ function verdict(tree: Tree): string[] {
     }
   }
   for (const w of Object.keys(DYNAMIC_FROM_WRITES))
-    if (!fromWrites.has(w)) failures.push(`stale: DYNAMIC_FROM_WRITES ${w} makes no such write`);
+    if (!fromWrites.has(w))
+      fail('staleFrom', `stale: DYNAMIC_FROM_WRITES ${w} makes no such write`);
+  for (const f of Object.keys(TABLE_NAMED))
+    if (!tableFiles.has(f)) fail('staleTable', `stale: TABLE_NAMED ${f} names no ${TABLE}`);
   for (const f of Object.keys(DYNAMIC_LOADS))
-    if (!loads.has(f)) failures.push(`stale: DYNAMIC_LOADS ${f} makes no such load`);
+    if (!loads.has(f)) fail('staleLoad', `stale: DYNAMIC_LOADS ${f} makes no such load`);
 
   // Rule 4.
   if (helperRpcs.length !== 1) {
-    failures.push(`${HELPER} calls ${FN} ${helperRpcs.length} times (want once)`);
+    fail('helperShape', `${HELPER} calls ${FN} ${helperRpcs.length} times (want once)`);
   } else if (helperRpcs[0]!.receiver !== 'createAdminClient()') {
-    failures.push(
+    fail(
+      'helperShape',
       `${HELPER}:${helperRpcs[0]!.line} calls ${FN} on ${helperRpcs[0]!.receiver}, not on createAdminClient()`,
     );
   }
   if (tree.files.includes(HELPER)) {
     const shape = helperShape(tree.read(HELPER));
     if (!shape.adminImported)
-      failures.push(`${HELPER} does not import createAdminClient from '@/lib/supabase/admin'`);
+      fail(
+        'helperShape',
+        `${HELPER} does not import createAdminClient from '@/lib/supabase/admin'`,
+      );
     if (JSON.stringify(shape.exports) !== JSON.stringify([...HELPER_EXPORTS].sort())) {
-      failures.push(
+      fail(
+        'helperShape',
         `${HELPER} exports ${shape.exports.join(', ')} (want ${[...HELPER_EXPORTS].sort().join(', ')})`,
       );
     }
   } else {
-    failures.push(`${HELPER} is missing`);
+    fail('helperShape', `${HELPER} is missing`);
   }
 
   // Rule 6.
   for (const [key, calls] of seen) {
     const site = SITES[key];
     if (!site) {
-      failures.push(
+      fail(
+        'newSite',
         `new export-event site ${key} (${calls.map((c) => c.topic).join(', ')}): review it and add it to SITES`,
       );
       continue;
     }
-    if (calls.length !== 1) failures.push(`${key} records ${calls.length} export events (want 1)`);
+    if (calls.length !== 1)
+      fail('siteShape', `${key} records ${calls.length} export events (want 1)`);
     const call = calls[0]!;
     const wantFn =
       site.kind === 'member' ? 'publishOutboxEvent' : 'publishOutboxEventForResolvedOrganization';
-    if (call.fn !== wantFn) failures.push(`${key} calls ${call.fn} (want ${wantFn})`);
+    if (call.fn !== wantFn) fail('siteShape', `${key} calls ${call.fn} (want ${wantFn})`);
     if (call.topic !== site.topic)
-      failures.push(`${key} records ${call.topic} (want ${site.topic})`);
+      fail('siteShape', `${key} records ${call.topic} (want ${site.topic})`);
     const [file, member] = key.split('#') as [string, string];
     const sf = parse(file, tree.read(file));
     if (site.kind === 'resolved') {
       if (call.firstArg !== site.firstArg)
-        failures.push(`${key} passes ${call.firstArg} (want ${site.firstArg})`);
+        fail('firstArg', `${key} passes ${call.firstArg} (want ${site.firstArg})`);
       const body = findMember(sf, member);
       if (!body) {
-        failures.push(`${key} moved`);
+        fail('moved', `${key} moved`);
         continue;
       }
       for (const [name, want] of Object.entries(site.bindings)) {
         const got = writesOf(body, sf, name);
         if (JSON.stringify(got) !== JSON.stringify(want))
-          failures.push(
+          fail(
+            'binding',
             `${key} binding ${name} is ${JSON.stringify(got)} (want ${JSON.stringify(want)})`,
           );
       }
       continue;
     }
     if (call.firstArg !== 'this.ctx')
-      failures.push(`${key} passes ${call.firstArg} as the context (want this.ctx)`);
+      fail('context', `${key} passes ${call.firstArg} as the context (want this.ctx)`);
     if (site.gateIn) {
       // A private member: its one caller runs the gate, then calls it.
       const caller = findMember(sf, site.gateIn);
@@ -782,9 +933,9 @@ function verdict(tree: Tree): string[] {
       const callers = (tree.read(file).match(new RegExp(String.raw`this\.${simple}\(`, 'g')) ?? [])
         .length;
       if (callers !== 1)
-        failures.push(`${key} is called ${callers} times (want once, from ${site.gateIn})`);
+        fail('gate', `${key} is called ${callers} times (want once, from ${site.gateIn})`);
       if (!caller) {
-        failures.push(`${key}: its caller ${site.gateIn} moved`);
+        fail('moved', `${key}: its caller ${site.gateIn} moved`);
         continue;
       }
       const gateAt = callStart(caller, sf, site.gate);
@@ -796,24 +947,24 @@ function verdict(tree: Tree): string[] {
         else ts.forEachChild(n, find);
       };
       find(caller);
-      if (gateAt < 0) failures.push(`${site.gateIn} has no ${site.gate}`);
-      else if (callAt < 0) failures.push(`${site.gateIn} no longer calls ${member}`);
+      if (gateAt < 0) fail('gate', `${site.gateIn} has no ${site.gate}`);
+      else if (callAt < 0) fail('gate', `${site.gateIn} no longer calls ${member}`);
       else if (callAt < gateAt)
-        failures.push(`${site.gateIn} calls ${member} before its gate ${site.gate}`);
+        fail('gate', `${site.gateIn} calls ${member} before its gate ${site.gate}`);
       continue;
     }
     const body = findMember(sf, member);
     if (!body) {
-      failures.push(`${key} moved`);
+      fail('moved', `${key} moved`);
       continue;
     }
     const gateAt = callStart(body, sf, site.gate);
-    if (gateAt < 0) failures.push(`${key} has no ${site.gate}`);
+    if (gateAt < 0) fail('gate', `${key} has no ${site.gate}`);
     else if (call.start < gateAt)
-      failures.push(`${key} records its event before its gate ${site.gate}`);
+      fail('gate', `${key} records its event before its gate ${site.gate}`);
   }
   for (const key of Object.keys(SITES)) {
-    if (!seen.has(key)) failures.push(`stale: SITES ${key} records no export event`);
+    if (!seen.has(key)) fail('staleSite', `stale: SITES ${key} records no export event`);
   }
   return failures;
 }
@@ -842,8 +993,38 @@ describe('export events are recorded only by the server helper, on the service c
     expect(REAL.files.some((f) => /\.mjs$/.test(f))).toBe(true);
     expect(REAL.files.filter((f) => f.startsWith('apps/web/src/')).length).toBeGreaterThan(500);
     expect(REAL.files.some((f) => /(^|\/)node_modules\//.test(f))).toBe(false);
-    expect(REAL.files.some((f) => /(^|\/)\./.test(f))).toBe(false);
     expect(REAL.files.some((f) => TEST_FILE.test(f) || DECLARATION.test(f))).toBe(false);
+  });
+
+  it('lists through git: no file it reads is ignored, and ignored copies (maplibre) are left out', () => {
+    // check-ignore reports untracked ignored paths only; a tracked file is never "ignored".
+    let ignored = '';
+    try {
+      ignored = execFileSync('git', ['check-ignore', '--stdin'], {
+        cwd: REPO,
+        input: REAL.files.join('\n'),
+        encoding: 'utf8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      // Exit 1 means "nothing ignored"; anything else is a real failure.
+      if ((err as { status?: number }).status !== 1) throw err;
+    }
+    expect(ignored).toBe('');
+    expect(REAL.files.some((f) => f.startsWith('apps/web/public/maplibre/'))).toBe(false);
+  });
+
+  it('a source folder of any name is scanned: build, out, dist and coverage are not skipped', () => {
+    for (const file of [
+      'apps/web/src/app/build/page.ts',
+      'apps/web/src/server/out/x.ts',
+      'packages/core/src/dist/y.mts',
+      'apps/mobile/src/coverage/z.cjs',
+    ]) {
+      expect(isScannedSource(file)).toBe(true);
+    }
+    for (const file of ['apps/web/src/a.d.ts', 'apps/web/src/a.test.ts', 'apps/web/e2e/a.spec.mjs'])
+      expect(isScannedSource(file)).toBe(false);
   });
 
   it('holds every rule today', () => {
@@ -862,13 +1043,15 @@ describe('export events are recorded only by the server helper, on the service c
 
 describe('the guard can fail (planted probes)', () => {
   const NEW_FILE = 'apps/web/src/server/services/planted-probe.ts';
-  const planted = (source: string, file = NEW_FILE) => verdict(withFile(REAL, file, source));
+  /** The failures without their advice, to match a message exactly. */
+  const messages = (tree: Tree) => verdict(tree).map((f) => f.split(' -- fix: ')[0]!);
+  const planted = (source: string, file = NEW_FILE) => messages(withFile(REAL, file, source));
   /** The real tree with one file's text changed by `change`, which must change it. */
   const changed = (file: string, change: (s: string) => string) => {
     const real = REAL.read(file);
     const next = change(real);
     expect(next).not.toBe(real);
-    return verdict(withFile(REAL, file, next));
+    return messages(withFile(REAL, file, next));
   };
 
   it.each([
@@ -1253,5 +1436,109 @@ describe('the guard can fail (planted probes)', () => {
         return real.slice(0, start) + real.slice(end);
       }),
     ).toContain(`stale: SITES ${routeKey} records no export event`);
+  });
+  it.each([['apps/web/src/app/build/page.ts'], ['apps/web/src/server/out/x.ts']])(
+    'a forbidden call in a source folder named like build output (%s) is caught',
+    (file) => {
+      expect(planted("export const f = (c) => c.rpc('publish_outbox', {});", file)).toContain(
+        `${file}:1 names ${FN} outside ${HELPER}`,
+      );
+    },
+  );
+
+  it.each([
+    [
+      'a parameter destructured as rpc and handed on',
+      'export function f({ rpc }) { return other(rpc); }',
+    ],
+    [
+      'a parameter destructured as rpc and called by a built name',
+      'export function f({ rpc }, t) { return rpc(`x_${t}`); }',
+    ],
+  ])('%s fails', (_label, source) => {
+    expect(planted(source)).toContain(
+      `${NEW_FILE}:1 reads rpc off a client without calling it there by name`,
+    );
+  });
+
+  it('a write on a .from( that is not reached through .storage still fails, and says to list a bucket', () => {
+    const all = verdict(
+      withFile(
+        REAL,
+        NEW_FILE,
+        'export async function f(files, b) { await files.from(b).update("p", new Blob()); }',
+      ),
+    );
+    const hit = all.find((f) => f.startsWith(`${NEW_FILE}#f writes through .from(`));
+    expect(hit).toBeDefined();
+    expect(hit).toContain('storage bucket');
+  });
+});
+
+describe('what the guard does not flag (each was a false alarm)', () => {
+  const NEW_FILE = 'apps/web/src/server/services/planted-probe.ts';
+  const onFile = (source: string) =>
+    verdict(withFile(REAL, NEW_FILE, source)).filter((f) => f.startsWith(NEW_FILE));
+
+  it.each([
+    [
+      'a storage bucket update',
+      'export async function f(sb, bucket: string, path: string, file: Blob) { await sb.storage.from(bucket).update(path, file); }',
+    ],
+    [
+      'a storage client kept as storage',
+      'export async function f(storage, bucket: string) { await storage.from(bucket).remove(["a"]); await storage.from(bucket).update("a", new Blob()); }',
+    ],
+    [
+      'setting rpc on a stub',
+      'export function stub(c) { c.rpc = () => Promise.resolve({ data: null, error: null }); return c; }',
+    ],
+    [
+      'a parameter destructured as rpc and never used',
+      'export function f({ rpc, other }) { return other; }',
+    ],
+    [
+      'a destructured rpc called by a literal name',
+      "export async function f({ rpc }) { return rpc('order_submission_status', {}); }",
+    ],
+    [
+      'a data file loaded by a template path',
+      'export async function load(lang: string) { return import(`./locales/${lang}.json`); }',
+    ],
+  ])('%s', (_label, source) => {
+    expect(onFile(source)).toEqual([]);
+  });
+});
+
+describe('every failure says what to do about it', () => {
+  const NEW_FILE = 'apps/web/src/server/services/planted-probe.ts';
+  const failuresOf = (source: string) =>
+    verdict(withFile(REAL, NEW_FILE, source)).filter((f) => f.startsWith(NEW_FILE));
+
+  it.each([
+    [
+      'a write through a computed table',
+      'export async function f(c, t) { await c.from(t).insert({}); }',
+      'fromWrite',
+    ],
+    ['a load by a computed path', 'export const load = (p: string) => import(p);', 'dynamicLoad'],
+    ['a string naming the table', "export const label = 'outbox_events';", 'namesTable'],
+    ['a computed rpc name', 'export async function f(c, n) { await c.rpc(n, {}); }', 'rpcName'],
+    ['a stray rpc read', 'export const r = (c) => c.rpc;', 'rpcLoose'],
+    ['a name of the function', "export const n = 'publish_outbox';", 'namesFn'],
+    [
+      'an import of the helper',
+      "import { publishOutboxEvent } from '@/server/lib/outbox-events';\nexport const x = 1;",
+      'badImport',
+    ],
+  ] as const)('%s ends with its own advice', (_label, source, kind) => {
+    const found = failuresOf(source);
+    expect(found).toHaveLength(1);
+    expect(found[0]!.endsWith(` -- fix: ${ADVICE[kind]}`)).toBe(true);
+  });
+
+  it('no two kinds share their advice', () => {
+    const lines = Object.values(ADVICE);
+    expect(new Set(lines).size).toBe(lines.length);
   });
 });

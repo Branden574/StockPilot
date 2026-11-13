@@ -13,9 +13,8 @@ import type { ServiceContext } from '@/server/services/context';
  *
  * Every event is written through the service client, with the topic and
  * payload each caller has always sent and the dedupe key `<topic>:<aggregate
- * id>` (the id in lower case, so one document sent in another letter case is
- * still one event; every id the app holds is already lower case), after the
- * action that causes it has succeeded. The organization is never taken from
+ * id>` (the key uses the id in lower case), after the action that causes it
+ * has succeeded. The organization is never taken from
  * a request:
  *
  *   - publishOutboxEvent(ctx, ...) is for a signed-in member's action. The
