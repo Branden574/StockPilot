@@ -36,9 +36,24 @@
 --     functions out, since they cannot be called through /rpc; a trigger on
 --     a table members write would still put rows in the queue on their
 --     behalf.
--- G7. The functions whose body writes outbox_events, whoever may execute
---     them, are exactly publish_outbox, so a new writer (a definer helper
---     among them) shows up here as a changed list.
+-- G7. The functions whose body writes outbox_events by a statement the
+--     pattern reads (insert into, update, delete from, merge into the table,
+--     plain or quoted), whoever may execute them, are exactly publish_outbox:
+--     the narrow statement of who writes the queue.
+-- G8. The functions other than trigger functions whose body names
+--     outbox_events at all, whoever may execute them, are exactly the two
+--     listed (publish_outbox, which writes it; connector_drain_candidates,
+--     which reads it for the drain), so any new function that names the
+--     table, a writer through dynamic SQL among them, shows up as a changed
+--     list.
+--
+-- Why one level of indirection is enough: after the migration
+-- publish_outbox_service_role_only, a chain of calls that ends in
+-- publish_outbox is refused by that function's own body for every caller
+-- but the service role, however many functions sit in between; and a chain
+-- that ends in a direct write of the table must contain a function that
+-- names the table, which G8 pins. Code that builds the table's name at run
+-- time from pieces is left to review, as in the web guard.
 -- C1-C3. Controls: planted probes, always undone, that each detector must
 --     report (each control reads only its probes' lines, so it stays true on
 --     a day the guard itself is red): a definer function granted to authenticated that inserts into
@@ -54,12 +69,15 @@
 --     calling a planted helper function that writes it, planted and undone,
 --     are each reported by G6.
 -- C7. Control: with that helper planted, G7's list changes.
+-- C8. Control: a planted definer helper that writes the queue through
+--     execute format(...) changes G8's list, and G7's pattern does not see
+--     it (which is why G8 exists).
 --
 -- Catalog only: no fixtures, no roles switched. begin/rollback.
 
 begin;
 
-select plan(15);
+select plan(17);
 
 -- == The tables, the allowlist, the detectors ===============================
 create temporary table s67_q (tbl text) on commit drop;
@@ -224,6 +242,14 @@ select is(pg_temp.list('select pg_temp.q_trigger_writers()'), 'none',
 select is(pg_temp.list('select pg_temp.q_queue_writers()'), 'public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
   'G7: the functions that write outbox_events, whoever may execute them, are exactly publish_outbox');
 
+-- The functions that name outbox_events, pinned by signature:
+--   connector_drain_candidates: reads the queue for the drain (service role only).
+--   publish_outbox: writes the queue (service role only).
+select is(pg_temp.list('select sig from pg_temp.q_queue_fns()'),
+  'public.connector_drain_candidates(uuid, uuid, text[], timestamp with time zone, integer), '
+  'public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
+  'G8: the functions that name outbox_events, whoever may execute them, are exactly the drain''s candidate read and publish_outbox');
+
 -- == Controls: each detector still reports a planted probe ==================
 select is(
   pg_temp.planted($p$
@@ -304,6 +330,18 @@ revoke all on function public._s67_probe_helper_write(uuid) from public, anon, a
     $q$select pg_temp.list('select pg_temp.q_queue_writers()')$q$),
   'public._s67_probe_helper_write(uuid), public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
   'C7: a new function that writes the queue, even one no API role may execute, changes G7''s list');
+
+select is(
+  pg_temp.planted($p$
+create function public._s67_probe_fmt_writer(p_org uuid) returns void
+  language plpgsql security definer set search_path = public
+  as $f$ begin execute format('insert into %I.%I (organization_id, topic, aggregate_type, payload) values ($1, ''x'', ''x'', ''{}'')',
+                              'public', 'outbox_events') using p_org; end $f$;
+revoke all on function public._s67_probe_fmt_writer(uuid) from public, anon, authenticated$p$,
+    $q$select pg_temp.list('select sig from pg_temp.q_queue_fns()', '_s67_probe') || ' | '
+         || pg_temp.list('select pg_temp.q_queue_writers()', '_s67_probe')$q$),
+  'public._s67_probe_fmt_writer(uuid) | none',
+  'C8: a definer helper that writes the queue through execute format changes G8''s list; G7''s pattern does not see it');
 
 -- The controls left nothing behind.
 select is(
