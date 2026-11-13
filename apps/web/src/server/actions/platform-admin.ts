@@ -474,12 +474,17 @@ export async function removeOrgAction(
     });
   }
 
-  // 1. A passphrase must be configured, and it must match.
-  const { data: settings } = await admin
+  // 1. A passphrase must be configured, and it must match. A read that
+  //    answers an error says so; it is never "no passphrase set".
+  const { data: settings, error: settingsErr } = await admin
     .from('platform_settings')
     .select('org_deletion_passphrase_hash, org_deletion_passphrase_salt')
     .eq('id', true)
     .maybeSingle();
+  if (settingsErr) {
+    await reportError(new Error(settingsErr.message), { tag: 'platform-admin.remove-org-passphrase-read' });
+    return err('internal_error', 'Could not read the deletion passphrase, so nothing was removed. Try again.');
+  }
   const s = settings as
     | { org_deletion_passphrase_hash: string | null; org_deletion_passphrase_salt: string | null }
     | null;
@@ -495,12 +500,20 @@ export async function removeOrgAction(
     return err('forbidden', 'Incorrect deletion passphrase.');
   }
 
-  // 2. Load the org + require an exact name re-type.
-  const { data: org } = await admin
+  // 2. Load the org + require an exact name re-type. A read that answers an
+  //    error says so; it is never "not found".
+  const { data: org, error: orgErr } = await admin
     .from('organizations')
     .select('id, name, slug')
     .eq('id', parsed.data.orgId)
     .maybeSingle();
+  if (orgErr) {
+    await reportError(new Error(orgErr.message), {
+      tag: 'platform-admin.remove-org-read',
+      extra: { orgId: parsed.data.orgId },
+    });
+    return err('internal_error', 'Could not read the organization, so nothing was removed. Try again.');
+  }
   const o = org as { id: string; name: string; slug: string } | null;
   if (!o) return err('not_found', 'Organization not found.');
   if (o.name !== parsed.data.confirmName.trim()) {
@@ -510,12 +523,11 @@ export async function removeOrgAction(
   // 3. Collect members whose ONLY membership is this org BEFORE the cascade
   //    removes the membership rows (so we can optionally delete those orphan
   //    accounts — the common "created under the wrong email" case).
-  //    A read that answers an error is never "no other organization": a
-  //    member list that could not be read removes nothing (once the cascade
-  //    runs, that list is gone), and a member whose count could not be read is
-  //    kept and counted as failed.
+  //    A read that answers an error (or a count with no number) is never "no
+  //    other organization": a member list or a member's count that could not
+  //    be read removes nothing, so the operator can simply try again (once the
+  //    cascade runs, that list is gone).
   const orphanUserIds: string[] = [];
-  let unreadMembers = 0;
   if (parsed.data.alsoDeleteOrphanedUsers) {
     const { data: members, error: membersErr } = await admin
       .from('organization_members')
@@ -541,12 +553,14 @@ export async function removeOrgAction(
         .eq('user_id', m.user_id)
         .neq('organization_id', parsed.data.orgId);
       if (countErr || typeof count !== 'number') {
-        unreadMembers += 1;
         await reportError(new Error(countErr?.message ?? 'membership count answered no count'), {
           tag: 'platform-admin.orphan-membership-read',
-          extra: { uid: m.user_id },
+          extra: { orgId: parsed.data.orgId, uid: m.user_id },
         });
-        continue;
+        return err(
+          'internal_error',
+          'Could not read whether each member belongs to another organization, so nothing was removed. Try again.',
+        );
       }
       if (count === 0) orphanUserIds.push(m.user_id);
     }
@@ -572,11 +586,11 @@ export async function removeOrgAction(
   //    deleteUser `{ error }` is read and settled: if GoTrue no longer has the
   //    user, the delete happened and only its reply failed (review R7). An
   //    account already gone is neither. After each deleted orphan its avatar
-  //    files are removed (O-A3-9). A count that could not be read (here or
-  //    in step 3) keeps the account and counts it as FAILED, reported.
+  //    files are removed (O-A3-9). A count that could not be read here keeps
+  //    the account and counts it as FAILED, reported.
   let deletedUsers = 0;
   let keptUsers = 0;
-  let failedUsers = unreadMembers;
+  let failedUsers = 0;
   for (const uid of orphanUserIds) {
     try {
       const { count, error: countErr } = await admin
