@@ -218,8 +218,15 @@ let authCalls: string[];
 let authAs: string[];
 let restSubjects: string[];
 let onContextAnswered: (() => void) | null;
+/** Tells a late read still waiting for the context that the render ended without an answer. */
+let contextNeverAnswered: (() => void) | null;
 /** Every request the fake network below is still answering. */
 const inFlight = new Set<Promise<Response>>();
+/** The real timers, kept before any test fakes one (the tests here fake Date only). */
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+/** How long, in real time, the settling below waits before it fails naming why. */
+const SETTLE_LIMIT_MS = 5_000;
 
 /**
  * Wait until every read the render left behind has finished, and every request
@@ -239,18 +246,61 @@ const inFlight = new Set<Promise<Response>>();
  * clock and cookie it set.
  */
 async function settleWhatTheRenderLeftBehind(): Promise<void> {
+  // A late read still waiting for get_request_context() never started: the
+  // render ended without that answer (a broken loader, say), so it is told so
+  // and ends, instead of holding this wait open.
+  contextNeverAnswered?.();
   const leftBehind = () => [
     ...inFlight,
     ...vi.mocked(getMfaFactorsForRequest).mock.results.map((r) => r.value as unknown),
     ...vi.mocked(getVerifiedSessionClaimsForRequest).mock.results.map((r) => r.value as unknown),
   ];
-  for (let seen = -1; seen !== leftBehind().length || inFlight.size > 0;) {
-    seen = leftBehind().length;
-    await Promise.allSettled(leftBehind());
-    // A read that settles can start another (the code gate starts the factor
-    // list once the claims show aal1): one more turn, then look again.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const settled = async () => {
+    for (let seen = -1; seen !== leftBehind().length || inFlight.size > 0;) {
+      seen = leftBehind().length;
+      await Promise.allSettled(leftBehind());
+      // A read that settles can start another (the code gate starts the factor
+      // list once the claims show aal1): one more turn, then look again.
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    }
+  };
+  // Bounded in real time, so a read that never settles fails here by name
+  // instead of as a 30 s hook timeout.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outOfTime = new Promise<never>((_, reject) => {
+    timer = realSetTimeout(
+      () =>
+        reject(new Error(`a read the render started never settled (waited ${SETTLE_LIMIT_MS} ms)`)),
+      SETTLE_LIMIT_MS,
+    );
+  });
+  try {
+    await Promise.race([settled(), outOfTime]);
+  } finally {
+    realClearTimeout(timer);
+    // Emptied once this test's reads have been waited for (or this test has
+    // failed above), never before: every entry of the two histories is then a
+    // read of the test that started it, from its first one. An index taken in
+    // beforeEach would instead trust that nothing emptied the histories in
+    // between (setup.ts's vi.resetAllMocks() does after each test, when it gets
+    // to run), and a wrong index could skip a read of this test's own. Not
+    // emptied, a read that never settles would hold every later test's wait.
+    vi.mocked(getMfaFactorsForRequest).mockClear();
+    vi.mocked(getVerifiedSessionClaimsForRequest).mockClear();
+    inFlight.clear();
   }
+}
+
+/**
+ * Resolves true once get_request_context() has answered, and false when the
+ * render ended without that answer: then a reader that starts after the
+ * context never starts.
+ */
+function afterTheContextAnswers(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    onContextAnswered = () => resolve(true);
+    contextNeverAnswered = () => resolve(false);
+  });
 }
 
 beforeAll(async () => {
@@ -314,6 +364,7 @@ beforeEach(() => {
   authAs = [];
   restSubjects = [];
   onContextAnswered = null;
+  contextNeverAnswered = null;
   hoisted.codeGateOut = true;
   server = fakeAuthServer(projectKey);
   vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
@@ -409,9 +460,8 @@ async function memberOwnRefresh() {
  */
 function startClaimsReadAfterTheContext() {
   vi.mocked(getVerifiedSessionClaimsForRequest).mockImplementationOnce(async () => {
-    await new Promise<void>((resolve) => {
-      onContextAnswered = resolve;
-    });
+    // No answer, no late reader: nothing verified (the read never rejects).
+    if (!(await afterTheContextAnswers())) return null;
     return (await hoisted.realClaimsRead!()) as Awaited<
       ReturnType<typeof getVerifiedSessionClaimsForRequest>
     >;
@@ -508,9 +558,10 @@ function readTheRealFactorList() {
  */
 function startFactorsReadAfterTheContext() {
   vi.mocked(getMfaFactorsForRequest).mockImplementationOnce(async () => {
-    await new Promise<void>((resolve) => {
-      onContextAnswered = resolve;
-    });
+    // No answer, no late reader: a failed read, which the layout observes.
+    if (!(await afterTheContextAnswers())) {
+      throw new Error('the context never answered, so the late factor list never started');
+    }
     return (await hoisted.realFactorsRead!()) as Awaited<
       ReturnType<typeof getMfaFactorsForRequest>
     >;
@@ -604,8 +655,14 @@ describe("with requireOrgContext()'s own gate in front, the same sessions get th
     await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
     // The context is the member's (the proxy's header, confirmed)...
     expect(restSubjects).toEqual([MEMBER]);
-    // ...and the list the code gate left behind did refresh into the no-factor
-    // account: the scenario this test is named for is the one that ran.
+    // ...and the layout's own factor list, started late in place of its first
+    // read and left behind by the code gate's redirect, refreshed into the
+    // no-factor account and read it: one refresh, one /user as that account.
+    // The code gate's own list in this file is the stub of the member's own
+    // (outside a render, cache() shares no read between the two calls), so
+    // the rule that the gate takes only the member's own list is held by
+    // src/lib/auth/session.step-up.test.ts ("another account's factor list is
+    // no answer").
     await settleWhatTheRenderLeftBehind();
     expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
     expect(authAs).toContain(`/user as ${NO_FACTOR}`);

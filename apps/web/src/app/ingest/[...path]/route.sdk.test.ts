@@ -40,6 +40,43 @@ const { sdkFetch, sdkFetched, realFetch, PROJECT_REF } = vi.hoisted(() => {
   return { sdkFetch, sdkFetched, realFetch, PROJECT_REF: 'phc_placeholder' };
 });
 
+/**
+ * The real timers, kept before any test fakes them: a wait below is bounded
+ * in real time even while the retry test runs the SDK's timers on a fake
+ * clock.
+ */
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+
+/**
+ * How long, in real time, a test waits for something the SDK does before it
+ * fails naming what never came (docket T28). What it waits for is the SDK's
+ * own work: a native gzip of a batch of a few kilobytes and the reading of an
+ * answer, done in milliseconds here; on CI the whole of this file (six
+ * tests, five of them waiting this way) took 365 ms of a web suite that ran
+ * 830 to 1060 s on a loaded day. 5 s is over ten times that whole file, and
+ * two such waits one after the other (the retry test's) still end before the
+ * 15 s test timeout, so the named message, not "Test timed out", is what a
+ * failure shows.
+ */
+const WAIT_LIMIT_MS = 5_000;
+
+/** `what`, or a failure naming it once WAIT_LIMIT_MS of real time has gone by. */
+async function within<T>(what: Promise<T>, failure: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outOfTime = new Promise<never>((_, reject) => {
+    timer = realSetTimeout(
+      () => reject(new Error(`${failure} (waited ${WAIT_LIMIT_MS} ms)`)),
+      WAIT_LIMIT_MS,
+    );
+  });
+  try {
+    return await Promise.race([what, outOfTime]);
+  } finally {
+    realClearTimeout(timer);
+  }
+}
+
 vi.mock('next/navigation', () => ({ usePathname: () => window.location.pathname }));
 vi.mock('@/lib/env.client', () => ({ env: { NEXT_PUBLIC_POSTHOG_KEY: PROJECT_REF } }));
 
@@ -358,23 +395,36 @@ describe('the real SDK through /ingest, with the options the provider gives it',
    * once it has. Waits for the SDK's own requests, not for a time: the SDK
    * gzips a batch with the native CompressionStream, off the main thread, so
    * how long a batch takes to go out is the machine's business (docket T28).
-   * A batch that never goes out fails the test on its timeout.
+   * A batch that has not gone out within WAIT_LIMIT_MS fails as `failure`.
    */
-  async function eventBatchSent(nth = 0): Promise<Asked> {
-    for (;;) {
-      // Listening before looking, so a request made while we look is not missed.
-      let told = () => {};
-      const nextRequest = new Promise<void>((resolve) => {
-        told = resolve;
-      });
-      sdkFetched.add(told);
-      try {
-        const batches = (await askedByFetch()).filter(({ at }) => at.startsWith('/ingest/e/'));
-        if (batches.length > nth) return batches[nth]!;
-        await nextRequest;
-      } finally {
-        sdkFetched.delete(told);
+  async function eventBatchSent(
+    nth = 0,
+    failure = `the SDK sent no batch ${nth + 1} to /ingest/e/`,
+  ): Promise<Asked> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const outOfTime = new Promise<'out of time'>((resolve) => {
+      timer = realSetTimeout(() => resolve('out of time'), WAIT_LIMIT_MS);
+    });
+    try {
+      for (;;) {
+        // Listening before looking, so a request made while we look is not missed.
+        let told = () => {};
+        const nextRequest = new Promise<void>((resolve) => {
+          told = resolve;
+        });
+        sdkFetched.add(told);
+        try {
+          const batches = (await askedByFetch()).filter(({ at }) => at.startsWith('/ingest/e/'));
+          if (batches.length > nth) return batches[nth]!;
+          if ((await Promise.race([nextRequest, outOfTime])) === 'out of time') {
+            throw new Error(`${failure} (waited ${WAIT_LIMIT_MS} ms)`);
+          }
+        } finally {
+          sdkFetched.delete(told);
+        }
       }
+    } finally {
+      realClearTimeout(timer);
     }
   }
 
@@ -530,12 +580,15 @@ describe('the real SDK through /ingest, with the options the provider gives it',
       });
       const instance = sdk('s38_retry', { ...QUIET, on_request_error: () => refused() });
       instance.capture('s38_placeholder_event');
-      await batchRefused;
+      await within(batchRefused, "PostHog's refusal never reached the SDK's retry queue");
       // The refusal was the batch's: it is the one request made so far.
       expect((await askedByFetch()).map(({ at }) => at)).toEqual(['/ingest/e/']);
 
       await vi.advanceTimersByTimeAsync(FIRST_RETRY_SENT_WITHIN_MS);
-      const retry = await eventBatchSent(1);
+      const retry = await eventBatchSent(
+        1,
+        `no retry was sent within the ${FIRST_RETRY_SENT_WITHIN_MS} ms advance`,
+      );
       expect(retry.at).toBe('/ingest/e/?retry_count=1');
       await expectPassedOn(retry);
     } finally {
