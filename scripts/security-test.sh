@@ -1260,6 +1260,15 @@ WEB_TESTS=(
   src/server/services/bundles.other-organization.test.ts
   src/server/actions/movements.other-organization.test.ts
 
+  # S41: the same rule for table writes. A write filtered to the active
+  # organization asks its row back and answers not_found, with no audit row,
+  # when none came back; a write to a child table reads its parent in the
+  # active organization first; a write keyed by an id alone carries the
+  # organization. The guard above reads every update, delete and upsert chain
+  # under apps/web/src, holds each to both rules, and takes the row proof,
+  # the read or the filter out of each changed site in turn.
+  src/server/services/row-writes.other-organization.test.ts
+
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified
   # organization only, fixed error words, not_found for a hidden book, order
