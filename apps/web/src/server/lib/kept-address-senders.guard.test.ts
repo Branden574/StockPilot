@@ -365,8 +365,9 @@ const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: stri
     enclosing: 'readInActiveOrg',
     why:
       "Its table is typed ActiveOrgTable ('order_requests' | 'cycle_counts' | 'purchase_orders' | " +
-      "'receipts' | 'warehouses' | 'bundles' | 'stock_movements'), and its callers select id, or " +
-      'status, requester_user_id, replacement_for_return_id and warehouse_id (S39): no kept address.',
+      "'receipts' | 'warehouses' | 'bundles' | 'stock_movements' | 'price_lists' | 'customers'), " +
+      'and its callers select id, or status, requester_user_id, replacement_for_return_id and ' +
+      'warehouse_id (S39): no kept address.',
   },
 ];
 

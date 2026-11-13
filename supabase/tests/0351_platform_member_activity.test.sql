@@ -141,7 +141,7 @@ select is(
   's',
   '0351/4: declared STABLE - it may not write');
 select ok(
-  (select p.prosrc !~* '\m(insert|update|delete|truncate)\M'
+  (select p.prosrc !~* '\m(insert|update|delete|merge|truncate)\M'
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname = 'public' and p.proname = 'platform_member_activity'),
   '0351/5: the body contains no write statement');

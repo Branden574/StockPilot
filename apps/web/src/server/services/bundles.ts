@@ -806,10 +806,17 @@ export class BundlesService {
     return this.get(id);
   }
 
+  /**
+   * Archive, restore and setActive ask the changed row back (S41). The write
+   * is filtered to this organization, and a filtered write that matches no
+   * row is not an error, so only the returned row proves a kit of this
+   * organization changed. No row answers 'Bundle not found' and records
+   * nothing.
+   */
   async archive(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bundles')
       .update({
         is_active: false,
@@ -817,8 +824,11 @@ export class BundlesService {
         updated_by: this.ctx.userId,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Bundle not found');
     await audit({ event: 'bundle.archived', entityType: 'bundle', entityId: id }, this.ctx);
   }
 
@@ -830,7 +840,7 @@ export class BundlesService {
   async restore(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bundles')
       .update({
         is_active: true,
@@ -838,8 +848,11 @@ export class BundlesService {
         updated_by: this.ctx.userId,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Bundle not found');
     await audit({ event: 'bundle.restored', entityType: 'bundle', entityId: id }, this.ctx);
   }
 
@@ -851,12 +864,15 @@ export class BundlesService {
       updated_by: this.ctx.userId,
     };
     if (isActive) payload.archived_at = null;
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bundles')
       .update(payload)
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Bundle not found');
     await audit(
       {
         event: 'bundle.updated',

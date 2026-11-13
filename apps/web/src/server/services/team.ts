@@ -347,12 +347,18 @@ export class TeamService {
 
   async revokeInvite(inviteId: string) {
     assertPermission(this.ctx, 'members:invite');
-    const { error } = await this.ctx.supabase
+    // The deleted row is asked back (S41): a filtered delete that matches no
+    // row is not an error, so only the returned row proves an invite of this
+    // organization was revoked.
+    const { data: row, error } = await this.ctx.supabase
       .from('organization_invites')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', inviteId);
+      .eq('id', inviteId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Invite not found');
   }
 
   /**
