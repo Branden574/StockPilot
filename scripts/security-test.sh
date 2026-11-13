@@ -1877,6 +1877,21 @@ MOBILE_TESTS=(
   src/lib/supabase.fetch-auth-user.test.ts
   src/lib/install-id.test.ts
 
+  # S43b: the phone asks for the authenticator code before anything of the
+  # account renders or syncs. Whether a session still owes its code is worked
+  # out from the session itself (the token's level and the user's factors), so
+  # the code screen shows with no connection and in the same render the
+  # session arrives in; the sync, the held order requests, the "last seen"
+  # beacon and both outbox drains wait for the code (the drains' own hold is
+  # executed in sync.drain.test.ts and cycle-count-sync.drain.test.ts, listed
+  # under S4); the gate follows the server's own factor list in both
+  # directions and comes down only through a session the server issued. The
+  # wiring test lists every file of the phone that reads the level, the factors
+  # or the gate. All three files carry the "Security invariant" marker.
+  src/lib/mfa-level.test.ts
+  src/lib/mfa-reconcile.test.ts
+  src/lib/code-gate-wiring.test.ts
+
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another
   # account's, left by a fallback sign-out or a session the server ended, is

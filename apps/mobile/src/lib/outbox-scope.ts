@@ -37,7 +37,12 @@
  *     the server applied it in the account's default organization. The
  *     workspace load saves the account's own workspace and asks both drains
  *     for a pass (use-workspace.ts), so the hold ends as soon as it is saved;
- *   - with no session at all, nothing is sent.
+ *   - with no session at all, nothing is sent;
+ *   - while the live session still owes its authenticator code, nothing is
+ *     sent either (docket S43b): every row is HELD, left exactly as it is,
+ *     and goes out once the code is entered. A password alone sends nothing
+ *     from this phone, and the queued work is not refused by the server and
+ *     parked in the meantime.
  *
  * The SQL fragments below are the same rule for queries. `IS` / `IS NOT` are
  * SQLite's null-safe comparisons, so OWNED and HELD are exact complements for
@@ -55,6 +60,12 @@ export interface OutboxRowOwner {
 export interface LiveScope {
   orgId: string | null;
   userId: string | null;
+  /**
+   * The live session still owes its authenticator code (session-scope.ts
+   * liveOutboxScope, from the stored session). Stated by every scope: a scope
+   * that owes it sends nothing.
+   */
+  stepUpOwed: boolean;
 }
 
 export type OutboxSendDecision =
@@ -71,7 +82,10 @@ export type OutboxSendDecision =
       /** The row is missing an owner column and is stamped at this send. */
       adopt: boolean;
     }
-  | { send: false; reason: 'signed-out' | 'other-account' | 'workspace-loading' };
+  | {
+      send: false;
+      reason: 'signed-out' | 'step-up-owed' | 'other-account' | 'workspace-loading';
+    };
 
 /** Is this row the live user's work (or legacy work anyone may adopt)? */
 export function isOwnedBy(row: OutboxRowOwner, liveUserId: string | null): boolean {
@@ -81,6 +95,9 @@ export function isOwnedBy(row: OutboxRowOwner, liveUserId: string | null): boole
 
 export function outboxSendDecision(row: OutboxRowOwner, live: LiveScope): OutboxSendDecision {
   if (!live.userId) return { send: false, reason: 'signed-out' };
+  // The session has not entered its authenticator code yet: nothing leaves
+  // the phone under it, whoever queued the row.
+  if (live.stepUpOwed) return { send: false, reason: 'step-up-owed' };
   if (!isOwnedBy(row, live.userId)) return { send: false, reason: 'other-account' };
   // An empty id is no workspace: api() names the workspace only for a
   // non-empty orgId, and would otherwise fall back to the saved one.
@@ -95,6 +112,17 @@ export function outboxSendDecision(row: OutboxRowOwner, live: LiveScope): Outbox
     userId: live.userId,
     adopt: (row.userId ?? null) === null || rowOrg === null,
   };
+}
+
+/**
+ * May queued rows be SETTLED on this device right now (a superseded count
+ * acked, another account's superseded count parked)? Never with nobody signed
+ * in: whose rows these are cannot be told apart from "somebody else's". Nor
+ * while the live session still owes its authenticator code (docket S43b):
+ * the outbox is left exactly as it is until the code is entered.
+ */
+export function canSettleOutbox(live: LiveScope): boolean {
+  return Boolean(live.userId) && !live.stepUpOwed;
 }
 
 /**

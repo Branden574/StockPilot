@@ -61,7 +61,7 @@ describe('push registration checks the hold and the code step right before the R
   const code = codeOnly(readFileSync(path.join(MOBILE_LIB, 'use-push-notifications.ts'), 'utf8'));
 
   it('the level is read, then the hold, then the RPC goes out with nothing awaited in between', () => {
-    const level = code.indexOf('if (await owesAuthenticatorCode()) return;');
+    const level = code.indexOf('if (await owesAuthenticatorCode(user.id)) return;');
     const holdCheck = code.indexOf('if (holds.size > 0 || cancelled()) return;');
     const rpc = code.indexOf("rpc('register_push_token'");
     expect(level).toBeGreaterThan(-1);

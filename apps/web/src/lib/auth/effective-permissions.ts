@@ -34,11 +34,14 @@ interface QueryableClient {
  *     there is a NEXT_REDIRECT 500 (recurring pattern #23).
  * Escaping produces a 5xx, which the web error boundaries render as a
  * retryable error. On the phone a read's 5xx says "The server had a problem.
- * Try again in a moment." and keeps its last good permission set; a stock
- * adjustment refused this way reads as not confirmed instead, because that
- * route takes no idempotency key and the phone never re-sends one after a
- * 5xx (item-adjust.ts, adjust-outbox.ts): the worker checks the item and
- * enters it again.
+ * Try again in a moment." and keeps its last good permission set.
+ *
+ * The routes the phone cannot safely send twice (a stock adjustment, a rental
+ * checkout, an exception escalation) build their context through
+ * apiContextGate (server/lib/api-context-gate.ts), which answers this class,
+ * thrown by withApiContext, as a 503 marked as refused before any write
+ * (docket S26): the phone says nothing was saved, and a queued adjustment
+ * stays queued and is sent again.
  */
 export class PermissionsUnavailableError extends Error {
   readonly code = 'PERMISSIONS_UNAVAILABLE';
