@@ -269,6 +269,7 @@ export async function verifyEnrollmentAction(input: {
       void reportError(new Error('An authenticator set-up was accepted but its account could not be confirmed'), {
         tag: 'actions.mfa.verify_enrollment_unconfirmed',
         level: 'warning',
+        extra: { userId: session.userId },
       });
     }
     if (afterCode.kind !== 'same') {
@@ -475,7 +476,8 @@ export async function challengeFactorAction(input: {
     // one the budget was spent on: this session was signed out here.
     if (check.kind === 'account_changed') return err('unauthenticated', MFA_SESSION_ENDED);
     // GoTrue judged the code, then the session could not be verified: the
-    // answer is not counted and the session stays; the person can press again.
+    // attempt spent before the challenge stays spent, the answer is not used,
+    // no row is written, and the session stays; the person can press again.
     if (check.kind === 'unconfirmed') return err('internal_error', MFA_CODE_NOT_CHECKED);
     // Plain words, never GoTrue's: its message can carry factor and challenge
     // identifiers.

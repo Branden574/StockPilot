@@ -174,7 +174,11 @@ export type MfaCodeCheck =
   | { kind: 'budget_spent' }
   /** GoTrue judged the code while the session held another account: signed out here. */
   | { kind: 'account_changed' }
-  /** GoTrue judged the code, then the session could not be verified: not counted, left alone. */
+  /**
+   * GoTrue judged the code, then the session could not be verified: the
+   * attempt spent before the challenge stays spent, the answer is not used, no
+   * row is written, and the session is left alone.
+   */
   | { kind: 'unconfirmed' }
   | { kind: 'challenge_failed'; outcome: MfaCodeOutcome }
   | { kind: 'verify_failed'; outcome: MfaCodeOutcome };

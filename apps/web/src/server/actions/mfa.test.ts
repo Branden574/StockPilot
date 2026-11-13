@@ -40,15 +40,6 @@ vi.mock('@/lib/auth/verified-claims', () => ({
     aal: 'aal1',
     amr: [],
   })),
-  // The read after GoTrue's answer, held to the account the press was checked
-  // for: by default the session still holds it.
-  readVerifiedSessionClaimsOf: vi.fn(async (_client: unknown, userId: string) => ({
-    userId,
-    sessionId: 'session-1',
-    aal: 'aal2',
-    amr: [],
-    email: null,
-  })),
 }));
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
@@ -102,7 +93,7 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(async () => ({ auth: authStub })),
 }));
 
-import { readVerifiedSessionClaims, readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -790,8 +781,6 @@ describe('challengeFactorAction — the answer counts only for the account it wa
   });
 
   it('a code accepted while the session moved to another account is refused, and this session is signed out', async () => {
-    // The read after GoTrue's answer verifies as another account.
-    vi.mocked(readVerifiedSessionClaimsOf).mockResolvedValueOnce(null);
     vi.mocked(readVerifiedSessionClaims)
       .mockResolvedValueOnce({ userId: 'user-1', sessionId: 's', aal: 'aal1', amr: [], email: null })
       .mockResolvedValueOnce({ userId: 'user-2', sessionId: 's2', aal: 'aal2', amr: [], email: null });
@@ -803,8 +792,7 @@ describe('challengeFactorAction — the answer counts only for the account it wa
     expect(emitAuthAudit).not.toHaveBeenCalled();
   });
 
-  it('a code accepted while the session could not be verified is not counted, and the session stays', async () => {
-    vi.mocked(readVerifiedSessionClaimsOf).mockResolvedValueOnce(null);
+  it('a code accepted while the session could not be verified is not used, and the session stays', async () => {
     vi.mocked(readVerifiedSessionClaims)
       .mockResolvedValueOnce({ userId: 'user-1', sessionId: 's', aal: 'aal1', amr: [], email: null })
       .mockResolvedValueOnce(null);
@@ -817,6 +805,24 @@ describe('challengeFactorAction — the answer counts only for the account it wa
     });
     expect(authStub.signOut).not.toHaveBeenCalled();
     expect(emitAuthAudit).not.toHaveBeenCalled();
+  });
+
+  it('a code refused while the session could not be verified is not used: no row, the session stays, and the attempt stays spent', async () => {
+    mfaStub.verify.mockResolvedValueOnce({ data: null, error: GOTRUE_WRONG_CODE } as never);
+    vi.mocked(readVerifiedSessionClaims)
+      .mockResolvedValueOnce({ userId: 'user-1', sessionId: 's', aal: 'aal1', amr: [], email: null })
+      .mockResolvedValueOnce(null);
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({
+      ok: false,
+      error: { code: 'internal_error', message: 'Could not check your code just now. Try again.' },
+    });
+    expect(authStub.signOut).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+    const keys = vi.mocked(checkRateLimit).mock.calls.map((call) => call[0]);
+    expect(keys).toContain('mfa-code-account:user-1');
   });
 
   it('reads the session again after GoTrue answered, and counts the answer for the same account', async () => {
@@ -869,7 +875,6 @@ describe('verifyEnrollmentAction — confirms only for the account whose passwor
   const SAME = { userId: 'user-1', sessionId: 's', aal: 'aal1' as const, amr: [], email: null };
 
   it('a session that holds another account after the factor list checks no code', async () => {
-    vi.mocked(readVerifiedSessionClaimsOf).mockResolvedValueOnce(null);
     vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(OTHER);
 
     const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
@@ -881,7 +886,6 @@ describe('verifyEnrollmentAction — confirms only for the account whose passwor
   });
 
   it('a code accepted while the session moved to another account is refused, with no row', async () => {
-    vi.mocked(readVerifiedSessionClaimsOf).mockResolvedValueOnce(SAME).mockResolvedValueOnce(null);
     vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(SAME).mockResolvedValueOnce(OTHER);
 
     const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
@@ -893,7 +897,6 @@ describe('verifyEnrollmentAction — confirms only for the account whose passwor
   });
 
   it('a session that cannot be verified after the factor list checks no code and stays signed in', async () => {
-    vi.mocked(readVerifiedSessionClaimsOf).mockResolvedValueOnce(null);
     vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(null);
 
     const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
@@ -910,7 +913,6 @@ describe('verifyEnrollmentAction — confirms only for the account whose passwor
   });
 
   it('a code accepted while the session could not be verified: no row, the session stays, the person is told to reload, and it is reported', async () => {
-    vi.mocked(readVerifiedSessionClaimsOf).mockResolvedValueOnce(SAME).mockResolvedValueOnce(null);
     vi.mocked(readVerifiedSessionClaims).mockResolvedValueOnce(SAME).mockResolvedValueOnce(null);
 
     const res = await verifyEnrollmentAction({ factorId: 'f1', code: '123456', password: CONFIRM_VALUE });
@@ -927,7 +929,11 @@ describe('verifyEnrollmentAction — confirms only for the account whose passwor
     expect(authStub.signOut).not.toHaveBeenCalled();
     expect(reportError).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ tag: 'actions.mfa.verify_enrollment_unconfirmed', level: 'warning' }),
+      expect.objectContaining({
+        tag: 'actions.mfa.verify_enrollment_unconfirmed',
+        level: 'warning',
+        extra: { userId: 'user-1' },
+      }),
     );
   });
 

@@ -243,7 +243,7 @@ describe('completePasswordResetAction', () => {
   /**
    * The `amr` of a session an emailed link made `secondsAgo` seconds ago
    * (S77). `otp` is what the confirm route's verify writes for every emailed
-   * link (lab Auth server v2.188.1).
+   * link (the lab's Auth server).
    */
   const linkOpened = (secondsAgo = 60, method = 'otp') => [
     { method, timestamp: Math.floor(Date.now() / 1000) - secondsAgo },
@@ -974,6 +974,15 @@ describe('completePasswordResetAction', () => {
       expect(auditInsert).not.toHaveBeenCalled();
     });
 
+    const LINK_GONE_ANSWER = {
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message:
+          'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.',
+      },
+    };
+
     it('an update that answers for another account is reported, that account is signed out everywhere, and its row is written', async () => {
       updateUser.mockResolvedValue({
         data: { user: { id: 'u9', email: 'other@example.test' } },
@@ -982,28 +991,60 @@ describe('completePasswordResetAction', () => {
 
       const res = await completePasswordResetAction(INPUT);
 
-      expect(res).toEqual({
-        ok: false,
-        error: {
-          code: 'unauthenticated',
-          message: 'Sign in again, then try again.',
-          details: { reason: 'session_changed' },
-        },
-      });
-      expect(reportError).toHaveBeenCalledWith(
-        expect.anything(),
-        expect.objectContaining({ tag: 'auth.password_reset_account_changed', level: 'error' }),
+      // The reset page's own words: a person here may have no working
+      // password to sign in again with.
+      expect(res).toEqual(LINK_GONE_ANSWER);
+      const reports = vi.mocked(reportError).mock.calls.filter(
+        (c) => (c[1] as { tag?: string }).tag === 'auth.password_reset_account_changed',
       );
+      expect(reports).toHaveLength(1);
+      expect(reports[0]![1]).toEqual({ tag: 'auth.password_reset_account_changed', level: 'error' });
       expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
       expect(broadcastToChannel).toHaveBeenCalledWith('user:u9:sessions', 'revoked', {
         keepId: null,
       });
       expect(auditInsert).toHaveBeenCalledWith(
-        expect.objectContaining({ event: 'user.password.reset_completed', user_id: 'u9' }),
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u9',
+          metadata: expect.objectContaining({ account_changed: true }),
+        }),
       );
       expect(
         auditInsert.mock.calls.some((c) => (c[0] as { user_id?: string }).user_id === 'u1'),
       ).toBe(false);
+    });
+
+    it('an update that answers for another account, when the global sign-out fails: that account is ended in the database and this browser loses its auth cookies', async () => {
+      updateUser.mockResolvedValue({
+        data: { user: { id: 'u9', email: 'other@example.test' } },
+        error: null,
+      });
+      signOut.mockResolvedValue({
+        error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+      });
+      revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: [] });
+      cookieGetAll.mockReturnValue([
+        { name: 'sb-x-auth-token', value: 'a' },
+        { name: 'stockpilot-theme', value: 'dark' },
+      ]);
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual(LINK_GONE_ANSWER);
+      expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
+      expect(revokeAllSessionsForUser).toHaveBeenCalledWith('u9');
+      expect(cookieSet.mock.calls.map((c) => c[0])).toEqual(['sb-x-auth-token']);
+      expect(cookieSet.mock.calls[0]!.slice(1)).toEqual(['', { path: '/', maxAge: 0 }]);
+      // The database revoke tells the devices itself when it worked.
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: 'user.password.reset_completed',
+          user_id: 'u9',
+          metadata: expect.objectContaining({ account_changed: true, database_revoke: 'ok' }),
+        }),
+      );
     });
 
     it('control: the verified session is read after the factor list and before the update', async () => {

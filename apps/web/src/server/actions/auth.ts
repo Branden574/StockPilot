@@ -672,7 +672,8 @@ export async function completePasswordResetAction(
   // that is not the account the link's session verified as, the session
   // changed accounts between the last read and the update: that account's
   // sessions are ended and its row written, as for any finished reset, and
-  // this press answers with sign in again.
+  // this press answers with the page's own words for a link that no longer
+  // works (a person here may have no working password to sign in with).
   const updatedId = updated?.user?.id ?? null;
   const accountChanged = updatedId !== null && updatedId !== accountId;
   if (accountChanged) {
@@ -729,7 +730,7 @@ export async function completePasswordResetAction(
       ...(accountChanged ? { account_changed: true } : {}),
     },
   });
-  if (accountChanged) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+  if (accountChanged) return err('unauthenticated', RESET_LINK_GONE);
 
   // Redirect to /signin. The sign-in form's existing success toast
   // ("Password updated.") still fires from the consumer page.

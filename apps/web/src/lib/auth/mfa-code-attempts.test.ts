@@ -395,7 +395,8 @@ describe('checkMfaCode — the answer counts only for the account the press was 
   });
 
   // S78: a read that cannot verify the session is not another account. The
-  // answer is not counted (not verified, no row) and the session stays.
+  // attempt spent before the challenge stays spent, the answer is not used
+  // (not verified, no row), and the session stays.
   it.each([
     ['accepted', null, 'challenge'],
     ['refused', GOTRUE_WRONG_CODE, 'password_reset'],
@@ -421,6 +422,30 @@ describe('checkMfaCode — the answer counts only for the account the press was 
       expect(auditInsert).not.toHaveBeenCalled();
     },
   );
+
+  it('an unconfirmed press still spends one code attempt, before the challenge', async () => {
+    const holder: { sub: string; read?: 'answer' | 'error' } = { sub: 'u1' };
+    const { client, challenge, verify } = fakeClient(null, holder);
+    verify.mockImplementation(async () => {
+      holder.read = 'error';
+      return { data: null, error: GOTRUE_WRONG_CODE };
+    });
+
+    const res = await checkMfaCode(client as never, {
+      userId: 'u1',
+      factorId: 'f1',
+      code: WRONG_CODE,
+      path: 'challenge',
+    });
+
+    expect(res).toEqual({ kind: 'unconfirmed' });
+    const keys = checkRateLimit.mock.calls.map((call) => call[0]);
+    expect(keys.filter((k) => String(k).startsWith('mfa-code:u1:'))).toHaveLength(1);
+    expect(keys).toContain('mfa-code-account:u1');
+    expect(checkRateLimit.mock.invocationCallOrder.at(-1)!).toBeLessThan(
+      challenge.mock.invocationCallOrder[0]!,
+    );
+  });
 
   it('control: the same account throughout is verified, read again only after GoTrue answered', async () => {
     const { client, verify, signOut, reads } = fakeClient(null);

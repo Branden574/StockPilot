@@ -31,9 +31,14 @@ const rpc = vi.fn();
 // vi.hoisted: this spy is touched INSIDE a vi.mock factory (which vitest hoists
 // above the module body), so a plain `const` would still be in its temporal
 // dead zone when the factory runs.
-const { verifyPasswordSideChannel } = vi.hoisted(() => ({
-  verifyPasswordSideChannel: vi.fn(),
-}));
+const { verifyPasswordSideChannel, cookieGetAll, cookieSet, revokeAllSessionsForUser } = vi.hoisted(
+  () => ({
+    verifyPasswordSideChannel: vi.fn(),
+    cookieGetAll: vi.fn((): Array<{ name: string; value: string }> => []),
+    cookieSet: vi.fn(),
+    revokeAllSessionsForUser: vi.fn(),
+  }),
+);
 
 // The session id the action keeps alive is the VERIFIED one: the `session_id`
 // claim getClaims() returns once the token's signature checks out. The stored
@@ -45,7 +50,12 @@ const STORED_ACCESS = `h.${Buffer.from(JSON.stringify(STORED_PAYLOAD)).toString(
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers()),
-  cookies: vi.fn(async () => ({ get: () => undefined, set: () => {}, delete: () => {} })),
+  cookies: vi.fn(async () => ({
+    get: () => undefined,
+    getAll: () => cookieGetAll(),
+    set: (...args: unknown[]) => cookieSet(...args),
+    delete: () => {},
+  })),
 }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('next/server', () => ({ after: vi.fn() }));
@@ -70,6 +80,11 @@ vi.mock('@/lib/auth/verify-password', async (importOriginal) => {
   };
 });
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn() }));
+// The by-user-id revoke behind a failed global sign-out (auth.ts
+// endSessionsAfterFailedGlobalSignOut).
+vi.mock('@/server/services/platform/sessions', () => ({
+  revokeAllSessionsForUser: (...args: unknown[]) => revokeAllSessionsForUser(...args),
+}));
 vi.mock('@/server/services/auth-audit', () => ({
   emitAuthAudit: vi.fn(async () => {}),
   resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-9', role: 'member' })),
@@ -452,10 +467,14 @@ describe('changePasswordAction — the update acts only as the account it checke
         details: { reason: 'session_changed' },
       },
     });
-    expect(reportError).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ tag: 'auth.password_change_account_changed', level: 'error' }),
-    );
+    // The report carries the tag and level only.
+    const reports = vi
+      .mocked(reportError)
+      .mock.calls.filter(
+        (c) => (c[1] as { tag?: string }).tag === 'auth.password_change_account_changed',
+      );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({ tag: 'auth.password_change_account_changed', level: 'error' });
     expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
     expect(signOut).not.toHaveBeenCalledWith({ scope: 'others' });
     expect(broadcastToChannel).toHaveBeenCalledWith('user:u-9:sessions', 'revoked', {
@@ -466,9 +485,50 @@ describe('changePasswordAction — the update acts only as the account it checke
         event: 'user.password.changed',
         userId: 'u-9',
         organizationId: 'org-9',
+        extra: expect.objectContaining({ account_changed: true }),
       }),
     );
     // Not the checked account's row.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('an update that answers for another account, when the global sign-out fails: that account is ended in the database and this browser loses its auth cookies', async () => {
+    updateUser.mockResolvedValue({
+      data: { user: { id: 'u-9', email: 'other@example.com' } },
+      error: null,
+    });
+    signOut.mockResolvedValue({
+      error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+    });
+    revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: [] });
+    cookieGetAll.mockReturnValue([
+      { name: 'sb-x-auth-token', value: 'a' },
+      { name: 'stockpilot-theme', value: 'dark' },
+    ]);
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith('u-9');
+    expect(cookieSet.mock.calls.map((c) => c[0])).toEqual(['sb-x-auth-token']);
+    expect(cookieSet.mock.calls[0]!.slice(1)).toEqual(['', { path: '/', maxAge: 0 }]);
+    // The database revoke tells the devices itself when it worked.
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(emitAuthAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.password.changed',
+        userId: 'u-9',
+        extra: expect.objectContaining({ account_changed: true, database_revoke: 'ok' }),
+      }),
+    );
     expect(audit).not.toHaveBeenCalled();
   });
 
