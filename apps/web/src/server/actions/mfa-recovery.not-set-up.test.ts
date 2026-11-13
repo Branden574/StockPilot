@@ -19,6 +19,7 @@ import { verifiedSessionAuth } from '@/test/verified-session-stub';
  */
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/lib/auth/session', () => ({
   requireSession: vi.fn(async () => ({
     userId: 'user-1',
@@ -90,8 +91,10 @@ describe('consumeMfaRecoveryCodeAction without the service-role key (S31)', () =
   });
 
   it('says the feature is not set up, never the setting, and reports it as a warning', async () => {
-    // The limiter's own client works; the one for removing factors does not.
-    h.adminCallsBeforeMissing = 1;
+    // The limiter's own clients work (one per bucket the press counts in: the
+    // account at this address, its password checks and its code checks); the
+    // one for removing factors does not.
+    h.adminCallsBeforeMissing = 3;
     const res = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
     expect(res).toEqual({
       ok: false,
