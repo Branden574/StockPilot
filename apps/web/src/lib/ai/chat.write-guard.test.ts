@@ -360,6 +360,37 @@ describe('classifyToolErrorMessage: a refusal from the app is told by its type a
   // in what the model reads, unless the words are validation words.
   const WAREHOUSE_ID = '3f6c1e0a-0000-4000-8000-00000000abcd';
   const RECORD_NAME = 'Annex 7 Projector';
+  const RECORD_ID = '9b2d4c71-0000-4000-8000-00000000ef01';
+  const DETAIL_WORDS = 'Kept in Annex Cage B';
+  /**
+   * A refusal's `details`, shaped as the services fill them (a record's id, a
+   * stored name, a location) plus fields named like words. The classifier
+   * reads one field, the multi-factor gate's `reason`, and only to choose a
+   * fixed sentence: nothing in `details` reaches the model.
+   */
+  const DETAILS: Record<string, unknown> = {
+    conflictItemId: RECORD_ID,
+    itemId: RECORD_ID,
+    warehouseId: WAREHOUSE_ID,
+    name: RECORD_NAME,
+    locationName: DETAIL_WORDS,
+    message: DETAIL_WORDS,
+    hint: DETAIL_WORDS,
+    nested: { name: RECORD_NAME, ids: [RECORD_ID] },
+  };
+  /** Nothing from DETAILS is in what the model reads. */
+  const keepsDetailsOut = (sentence: string) => {
+    for (const value of [
+      RECORD_ID,
+      WAREHOUSE_ID,
+      RECORD_NAME,
+      DETAIL_WORDS,
+      'conflictItemId',
+      'locationName',
+    ]) {
+      expect(sentence).not.toContain(value);
+    }
+  };
   // Words the untyped word map would act on: a typed refusal is never read for them.
   const LOADED = `permission denied; not found; insufficient_stock; rate limit; ssrf; ${RECORD_NAME} is required and must be valid`;
 
@@ -367,6 +398,7 @@ describe('classifyToolErrorMessage: a refusal from the app is told by its type a
     expect(sentence).not.toContain(WAREHOUSE_ID);
     expect(sentence).not.toContain(RECORD_NAME);
     expect(sentence).not.toContain('<data>');
+    keepsDetailsOut(sentence);
   };
 
   it.each([
@@ -434,19 +466,55 @@ describe('classifyToolErrorMessage: a refusal from the app is told by its type a
       list.map((words) => [code as keyof typeof SENTENCE_BY_CODE, words] as const),
     ),
   )('a %s ServiceError saying "%s" gives the fixed sentence for its code', (code, words) => {
-    const sentence = classifyToolErrorMessage(new ServiceError(code, words));
-    expect(sentence).toBe(SENTENCE_BY_CODE[code]);
-    namesNothing(sentence);
+    for (const refusal of [new ServiceError(code, words), new ServiceError(code, words, DETAILS)]) {
+      const sentence = classifyToolErrorMessage(refusal);
+      expect(sentence).toBe(SENTENCE_BY_CODE[code]);
+      namesNothing(sentence);
+    }
   });
 
   it('the code decides, whatever words the text holds', () => {
     for (const [code, sentence] of Object.entries(SENTENCE_BY_CODE)) {
-      const refusal = new ServiceError(code as ServiceError['code'], LOADED);
+      const refusal = new ServiceError(code as ServiceError['code'], LOADED, DETAILS);
       expect(classifyToolErrorMessage(refusal), code).toBe(sentence);
     }
     // A code the classifier has no sentence for gives the general sentence.
-    const unknown = new ServiceError('a_later_code' as ServiceError['code'], LOADED);
+    const unknown = new ServiceError('a_later_code' as ServiceError['code'], LOADED, DETAILS);
     expect(classifyToolErrorMessage(unknown)).toBe(TOOL_FAILED_MESSAGE);
+  });
+
+  it("a refusal's details never reach the model, for every code", () => {
+    // The words of a validation refusal are the one part the model reads; its
+    // details are not, whatever they hold.
+    const shapes: Record<string, unknown>[] = [
+      DETAILS,
+      { reason: RECORD_NAME, ...DETAILS },
+      { reason: 'mfa_required', ...DETAILS },
+      { reason: 'aal2_required', ...DETAILS },
+      { [RECORD_NAME]: RECORD_ID, list: [DETAIL_WORDS, WAREHOUSE_ID] },
+    ];
+    const codes = [...Object.keys(SENTENCE_BY_CODE), 'validation_error'] as ServiceError['code'][];
+    for (const code of codes) {
+      for (const details of shapes) {
+        const sentence = classifyToolErrorMessage(new ServiceError(code, 'Pick a size.', details));
+        keepsDetailsOut(sentence);
+        if (code === 'validation_error') expect(sentence, code).toBe('<data>Pick a size.</data>');
+        else if (code !== 'forbidden') expect(sentence, code).toBe(SENTENCE_BY_CODE[code]);
+      }
+    }
+    // A forbidden refusal's details choose between fixed sentences only.
+    for (const details of shapes) {
+      const reason = details.reason;
+      expect(classifyToolErrorMessage(new ServiceError('forbidden', 'Pick a size.', details))).toBe(
+        reason === 'mfa_required' || reason === 'aal2_required'
+          ? TOOL_MFA_MESSAGES[reason]
+          : TOOL_PERMISSION_MESSAGE,
+      );
+    }
+    // A ForbiddenError carries no details; one given some still reads as the
+    // permission sentence.
+    const forbidden = Object.assign(new ForbiddenError(RECORD_NAME), { details: DETAILS });
+    expect(classifyToolErrorMessage(forbidden)).toBe(TOOL_PERMISSION_MESSAGE);
   });
 
   it('the conflict sentence fits a read as well as a write, and claims nothing about what was saved', () => {
@@ -488,11 +556,19 @@ describe('classifyToolErrorMessage: a refusal from the app is told by its type a
     '"XXL-ish" is not a usable size. Sizes are 1 to 24 characters.',
     'Blue Widget is a rental item and cannot be ordered here.',
     'reason is required and must not be empty; too many items',
-  ])('a validation refusal saying "%s" keeps its words, fenced as data', (words) => {
-    expect(classifyToolErrorMessage(new ServiceError('validation_error', words))).toBe(
-      `<data>${words}</data>`,
-    );
-  });
+  ])(
+    'a validation refusal saying "%s" keeps its words, fenced as data, and nothing of its details',
+    (words) => {
+      for (const refusal of [
+        new ServiceError('validation_error', words),
+        new ServiceError('validation_error', words, DETAILS),
+      ]) {
+        const sentence = classifyToolErrorMessage(refusal);
+        expect(sentence).toBe(`<data>${words}</data>`);
+        keepsDetailsOut(sentence);
+      }
+    },
+  );
 
   it('validation words are capped at 200 characters, cannot close the fence, and are never blank', () => {
     expect(classifyToolErrorMessage(new ServiceError('validation_error', 'y'.repeat(300)))).toBe(

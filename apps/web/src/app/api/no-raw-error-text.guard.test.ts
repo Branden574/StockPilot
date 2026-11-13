@@ -2558,6 +2558,68 @@ describe("what the model can read from a service's refusal is listed (S30 review
     ]);
   });
 
+  it("the classifier reads one field of a refusal's details, the multi-factor gate's reason, and only to choose a fixed sentence", () => {
+    // A ServiceError's details can hold a record's id or a stored name. The
+    // classifier's own tests hold that none of it reaches the model; this
+    // holds the source to the one read those tests were written for. Every
+    // `details` in the function (a property, a key, a destructured name) is
+    // that read, and the name it is kept in is only compared with the gate's
+    // two reasons or used to pick one of the gate's two fixed sentences.
+    const file = path.join(AI, 'chat.ts');
+    const sf = parse(file, readFileSync(file, 'utf8'));
+    const classifier = sf.statements.find(
+      (st): st is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(st) && st.name?.text === 'classifyToolErrorMessage',
+    );
+    expect(classifier).toBeDefined();
+    const written = (node: ts.Node) => node.getText(sf).replace(/\s+/g, ' ');
+    const detailsReads: string[] = [];
+    const look = (node: ts.Node) => {
+      if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && node.text === 'details') {
+        detailsReads.push(written(node.parent.parent));
+      }
+      ts.forEachChild(node, look);
+    };
+    look(classifier!);
+    expect(detailsReads).toEqual(['err.details?.reason']);
+
+    const holder: ts.VariableDeclaration[] = [];
+    const findHolder = (node: ts.Node) => {
+      if (
+        ts.isVariableDeclaration(node) &&
+        node.initializer &&
+        written(node.initializer) === 'err.details?.reason'
+      ) {
+        holder.push(node);
+      }
+      ts.forEachChild(node, findHolder);
+    };
+    findHolder(classifier!);
+    expect(holder.length).toBe(1);
+    expect(ts.isIdentifier(holder[0]!.name)).toBe(true);
+    const name = (holder[0]!.name as ts.Identifier).text;
+    const uses: string[] = [];
+    const used = (node: ts.Node) => {
+      const isPropertyName =
+        ts.isPropertyAccessExpression(node.parent) && node.parent.name === node;
+      if (
+        ts.isIdentifier(node) &&
+        node.text === name &&
+        node.parent !== holder[0] &&
+        !isPropertyName
+      ) {
+        uses.push(written(node.parent));
+      }
+      ts.forEachChild(node, used);
+    };
+    used(classifier!);
+    expect(uses).toEqual([
+      `${name} === 'aal2_required'`,
+      `${name} === 'mfa_required'`,
+      `TOOL_MFA_MESSAGES[${name}]`,
+    ]);
+  });
+
   it('no class extends ServiceError or ForbiddenError, so every construction is one the walk reads', () => {
     const subclasses = files(SRC).filter((file) => {
       const source = readFileSync(file, 'utf8');
