@@ -3,7 +3,6 @@ import * as React from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +14,7 @@ import {
 import { PARTIAL_CLOSE_LABEL, READINESS_NEEDS_CONNECTION_COPY } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import { Modal } from '@/components/ui/modal';
 import { Body, Mono } from '@/components/ui/text';
 import { buttonTone } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';

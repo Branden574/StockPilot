@@ -6,6 +6,8 @@ import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { Card } from './card';
+import { glassStatLabel, glassStatUnit, glassStatValue } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { sparkStroke, type MeterKind } from './tones';
 
 /**
@@ -49,9 +51,7 @@ export function Sparkline({
     return [x, y] as const;
   });
 
-  const d = pts
-    .map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
-    .join(' ');
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
 
   const stroke = sparkStroke(kind, c);
 
@@ -95,6 +95,7 @@ export function StatCard({
   sparkKind?: SparkKind;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   // Paired with LABEL_CAP, and the half that actually stops "IT/EM/S". A 2-up
   // card is ~143pt of interior; the sparkline is a fixed 84pt, so the label is
   // left ~51pt — which even a capped 20pt "ITEMS" (~68pt) overruns, and iOS
@@ -112,29 +113,27 @@ export function StatCard({
           style={[
             styles.label,
             { color: c.ink3 },
+            // Liquid Glass: the label in the system face (12/16 600, ink-3).
+            lg && glassStatLabel(lg),
           ]}
           maxFontSizeMultiplier={LABEL_CAP}
         >
           {label}
         </Text>
-        {spark ? (
-          <Sparkline data={spark} kind={sparkKind} />
-        ) : null}
+        {spark ? <Sparkline data={spark} kind={sparkKind} /> : null}
       </View>
       <View style={styles.valueRow}>
         <Text
-          style={[styles.value, { color: c.ink }]}
+          style={[styles.value, { color: c.ink }, lg && glassStatValue(lg)]}
           maxFontSizeMultiplier={capTo(28, TYPE_CEILING.display)}
         >
           {value}
         </Text>
         {unit ? (
-          <Text style={[styles.unit, { color: c.ink3 }]}>{unit}</Text>
+          <Text style={[styles.unit, { color: c.ink3 }, lg && glassStatUnit(lg)]}>{unit}</Text>
         ) : null}
       </View>
-      {delta ? (
-        <Text style={[styles.delta, { color: deltaColor }]}>{delta}</Text>
-      ) : null}
+      {delta ? <Text style={[styles.delta, { color: deltaColor }]}>{delta}</Text> : null}
     </Card>
   );
 }

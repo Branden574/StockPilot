@@ -1,11 +1,17 @@
 'use client';
 
-import { BookOpen, LifeBuoy, LogOut, Settings, ShieldAlert, User } from 'lucide-react';
+import { BookOpen, Gift, LifeBuoy, LogOut, Settings, ShieldAlert, User } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useTheme } from 'next-themes';
 
 import type { Density } from '@/components/dashboard/sidebar-pref';
+import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
+import {
+  AppearanceDesignRadioGroup,
+  useAppearanceChoice,
+} from '@/components/theme/appearance-select';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -22,6 +28,7 @@ import { reset as resetAnalytics } from '@/lib/analytics';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
+import { openWhatsNew, useUpdateState } from '@/lib/updates/update-store';
 import { signOutAction } from '@/server/actions/auth';
 
 interface UserMenuProps {
@@ -39,6 +46,35 @@ interface UserMenuProps {
   onDensityChange?: (density: Density) => void;
 }
 
+/**
+ * LIQUID GLASS ONLY: What's New in the account menu, for the glass phone bar
+ * (stage 3 fidelity, small lane, finding 2 round 2). At 760 px and under the
+ * glass bar leaves the top bar's What's New button out (shell.css), so its
+ * page title has the room the board gives it (Overview-Mobile); this item
+ * does what that button does (openWhatsNew, the same panel, with the same
+ * unread count in its name) and is drawn only there. Rendered only in a build
+ * that offers glass; hidden in Classic (visibility.css) and from 761 px
+ * (shell.css), where the bar's own button is on screen. No class sets its
+ * display: the wrapper is the glass-only element and the item inside it is
+ * the menu's own (8.5 allowlist entry account-menu-whats-new).
+ */
+function GlassWhatsNewItem() {
+  const { releases } = useUpdateState();
+  const unread = releases?.unreadCount ?? 0;
+  const label = unread > 0 ? `What’s new, ${unread} unread` : 'What’s new';
+  return (
+    <div data-glass-only="" data-glass="um-whats-new">
+      <DropdownMenuItem aria-label={label} onSelect={() => openWhatsNew(null, 'account-menu')}>
+        <Gift className="mr-2 h-4 w-4" aria-hidden />
+        What’s new
+        {unread > 0 ? (
+          <span aria-hidden className="bg-primary ml-auto size-1.5 shrink-0 rounded-full" />
+        ) : null}
+      </DropdownMenuItem>
+    </div>
+  );
+}
+
 /** Group labels inside the menu: the same quiet uppercase as the sidebar's. */
 const GROUP_LABEL =
   'text-muted-foreground px-2 pb-1 pt-2 text-[11px] font-medium uppercase tracking-[0.06em]';
@@ -53,7 +89,21 @@ export function UserMenu({
   onDensityChange,
 }: UserMenuProps) {
   const router = useRouter();
-  const { theme, setTheme } = useTheme();
+  // The Theme radio: origin/main's markup and words in every rollout. Under
+  // `off` it calls next-themes directly, as origin/main does; with Liquid Glass
+  // in the build it goes through the appearance provider, so the choice is the
+  // person's own and is saved (plans/REVISION-DEFAULT.md R13, finding 9).
+  const { theme: nextTheme, setTheme } = useTheme();
+  const appearance = useAppearanceChoice();
+  const glassBuild = liquidGlassRollout() !== 'off';
+  const theme = glassBuild ? appearance.theme : nextTheme;
+  const onThemeChange = glassBuild
+    ? (value: string) => {
+        if (value === 'light' || value === 'dark' || value === 'system') {
+          appearance.chooseTheme(value);
+        }
+      }
+    : setTheme;
   // NO LINK IN THE MENU PREFETCHES ITS PAGE WHEN THE MENU OPENS (PLAN 0.6). A
   // default <Link> prefetches as soon as it is on screen, so opening the menu
   // fetched Profile, Settings, Help, Support (and Platform) at once: two
@@ -158,12 +208,24 @@ export function UserMenu({
               Support & feedback
             </Link>
           </DropdownMenuItem>
+          {glassBuild ? <GlassWhatsNewItem /> : null}
           <DropdownMenuSeparator />
+          {glassBuild ? (
+            // Design first (Liquid Glass, Classic; components/theme/
+            // appearance-select.tsx). Only when this build has Liquid Glass.
+            // One inert wrapper that draws no box (display: contents), as in
+            // the header menu (theme-toggle.tsx): the lab's parity run takes
+            // the group out by this one selector; nothing styles or reads it.
+            <div data-appearance-design="" className="contents">
+              <DropdownMenuLabel className={GROUP_LABEL}>Design</DropdownMenuLabel>
+              <AppearanceDesignRadioGroup itemClassName="pl-10" />
+            </div>
+          ) : null}
           <DropdownMenuLabel className={GROUP_LABEL}>Theme</DropdownMenuLabel>
           {/* One choice of three: the one in use is marked with a dot in the
               icon column (announced as checked); pl-10 lines the names up
               with the items above (icon 16 + its margin + the item's gap). */}
-          <DropdownMenuRadioGroup aria-label="Theme" value={theme} onValueChange={setTheme}>
+          <DropdownMenuRadioGroup aria-label="Theme" value={theme} onValueChange={onThemeChange}>
             <DropdownMenuRadioItem value="light" className="pl-10">
               Light
             </DropdownMenuRadioItem>
@@ -215,6 +277,10 @@ export function UserMenu({
               // And this person's tour state, kept for the browser session
               // (sign-out is a soft navigation, so module state survives it).
               forgetTourState();
+              // And the appearance's account sync record (the device keeps its
+              // appearance, as it keeps its theme): nothing that names this
+              // account outlives the session (Liquid Glass plan 3.3).
+              forgetAppearanceAccount();
               // And what an interrupted run kept in this tab
               // (lib/interrupted-run): a sign-out on purpose leaves none of it.
               // Before the request, which answers with a redirect.

@@ -9,6 +9,12 @@ import { TagsService } from '@/server/services/tags';
 
 import { can } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 // The tab names the page ("Tags · StockPilot"); before, it read the group's
 // "Dashboard" (CONFLICTS D16).
 export const metadata: Metadata = { title: 'Tags' };
@@ -38,7 +44,7 @@ export default async function TagsPage() {
   return (
     // The header (h1, subline, New tag) is drawn by TagsManager, which holds
     // the dialog New tag opens.
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="tags">
       <TagsManager
         title={title}
         initial={rows.map((r) => ({

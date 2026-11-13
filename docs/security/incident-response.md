@@ -55,7 +55,11 @@ This is a response-time constraint, not an inconvenience, and it must be part of
 triage rather than discovered during containment.
 
 - **JS-only fixes to our own code**: OTA-deliverable. Minutes to hours. Ship with
-  `pnpm release:ota` from `apps/mobile` — **never** a raw `eas update`.
+  `EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota` from `apps/mobile` —
+  **never** a raw `eas update`. The script refuses to publish until the command
+  names the Liquid Glass rollout (`off`, `opt-in` or `default`): give the one
+  phones have now, which the last production update printed at the top of its
+  release log (docs/runbooks/mobile-ota.md, "Publish").
 - **A framework-level or native security fix**: **not OTA-deliverable.** It needs
   an SDK bump, an EAS native build, and a **store review**. Lead time is days to
   weeks and it is outside your control.
@@ -205,8 +209,10 @@ an overlap window rather than a hard cutover.
   This project already manages bypass rules there for the mobile client, so the
   mechanism is familiar. Useful when an attack is in progress and the fix is not
   ready.
-- **Mobile**: see section 0. JS-only fix, OTA with `pnpm release:ota`. Anything
-  native needs a store release, so mitigate server-side.
+- **Mobile**: see section 0. JS-only fix, OTA with
+  `EXPO_PUBLIC_LIQUID_GLASS=<rollout> pnpm release:ota` (the rollout phones have
+  now; section 0). Anything native needs a store release, so mitigate
+  server-side.
 
 ### 3.5 Database policy or function vulnerability
 

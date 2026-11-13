@@ -64,9 +64,11 @@ import {
 } from '@/server/actions/order-requests';
 import {
   availableOrderActions,
+  deletedDriverHandOverLine,
   derivePickingStatus,
   describeDepartureRisk,
   isManagerOrAbove,
+  orderStatusLabelForFulfillment,
   previewPartialFulfilment,
   releaseOutcomeLine,
   returnCancelledReplacementLine,
@@ -84,8 +86,10 @@ import {
 
 import { ApprovePartialDialog } from '@/components/orders/approve-partial-dialog';
 import { focusOrderLine } from '@/components/orders/focus-order-line';
+import { useOrderStatusMeta } from '@/components/orders/order-status-config-provider';
 import { ReleaseEarlyDialog } from '@/components/returns/exchange-panel';
 import { releaseReturnReplacementAction } from '@/server/actions/returns';
+import { DOWNSTREAM_PACKING_STATUSES } from '@/lib/orders/actions-panel-reads';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { physicalSignatureRecordedMessage } from '@/lib/orders/sign-outcome';
 import type { OrderRequestStatus } from '@/server/services/order-requests';
@@ -104,6 +108,15 @@ interface Props {
   hasRequesterNote: boolean;
   fulfillmentType: 'pickup' | 'delivery';
   assignedDeliveryUserId: string | null;
+  /** B23: the delivery went out and its driver deleted their account (core
+   *  isDeliveryDriverDeleted, from the order's own columns). In transit, an
+   *  approver who may hand it over reads who is left to do it. Omitted: false. */
+  driverDeleted?: boolean;
+  /** May this viewer hand the order over: the page's handOverAllowed, the
+   *  rule the Collect signature link and the sign route apply (below manager
+   *  rank, write access to the order's warehouse too). Only the
+   *  deleted-driver line reads it. Omitted: false. */
+  viewerMayHandOver?: boolean;
   signatureToken: string | null;
   /** Set when the Collect signature link is held back because the viewer
    *  owes an MFA step-up (migration 0389, desk check F2): the button stays
@@ -113,13 +126,26 @@ interface Props {
    *  actual data-URL blob is fetched lazily on dialog-open (see the sig
    *  dialog) instead of shipped in the RSC payload. */
   hasSignature: boolean;
+  /** Whether to offer "Print warehouse slip". Its QR completes the hand-over
+   *  with no sign-in, so its route asks the hand-over rule (mayHandOverOrder:
+   *  the assigned driver, an approver of manager rank, or an approver with
+   *  write access to the order's warehouse; never a viewer) and the page
+   *  passes that rule's answer (handOverAllowed). Required, so no caller can
+   *  offer it by leaving it out (slice E review: a viewer granted
+   *  orders:approve, and an approver outside the warehouse who keeps the
+   *  panel's reads, were offered it and refused). */
+  canPrintWarehouseSlip: boolean;
   signedByName: string | null;
   signedAt: string | null;
   drivers: DriverOption[];
   /** Whether the viewer has orders:approve. Drives which manage-only
    *  sections render. False = staff driver assigned to this delivery
    *  who sees the panel ONLY for in-transit actions; they shouldn't
-   *  see Approve / Deny / Reassign / Internal-Notes. */
+   *  see Approve / Deny / Reassign / Internal-Notes. Since security slice E
+   *  (0416) the order page passes it only for an approver who may write to
+   *  this order's warehouse (approverWritesHere): every step it gates asks
+   *  that in the service and the database, so an approver outside the
+   *  warehouse is offered none of them. */
   canApprove: boolean;
   /** Whether the viewer holds orders:assign_delivery, the permission
    *  assignDelivery and assign_order_delivery ask besides orders:approve
@@ -243,13 +269,6 @@ const NO_STOCK_GATES: OrderStockGates = {
   canRetry: false,
 };
 
-const DOWNSTREAM_PACKING_STATUSES: OrderRequestStatus[] = [
-  'packing_slip_generated',
-  'staged_for_pickup',
-  'staged_for_delivery',
-  'completed',
-];
-
 export function ManagerActionsPanel({
   orderId,
   status,
@@ -259,9 +278,12 @@ export function ManagerActionsPanel({
   hasRequesterNote,
   fulfillmentType,
   assignedDeliveryUserId,
+  driverDeleted = false,
+  viewerMayHandOver = false,
   signatureToken,
   handOverMfaMessage = null,
   hasSignature,
+  canPrintWarehouseSlip,
   signedByName,
   signedAt,
   drivers,
@@ -285,6 +307,12 @@ export function ManagerActionsPanel({
   const router = useRouter();
   const [busy, setBusy] = React.useState<BusyKey>(null);
   const [releaseOpen, setReleaseOpen] = React.useState(false);
+  // The status as the page head's badge names it (OrderStatusBadge: the
+  // org's label, a completed pickup "Handed over"). Liquid Glass's phone
+  // next-step bar reads it from the button row's data-glass-status, an inert
+  // hook (no Classic CSS reads it; the classic proof drops it).
+  const statusMeta = useOrderStatusMeta(status);
+  const statusLabel = orderStatusLabelForFulfillment(status, statusMeta.label, fulfillmentType);
   const gated = replacement?.waitingForReturn === true;
   // Desk check F3: a replacement whose RMA was cancelled or denied is never
   // picked again (the gate refuses it), so the pick slip and Resume go too.
@@ -750,13 +778,18 @@ export function ManagerActionsPanel({
     // (core availableOrderActions and the page's gates).
     <DetailSection
       data-tour="manager-actions"
+      data-glass-role="order-manager-actions"
       title="Manager actions"
       aside={
         <DetailSectionMeta>Move this request through the fulfillment pipeline.</DetailSectionMeta>
       }
       bodyClassName="space-y-3"
     >
-      <div className="flex flex-wrap items-center gap-2" data-testid="manager-actions-buttons">
+      <div
+        className="flex flex-wrap items-center gap-2"
+        data-testid="manager-actions-buttons"
+        data-glass-status={statusLabel}
+      >
         {status === 'pending_approval' && approves && (
           <>
             <NeededBySuggest
@@ -765,7 +798,12 @@ export function ManagerActionsPanel({
               timeZone={orgTimeZone}
               hasRequesterNote={hasRequesterNote}
             />
-            <Button variant="default" onClick={approve} disabled={busy !== null}>
+            <Button
+              variant="default"
+              onClick={approve}
+              disabled={busy !== null}
+              data-glass-role="order-primary"
+            >
               {busy === 'approve' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
@@ -790,6 +828,7 @@ export function ManagerActionsPanel({
               className="text-destructive hover:text-destructive"
               onClick={() => setDenyOpen(true)}
               disabled={busy !== null}
+              data-glass-role="order-deny"
             >
               <X className="h-3.5 w-3.5" />
               Deny
@@ -798,7 +837,12 @@ export function ManagerActionsPanel({
         )}
 
         {status === 'approved' && approves && !pickBlocked && (
-          <Button variant="default" onClick={generatePickSlip} disabled={busy !== null}>
+          <Button
+            variant="default"
+            onClick={generatePickSlip}
+            disabled={busy !== null}
+            data-glass-role="order-primary"
+          >
             {busy === 'generate-pick-slip' ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : (
@@ -955,10 +999,12 @@ export function ManagerActionsPanel({
               <Printer className="h-3.5 w-3.5" />
               Print customer slip
             </Button>
-            <Button variant="outline" onClick={printWarehouseSlip} disabled={busy !== null}>
-              <Printer className="h-3.5 w-3.5" />
-              Print warehouse slip
-            </Button>
+            {canPrintWarehouseSlip && (
+              <Button variant="outline" onClick={printWarehouseSlip} disabled={busy !== null}>
+                <Printer className="h-3.5 w-3.5" />
+                Print warehouse slip
+              </Button>
+            )}
             {hasSignature && (
               <Button variant="outline" onClick={() => setSigOpen(true)} disabled={busy !== null}>
                 <PenLine className="h-3.5 w-3.5" />
@@ -1047,6 +1093,28 @@ export function ManagerActionsPanel({
               once, in the replacement banner (core's replacementDriverLine:
               an early-released delivery not yet returned, never to the
               requester), never repeated here. */}
+
+        {/* B23: the driver deleted their account on the way (0393 cleared
+              the driver). Nobody else will finish this delivery, so the
+              approver reads who is left and with which buttons. The line
+              sends them to Collect signature, so it is said only to a viewer
+              who may hand this order over (an approver from another
+              warehouse is not) while that button is enabled: a link, or the
+              MFA step-up it explains (review 2026-10-31). */}
+        {status === 'in_transit' &&
+          driverDeleted &&
+          approves &&
+          viewerMayHandOver &&
+          (signatureToken !== null || handOverMfaMessage !== null) && (
+            <span
+              className="text-muted-foreground inline-flex w-full items-center gap-1.5 text-[12.5px]"
+              role="status"
+              data-testid="deleted-driver-line"
+            >
+              <Truck className="h-3.5 w-3.5 shrink-0" />
+              {deletedDriverHandOverLine({ offersPhysicalSignature })}
+            </span>
+          )}
 
         {(status === 'staged_for_pickup' || status === 'in_transit') &&
           (approves || isDriverHere) && (
@@ -1138,6 +1206,7 @@ export function ManagerActionsPanel({
           role="status"
           className="text-warning flex flex-wrap items-center gap-2 text-[12.5px]"
           data-testid="order-stock-notice"
+          data-glass="order-notice"
         >
           <span>{stockNotice}</span>
           {stockGates.canRetry && (
@@ -1158,7 +1227,11 @@ export function ManagerActionsPanel({
         </div>
       )}
       {shortNotice && (
-        <p className="text-warning text-[12.5px]" data-testid="approve-short-notice">
+        <p
+          className="text-warning text-[12.5px]"
+          data-testid="approve-short-notice"
+          data-glass="order-notice"
+        >
           {shortNotice}
         </p>
       )}
@@ -1227,7 +1300,7 @@ export function ManagerActionsPanel({
           data-testid="completion-confirm"
           onCloseAutoFocus={landOnLineAfterClose}
         >
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{completionConfirm?.title}</DialogTitle>
             <DialogDescription asChild>
               <div className="space-y-2">
@@ -1237,7 +1310,7 @@ export function ManagerActionsPanel({
               </div>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => {
@@ -1278,11 +1351,11 @@ export function ManagerActionsPanel({
           data-testid="departure-confirm"
           onCloseAutoFocus={landOnLineAfterClose}
         >
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{departure?.risk.title}</DialogTitle>
             <DialogDescription>{departure?.risk.message}</DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => {
@@ -1318,15 +1391,15 @@ export function ManagerActionsPanel({
       ) : null}
 
       <Dialog open={denyOpen} onOpenChange={closeDenyDialog}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-md" data-glass-role="order-deny-dialog">
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Deny this request?</DialogTitle>
             <DialogDescription>
               The requester will be notified with the reason you provide. This action can&apos;t be
               undone.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-glass="dialog-body">
             <Label htmlFor="deny-reason">Reason</Label>
             <Textarea
               id="deny-reason"
@@ -1338,7 +1411,7 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => closeDenyDialog(false)}
@@ -1364,7 +1437,7 @@ export function ManagerActionsPanel({
           window.prompt(). */}
       <Dialog open={reopenOpen} onOpenChange={closeReopenDialog}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Reopen picking?</DialogTitle>
             <DialogDescription>
               Sends this order back to picking so the count can be corrected. The picked quantities
@@ -1377,7 +1450,7 @@ export function ManagerActionsPanel({
               A signed order can&apos;t be reopened. This is recorded in the audit log.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-glass="dialog-body">
             <Label htmlFor="reopen-reason">Reason</Label>
             <Textarea
               id="reopen-reason"
@@ -1389,7 +1462,7 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => closeReopenDialog(false)}
@@ -1419,7 +1492,7 @@ export function ManagerActionsPanel({
         }}
       >
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>
               {orderLabel
                 ? `Record a physical signature for ${orderLabel}`
@@ -1431,7 +1504,7 @@ export function ManagerActionsPanel({
               signature as physical — no image is stored.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-1.5">
+          <div className="space-y-1.5" data-glass="dialog-body">
             <Label htmlFor="physical-signer">Signer&apos;s name</Label>
             <Textarea
               id="physical-signer"
@@ -1443,7 +1516,7 @@ export function ManagerActionsPanel({
               autoFocus
             />
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => setPhysicalSigOpen(false)}
@@ -1476,14 +1549,14 @@ export function ManagerActionsPanel({
         }}
       >
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Close as delivered-partial?</DialogTitle>
             <DialogDescription>
               This ends the order and keeps the record of what was already delivered. The remaining
               backordered units will NOT be fulfilled. You can&apos;t reopen the order afterward.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => setClosePartialOpen(false)}
@@ -1502,7 +1575,7 @@ export function ManagerActionsPanel({
       {/* View signature */}
       <Dialog open={sigOpen} onOpenChange={setSigOpen}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Customer signature</DialogTitle>
             <DialogDescription>
               {signedByName ? `Signed by ${signedByName}` : 'Signed'}
@@ -1527,7 +1600,7 @@ export function ManagerActionsPanel({
           ) : (
             <p className="text-muted-foreground text-sm">No signature on file.</p>
           )}
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button variant="outline" onClick={() => setSigOpen(false)}>
               Close
             </Button>

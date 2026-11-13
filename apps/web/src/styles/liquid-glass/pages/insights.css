@@ -1,0 +1,942 @@
+/* Liquid Glass, the insights pages (stage 4, lane L2a): the reports hub and
+   every report (Book Order Totals' own composition is pages/reports.css),
+   the Briefing, the AI Assistant, Help, Support, What's New and its posts,
+   Zendesk, Notifications, Team and the audit log. The shared frame every one
+   of them takes from the boards: the page box and head (sp.css .page,
+   .page-h, .h1), the cards (.card, .card-h, .card-b), the figures (.kpis:
+   one content-glass card per figure, Book-Order-Totals.dc.html), the table
+   cards (.dt: the 38 px quiet header band, the row metrics), the badges, the
+   segmented ranges (.seg), the empty and failed states (.empty), the label
+   and value lists (.kv) and the dialogs (.dialog). The board panels of
+   Routes-Gallery-2.dc.html (Notifications, Team, Audit log) add their own
+   rows below; every other page here is an inferred extension built from
+   these parts only. The same values as the operations lane's frame
+   (pages/ops.css), so the two lanes' pages read as one product.
+
+   Same DOM as Classic (plan M1): every rule restyles today's markup through
+   the inert root hooks each page carries (data-glass-page="insights",
+   data-glass-view="<page>", data-glass-width="wide" on the wide pages), the
+   stage 2 hooks of the shared components (data-glass="card", "table",
+   "badge", "seg", "state-panel", ...) and the pattern components' own
+   data-slot attributes. Every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen, so Classic
+   Dark and Light never match one and printing never gets one
+   (glass-scope.guard.test.ts reads this folder). App Router keeps a route's
+   stylesheet after a client navigation, so every selector also names the
+   lane's page root: nothing here reaches another lane's page. Dialogs are
+   portalled out of the page, so their rules name the root through
+   :root:has([data-glass-page='insights']).
+
+   Imported only by the lane's route pages (never globally, plan 4.1). The
+   layer order statement is insurance: it is the order globals.css already
+   declares, so it changes nothing when this file loads after globals.css. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The page box (.page: 6 / 28 / 48 padding, 20 between) ───────────
+       The wide pages (the reports, Team, the audit log) take the board's
+       1480 px; the reading pages keep their own measure. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] {
+      gap: 20px;
+      padding: 6px 28px 48px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'][data-glass-width='wide'] {
+      max-width: 1480px;
+    }
+
+    /* ── The page head (.page-h: the large title 26/32, the subline at
+       13/18, the 36 px header buttons, the back link as .row.g4.sm.muted) ── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='page-header']
+      h1 {
+      font-size: 26px;
+      line-height: 32px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='page-header']
+      div:has(> h1)
+      ~ div {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='page-header']
+      > div:first-child:not(:last-child)
+      > a {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='page-header']
+      > div:first-child:not(:last-child)
+      > a:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='page-header-actions']
+      [data-glass='button'][data-glass-size='default']:not([data-glass-variant='ghost']):not(
+        [data-glass-variant='link']
+      ) {
+      height: 36px;
+      gap: 8px;
+      padding: 0 14px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ── The segmented ranges and views (.seg: 30 px segments, 13 px) ──── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='seg'] {
+      gap: 2px;
+      padding: 3px;
+    }
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='seg'] > * {
+      height: 30px;
+      padding: 0 12px;
+      border-radius: 8px;
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      font-weight: 500;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='seg']
+      > *:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='seg']
+      > :is([aria-selected='true'], [aria-current='page'], [data-state='active']) {
+      color: var(--lg-ink);
+      font-weight: 650;
+    }
+
+    /* ── Cards the pages draw themselves (.card: content glass, radius 20).
+       A plain block with the card fill, hairline and radius, unhooked (a
+       hooked one takes its material from materials.css). ──────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      :is(div, section, aside, ul, ol, li, form, article, details).bg-card.rounded-lg.border:not(
+        [data-glass]
+      ) {
+      background-color: var(--lg-card-fill);
+      border-color: var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    /* Record and list cards (DetailSection) are the board's .card (radius
+       20), not the 26 px panel: a 52 px head (12 x 16) with the 16/22
+       title, 16 px inside, a 12 x 16 foot. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='detail-section'] {
+      border-radius: var(--lg-r-lg);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='detail-section-header'] {
+      min-height: 52px;
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='detail-section-header']
+      > :is(h2, h3, h4) {
+      color: var(--lg-ink);
+      font-size: 16px;
+      font-weight: 600;
+      line-height: 22px;
+      letter-spacing: -0.01em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='detail-section-body'].p-\[18px\] {
+      padding: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='detail-section-footer'] {
+      padding: 12px 16px;
+      border-color: var(--lg-line);
+    }
+
+    /* ── Figures (.kpis: one content-glass card per figure, 12 px apart;
+       the label .stat-l 13/18 in ink 3 at 500 over the figure .stat-v
+       28/34 at 650, the definition 12/16 in ink 3). The Overview's stage
+       strip (data-variant="stages") is not this lane's. ─────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='stat-strip']:not([data-variant='stages']) {
+      overflow: visible;
+      border-width: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='stat-strip']:not([data-variant='stages'])
+      > div {
+      gap: 12px;
+      margin: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='stat-strip']:not([data-variant='stages'])
+      [data-slot='stat-strip-item'] {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 20px;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: var(--lg-r-lg);
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='stat-strip']:not([data-variant='stages'])
+      [data-slot='stat-strip-item']
+      > div:first-child {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='stat-strip']:not([data-variant='stages'])
+      [data-slot='stat-strip-item']
+      > div:nth-child(2) {
+      font-size: 28px;
+      font-weight: 650;
+      line-height: 34px;
+      letter-spacing: -0.02em;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='stat-strip']:not([data-variant='stages'])
+      [data-slot='stat-strip-item']
+      > div:nth-child(3) {
+      font-size: 12px;
+      line-height: 16px;
+    }
+
+    /* ── Tables (.dt): 14 px, the 38 px header band (12 / 600 in ink 3, no
+       capitals), the row hairline, 52 px rows ──────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='table'] {
+      font-size: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > thead
+      > tr {
+      border-bottom: 1px solid var(--lg-line);
+      background: var(--lg-card-fill-2);
+    }
+    /* The header band (.dt .hd) is frosted where rows can scroll under it
+       (sp.css:985); the rows themselves never blur. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > thead {
+      -webkit-backdrop-filter: blur(14px) saturate(140%);
+      backdrop-filter: blur(14px) saturate(140%);
+    }
+    /* The band's cells only: a row header in the body (Book Order Totals'
+       book cell, th scope="row") keeps its own type and wraps as in
+       Classic. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > thead
+      th {
+      height: 38px;
+      padding-top: 0;
+      padding-bottom: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > tbody
+      > tr {
+      height: var(--lg-row-h);
+      border-bottom: 1px solid var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > tbody
+      > tr:last-child {
+      border-bottom: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > tbody
+      > tr
+      > :is(td, th) {
+      padding-top: var(--lg-row-pad);
+      padding-bottom: var(--lg-row-pad);
+    }
+
+    /* ── Badges (.badge: 22 px, 12 / 600, radius 6) ───────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='badge'] {
+      height: 22px;
+      gap: 5px;
+      padding: 0 8px;
+      font-size: 12px;
+      line-height: 1;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='badge'][data-glass-variant='outline'] {
+      border-color: transparent;
+      background: transparent;
+      box-shadow: inset 0 0 0 1px var(--lg-line-2);
+      color: var(--lg-ink-2);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='badge'][data-glass-variant='secondary'] {
+      border-color: transparent;
+      background: var(--lg-neutral-wash);
+      color: var(--lg-ink-2);
+    }
+
+    /* ── Pagers (.pager: 13 px ink 3) ──────────────────────────────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='pager'] {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+    }
+
+    /* ── Empty and failed states (.empty: the 56 px wash tile) ─────────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='insights'] [data-glass='state-panel'] {
+      gap: 10px;
+      padding: 44px 24px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='state-panel-icon'] {
+      width: 56px;
+      height: 56px;
+      border-radius: 18px;
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-state-kind='failed']
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-danger-wash);
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-state-kind='no-match']
+      [data-slot='state-panel-icon'] {
+      background: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='state-panel-icon']
+      svg {
+      width: 26px;
+      height: 26px;
+    }
+
+    /* ── Label and value lists (.kv: the label in ink 3, the value in ink
+       at 500, 14 px) ──────────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='key-value-row']
+      > dt {
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-slot='key-value-row']
+      > dd {
+      color: var(--lg-ink);
+      font-weight: 500;
+    }
+
+    /* ── Dialogs opened from these pages (.dialog: the 20/26 title in the
+       glass display face, the description in ink 2, the 36 px foot
+       buttons). The dialog material and radius are stage 2's. ─────────── */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='dialog']
+      h2:first-child {
+      font-size: 20px;
+      font-weight: 650;
+      line-height: 26px;
+      letter-spacing: -0.016em;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='dialog']
+      h2:first-child
+      + :is(p, div) {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='dialog']
+      [data-glass='button'][data-glass-size='default']:not([data-glass-variant='ghost']):not(
+        [data-glass-variant='link']
+      ) {
+      min-height: 36px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    /* ── The report menus (portalled, so named through
+       :root:has([data-glass-page='insights']) and their role hooks) ──────
+       The PDF menu, on the hub, the reports and Book Order Totals' Export:
+       Book-Order-Totals.dc.html's Export .menu (270 px, the stage 2 .menu
+       padding and 36 px .mi rows, the ink 3 icons 10 px from the words, the
+       second line as .mi .sub: 12/16 in ink 3, the covers note 12/16 in
+       ink 3). The charter selector on Inventory valuation: DS-Components'
+       "Charter selector — open" (the 240 px .input.select, 36 px; the
+       300 px .menu of .mi rows). */
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-menu'] {
+      width: 270px;
+      max-width: calc(100vw - 32px);
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-menu']
+      [data-glass='menu-item']
+      > svg {
+      margin-right: 0;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-sub'] {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass-role='report-pdf-note'] {
+      padding: 4px 10px 6px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      [data-glass='select'][data-glass-role='report-charter-select'] {
+      width: 240px;
+    }
+    /* Below 640 px the field keeps Classic's 44 px and 16 px (the
+       SelectTrigger's max-sm:h-11 max-sm:text-base). */
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights']
+        [data-glass='select'][data-glass-role='report-charter-select'] {
+        height: 36px;
+        padding: 0 12px;
+        font-size: 14px;
+      }
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='menu'][data-glass-role='report-charter-menu'] {
+      min-width: min(300px, calc(100vw - 32px));
+    }
+    :root[data-appearance='liquid-glass']:has([data-glass-page='insights'])
+      [data-glass='menu'][data-glass-role='report-charter-menu']
+      > [data-radix-select-viewport] {
+      padding: 0;
+    }
+
+    /* ══ The board panels (Routes-Gallery-2.dc.html) ═════════════════════ */
+
+    /* Notifications: the live alerts as the board's list (.list.card,
+       radius 14) under its eyebrow, each alert a .li row (56 px, 12 x 16,
+       12 between) with its 26 px tone dot (.tl-dot, a 14 px icon), the
+       title 13/18 at 600 over the line 12/16 in ink 3, the chevron in
+       ink 3. Classic's own section title is the eyebrow; the card is the
+       section's body. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts'] {
+      overflow: visible;
+      border-width: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      > [data-slot='detail-section-header'] {
+      min-height: 0;
+      padding: 0 0 10px;
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      > [data-slot='detail-section-header']
+      > :is(h2, h3) {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      > [data-slot='detail-section-body'] {
+      overflow: hidden;
+      border: var(--lg-b-w) solid var(--lg-card-line);
+      border-radius: 14px;
+      background-color: var(--lg-card-fill);
+      box-shadow: var(--lg-glass-inner);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      li {
+      border-color: var(--lg-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      :is(li > a, [data-slot='detail-section-body'] > div) {
+      min-height: 56px;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      li
+      > a:hover {
+      background-color: var(--lg-card-hover);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      :is(li > a, [data-slot='detail-section-body'] > div)
+      > span:first-child {
+      width: 26px;
+      height: 26px;
+      border-width: 0;
+      background: var(--lg-surface-3);
+      color: var(--lg-ink-3);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      li
+      > a[data-tone='warn']
+      > span:first-child {
+      background: var(--lg-warn-wash);
+      color: var(--lg-warn);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      li
+      > a[data-tone='info']
+      > span:first-child {
+      background: var(--lg-info-wash);
+      color: var(--lg-info);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      [data-slot='detail-section-body']
+      > div
+      > span:first-child {
+      background: var(--lg-ok-wash);
+      color: var(--lg-ok);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      :is(li > a, [data-slot='detail-section-body'] > div)
+      > span:first-child
+      svg {
+      width: 14px;
+      height: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      :is(li > a, [data-slot='detail-section-body'] > div)
+      > :is(span, div):nth-child(2) {
+      padding-top: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      :is(li > a, [data-slot='detail-section-body'] > div)
+      > :is(span, div):nth-child(2)
+      > :first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      :is(li > a, [data-slot='detail-section-body'] > div)
+      > :is(span, div):nth-child(2)
+      > :nth-child(2) {
+      margin-top: 0;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='live-alerts']
+      li
+      > a
+      > svg:last-child {
+      margin-top: 0;
+      color: var(--lg-ink-3);
+    }
+
+    /* Notifications, the history (Routes-Gallery-2.dc.html: the "History"
+       eyebrow over plain rows on the pane, .col.g8.sm, no card). Classic's
+       section title is the eyebrow, with the unread count and Mark all read
+       beside it; the rows sit on the pane 8 px apart with no hairline, the
+       title 13/18 in ink, the line 12/16 in ink 2, the type and time 12/16
+       in ink 3 without capitals (.xs.muted.num). The unread dot, the unread
+       wash (rounded 10) and Mark read stay. The time stays under the row:
+       Classic's line carries the type with it, more than the board's 70 px
+       time column holds (stage4/insights-rows.md, deviations). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history'] {
+      overflow: visible;
+      border-width: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      > [data-slot='detail-section-header'] {
+      min-height: 0;
+      padding: 0 0 10px;
+      border-bottom-width: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      > [data-slot='detail-section-header']
+      > :is(h2, h3) {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 16px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      [data-slot='detail-section-body']
+      > ul {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      [data-slot='detail-section-body']
+      > ul
+      > li {
+      gap: 10px;
+      padding: 8px 10px;
+      border-bottom-width: 0;
+      border-radius: 10px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      li
+      > div
+      > a:first-child
+      > p,
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      li
+      > div
+      > p:first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      li
+      > div
+      > p:not(:first-child):not([data-glass-role]) {
+      color: var(--lg-ink-2);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      li
+      > span:first-child {
+      /* The unread dot, centred on the 18 px title line. */
+      margin-top: 5px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='notifications']
+      [data-glass-role='notification-history']
+      [data-glass-role='notification-when'] {
+      margin-top: 2px;
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+      line-height: 16px;
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    /* Team: the members and the invitations as the board's list card (radius
+       14) with 56 px rows; the 28 px avatar (.av, 11 / 700 on the member's
+       hue, .av.c1 to .c6; #4E6A8C without one); the
+       name 13/18 at 600 over the address 12/16 in ink 3; the role a neutral
+       badge. Every Classic column stays (Role, access, status, joined and
+       the row menu): the board draws a list, the page keeps its table. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-slot='detail-section'] {
+      border-radius: 14px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      > tbody
+      > tr {
+      height: 56px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-avatar'] {
+      width: 28px;
+      height: 28px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'] {
+      background: #4e6a8c;
+      color: #ffffff;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+    /* Each member's own hue (.av.c1 to .c6), picked from the member id by
+       the inert data-glass-hue hook, so a member keeps the colour wherever
+       the row sits. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'][data-glass-hue='1'] {
+      background: #2f7a68;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'][data-glass-hue='2'] {
+      background: #6a4fa0;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'][data-glass-hue='3'] {
+      background: #a0543a;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'][data-glass-hue='4'] {
+      background: #3d63a8;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'][data-glass-hue='5'] {
+      background: #7a6a2e;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      [data-glass-role='member-initials'][data-glass-hue='6'] {
+      background: #8c3f6b;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      td:first-child
+      p:first-child {
+      color: var(--lg-ink);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='team']
+      [data-glass='table']
+      td:first-child
+      p:nth-child(2) {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+
+    /* Audit log: the board's event table (46 px rows, 6 px padding, 13 px;
+       the time in ink 3 at 12, tabular). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='audit']
+      [data-glass='table'] {
+      font-size: 13px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='audit']
+      [data-glass='table']
+      > tbody
+      > tr {
+      height: 46px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights'][data-glass-view='audit']
+      [data-glass='table']
+      > tbody
+      > tr
+      > :is(td, th) {
+      padding-top: 6px;
+      padding-bottom: 6px;
+    }
+
+    /* ══ Inferred pages ═══════════════════════════════════════════════════ */
+
+    /* Help and a What's New post: the long-form reading layout of
+       Site-Security.dc.html and Site-Privacy.dc.html in the pane, every
+       section in one content-glass card; the in-page links as the accent
+       text, underlined. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']:is([data-glass-view='help'], [data-glass-view='whats-new-post'])
+      :is(article, [data-slot='detail-section'])
+      :is(p, li) {
+      color: var(--lg-ink-2);
+      line-height: 1.6;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']:is([data-glass-view='help'], [data-glass-view='whats-new-post'])
+      :is(article, [data-slot='detail-section'])
+      a:not([data-glass]) {
+      color: var(--lg-accent-text);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']:is([data-glass-view='help'], [data-glass-view='whats-new-post'])
+      kbd {
+      border-color: var(--lg-line-2);
+      border-radius: 6px;
+      background: var(--lg-surface-3);
+      color: var(--lg-ink);
+    }
+
+    /* ── Focus: the outline ring in --lg-focus on the lane's own links and
+       buttons that carry no stage 2 hook (sp.css :focus-visible). ───────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='insights']
+      :is(a, button, summary):not([data-glass]):focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+    }
+
+    /* ── Phones (sp.css 760 px: 4 / 16 / 96, 16 between, the 24/30 title) */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='insights'] {
+        gap: 16px;
+        padding: 4px 16px 96px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights']
+        [data-glass='page-header']
+        h1 {
+        font-size: 24px;
+        line-height: 30px;
+      }
+    }
+
+    /* Reduce Transparency and Increase Contrast: no frost on the header
+       band (the tokens are already opaque there). */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights']
+        [data-glass='table']
+        > thead {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='insights']
+      [data-glass='table']
+      > thead {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    /* Forced colours: system colours, no fills of their own. */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights']
+        [data-glass='stat-strip']:not([data-variant='stages'])
+        [data-slot='stat-strip-item'] {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='insights'][data-glass-view='notifications']
+        [data-glass-role='live-alerts']
+        > [data-slot='detail-section-body'] {
+        border: 1px solid CanvasText;
+        background: Canvas;
+        box-shadow: none;
+      }
+    }
+  }
+}

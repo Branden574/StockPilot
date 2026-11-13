@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
 import { challengeFactorAction } from '@/server/actions/mfa';
 import { signOutAction } from '@/server/actions/auth';
@@ -98,6 +99,7 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
     // A sign-out on purpose leaves nothing an interrupted run kept in this tab
     // (lib/interrupted-run). Before the request, which answers with a redirect.
     purgeInterruptedRuns();
+    forgetAppearanceAccount();
     await signOutAction();
     router.replace('/signin');
     router.refresh();
@@ -149,9 +151,10 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
             autoComplete="one-time-code"
             autoFocus
             placeholder="123456"
-            maxLength={6}
             value={code}
-            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
+            // Digits only, the first six. No maxLength: a browser cuts a pasted
+            // "123 456" at six characters before this runs, leaving five digits.
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
             className="font-mono tracking-widest sm:h-10"
           />
         </div>
@@ -190,10 +193,9 @@ export function MfaChallengeForm({ factors }: MfaChallengeFormProps) {
           <DialogHeader>
             <DialogTitle>Use a recovery code</DialogTitle>
             <DialogDescription>
-              Enter one of the recovery codes you saved when you set up
-              two-factor authentication. The code will be consumed and your
-              authenticator factor will be removed so you can re-enroll a new
-              device.
+              Enter one of the recovery codes you saved when you set up two-factor authentication.
+              The code will be consumed and your authenticator factor will be removed so you can
+              re-enroll a new device.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={recover} className="space-y-4">

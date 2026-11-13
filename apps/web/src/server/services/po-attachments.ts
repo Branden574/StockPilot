@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import { isValidStoragePath, poAttachmentPathShape } from '@/lib/storage-path';
 
 
@@ -65,9 +66,21 @@ export class PoAttachmentsService {
     const paths = rows.map((r) => r.storage_path as string);
     const signed = new Map<string, string>();
     if (paths.length > 0) {
-      const { data: urls } = await this.ctx.supabase.storage
+      // sign-bound: one path a row, and the rows are one purchase order's
+      // attachments, read above in one request that PostgREST caps at
+      // max_rows (1,000), the most one createSignedUrls call takes.
+      const { data: urls, error: signErr } = await this.ctx.supabase.storage
         .from(BUCKET)
         .createSignedUrls(paths, 60 * 60);
+      // A failed call signed nothing. It is reported (B20a: it was ignored),
+      // and the rows still come back, each without a link (url null).
+      if (signErr) {
+        void reportError(signErr, {
+          tag: 'purchase-orders.attachments.sign',
+          organizationId: this.ctx.organizationId,
+          extra: { purchaseOrderId, paths: paths.length },
+        });
+      }
       for (const u of (urls ?? []) as Array<{ path?: string | null; signedUrl: string }>) {
         if (u.path) signed.set(u.path, u.signedUrl);
       }

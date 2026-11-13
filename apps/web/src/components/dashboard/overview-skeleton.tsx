@@ -57,8 +57,11 @@ export function OverviewBodySkeleton() {
         <div className="flex h-5 items-center">
           <Bar w={210} h={11} />
         </div>
-        <div className={CARD}>
-          <div className="border-border flex h-[49px] items-center justify-between border-b px-[18px]">
+        <div className={CARD} data-glass="card">
+          <div
+            className="border-border flex h-[49px] items-center justify-between border-b px-[18px]"
+            data-glass-role="skeleton-card-head"
+          >
             <Bar w={120} h={12} />
             <Bar w={96} h={10} />
           </div>
@@ -84,10 +87,14 @@ export function OverviewBodySkeleton() {
           <Bar w={130} h={14} />
           <Bar w={320} h={10} />
         </div>
-        <div className={`${CARD} hidden lg:block`}>
-          <div className="bg-border grid grid-cols-4 gap-px">
+        <div className={`${CARD} hidden lg:block`} data-glass="skeleton-strip">
+          <div className="bg-border grid grid-cols-4 gap-px" data-glass-role="skeleton-strip-grid">
             {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="bg-card space-y-2.5 px-[18px] py-4">
+              <div
+                key={i}
+                className="bg-card space-y-2.5 px-[18px] py-4"
+                data-glass-role="skeleton-strip-cell"
+              >
                 <Bar w={80} h={11} />
                 <Bar w={72} h={22} />
               </div>
@@ -97,10 +104,17 @@ export function OverviewBodySkeleton() {
       </div>
 
       {/* The key stats strip: one card, cells divided by hairlines. */}
-      <div className={CARD}>
-        <div className="bg-border grid grid-cols-2 gap-px lg:grid-cols-4">
+      <div className={CARD} data-glass="skeleton-strip">
+        <div
+          className="bg-border grid grid-cols-2 gap-px lg:grid-cols-4"
+          data-glass-role="skeleton-strip-grid"
+        >
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="bg-card space-y-2.5 px-[18px] py-4">
+            <div
+              key={i}
+              className="bg-card space-y-2.5 px-[18px] py-4"
+              data-glass-role="skeleton-strip-cell"
+            >
               <Bar w={96} h={11} />
               <Bar w={84} h={22} />
               <Bar w={120} h={10} />
@@ -112,13 +126,13 @@ export function OverviewBodySkeleton() {
       {/* The value card beside the movements breakdown. */}
       <div className="@container">
         <div className="@min-[936px]:grid-cols-12 grid grid-cols-1 gap-4">
-          <div className={`${CARD} @min-[936px]:col-span-9 space-y-3 p-[18px]`}>
+          <div className={`${CARD} @min-[936px]:col-span-9 space-y-3 p-[18px]`} data-glass="card">
             <Bar w={160} h={12} />
             <Bar w={200} h={10} />
             <Bar w={180} h={28} />
             <Bar w="100%" h={200} radius={6} />
           </div>
-          <div className={`${CARD} @min-[936px]:col-span-3 space-y-3 p-[18px]`}>
+          <div className={`${CARD} @min-[936px]:col-span-3 space-y-3 p-[18px]`} data-glass="card">
             <Bar w={130} h={12} />
             <Bar w={150} h={10} />
             <Bar w="100%" h={120} radius={6} />
@@ -133,6 +147,7 @@ function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: num
   return (
     <div
       className="bg-muted max-w-full shrink-0 animate-pulse"
+      data-glass="skeleton"
       style={{
         width: typeof w === 'number' ? `${w}px` : w,
         height: h,

@@ -91,14 +91,16 @@ export function inFilters(call: MockCall): Array<[string, unknown[]]> {
 
 /**
  * A select result that answers like PostgREST: it applies the query's OWN
- * filters (`eq`, `neq`, `is`, `gt`, `gte`, `lt`, `lte`, `in`), its `.order()`
+ * filters (`eq`, `neq`, `is`, `gt`, `gte`, `lt`, `lte`, `in`, and
+ * `.not(col, 'is', null)`, the archived-only lists' filter), its `.order()`
  * calls and its `.range()`/`.limit()` window (capped at max_rows, 1000) to
  * `rows`. Several `.order()` calls sort as PostgREST's `order=a,b` does: the
  * FIRST is the primary key and each later one only breaks its ties.
  * So a test fails when the code under test forgets a filter, instead of the
  * stub handing back every row whatever was asked. Any other method in the
- * chain (an `.or()` it cannot evaluate) throws, so nothing is ignored
- * silently. `rows` may be a function, to change the data between calls.
+ * chain (an `.or()`, or any other `.not()`, it cannot evaluate) throws, so
+ * nothing is ignored silently. `rows` may be a function, to change the data
+ * between calls.
  */
 export function servedLikePostgrest(
   rows: ReadonlyArray<Record<string, unknown>> | (() => ReadonlyArray<Record<string, unknown>>),
@@ -125,15 +127,6 @@ export function servedLikePostgrest(
         case 'is':
           out = out.filter((r) => (r[col] ?? null) === value);
           break;
-        case 'not': {
-          // Only the negated IS (`.not('accepted_at', 'is', null)`); any other
-          // negation is not evaluated here, so it throws like an unknown method.
-          const operand = call.args[i]?.[2];
-          if (value !== 'is')
-            throw new Error(`servedLikePostgrest cannot evaluate .not(…, '${String(value)}', …)`);
-          out = out.filter((r) => (r[col] ?? null) !== operand);
-          break;
-        }
         case 'gt':
           out = out.filter((r) => r[col] !== null && r[col] !== undefined && cmp(value, r[col]));
           break;
@@ -149,6 +142,17 @@ export function servedLikePostgrest(
         case 'in':
           out = out.filter((r) => (value as unknown[]).includes(r[col]));
           break;
+        case 'not': {
+          // Only `.not(col, 'is', null)`: the rows whose col is set.
+          const operand = call.args[i]?.[2];
+          if (value !== 'is' || operand !== null) {
+            throw new Error(
+              `servedLikePostgrest cannot evaluate .not(${col}, ${String(value)}, ${String(operand)})`,
+            );
+          }
+          out = out.filter((r) => (r[col] ?? null) !== null);
+          break;
+        }
         case 'order':
           // Collected, not applied here: re-sorting per call would make the
           // LAST .order() the primary key (a stable sort keeps only the
@@ -179,6 +183,46 @@ export function servedLikePostgrest(
       });
     }
     return { data: out.slice(from, Math.min(to, from + 999) + 1), error: null };
+  };
+}
+
+/**
+ * servedLikePostgrest, and a HEAD COUNT (`select(cols, { count: 'exact',
+ * head: true })`) answered as PostgREST answers one: no rows, and `count` =
+ * how many rows the query's own filters keep (`eq`, `neq`, `is`, `in`), with
+ * no range and no 1000-row cap, as its Content-Range header carries. Any
+ * other method in a counted chain throws, so nothing is ignored silently.
+ */
+export function countedLikePostgrest(
+  rows: ReadonlyArray<Record<string, unknown>> | (() => ReadonlyArray<Record<string, unknown>>),
+): (call: MockCall) => QueryResult {
+  const served = servedLikePostgrest(rows);
+  return (call) => {
+    const options = callArgs(call, 'select')?.[1] as { count?: string; head?: boolean } | undefined;
+    if (!options?.head) return served(call);
+    let out = [...(typeof rows === 'function' ? rows() : rows)];
+    call.methods.forEach((method, i) => {
+      const [col, value] = (call.args[i] ?? []) as [string, unknown];
+      switch (method) {
+        case 'select':
+          break;
+        case 'eq':
+          out = out.filter((r) => r[col] === value);
+          break;
+        case 'neq':
+          out = out.filter((r) => r[col] !== value);
+          break;
+        case 'is':
+          out = out.filter((r) => (r[col] ?? null) === value);
+          break;
+        case 'in':
+          out = out.filter((r) => (value as unknown[]).includes(r[col]));
+          break;
+        default:
+          throw new Error(`countedLikePostgrest cannot evaluate .${method}() in a count`);
+      }
+    });
+    return { data: null, error: null, count: out.length };
   };
 }
 

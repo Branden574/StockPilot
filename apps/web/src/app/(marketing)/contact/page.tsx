@@ -2,49 +2,38 @@ import { LifeBuoy, Mail, ShieldCheck } from 'lucide-react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 
-import { COMPANY_NAME, PRIVACY_EMAIL, SALES_EMAIL, SUPPORT_EMAIL } from '@/lib/site';
+import {
+  CONTACT,
+  CONTACT_CARDS,
+  CONTACT_METADATA,
+  contactSupportNote,
+  type ContactCardId,
+} from '@/components/marketing/content/contact';
+import type { ChildrenProps, LinkPartProps } from '@/components/marketing/content/parts';
 
-export const metadata: Metadata = {
-  // The root layout's title template adds " · StockPilot" (CONFLICTS D15).
-  title: 'Contact',
-  description: `Get in touch with the ${COMPANY_NAME} team — support, sales, and privacy requests.`,
+// The words and metadata live in components/marketing/content/contact.tsx,
+// shared with the Liquid Glass twin so the two can never drift.
+export const metadata: Metadata = CONTACT_METADATA;
+
+const ICONS: Record<ContactCardId, typeof LifeBuoy> = {
+  support: LifeBuoy,
+  sales: Mail,
+  privacy: ShieldCheck,
 };
-
-const CARDS = [
-  {
-    icon: LifeBuoy,
-    title: 'Something broken?',
-    body: 'Report an issue and track it to resolution. The fastest way to reach us when something is not working.',
-    cta: { href: '/support', label: 'Open a support ticket', internal: true },
-  },
-  {
-    icon: Mail,
-    title: 'Sales & general',
-    body: 'Questions about plans, onboarding a new team, or anything else.',
-    cta: { href: `mailto:${SALES_EMAIL}`, label: SALES_EMAIL, internal: false },
-  },
-  {
-    icon: ShieldCheck,
-    title: 'Privacy requests',
-    body: 'Exercise your data rights (access, deletion, correction) or ask a privacy question.',
-    cta: { href: `mailto:${PRIVACY_EMAIL}`, label: PRIVACY_EMAIL, internal: false },
-  },
-] as const;
 
 export default function ContactPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-16 sm:px-8">
       <h1 className="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">
-        Contact us
+        {CONTACT.heading}
       </h1>
       <p className="text-muted-foreground mt-3 max-w-xl text-[15px] leading-relaxed">
-        We&apos;re a small team and we read everything. Pick the channel that fits — for anything
-        that&apos;s actually broken, a support ticket gets you a tracked response fastest.
+        {CONTACT.lede}
       </p>
 
       <div className="mt-10 grid gap-4 sm:grid-cols-3">
-        {CARDS.map((c) => {
-          const Icon = c.icon;
+        {CONTACT_CARDS.map((c) => {
+          const Icon = ICONS[c.id];
           return (
             <div
               key={c.title}
@@ -76,16 +65,28 @@ export default function ContactPage() {
       </div>
 
       <div className="border-border text-muted-foreground mt-10 rounded-lg border border-dashed p-5 text-[13px] leading-relaxed">
-        <p>
-          <span className="text-foreground font-medium">General support:</span>{' '}
-          <a href={`mailto:${SUPPORT_EMAIL}`} className="underline-offset-4 hover:underline">
-            {SUPPORT_EMAIL}
-          </a>
-          . We aim to respond within 1–2 business days. For urgent outages affecting your team, open
-          a <Link href="/support" className="underline-offset-4 hover:underline">support ticket</Link>{' '}
-          and mark it high priority.
-        </p>
+        <p>{contactSupportNote({ Strong, PageLink, Anchor })}</p>
       </div>
     </div>
+  );
+}
+
+function Strong({ children }: ChildrenProps) {
+  return <span className="text-foreground font-medium">{children}</span>;
+}
+
+function PageLink({ href, children }: LinkPartProps) {
+  return (
+    <Link href={href} className="underline-offset-4 hover:underline">
+      {children}
+    </Link>
+  );
+}
+
+function Anchor({ href, children }: LinkPartProps) {
+  return (
+    <a href={href} className="underline-offset-4 hover:underline">
+      {children}
+    </a>
   );
 }

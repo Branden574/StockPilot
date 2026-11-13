@@ -19,7 +19,6 @@ import {
   Image,
   KeyboardAvoidingView,
   Linking,
-  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -37,6 +36,19 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApprovePartialSheet } from '@/components/approve-partial-sheet';
 import { DigitalPick } from '@/components/digital-pick';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GlassNavSpacer } from '@/components/ui/glass/screens/po';
+import {
+  GLASS_NAV_BADGE,
+  GLASS_ORDER_DIALOG_RADIUS,
+  GlassOrderNavTitle,
+  glassOrderStyles,
+  glassOrderTitle,
+} from '@/components/ui/glass/screens/order';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { OrderLineReadiness } from '@/components/order-line-readiness';
 import { OrderNeededByCard } from '@/components/order-needed-by-card';
 import { OrderReadinessSummary } from '@/components/order-readiness-summary';
@@ -68,6 +80,7 @@ import {
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { Card } from '@/components/ui/card';
+import { Modal } from '@/components/ui/modal';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
@@ -113,6 +126,7 @@ import { ReplacementPickerList } from '@/components/replacement-picker-list';
 import { ReleaseReplacementSheet } from '@/components/release-replacement-sheet';
 import { RequesterReturnSheet } from '@/components/requester-return-sheet';
 import { RequesterTrackingCard } from '@/components/requester-tracking-card';
+import { ReturnRequestSection } from '@/components/return-request-section';
 import {
   requesterButtonShown,
   requesterEntryWords,
@@ -193,6 +207,14 @@ import { orderManagerActions } from '@/lib/order-manager-actions';
 import { reloadAfterFailedOrderAction } from '@/lib/order-action-refusal';
 import { keepReasonDialogOpen } from '@/lib/order-reason-dialog';
 import {
+  needsOrderWarehouseScope,
+  orderWarehouseAccessAsShown,
+  readOrderWarehouseScope,
+  type OrderWarehouseScope,
+} from '@/lib/order-warehouse-scope';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
+import { createNewestLoads } from '@/lib/newest-load';
+import {
   describeHoldError,
   HOLD_REFUSED_TITLE,
   holdTopUpNotice,
@@ -200,7 +222,7 @@ import {
 } from '@/lib/order-hold';
 import { readErrorMessage } from '@/lib/id-batches';
 import { orderItemsEyebrow } from '@/lib/order-items-eyebrow';
-import { orderHeaderEyebrow } from '@/lib/orders-list';
+import { orderHeaderEyebrow, orderStatusPill } from '@/lib/orders-list';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   BLOCKED_HEADLINE as DR_BLOCKED_HEADLINE,
@@ -227,6 +249,13 @@ import {
 } from '@/lib/delivery-request-actions';
 import { nativeOutlookAvailable, type OutlookPlatform } from '@/lib/outlook-transport';
 import {
+  RETURN_REQUEST_COPY,
+  anyReturnRequestSendable,
+  getReturnRequestEmailForOrder,
+  returnRequestContentForTracking,
+  type ReturnRequestEmailForOrder,
+} from '@/lib/return-request-actions';
+import {
   approveShortNotice,
   availableOrderActions,
   can,
@@ -236,6 +265,8 @@ import {
   formatOrderNumber,
   derivePickingStatus,
   HOLD_AVAILABLE_STOCK_LABEL,
+  isDeliveryDriverDeleted,
+  isUuid,
   orderLineItemName,
   orderReadinessPhase,
   orderStockGates,
@@ -260,7 +291,7 @@ import {
   type Role,
 } from '@stockpilot/core';
 import { getOrderShipment, type OrderShipment } from '@/lib/shipping-api';
-import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { permissionsOnceRead, useEffectivePermissionsState } from '@/lib/use-effective-permissions';
 import { UploadBatchProgress, uploadFileToBucket } from '@/lib/storage-upload';
 import { linkToOpen, signerFor, STORED_FILE_LINK_SECONDS } from '@/lib/stored-file-link';
 import { supabase } from '@/lib/supabase';
@@ -271,6 +302,7 @@ import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
 import { useTheme } from '@/lib/use-theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 
 const BUCKET = 'order-attachments';
 
@@ -349,6 +381,9 @@ interface OrderHeader {
   signedAt: string | null;
   createdAt: string | null;
   assignedDeliveryUserId: string | null;
+  /** When the order went out (in_transit_at), null until then. B23: with no
+   *  driver on a delivery that went out, the driver deleted their account. */
+  inTransitAt: string | null;
   /** The locked-in picker (null when unclaimed). Drives the picker chip. */
   assignedPickerId: string | null;
   /** Resolved display name of the assigned picker, when readable. */
@@ -406,6 +441,10 @@ interface OrderHeader {
   /** The replacement block from GET /api/v1/orders/[id] (banner, gate, release,
    *  the driver's line); null for an ordinary order or when unread. */
   replacement: MobileOrderReplacement | null;
+  /** Security slice E (0416): the viewer's warehouses, read with this order
+   *  for an approver below manager rank, or a picker at a picking status
+   *  (lib/order-warehouse-scope.ts). Null: not read (nothing it decides). */
+  warehouseScope: OrderWarehouseScope | null;
   /** What's being ordered — name/sku/requested (+fulfilled once shipping starts). */
   lines: {
     /** order_request_lines.id — the return payload keys on it. */
@@ -474,6 +513,7 @@ export default function OrderDetail() {
   const router = useRouter();
   const { user } = useAuth();
   const { c, mode } = useTheme();
+  const lg = useGlass();
   // The shared outline button (tones.ts buttonTone): the card fill in the
   // stronger border, for this screen's secondary actions and chips.
   const outlineTone = buttonTone('outline', c);
@@ -481,6 +521,7 @@ export default function OrderDetail() {
     backgroundColor: outlineTone.bg,
     borderWidth: 1,
     borderColor: outlineTone.border,
+    ...(lg && glassOrderStyles(lg).outline),
   };
 
   const { activeOrgId: orgId, activeRole: role } = useWorkspace();
@@ -500,6 +541,8 @@ export default function OrderDetail() {
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
   const [uploading, setUploading] = React.useState(false);
+  // A proof photo or file still uploading: the phone update pop-up waits (B44).
+  useHoldUpdatePrompt(uploading, 'photo');
   /** `percent` is the REAL transported percentage across the batch — floored,
    *  monotonic, held at 99 unless every file genuinely succeeded (see
    *  lib/storage-upload.ts UploadBatchProgress). Never synthesised. */
@@ -536,9 +579,10 @@ export default function OrderDetail() {
   const attachmentsError = recalled ? recalled.view.attachmentsError : loadedAttachmentsError;
   const shipment = recalled ? recalled.view.shipment : loadedShipment;
   // Why the order is not shown. Offline with nothing to show, it says so
-  // (never "Order not found." and never a stale read error).
+  // (never "Order not found." and never a stale read error). A link id that
+  // is not a uuid is "Order not found." offline too: no connection opens it.
   const loadError =
-    offline && order === null ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
+    offline && order === null && isUuid(id) ? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;
 
   // Create-return sheet state (staff parity with the web CreateReturnDialog).
   const [returnOpen, setReturnOpen] = React.useState(false);
@@ -663,21 +707,39 @@ export default function OrderDetail() {
   const isManager = role !== null && ['owner', 'admin', 'manager'].includes(role);
   const canAttach = isManager && order !== null && ATTACHABLE.includes(order.status);
 
-  // Effective permission set (org role/user overrides applied; static role
-  // defaults while loading). Feeds `viewerCanPick` below.
-  const permissions = useEffectivePermissions();
-  // Whether THIS viewer can pick — manager+ OR holds items:update. Mobile can't
-  // see warehouse assignments (the backend + assign_picking enforce warehouse),
-  // so this at least keeps a `viewer` role from being offered Claim/Pick. `can`
-  // falls back to the static role default when `permissions` hasn't loaded, so a
-  // staffer sees pick affordances immediately and a viewer never does.
+  // Effective permission set (org role/user overrides applied), as saved on
+  // the phone. Until the saved set is read this screen gates with nothing,
+  // never the static role defaults: a staff member granted orders:approve by
+  // a per-user exception holds it only in the saved set, and an order read
+  // with the defaults skipped the warehouse read that decides where their
+  // approver controls apply (S2 follow-up, lab walk of #378). The read takes
+  // milliseconds and always ends (a store that has not answered after two
+  // seconds counts as nothing saved); `load` waits for it. Once read: the
+  // saved set, or the static defaults when nothing is saved, as before
+  // (offline too: the saved set is on the phone).
+  const savedPermissions = useEffectivePermissionsState();
+  const permissionsRead = savedPermissions.read === true;
+  // Memoized, so the React Compiler sees a value that never changes in place
+  // (as the hook's own value was): everything derived from it below, and
+  // `load`, keep their memoization.
+  const permissions = React.useMemo(
+    () => permissionsOnceRead(savedPermissions),
+    [savedPermissions],
+  );
+  // Whether THIS viewer can pick — manager+ OR holds items:update. This keeps
+  // a `viewer` role from being offered Claim/Pick; the order's warehouse is
+  // added once the order is read (viewerCanPickHere, security slice E: the
+  // scope is read with the order at a picking status). With nothing saved,
+  // `can` falls back to the static role default, so a staffer sees pick
+  // affordances and a viewer never does.
   const viewerCanPick =
     isManager || (role !== null && can({ role: role as Role, permissions }, 'items:update'));
 
-  // The viewer's readiness permissions, as three booleans `load` depends on:
-  // they change only when an override changes what this viewer sees (the
-  // effective set loads after the first render, and with the static
-  // defaults it normally agrees), and then the order is read again.
+  // The viewer's readiness permissions, as three booleans `load` depends on.
+  // They change when the saved set is read and when an override changes what
+  // this viewer sees, and then the order is read again; until that read
+  // lands, the order on screen is gated as its own load read it
+  // (orderWarehouseAccessAsShown below).
   const {
     canApproveOrders: rpApprove,
     canUpdateItems: rpItems,
@@ -773,6 +835,34 @@ export default function OrderDetail() {
     canReadReturns: canReadReturns === true,
   });
   const requesterScope = React.useMemo(() => (userId && orgId ? { userId, orgId } : null), [userId, orgId]);
+
+  // ── Return request (F14) ────────────────────────────────────────────────
+  // "Email return request" under each of the requester's own open requests:
+  // the web order page's "Send return request". The mailboxes and the
+  // order's facts come resolved from the server (GET
+  // .../return-request-email, the requester of the order only), read once
+  // the screen holds a request that could be written about, and never
+  // offline. The answer is kept with the order it was read for, so another
+  // order opened in this screen never shows it. Every decision is in
+  // lib/return-request-actions.
+  const returnRequestOrderId = order?.id ?? null;
+  const returnRequestWanted = anyReturnRequestSendable(returnsShown.tracking);
+  const [returnRequestRead, setReturnRequestRead] = React.useState<{
+    orderId: string;
+    email: ReturnRequestEmailForOrder | null;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!returnRequestOrderId || !returnRequestWanted || offline) return;
+    let cancelled = false;
+    void getReturnRequestEmailForOrder(returnRequestOrderId).then((email) => {
+      if (!cancelled) setReturnRequestRead({ orderId: returnRequestOrderId, email });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [returnRequestOrderId, returnRequestWanted, offline]);
+  const returnRequestEmail =
+    returnRequestRead && returnRequestRead.orderId === returnRequestOrderId ? returnRequestRead.email : null;
 
   // ── Delivery request ────────────────────────────────────────────────────
   // Mobile parity with the web order page's SendDeliveryRequestButton. Opens a
@@ -889,12 +979,52 @@ export default function OrderDetail() {
   // Returns RX-2: an exchange replacement's items come from its RMA; they are
   // changed or cancelled only there ("Change or cancel in RMA-…").
   const isReplacementOrder = Boolean(order?.replacementForReturnId);
-  const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder;
+  // SECURITY SLICE E (0416): what the viewer may do to THIS order by its
+  // warehouse, from the scope read with it (lib/order-warehouse-scope.ts):
+  // every warehouse for an owner, admin or manager; the assigned ones for
+  // anyone else; never write for a viewer. An approver outside the order's
+  // warehouse is offered none of an approver's controls, together: Approve,
+  // Deny and every pipeline step, Cancel, Hold, the needed-by Change, the
+  // line edits and Add items, and in picking Claim and Release (the web order
+  // page's approverWritesHere and viewerCanPick). A read that failed decides
+  // nothing: offered as before, and the server answers in its one sentence.
+  // An order whose load did not read the scope although the permissions this
+  // render gates with ask for it (they changed after that load started) is
+  // offered none of these until the load they started lands. (The two are
+  // passed as plain booleans for the React Compiler, as writesHere below:
+  // passed as they are, they may alias the object they were read off, and
+  // the compiler gave up memoizing `load`.)
+  const orderAccess = orderWarehouseAccessAsShown({
+    role,
+    warehouseId: order?.warehouseId ?? null,
+    scope: order?.warehouseScope ?? null,
+    status: order?.status ?? null,
+    canApproveOrders: rpApprove === true,
+    canPick: rpItems === true,
+  });
+  // `=== true` makes each a plain boolean the React Compiler can see: read
+  // off the object as it is, it may alias that object, which then passes to
+  // availableOrderActions below, and the compiler gave up memoizing `load`
+  // (react-hooks/preserve-manual-memoization).
+  const writesHere = orderAccess.writes === true;
+  // The pick gate with the order's warehouse, as the web page decides it.
+  const viewerCanPickHere = viewerCanPick && writesHere;
+  // The line edits ask READ access to the order's warehouse of everyone, the
+  // person who placed the order included (loadEditableOrderHeader; the line
+  // insert policy also refuses a raw insert of any item of that warehouse
+  // they cannot read), so being the requester never stands in for it: an
+  // approver whose own order sits in a warehouse they don't work in is
+  // offered no Add items or line edit (slice E review; the web page's
+  // viewerMayChangeLines). Nothing is read for a requester who neither
+  // approves nor picks here, so the scope is null and they are offered as
+  // before (orderWarehouseAccess reads: true); the server answers.
+  const linesInScope = orderAccess.reads === true;
+  const canAddItems = canAddOrderItems(lineGate) && !isReplacementOrder && linesInScope;
   // Correcting a line rides the SAME gate — on the server all three line
   // mutations load the order through one helper (loadEditableOrderHeader), and
   // an order you can add to but cannot correct is exactly the bug the owner
   // reported.
-  const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder;
+  const canEditItems = canEditOrderLines(lineGate) && !isReplacementOrder && linesInScope;
   const existingItemIds = React.useMemo(
     () => (order?.lines ?? []).map((l) => l.itemId).filter((x): x is string => x !== null),
     [order],
@@ -965,7 +1095,7 @@ export default function OrderDetail() {
     // F2-2: what the automatic hold did for the added items, core's words; a
     // failed hold says so and points to Hold available stock (never dropped).
     Alert.alert('Items added', withHoldNotice(addedSummary(res), holdTopUpNotice(res.hold, 'added')));
-    await load();
+    await reload();
   }
 
   // The line the edit sheet is working on, resolved from the CURRENT order on
@@ -1004,7 +1134,7 @@ export default function OrderDetail() {
     // so the banner clears when THAT slip is reprinted, not one second later.
     if (pickSlipStale) setStaleReportedForSlipAt(order?.pickSlipGeneratedAt ?? null);
     Alert.alert(title, message);
-    await load();
+    await reload();
   }
 
   function handleLineChanged(line: EditableOrderLine, res: LineQuantityResult) {
@@ -1070,7 +1200,7 @@ export default function OrderDetail() {
     } finally {
       setActing(null);
     }
-    await load();
+    await reload();
   }
 
   /**
@@ -1099,7 +1229,7 @@ export default function OrderDetail() {
         {
           commit: commitPartialFulfilment,
           reread: (orderId) => readOrderReadiness(supabase, orderId),
-          reload: load,
+          reload,
         },
         id,
         action,
@@ -1195,7 +1325,7 @@ export default function OrderDetail() {
         supplierNames,
         timeZone: order.orgTimezone,
       });
-      if (opening.changed) void load();
+      if (opening.changed) void reload();
     } finally {
       setActing(null);
     }
@@ -1211,7 +1341,7 @@ export default function OrderDetail() {
   async function handleNeededBySaved(title: string, message: string) {
     setNeededBySheet(null);
     Alert.alert(title, message);
-    await load();
+    await reload();
   }
 
   function handleLineRemoved(line: EditableOrderLine, res: LineRemovedResult) {
@@ -1228,13 +1358,13 @@ export default function OrderDetail() {
       const res = await releaseReturnReplacement(order.replacement.returnId, order.id, reason);
       setReleaseOpen(false);
       Alert.alert(RETURNS_COPY.releaseBeforeReturn, releaseOutcomeLine(res.answer));
-      await load();
+      await reload();
     } catch (e) {
       setReleaseError(extractApiErrorMessage(e, 'Could not release the replacement. Please try again.'));
       // The sheet says why; behind it, the order is read again when the
       // server answered (409 return_changed: the replacement was substituted,
       // re-issued, picked or sent elsewhere), still busy, as runAction does.
-      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
+      if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);
     } finally {
       setReleaseBusy(false);
     }
@@ -1329,7 +1459,7 @@ export default function OrderDetail() {
       } else {
         Alert.alert('Return created', 'Return created — pending approval.');
       }
-      await load();
+      await reload();
     } catch (e) {
       // 4xx (over-budget, module off, permission revoked mid-session…) —
       // surface the server's message inline in the sheet, not a dead toast.
@@ -1340,15 +1470,39 @@ export default function OrderDetail() {
       // over-budget refusal means the returnable budget on screen is stale
       // (another device returned those units), and the sheet's caps and its
       // own check (buildReturnPayload) follow the order that is read.
-      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
+      if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);
     } finally {
       setReturnSubmitting(false);
     }
   }
 
 
-  // Returns what it set, so `load` can remember the whole view for offline.
-  const loadAttachments = React.useCallback(async (): Promise<{
+  // Every load of the order is numbered (lib/newest-load: the sequence guard
+  // the returns workbench uses, and a way to wait for the newest load): only
+  // the newest one started may put what it read on screen, whichever
+  // finishes last. Loads overlap when the permissions, the role or the
+  // connection change under an open order, and on a pull to refresh or an
+  // action's reload beside the focus load. The older one finishing last used
+  // to win: on a fresh open, the one read with the static role defaults,
+  // without the viewer's warehouses, offered a staff approver from another
+  // warehouse every approver control until a refresh (S2 follow-up, lab walk
+  // of #378). Every load goes through loads.run: the focus effect's, and
+  // every other through `reload` below.
+  const [loads] = React.useState(() => createNewestLoads());
+  // The attachments are read by the order's load and by the upload, delete
+  // and Try again paths. Each read is numbered too, and only the newest read
+  // started shows what it read: a load whose read began before an upload's
+  // row was saved, landing after the upload's own read, put the older list
+  // back and the new photo disappeared until the next load (review of the S2
+  // follow-up, F4).
+  const [attachmentReads] = React.useState(() => createSequenceGuard());
+
+  // The order's attachments with their links signed. Sets nothing: `load`
+  // puts them on screen only while it is the newest load, and keeps them
+  // with the view it remembers for offline; loadAttachments below sets them
+  // for the upload, delete and Try again paths. Each shows a read only while
+  // it is the newest read of them (attachmentReads).
+  const readAttachments = React.useCallback(async (): Promise<{
     attachments: Attachment[];
     error: string | null;
   } | null> => {
@@ -1359,10 +1513,6 @@ export default function OrderDetail() {
       .eq('organization_id', orgId)
       .eq('order_request_id', id)
       .order('created_at', { ascending: false });
-    // A failed read must NOT masquerade as "No attachments yet." — surface it
-    // as an error state so a member seeing an empty gallery is distinguishable
-    // from a member whose read actually failed (offline / RLS denial).
-    setAttachmentsError(error ? error.message : null);
     const rows = (data ?? []) as Record<string, unknown>[];
     const paths = rows.map((r) => r.storage_path as string);
     const signed = new Map<string, string>();
@@ -1390,12 +1540,37 @@ export default function OrderDetail() {
         createdAt: r.created_at as string,
       };
     });
-    setAttachments(next);
+    // A failed read must NOT masquerade as "No attachments yet." — it comes
+    // back as an error state so a member seeing an empty gallery is
+    // distinguishable from a member whose read actually failed (offline / RLS
+    // denial).
     return { attachments: next, error: error ? error.message : null };
   }, [orgId, id]);
 
+  // Reads the attachments and shows them, unless a newer read of them
+  // started meanwhile (F4 above).
+  const loadAttachments = React.useCallback(async () => {
+    const seq = attachmentReads.next();
+    const read = await readAttachments();
+    if (!read || !attachmentReads.isCurrent(seq)) return;
+    setAttachmentsError(read.error);
+    setAttachments(read.attachments);
+  }, [attachmentReads, readAttachments]);
+
   const load = React.useCallback(async () => {
     if (!orgId || !id) return;
+    // A link id that is not a uuid (mistyped or cut off; B65) names no order.
+    // It is "Order not found." at once, online or offline: Postgres refuses
+    // it, so the read could only fail, and its raw text with Try again was
+    // all the screen could say. It takes a number too, so no earlier load
+    // still on its way can show an order over it.
+    if (!isUuid(id)) {
+      loads.next();
+      setOrder(null);
+      setLoadError(null);
+      setLoading(false);
+      return;
+    }
     if (offline) {
       // OFFLINE: nothing is asked. Every read would fail, and a failed header
       // read would replace the order on screen with an error. The view is
@@ -1404,9 +1579,19 @@ export default function OrderDetail() {
       // is left as it is: a screen opened offline stays "loading" underneath
       // (the render shows the remembered order or the offline sentence), so
       // on reconnect it shows the spinner until the order arrives, never a
-      // flash of "Order not found.".
+      // flash of "Order not found.". It takes no number: a load already on
+      // its way may still show what it read.
       return;
     }
+    // Nothing is read with permissions not yet read (S2 follow-up): which
+    // reads this load makes (the viewer's warehouses, readiness) follow the
+    // saved permissions, and the static role defaults leave out a per-user
+    // exception's orders:approve. The spinner stays meanwhile; reading the
+    // saved set takes milliseconds and always ends (within two seconds), and
+    // `permissionsRead` is a dependency, so the focus effect runs this again
+    // then.
+    if (!permissionsRead) return;
+    const seq = loads.next();
     const { data, error: headerError, status: headerStatus } = await supabase
       .from('order_requests')
       .select(
@@ -1425,7 +1610,7 @@ export default function OrderDetail() {
         `id, order_number, status, requester_name, requester_email, requester_user_id, requester_org_label,
          requester_deleted_at, signed_by_name, signed_at, created_at, warehouse_id, pick_slip_generated_at,
          assigned_delivery_user_id, assigned_picker_id, fulfillment_type, signature_token,
-         needed_by, notes, delivery_charter_id, replacement_for_return_id,
+         in_transit_at, needed_by, notes, delivery_charter_id, replacement_for_return_id,
          warehouse:warehouses!warehouse_id (name),
          requester:user_profiles!requester_user_id (full_name, email),
          picker:user_profiles!assigned_picker_id (full_name, email)`,
@@ -1470,6 +1655,23 @@ export default function OrderDetail() {
       })
         ? readOrgTimeZone(supabase, orgId)
         : null;
+    // Security slice E (0416): the viewer's warehouses, started beside the
+    // lines read (no serial round trip), for an approver below manager rank
+    // (their controls ask write access to the order's warehouse at every
+    // status) or a picker at a picking status (Claim and Release ask it).
+    // Below manager rank the pick gate is items:update (viewerCanPick), the
+    // permission rpItems already answers for this load. Never throws: a
+    // failed read decides nothing (lib/order-warehouse-scope).
+    const warehouseScopeRead =
+      headerForReadiness &&
+      needsOrderWarehouseScope({
+        role,
+        canApproveOrders: rpApprove,
+        canPick: rpItems,
+        status: (headerForReadiness.status as string | null) ?? null,
+      })
+        ? readOrderWarehouseScope(supabase, { role, organizationId: orgId, userId })
+        : null;
     // Order lines — both the per-line ITEMS list (a manager must SEE what's
     // being ordered before approving) and the backorder roll-ups. In
     // (created_at, id) order: readiness numbers its lines the same way, and
@@ -1485,6 +1687,10 @@ export default function OrderDetail() {
       .eq('order_request_id', id)
       .order('created_at', { ascending: true })
       .order('id', { ascending: true });
+    // A newer load started while these were read: it decides what shows, and
+    // this one stops here, reading nothing more. The same check follows every
+    // later read that is followed by a change to the screen.
+    if (!loads.isCurrent(seq)) return;
     // FAIL CLOSED on either read. The header used to fall through to "Order
     // not found." and the lines to an order with no items; both are claims
     // about the order made from an error. Nothing below runs on a failure:
@@ -1701,6 +1907,9 @@ export default function OrderDetail() {
     // (F2-4). Any of the reads may supply it.
     orgTimezone =
       orgTimezone ?? readinessAnswer?.[1] ?? (neededByZoneRead ? await neededByZoneRead : null);
+    const warehouseScope = warehouseScopeRead ? await warehouseScopeRead : null;
+    // Only the newest load shows its order, with the warehouses it read.
+    if (!loads.isCurrent(seq)) return;
 
     let shown: OrderHeader | null = null;
     setLoadError(null);
@@ -1746,6 +1955,7 @@ export default function OrderDetail() {
         signedAt: (r.signed_at as string | null) ?? null,
         createdAt: (r.created_at as string | null) ?? null,
         assignedDeliveryUserId: (r.assigned_delivery_user_id as string | null) ?? null,
+        inTransitAt: (r.in_transit_at as string | null) ?? null,
         assignedPickerId: (r.assigned_picker_id as string | null) ?? null,
         pickerName: pkObj?.full_name?.trim() || pkObj?.email?.trim() || null,
         fulfillmentType: (r.fulfillment_type as string | null) ?? null,
@@ -1765,6 +1975,7 @@ export default function OrderDetail() {
         returns: orderReturns,
         replacementForReturnId,
         replacement,
+        warehouseScope,
         lines: rows.map((l) => {
           const itemObj = Array.isArray(l.item) ? l.item[0] : l.item;
           const charterObj = Array.isArray(itemObj?.charter)
@@ -1789,16 +2000,25 @@ export default function OrderDetail() {
       };
       setOrder(shown);
     }
-    const attachmentsRead = await loadAttachments();
+    const attachmentsSeq = attachmentReads.next();
+    const attachmentsRead = await readAttachments();
+    if (!loads.isCurrent(seq)) return;
+    // Shown only if no newer read of them started meanwhile (an upload that
+    // finished during this load read them after its row was saved).
+    if (attachmentsRead && attachmentReads.isCurrent(attachmentsSeq)) {
+      setAttachmentsError(attachmentsRead.error);
+      setAttachments(attachmentsRead.attachments);
+    }
     // Read-only carrier tracking. The wrapper soft-gates: with the shipping
     // module off it does not ask at all (the server answered every order view
     // with a 403, docket B10); if the member lacks access or there is simply
     // no shipment, it returns null and the section below stays hidden.
     const shipmentRead = await getOrderShipment(id);
+    if (!loads.isCurrent(seq)) return;
     setShipment(shipmentRead);
     // Kept in memory for this app session only (never written to the
     // device), so the screen can show how the order looked if the phone goes
-    // offline and the order is opened again.
+    // offline and the order is opened again: the newest load's view only.
     if (shown) {
       rememberOrderView<RememberedOrder>(userId, orgId, id, {
         order: shown,
@@ -1808,12 +2028,44 @@ export default function OrderDetail() {
       });
     }
     setLoading(false);
-  }, [orgId, id, loadAttachments, offline, userId, role, rpApprove, rpItems, rpBuy]);
+  }, [
+    orgId,
+    id,
+    loads,
+    attachmentReads,
+    readAttachments,
+    offline,
+    permissionsRead,
+    userId,
+    role,
+    rpApprove,
+    rpItems,
+    rpBuy,
+  ]);
+
+  // The newest `load`, kept in the runner after every render that makes one.
+  // A handler holds the `load` of the render it was made in; one that
+  // reloads after an await (an action's server call, a sheet's save,
+  // Complete picking) could then read the order with permissions, a role or
+  // a connection that have since changed. A per-user grant of orders:approve
+  // landing during Complete picking left the order read without the viewer's
+  // warehouses, and their own warehouse's controls hidden until a refresh
+  // (review of the S2 follow-up, F1).
+  React.useLayoutEffect(() => {
+    loads.keep(load);
+  }, [loads, load]);
+  // Every reload after the screen opened: the newest `load`, through the
+  // runner, so it resolves once the newest load's order is on screen. A
+  // reload a newer load overtook (the connection came back, the permissions
+  // changed) stops at a check and shows nothing; returning then let an
+  // action clear its busy key, and a refused Deny or Reopen picking keep its
+  // reason, over the order from before the action (F2).
+  const reload = React.useCallback(() => loads.reload(), [loads]);
 
   useFocusEffect(
     React.useCallback(() => {
-      void load();
-    }, [load]),
+      void loads.run(load);
+    }, [loads, load]),
   );
 
   // Fetch the signature blob only when the viewer opens the dialog — it's an
@@ -1844,7 +2096,7 @@ export default function OrderDetail() {
 
   async function refresh() {
     setRefreshing(true);
-    await load();
+    await reload();
     setRefreshing(false);
   }
 
@@ -1854,7 +2106,7 @@ export default function OrderDetail() {
     if (retrying) return;
     setRetrying(true);
     try {
-      await load();
+      await reload();
     } finally {
       setRetrying(false);
     }
@@ -1870,7 +2122,7 @@ export default function OrderDetail() {
     setActing(busyKey);
     try {
       await fn();
-      await load();
+      await reload();
       return true;
     } catch (e) {
       Alert.alert('Could not update order', e instanceof Error ? e.message : 'Please try again.');
@@ -1878,7 +2130,7 @@ export default function OrderDetail() {
       // (someone else moved it on): read it again so the status and the
       // buttons are current, still under the busy key. No answer (a timeout)
       // leaves it as shown. The read never turns the refusal into a throw.
-      if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);
+      if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);
       return false;
     } finally {
       setActing(null);
@@ -2079,12 +2331,13 @@ export default function OrderDetail() {
   );
 
   // F2-2 "Hold available stock" on the readiness card: core's rule, the web
-  // strip's own (approvers, hold statuses, some line not or partly held).
+  // strip's own (approvers, hold statuses, some line not or partly held), in
+  // a warehouse the approver writes to (slice E: hold_order_stock asks it).
   const offerHold =
     readinessShown &&
     shouldOfferHoldStock({
       assessment: order?.readiness?.state === 'ok' ? order.readiness.assessment : null,
-      canApproveOrders: rpApprove,
+      canApproveOrders: rpApprove && writesHere,
     });
 
   // F2-5 "Draft PO for what is short" on the readiness card, when something
@@ -2110,14 +2363,15 @@ export default function OrderDetail() {
 
   // F2-4 "Change" beside the needed-by: approvers (the effective
   // orders:approve; since 0390 the database has no manager-by-role exception)
-  // on an open order where Orders is on. Warehouse write
-  // access is checked when the sheet opens; the server re-checks all of it.
+  // on an open order where Orders is on, in a warehouse they write to (slice
+  // E: the scope read with the order; the web hides it the same way). Write
+  // access is checked again when the sheet opens; the server re-checks all of it.
   const canChangeNeededBy =
     order !== null &&
     canOfferNeededByChange({
       status: order.status,
       role,
-      canApproveOrders: rpApprove,
+      canApproveOrders: rpApprove && writesHere,
       ordersModuleEnabled: enabledModules.has('orders'),
     });
 
@@ -2154,12 +2408,24 @@ export default function OrderDetail() {
           disabled={retrying}
           accessibilityRole="button"
           accessibilityState={{ disabled: retrying }}
-          style={[styles.addBtn, { ...outlineButton, opacity: retrying ? 0.5 : 1 }]}
+          style={[
+            styles.addBtn,
+            lg && glassOrderStyles(lg).addBtn,
+            { ...outlineButton, opacity: retrying ? 0.5 : 1 },
+          ]}
         >
           {retrying ? (
             <ActivityIndicator color={c.ink} />
           ) : (
-            <Text style={[styles.actionLabel, { color: c.ink }]}>Try again</Text>
+            <Text
+              style={[
+                styles.actionLabel,
+                lg && glassOrderStyles(lg).actionLabel,
+                { color: c.ink },
+              ]}
+            >
+              Try again
+            </Text>
           )}
         </Pressable>
       ) : null}
@@ -2202,9 +2468,13 @@ export default function OrderDetail() {
           viewerUserId: user?.id ?? '',
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
-          viewerCanPick,
-          // 0390: approval-class actions follow the effective permission.
-          canApproveOrders: rpApprove,
+          // Slice E: Claim, the pick and Release ask write access to the
+          // order's warehouse (claim_picking, complete_picking,
+          // release_picking), as on the web.
+          viewerCanPick: viewerCanPickHere,
+          // 0390: approval-class actions follow the effective permission;
+          // slice E: in a warehouse the viewer writes to.
+          canApproveOrders: rpApprove && writesHere,
         })
       : [];
   const canClaimPick = pickActions.includes('claim_picking');
@@ -2231,10 +2501,11 @@ export default function OrderDetail() {
           viewerUserId: user?.id ?? '',
           assignedPickerId: order.assignedPickerId,
           assignedDeliveryUserId: order.assignedDeliveryUserId,
-          viewerCanPick,
+          viewerCanPick: viewerCanPickHere,
           // 0390: reopen_picking asks orders:approve, so a granted staff
-          // member is offered it and a revoked manager is not (as on the web).
-          canApproveOrders: rpApprove,
+          // member is offered it and a revoked manager is not (as on the web);
+          // slice E: and write access to the order's warehouse.
+          canApproveOrders: rpApprove && writesHere,
           isReplacement: isReplacementOrder,
         })
       : [];
@@ -2251,10 +2522,16 @@ export default function OrderDetail() {
     status: st,
     fulfillmentType: ft,
     canApproveOrders: rpApprove,
+    writesOrderWarehouse: writesHere,
     canAssignDelivery: role !== null && can({ role: role as Role, permissions }, 'orders:assign_delivery'),
     isManagerByRole: isManager,
     isAssignedDriver: !!order?.assignedDeliveryUserId && order.assignedDeliveryUserId === user?.id,
     hasAssignedDriver: !!order?.assignedDeliveryUserId,
+    driverDeleted: isDeliveryDriverDeleted({
+      fulfillmentType: ft,
+      inTransitAt: order?.inTransitAt,
+      assignedDeliveryUserId: order?.assignedDeliveryUserId,
+    }),
     machineOffersClosePartial,
     machineOffersReopen: canReopenPicking,
     isViewerRole: role === 'viewer',
@@ -2291,6 +2568,7 @@ export default function OrderDetail() {
   const cancelOffer = isReplacementOrder ? null : phoneOrderCancel({
     status: st,
     canApproveOrders: rpApprove,
+    writesOrderWarehouse: writesHere,
     isOwnRequest: !!order?.requesterUserId && order.requesterUserId === userId,
     canRequestOrders: role !== null && can({ role: role as Role, permissions }, 'orders:request'),
   });
@@ -2355,8 +2633,16 @@ export default function OrderDetail() {
     // Cancel) as the outline with its words in the per-mode refusal ink,
     // never a full red bar.
     const tones = buttonTone(tone === 'primary' ? 'primary' : 'outline', c);
-    const bg = tones.bg;
-    const fg = tone === 'danger' ? c.critText : tones.fg;
+    const bg = lg ? (tone === 'primary' ? lg.g.accent : lg.ios.fill) : tones.bg;
+    const fg = lg
+      ? tone === 'primary'
+        ? lg.g.onAccent
+        : tone === 'danger'
+          ? c.critText
+          : c.ink
+      : tone === 'danger'
+        ? c.critText
+        : tones.fg;
     return (
       <Pressable
         key={label}
@@ -2367,18 +2653,28 @@ export default function OrderDetail() {
         accessibilityHint={hint}
         style={[
           styles.addBtn,
+          lg && glassOrderStyles(lg).addBtn,
           {
             backgroundColor: bg,
             borderWidth: 1,
             borderColor: tones.border,
             opacity: disabled || (acting !== null && !isBusy) ? 0.5 : 1,
           },
+          lg && glassOrderStyles(lg).actionEdge,
         ]}
       >
         {isBusy ? (
           <ActivityIndicator color={fg} />
         ) : (
-          <Text style={[styles.actionLabel, { color: fg }]}>{label}</Text>
+          <Text
+            style={[
+              styles.actionLabel,
+              lg && glassOrderStyles(lg).actionLabel,
+              { color: fg },
+            ]}
+          >
+            {label}
+          </Text>
         )}
       </Pressable>
     );
@@ -2557,8 +2853,8 @@ export default function OrderDetail() {
 
   function addProof() {
     Alert.alert('Add proof of delivery', `Saving as "${KIND_LABELS[kind]}"`, [
-      { text: 'Take photo', onPress: () => void fromCamera() },
-      { text: 'Choose from library', onPress: () => void fromLibrary() },
+      { text: 'Take photo', onPress: () => void whileUpdatePromptHeld(fromCamera) },
+      { text: 'Choose from library', onPress: () => void whileUpdatePromptHeld(fromLibrary) },
       { text: 'Cancel', style: 'cancel' },
     ]);
   }
@@ -2612,9 +2908,10 @@ export default function OrderDetail() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? glassOrderStyles(lg).nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -2624,6 +2921,30 @@ export default function OrderDetail() {
             accessibilityLabel="Back"
             minTap
           />
+          {/* Liquid Glass: the order number as the nav title and the status
+              as the board's badge beside it; Classic's eyebrow holds both. */}
+          {lg ? (
+            <GlassOrderNavTitle
+              lg={lg}
+              title={glassOrderTitle(
+                order?.orderNumber ? formatOrderNumber(order.orderNumber) : null,
+                canDigitalPick,
+              )}
+            />
+          ) : null}
+          {lg ? (
+            order ? (
+              <Pill
+                status={orderStatusPill(order.status, order.fulfillmentType).status}
+                dot={false}
+                style={GLASS_NAV_BADGE}
+              >
+                {sentenceCase(orderStatusPill(order.status, order.fulfillmentType).label)}
+              </Pill>
+            ) : (
+              <GlassNavSpacer />
+            )
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -2642,13 +2963,22 @@ export default function OrderDetail() {
             accessibilityState={{ disabled: retrying }}
             style={[
               styles.addBtn,
+              lg && glassOrderStyles(lg).addBtn,
               { marginTop: 16, ...outlineButton, opacity: retrying ? 0.5 : 1 },
             ]}
           >
             {retrying ? (
               <ActivityIndicator color={c.ink} />
             ) : (
-              <Text style={[styles.actionLabel, { color: c.ink }]}>Try again</Text>
+              <Text
+                style={[
+                  styles.actionLabel,
+                  lg && glassOrderStyles(lg).actionLabel,
+                  { color: c.ink },
+                ]}
+              >
+                Try again
+              </Text>
             )}
           </Pressable>
         </View>
@@ -2667,15 +2997,28 @@ export default function OrderDetail() {
         >
         <ScrollView
           ref={scrollRef}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 60, gap: 16 }}
+          contentContainerStyle={
+            lg ? glassOrderStyles(lg).scroll : { paddingHorizontal: 20, paddingBottom: 60, gap: 16 }
+          }
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={refresh} tintColor={c.ink} />}
         >
-          <View style={{ paddingTop: 1 }}>
-            <Eyebrow>{orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}</Eyebrow>
-            <Display size={30} style={{ marginTop: 10 }}>
+          <View style={lg ? glassOrderStyles(lg).headBlock : { paddingTop: 1 }}>
+            {lg ? null : (
+              <Eyebrow>
+                {orderHeaderEyebrow(order.orderNumber, order.status, order.fulfillmentType)}
+              </Eyebrow>
+            )}
+            <Display
+              size={lg ? 22 : 30}
+              style={lg ? glassOrderStyles(lg).headName : { marginTop: 10 }}
+            >
               {order.requester ?? 'Order'}
             </Display>
-            <Body size={13} color={c.ink3} style={{ marginTop: 4 }}>
+            <Body
+              size={13}
+              color={c.ink3}
+              style={lg ? glassOrderStyles(lg).headLine : { marginTop: 4 }}
+            >
               {[order.orgLabel, order.warehouseName].filter(Boolean).join(' · ') || '—'}
             </Body>
           </View>
@@ -3160,7 +3503,7 @@ export default function OrderDetail() {
                   // entered against this order's readiness; its "Review short
                   // lines" focuses that line's quantity in the pick.
                   readiness={order.readiness}
-                  onCompleted={() => void load()}
+                  onCompleted={() => void reload()}
                 />
               ) : !canClaimPick &&
                 order.assignedPickerId !== null &&
@@ -3281,6 +3624,14 @@ export default function OrderDetail() {
                     ),
                   )
                 : null}
+              {/* B23: the driver deleted their account on the way; the
+                  approver reads who is left to hand it over (the web
+                  panel's words). */}
+              {managerActions.deletedDriverLine ? (
+                <Body size={12.5} color={c.ink3} accessibilityRole="text">
+                  {managerActions.deletedDriverLine}
+                </Body>
+              ) : null}
               {managerActions.digitalSignature
                 ? actionBtn('Collect signature', 'sig', () =>
                     confirmDeparture('signature', collectSignature),
@@ -3491,9 +3842,25 @@ export default function OrderDetail() {
               {returnsShown.tracking.length > 0 ? (
                 <>
                   <Eyebrow>{RETURNS_COPY.requesterYourRequests}</Eyebrow>
-                  {returnsShown.tracking.map((t, i) => (
-                    <RequesterTrackingCard key={t.returnNumber ?? `${t.createdAt}-${i}`} request={t} />
-                  ))}
+                  {returnsShown.tracking.map((t, i) => {
+                    // F14: an open, numbered request with the mailboxes
+                    // saved carries the RETURN REQUEST section under its card.
+                    const content = returnRequestContentForTracking(t, returnRequestEmail);
+                    return (
+                      <React.Fragment key={t.returnNumber ?? `${t.createdAt}-${i}`}>
+                        <RequesterTrackingCard request={t} />
+                        {content && returnRequestEmail?.recipients && order ? (
+                          <ReturnRequestSection
+                            orderId={order.id}
+                            surface="order"
+                            content={content}
+                            recipients={returnRequestEmail.recipients}
+                            heading={<Eyebrow>{RETURN_REQUEST_COPY.eyebrow}</Eyebrow>}
+                          />
+                        ) : null}
+                      </React.Fragment>
+                    );
+                  })}
                 </>
               ) : null}
               {returnsShown.orderReturns.length > 0 || returnsShown.tracking.length === 0 ? (
@@ -3700,6 +4067,7 @@ export default function OrderDetail() {
                     accessibilityState={{ disabled: uploading || offline }}
                     style={[
                       styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
                       { ...outlineButton, opacity: uploading || offline ? 0.6 : 1 },
                     ]}
                   >
@@ -3707,7 +4075,13 @@ export default function OrderDetail() {
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <ActivityIndicator color={c.ink} />
                         {uploadProgress ? (
-                          <Text style={[styles.actionLabel, { color: c.ink }]}>
+                          <Text
+                            style={[
+                              styles.actionLabel,
+                              lg && glassOrderStyles(lg).actionLabel,
+                              { color: c.ink },
+                            ]}
+                          >
                             {uploadProgress.total > 1
                               ? `Uploading ${uploadProgress.done}/${uploadProgress.total} · ${uploadProgress.percent}%`
                               : `Uploading… ${uploadProgress.percent}%`}
@@ -3717,7 +4091,15 @@ export default function OrderDetail() {
                     ) : (
                       <>
                         <Camera size={16} color={c.ink} strokeWidth={1.8} />
-                        <Text style={[styles.actionLabel, { color: c.ink }]}>Add proof</Text>
+                        <Text
+                          style={[
+                            styles.actionLabel,
+                            lg && glassOrderStyles(lg).actionLabel,
+                            { color: c.ink },
+                          ]}
+                        >
+                          Add proof
+                        </Text>
                       </>
                     )}
                   </Pressable>
@@ -3853,13 +4235,20 @@ export default function OrderDetail() {
             style={[
               StyleSheet.absoluteFill,
               { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+              lg && glassScrim(lg),
             ]}
           />
           <View
             style={{ flex: 1, justifyContent: 'center', padding: 24 }}
             pointerEvents="box-none"
           >
-            <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+            <View
+              style={[
+                { backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 },
+                lg && glassOrderStyles(lg).dialog,
+              ]}
+            >
+              {lg ? <GlassSheetBackdrop radius={GLASS_ORDER_DIALOG_RADIUS} /> : null}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Body
                   size={15}
@@ -3982,13 +4371,20 @@ export default function OrderDetail() {
               style={[
                 StyleSheet.absoluteFill,
                 { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+                lg && glassScrim(lg),
               ]}
             />
             <View
               style={{ flex: 1, justifyContent: 'center', padding: 24 }}
               pointerEvents="box-none"
             >
-              <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <View
+                style={[
+                  { backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 },
+                  lg && glassOrderStyles(lg).dialog,
+                ]}
+              >
+                {lg ? <GlassSheetBackdrop radius={GLASS_ORDER_DIALOG_RADIUS} /> : null}
                 <ScrollView
                   style={{
                     maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top),
@@ -4016,6 +4412,7 @@ export default function OrderDetail() {
                     style={[
                       styles.reasonInput,
                       { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                      lg && glassOrderStyles(lg).reasonInput,
                     ]}
                   />
                 </ScrollView>
@@ -4028,9 +4425,21 @@ export default function OrderDetail() {
                   <Pressable
                     onPress={dismissDenyModal}
                     accessibilityRole="button"
-                    style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+                    style={[
+                      styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
+                      { ...outlineButton, paddingHorizontal: 18 },
+                    ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.ink },
+                      ]}
+                    >
+                      Cancel
+                    </Text>
                   </Pressable>
                   <Pressable
                     onPress={() => void submitDeny()}
@@ -4038,6 +4447,7 @@ export default function OrderDetail() {
                     accessibilityRole="button"
                     style={[
                       styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
                       {
                         ...outlineButton,
                         paddingHorizontal: 18,
@@ -4045,7 +4455,15 @@ export default function OrderDetail() {
                       },
                     ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.critText },
+                      ]}
+                    >
+                      Deny
+                    </Text>
                   </Pressable>
                 </View>
               </View>
@@ -4087,13 +4505,20 @@ export default function OrderDetail() {
               style={[
                 StyleSheet.absoluteFill,
                 { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+                lg && glassScrim(lg),
               ]}
             />
             <View
               style={{ flex: 1, justifyContent: 'center', padding: 24 }}
               pointerEvents="box-none"
             >
-              <View style={{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }}>
+              <View
+                style={[
+                  { backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 },
+                  lg && glassOrderStyles(lg).dialog,
+                ]}
+              >
+                {lg ? <GlassSheetBackdrop radius={GLASS_ORDER_DIALOG_RADIUS} /> : null}
                 <ScrollView
                   style={{
                     maxHeight: reasonDialogBodyMax(reasonRoom, reasonButtons, sheetInsets.top),
@@ -4128,6 +4553,7 @@ export default function OrderDetail() {
                     style={[
                       styles.reasonInput,
                       { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                      lg && glassOrderStyles(lg).reasonInput,
                     ]}
                   />
                 </ScrollView>
@@ -4138,9 +4564,21 @@ export default function OrderDetail() {
                   <Pressable
                     onPress={dismissReopenModal}
                     accessibilityRole="button"
-                    style={[styles.addBtn, { ...outlineButton, paddingHorizontal: 18 }]}
+                    style={[
+                      styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
+                      { ...outlineButton, paddingHorizontal: 18 },
+                    ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.ink },
+                      ]}
+                    >
+                      Cancel
+                    </Text>
                   </Pressable>
                   <Pressable
                     onPress={() => void reopenPicking()}
@@ -4148,6 +4586,7 @@ export default function OrderDetail() {
                     accessibilityRole="button"
                     style={[
                       styles.addBtn,
+                      lg && glassOrderStyles(lg).addBtn,
                       {
                         ...outlineButton,
                         paddingHorizontal: 18,
@@ -4155,7 +4594,15 @@ export default function OrderDetail() {
                       },
                     ]}
                   >
-                    <Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>
+                    <Text
+                      style={[
+                        styles.actionLabel,
+                        lg && glassOrderStyles(lg).actionLabel,
+                        { color: c.critText },
+                      ]}
+                    >
+                      Reopen picking
+                    </Text>
                   </Pressable>
                 </View>
               </View>
@@ -4231,20 +4678,26 @@ export default function OrderDetail() {
                 {
                   backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
                 },
+                lg && glassScrim(lg),
               ]}
             />
             <View
               onStartShouldSetResponder={returnKb.claimTapOutside}
               onResponderRelease={returnKb.onTapOutside}
-              style={{
-                backgroundColor: c.card,
-                borderTopLeftRadius: 18,
-                borderTopRightRadius: 18,
-                padding: 18,
-                gap: 12,
-                maxHeight: returnSheetLayout.sheetMaxHeight,
-              }}
+              style={[
+                {
+                  backgroundColor: c.card,
+                  borderTopLeftRadius: 18,
+                  borderTopRightRadius: 18,
+                  padding: 18,
+                  gap: 12,
+                  maxHeight: returnSheetLayout.sheetMaxHeight,
+                },
+                lg && GLASS_SHEET_CARD,
+              ]}
             >
+              {lg ? <GlassSheetBackdrop /> : null}
+              {lg ? <GlassSheetGrabber /> : null}
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
                 <Body
                   size={15}
@@ -4521,6 +4974,7 @@ export default function OrderDetail() {
                     style={[
                       styles.reasonInput,
                       { minHeight: 60, borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                      lg && glassOrderStyles(lg).reasonInput,
                     ]}
                   />
                 </View>
@@ -4547,17 +5001,24 @@ export default function OrderDetail() {
                 accessibilityHint={offline ? READINESS_NEEDS_CONNECTION_COPY : undefined}
                 style={[
                   styles.addBtn,
+                  lg && glassOrderStyles(lg).addBtn,
                   // The box grows with its capped label (Dynamic Type policy: a
                   // cap always comes with its box fix).
                   { height: undefined, minHeight: 44, paddingVertical: 10 },
                   { backgroundColor: c.ink, opacity: returnSubmitting || offline ? 0.6 : 1 },
+                  lg && { backgroundColor: lg.g.accent },
                 ]}
               >
                 {returnSubmitting ? (
-                  <ActivityIndicator color={c.paper} />
+                  <ActivityIndicator color={lg ? lg.g.onAccent : c.paper} />
                 ) : (
                   <Text
-                    style={[styles.actionLabel, { color: c.paper }]}
+                    style={[
+                      styles.actionLabel,
+                      lg && glassOrderStyles(lg).actionLabel,
+                      { color: c.paper },
+                      lg && { color: lg.g.onAccent },
+                    ]}
                     maxFontSizeMultiplier={capTo(13, TYPE_CEILING.control)}
                   >
                     Submit return
@@ -4583,7 +5044,7 @@ export default function OrderDetail() {
           onSent={(sent) => {
             setRequesterOpen(false);
             Alert.alert(requesterSentTitle(sent.exchange), requesterSentMessage(sent.returnNumber));
-            void load();
+            void reload();
           }}
         />
       ) : null}
@@ -4600,7 +5061,7 @@ export default function OrderDetail() {
           warehouseId={order.warehouseId}
           existingItemIds={existingItemIds}
           onAdded={(res) => void handleItemsAdded(res)}
-          onRequestReload={() => void load()}
+          onRequestReload={() => void reload()}
         />
       ) : null}
 
@@ -4621,7 +5082,7 @@ export default function OrderDetail() {
           shortFix={editLineShortFix}
           onChanged={handleLineChanged}
           onRemoved={handleLineRemoved}
-          onRequestReload={() => void load()}
+          onRequestReload={() => void reload()}
         />
       ) : null}
 
@@ -4659,7 +5120,7 @@ export default function OrderDetail() {
           offline={offline}
           onClose={() => setNeededBySheet(null)}
           onSaved={(_outcome, title, message) => void handleNeededBySaved(title, message)}
-          onRefresh={() => void load()}
+          onRefresh={() => void reload()}
         />
       ) : null}
 
@@ -4677,9 +5138,9 @@ export default function OrderDetail() {
           timeZone={shortfallSheet.timeZone}
           offline={offline}
           onClose={() => setShortfallSheet(null)}
-          onDrafted={() => void load()}
+          onDrafted={() => void reload()}
           onOpenDraft={openShortfallDraft}
-          onRefresh={() => void load()}
+          onRefresh={() => void reload()}
         />
       ) : null}
 
@@ -4687,7 +5148,7 @@ export default function OrderDetail() {
         <SignaturePadModal
           visible={signatureModalVisible}
           onClose={() => setSignatureModalVisible(false)}
-          onSuccess={() => void load()}
+          onSuccess={() => void reload()}
           signatureToken={order.signatureToken}
           defaultName={order.requesterName ?? ''}
           defaultEmail={signerEmailDefault(order)}
@@ -4722,11 +5183,23 @@ export default function OrderDetail() {
               {
                 backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)',
               },
+              lg && glassScrim(lg),
             ]}
           />
           <View
-            style={{ backgroundColor: c.card, borderTopLeftRadius: 18, borderTopRightRadius: 18, padding: 18, gap: 10 }}
+            style={[
+              {
+                backgroundColor: c.card,
+                borderTopLeftRadius: 18,
+                borderTopRightRadius: 18,
+                padding: 18,
+                gap: 10,
+              },
+              lg && GLASS_SHEET_CARD,
+            ]}
           >
+            {lg ? <GlassSheetBackdrop /> : null}
+            {lg ? <GlassSheetGrabber /> : null}
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Body
                 size={15}

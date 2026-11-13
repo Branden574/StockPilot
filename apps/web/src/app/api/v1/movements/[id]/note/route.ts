@@ -6,6 +6,7 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { audit } from '@/server/services/audit';
 import { assertPermission, ServiceError, serviceErrorStatus } from '@/server/services/context';
+import { readInActiveOrg } from '@/server/services/lib/in-active-org';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -89,6 +90,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // → 403; the RPC re-asserts the same additive gate internally (defense in
     // depth), same relationship as transfer/stock:transfer.
     assertPermission(ctx, 'movements:edit_notes');
+    // S39: the movement is read in the organization this request names
+    // first; a miss answers 404 'Movement not found.' before the RPC.
+    // edit_movement_note decides on the movement's own organization, so a
+    // phone screen left open after a workspace switch edited the other
+    // organization's note while the audit row below went to this one.
+    await readInActiveOrg(ctx, 'stock_movements', id, 'Movement not found.');
 
     const { data, error } = await ctx.supabase.rpc('edit_movement_note', {
       p_movement_id: id,

@@ -29,6 +29,12 @@ import {
 import { EscalateRequestClient } from './escalate-request-client';
 import { NewMaintenanceRequestClient } from './new-request-client';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const dynamic = 'force-dynamic';
 
 /**
@@ -125,11 +131,21 @@ export default async function NewMaintenanceRequestPage({
 
   const assignment = assignmentRow.data as { charter_id: string | null; warehouse_id: string | null } | null;
   const launchCharterId = readUuidParam(sp.charterId);
+  // The Site defaults to the launch link's site, else the member's own. Only
+  // one the select offers (active charters): the select is controlled by the
+  // form's value, so an archived or inactive site matched no option and read
+  // "Select a site" while the form still held it, and saved the request under
+  // it (B97). The server still keeps any site of the organization a request
+  // names; this is only what the form starts with.
+  const offeredSiteIds = new Set(sites.map((s) => s.id));
+  const defaultCharterId = [launchCharterId, assignment?.charter_id].find(
+    (id): id is string => !!id && offeredSiteIds.has(id),
+  );
   // Every related id is a deep-link HINT: create() re-derives each against
   // this organization and drops one that does not belong to it.
   const defaults: Partial<MaintenanceRequestFormValues> = {
     subject: sp.subject?.trim().slice(0, 120) || undefined,
-    charterId: launchCharterId ?? assignment?.charter_id ?? undefined,
+    charterId: defaultCharterId,
     warehouseId: assignment?.warehouse_id ?? undefined,
     relatedItemId: readUuidParam(sp.itemId),
     relatedOrderRequestId: readUuidParam(sp.orderRequestId),
@@ -138,7 +154,12 @@ export default async function NewMaintenanceRequestPage({
   };
 
   return (
-    <div className={FORM_PAGE_BOX}>
+    <div
+      className={FORM_PAGE_BOX}
+      data-glass-page="ops"
+      data-glass-view="maintenance-new"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href="/dashboard/maintenance">
@@ -194,7 +215,12 @@ async function escalationPage(ctx: ServiceContext, occurrenceId: string) {
   const occurrence = read.ok ? read.occurrence : null;
 
   return (
-    <div className={FORM_PAGE_BOX}>
+    <div
+      className={FORM_PAGE_BOX}
+      data-glass-page="ops"
+      data-glass-view="maintenance-new"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/exceptions/${occurrenceId}`}>

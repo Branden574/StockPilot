@@ -30,6 +30,7 @@ import {
   returnNumberLabels,
 } from '@stockpilot/core';
 
+import { AppearanceIntroNotice } from '@/components/appearance-intro-notice';
 import { Avatar } from '@/components/ui/avatar';
 import { Card } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
@@ -37,6 +38,17 @@ import { IconChip, Row } from '@/components/ui/row';
 import { StatCard } from '@/components/ui/stat-card';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { Thumb } from '@/components/ui/thumb';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GlassHeading, GlassLinkText } from '@/components/ui/glass/parts';
+import {
+  GLASS_HOME,
+  GlassHomeFigures,
+  GlassHomeSubline,
+  GlassMovementRow,
+  GlassScanHero,
+  GlassSyncCapsule,
+} from '@/components/ui/glass/screens/home';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useAuth } from '@/lib/auth-context';
 import { HOME_BUNDLES_SUBTITLE } from '@/lib/cta-gating';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
@@ -93,7 +105,20 @@ const MOVEMENT_VERB: Record<string, string> = {
   initial: 'Initialized',
 };
 
-const SHORT_MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SHORT_MONTH = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
 const SHORT_DAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /**
@@ -146,6 +171,9 @@ export default function Home() {
   const { user } = useAuth();
   const { activeOrgId, activeOrgName, loading: workspaceLoading } = useWorkspace();
   const { c } = useTheme();
+  // Liquid Glass (iOS-Home.dc.html): the board's top bar, large title and
+  // grouped sections over the scene; every Classic part keeps its data.
+  const lg = useGlass();
   const profile = useProfile();
   const tabBarHeight = useBottomTabBarHeight();
   const [summary, setSummary] = React.useState<Summary | null>(null);
@@ -156,7 +184,7 @@ export default function Home() {
   // Derived, not stored: the header label IS the workspace switcher's active
   // org name. It used to be useState set synchronously at the top of load(),
   // which is the same value one render late (with the same fallbacks).
-  const orgName = user && activeOrgId ? activeOrgName ?? 'Workspace' : 'Your workspace';
+  const orgName = user && activeOrgId ? (activeOrgName ?? 'Workspace') : 'Your workspace';
   const [refreshing, setRefreshing] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [unread, setUnread] = React.useState(0);
@@ -178,7 +206,10 @@ export default function Home() {
         const current = new Date();
         setNow(current);
         // A second past the change, so the clock read is on the far side of it.
-        timer = setTimeout(readClock, nextDayPartChange(current).getTime() - current.getTime() + 1000);
+        timer = setTimeout(
+          readClock,
+          nextDayPartChange(current).getTime() - current.getTime() + 1000,
+        );
       };
       readClock();
       return () => clearTimeout(timer);
@@ -303,13 +334,15 @@ export default function Home() {
       ]);
       const refLabelById = new Map([
         ...orderNumberLabels((orders.data ?? []) as { id: string; order_number: number | null }[]),
-        ...returnNumberLabels((returns.data ?? []) as { id: string; return_number: string | null }[]),
+        ...returnNumberLabels(
+          (returns.data ?? []) as { id: string; return_number: string | null }[],
+        ),
       ]);
 
       setRecent(
         movementRows.map((r) => {
           const item = r.item as { name?: string } | { name?: string }[] | null;
-          const itemObj = Array.isArray(item) ? item[0] ?? null : item;
+          const itemObj = Array.isArray(item) ? (item[0] ?? null) : item;
           return {
             id: r.id as string,
             itemId: r.item_id as string,
@@ -355,8 +388,8 @@ export default function Home() {
   const recentUnavailable = noWorkspace || recentFailed;
 
   const dateLabel = `TODAY · ${SHORT_DAY[now.getDay()].toUpperCase()} ${SHORT_MONTH[now.getMonth()].toUpperCase()} ${now.getDate()}`;
-  const firstName = (profile.fullName ?? '').split(/\s+/)[0]
-    || (user?.email ? user.email.split('@')[0] : 'there');
+  const firstName =
+    (profile.fullName ?? '').split(/\s+/)[0] || (user?.email ? user.email.split('@')[0] : 'there');
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   // A sync problem is said in its tone; every other state in the muted ink.
   const syncColor =
@@ -370,10 +403,15 @@ export default function Home() {
   const value = fmtCurrency(figures?.inventoryValue ?? 0);
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_HOME.nav : styles.topbar}>
+          <View
+            style={
+              lg ? GLASS_HOME.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
             <Avatar
               size={38}
@@ -381,7 +419,9 @@ export default function Home() {
               accessibilityLabel="Account settings"
             />
           </View>
-          <View style={{ flexDirection: 'row', gap: 2 }}>
+          <View style={lg ? GLASS_HOME.navGroup : { flexDirection: 'row', gap: 2 }}>
+            {/* The board's sync capsule; Classic says it in the line under the greeting. */}
+            {lg ? <GlassSyncCapsule label={sync.label} tone={sync.tone} /> : null}
             <IconChip
               icon={Bell}
               badge={unread}
@@ -392,46 +432,56 @@ export default function Home() {
             <IconChip icon={RefreshCcw} onPress={onRefresh} accessibilityLabel="Refresh" minTap />
           </View>
         </View>
-        <View style={styles.head}>
-          <Eyebrow>{dateLabel}</Eyebrow>
-          <Display size={32} style={{ marginTop: 12 }}>
-            {homeGreeting(now)}{'\n'}
+        <View style={lg ? GLASS_HOME.head : styles.head}>
+          {lg ? null : <Eyebrow>{dateLabel}</Eyebrow>}
+          {/* The greeting is Home's own title: the board's large title (34/41 700). */}
+          <Display
+            size={lg ? 34 : 32}
+            style={lg ? GLASS_HOME.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {homeGreeting(now)}
+            {lg ? ' ' : '\n'}
             <Em>{firstName}.</Em>
           </Display>
-          <Mono size={13.5} tracking={0.02} color={c.ink3} style={{ marginTop: 10 }}>
-            {orgName} ·{' '}
-            <Mono size={13.5} tracking={0.02} color={syncColor}>
-              {sync.label}
+          {lg ? (
+            <GlassHomeSubline orgName={orgName} now={now} />
+          ) : (
+            <Mono size={13.5} tracking={0.02} color={c.ink3} style={{ marginTop: 10 }}>
+              {orgName} ·{' '}
+              <Mono size={13.5} tracking={0.02} color={syncColor}>
+                {sync.label}
+              </Mono>
             </Mono>
-          </Mono>
-          <View style={{ marginTop: 12 }}>
+          )}
+          <View style={{ marginTop: lg ? 8 : 12 }}>
             <MobileTour tour={MOBILE_HOME_TOUR} />
           </View>
         </View>
       </SafeAreaView>
 
       <ScrollView
-        contentContainerStyle={{ paddingBottom: tabBarHeight + 24 }}
+        contentContainerStyle={
+          lg
+            ? [GLASS_HOME.scroll, { paddingBottom: tabBarHeight + 24 }]
+            : { paddingBottom: tabBarHeight + 24 }
+        }
         refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            tintColor={c.ink}
-          />
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />
         }
       >
+        {/* Liquid Glass is the default: a one-time card says the classic
+            design is one tap away (R13). Draws nothing in classic. */}
+        <AppearanceIntroNotice />
         {loading && !noWorkspace ? (
           <ActivityIndicator color={c.ink} style={{ marginTop: 32 }} />
         ) : (
           <>
-            {figures ? (
+            {/* Liquid Glass draws the figures under the hero card, as grouped tiles. */}
+            {lg ? null : figures ? (
               <View style={styles.statGrid}>
                 <View style={styles.statCol}>
-                  <StatCard
-                    label="ITEMS"
-                    value={figures.itemCount.toLocaleString()}
-                    unit="SKUs"
-                  />
+                  <StatCard label="ITEMS" value={figures.itemCount.toLocaleString()} unit="SKUs" />
                 </View>
                 <View style={styles.statCol}>
                   <StatCard label="VALUE" value={value.value} unit={value.unit} />
@@ -462,57 +512,89 @@ export default function Home() {
               </View>
             )}
 
-            <View ref={scanTargetRef} collapsable={false} style={{ paddingHorizontal: 20, marginTop: 20 }}>
+            <View
+              ref={scanTargetRef}
+              collapsable={false}
+              style={lg ? GLASS_HOME.block : { paddingHorizontal: 20, marginTop: 20 }}
+            >
               <Pressable
                 onPress={() => router.push('/scan')}
                 accessibilityRole="button"
                 style={({ pressed }) => ({ opacity: pressed ? 0.92 : 1 })}
               >
-                <Card hero style={styles.scanCard}>
-                  <Eyebrow>QUICK ADJUST</Eyebrow>
-                  <Display size={22} style={{ marginTop: 10 }}>
-                    Scan to <Em>adjust stock.</Em>
-                  </Display>
-                  <Body muted style={{ marginTop: 8 }}>
-                    Point at a barcode, QR, or rack tag. Stock moves before you put the phone down.
-                  </Body>
-                  <View style={styles.scanCtaRow}>
-                    <View style={[styles.barWell, { backgroundColor: c.sunk, borderColor: c.hair }]}>
-                      <Barcode size={28} color={c.ink} strokeWidth={1.6} />
-                      <View style={[styles.accentPip, { backgroundColor: c.accent }]} />
-                    </View>
-                    {/* The ink button's look (a View: the whole card is the
+                <Card hero style={lg ? GLASS_HOME.hero : styles.scanCard}>
+                  {/* Liquid Glass: the board's hero group (tile, eyebrow, title, copy, button). */}
+                  {lg ? <GlassScanHero /> : null}
+                  {lg ? null : <Eyebrow>QUICK ADJUST</Eyebrow>}
+                  {lg ? null : (
+                    <Display size={22} style={{ marginTop: 10 }}>
+                      Scan to <Em>adjust stock.</Em>
+                    </Display>
+                  )}
+                  {lg ? null : (
+                    <Body muted style={{ marginTop: 8 }}>
+                      Point at a barcode, QR, or rack tag. Stock moves before you put the phone
+                      down.
+                    </Body>
+                  )}
+                  {lg ? null : (
+                    <View style={styles.scanCtaRow}>
+                      <View
+                        style={[styles.barWell, { backgroundColor: c.sunk, borderColor: c.hair }]}
+                      >
+                        <Barcode size={28} color={c.ink} strokeWidth={1.6} />
+                        <View style={[styles.accentPip, { backgroundColor: c.accent }]} />
+                      </View>
+                      {/* The ink button's look (a View: the whole card is the
                         one target, so no button sits inside it). Two lines,
                         centred: beside the 56pt well on a 320pt-wide screen
                         (Display Zoom) the label has 132pt, and one line read
                         "Open scann…" from the larger text sizes; it wrapped
                         before the restyle and wraps again. */}
-                    <View style={[styles.openScanCta, { backgroundColor: c.ink }]}>
-                      <Text
-                        style={[styles.openScanLabel, { color: c.paper }]}
-                        numberOfLines={2}
-                        maxFontSizeMultiplier={OPEN_SCANNER_CAP}
-                      >
-                        Open scanner →
-                      </Text>
+                      <View style={[styles.openScanCta, { backgroundColor: c.ink }]}>
+                        <Text
+                          style={[styles.openScanLabel, { color: c.paper }]}
+                          numberOfLines={2}
+                          maxFontSizeMultiplier={OPEN_SCANNER_CAP}
+                        >
+                          Open scanner →
+                        </Text>
+                      </View>
                     </View>
-                  </View>
+                  )}
                 </Card>
               </Pressable>
             </View>
 
-            <View style={styles.section}>
-              <View style={styles.sectionHead}>
-                <Eyebrow>RECENT MOVEMENTS</Eyebrow>
+            {lg ? (
+              <View style={GLASS_HOME.block}>
+                <GlassHomeFigures figures={figures} value={value} errorText={FIGURES_LOAD_ERROR} />
+              </View>
+            ) : null}
+
+            <View style={lg ? GLASS_HOME.section : styles.section}>
+              <View style={lg ? GLASS_HOME.sectionHead : styles.sectionHead}>
+                {lg ? (
+                  <GlassHeading>Recent movements</GlassHeading>
+                ) : (
+                  <Eyebrow>RECENT MOVEMENTS</Eyebrow>
+                )}
                 <Pressable
                   onPress={() => router.push('/movements')}
                   accessibilityRole="button"
                   accessibilityLabel="See all movements"
-                  style={({ pressed }) => [styles.seeAll, { opacity: pressed ? 0.6 : 1 }]}
+                  style={({ pressed }) => [
+                    lg ? GLASS_HOME.seeAll : styles.seeAll,
+                    { opacity: pressed ? 0.6 : 1 },
+                  ]}
                 >
-                  <Mono size={11} tracking={0.06} color={c.accent}>
-                    See all
-                  </Mono>
+                  {lg ? (
+                    <GlassLinkText>See all</GlassLinkText>
+                  ) : (
+                    <Mono size={11} tracking={0.06} color={c.accent}>
+                      See all
+                    </Mono>
+                  )}
                 </Pressable>
               </View>
               {recentUnavailable ? (
@@ -543,9 +625,9 @@ export default function Home() {
               )}
             </View>
 
-            <View style={styles.section}>
-              <View style={styles.sectionHead}>
-                <Eyebrow>BUNDLES</Eyebrow>
+            <View style={lg ? GLASS_HOME.section : styles.section}>
+              <View style={lg ? GLASS_HOME.sectionHead : styles.sectionHead}>
+                {lg ? <GlassHeading>Bundles</GlassHeading> : <Eyebrow>BUNDLES</Eyebrow>}
               </View>
               <Pressable
                 onPress={() => router.push('/bundles')}
@@ -580,6 +662,7 @@ function MovementMiniRow({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const isAdd = m.quantityChange > 0;
   const isSub = m.quantityChange < 0;
   const Icon = isAdd ? Plus : isSub ? Minus : RotateCcw;
@@ -594,6 +677,18 @@ function MovementMiniRow({
   // Already resolved and clamped by the loader (packages/core
   // movementReasonTeaser) — the same words the web dashboard widget prints.
   const reason = m.reason;
+  if (lg) {
+    // Liquid Glass: the board's Today row (tile, name, detail, the change, chevron).
+    return (
+      <GlassMovementRow
+        itemName={m.itemName}
+        detail={`${verb}${reason ? ` · ${reason}` : ''} · ${time}`}
+        quantityChange={m.quantityChange}
+        divider={divider}
+        onPress={onPress}
+      />
+    );
+  }
   return (
     <Pressable
       onPress={onPress}

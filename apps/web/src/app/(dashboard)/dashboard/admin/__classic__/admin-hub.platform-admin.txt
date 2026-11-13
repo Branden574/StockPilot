@@ -1,0 +1,115 @@
+<div>
+  <div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div class="flex min-w-0 flex-col" data-slot="page-header">
+      <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+        <div class="min-w-0 max-w-full">
+          <div class="min-w-0">
+            <div class="text-muted-foreground mb-1.5 text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.1em]">
+              "Admin"
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+                "Admin overview"
+            <div class="text-muted-foreground text-[13.5px] mt-0.5">
+              "Configure the company structure, manage user access, and review what changed."
+    <section class="border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border" data-slot="detail-section" data-testid="admin-platform-block">
+      <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+        <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+          <span class="inline-flex items-center gap-2">
+            <svg aria-hidden="true" class="lucide lucide-circle-plus lucide-plus-circle text-muted-foreground h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="10">
+              <path d="M8 12h8">
+              <path d="M12 8v8">
+            "Platform admin"
+      <div class="" data-slot="detail-section-body">
+        <ul class="divide-border divide-y">
+          <li class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-[18px] py-[13px]">
+            <div class="min-w-0 flex-1 basis-60">
+              <div class="text-foreground text-[13.5px] font-medium leading-5">
+                "Provision a new organization"
+              <p class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Create a customer account + org + magic-link invite in one step. Audit-logged."
+            <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]" href="/dashboard/admin/orgs/new">
+              "Open"
+          <li class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-[18px] py-[13px]">
+            <div class="min-w-0 flex-1 basis-60">
+              <div class="text-foreground text-[13.5px] font-medium leading-5">
+                "Support tickets"
+              <p class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Triage “report a problem” tickets from the public support page."
+            <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]" href="/dashboard/admin/support">
+              "Open"
+    <div class="border-border bg-card overflow-hidden rounded-lg border">
+      <ul class="divide-border divide-y">
+        <li>
+          <a class="hover:bg-muted group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-[18px] py-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/admin/charters">
+            <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 items-center justify-center rounded-md border">
+              <svg aria-hidden="true" class="lucide lucide-building-complex lucide-building-2 h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M10 12h4">
+                <path d="M10 8h4">
+                <path d="M14 21v-3a2 2 0 0 0-4 0v3">
+                <path d="M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2">
+                <path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16">
+            <span class="min-w-0">
+              <span class="text-foreground block text-[13.5px] font-medium leading-5">
+                "Charters"
+              <span class="text-muted-foreground block text-[12.5px] leading-[18.75px] [text-wrap:pretty]">
+                "Top-level company groupings. Rename to Region / Division / Branch from organization settings."
+            <span class="flex items-center gap-2">
+              <span class="text-muted-foreground font-mono text-[12px] tabular-nums">
+                "3"
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+        <li>
+          <a class="hover:bg-muted group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-[18px] py-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/admin/warehouses">
+            <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 items-center justify-center rounded-md border">
+              <svg aria-hidden="true" class="lucide lucide-warehouse h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M18 21V10a1 1 0 0 0-1-1H7a1 1 0 0 0-1 1v11">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 1.132-1.803l7.95-3.974a2 2 0 0 1 1.837 0l7.948 3.974A2 2 0 0 1 22 8z">
+                <path d="M6 13h12">
+                <path d="M6 17h12">
+            <span class="min-w-0">
+              <span class="text-foreground block text-[13.5px] font-medium leading-5">
+                "Warehouses"
+              <span class="text-muted-foreground block text-[12.5px] leading-[18.75px] [text-wrap:pretty]">
+                "Physical locations stock lives in. Each user is assigned to one or more."
+            <span class="flex items-center gap-2">
+              <span class="text-muted-foreground font-mono text-[12px] tabular-nums">
+                "2"
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+        <li>
+          <a class="hover:bg-muted group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-[18px] py-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/admin/users">
+            <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 items-center justify-center rounded-md border">
+              <svg aria-hidden="true" class="lucide lucide-users h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2">
+                <path d="M16 3.128a4 4 0 0 1 0 7.744">
+                <path d="M22 21v-2a4 4 0 0 0-3-3.87">
+                <circle cx="9" cy="7" r="4">
+            <span class="min-w-0">
+              <span class="text-foreground block text-[13.5px] font-medium leading-5">
+                "Users & invites"
+              <span class="text-muted-foreground block text-[12.5px] leading-[18.75px] [text-wrap:pretty]">
+                "7 active · 1 pending invite"
+            <span class="flex items-center gap-2">
+              <span class="text-muted-foreground font-mono text-[12px] tabular-nums">
+                "7"
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+        <li>
+          <a class="hover:bg-muted group grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 px-[18px] py-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/audit">
+            <span aria-hidden="true" class="border-border bg-sunk text-ink-2 flex size-8 items-center justify-center rounded-md border">
+              <svg aria-hidden="true" class="lucide lucide-file-lock lucide-file-lock-2 h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.6" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 9.8V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3">
+                <path d="M14 2v5a1 1 0 0 0 1 1h5">
+                <path d="M9 17v-2a2 2 0 0 0-4 0v2">
+                <rect height="5" rx="1" width="8" x="3" y="17">
+            <span class="min-w-0">
+              <span class="text-foreground block text-[13.5px] font-medium leading-5">
+                "Audit log"
+              <span class="text-muted-foreground block text-[12.5px] leading-[18.75px] [text-wrap:pretty]">
+                "Every sensitive action — who, when, before/after diff. Read-only."
+            <span class="flex items-center gap-2">
+              <span class="text-muted-foreground font-mono text-[12px] tabular-nums">
+                "4210"
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-muted-foreground h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">

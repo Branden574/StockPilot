@@ -5,6 +5,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { DELETE_ACCOUNT_DIALOG_COPY } from '@/components/settings/delete-account-copy';
+import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
 import { Button } from '@/components/ui/button';
 import { DestructiveConfirm } from '@/components/ui/destructive-confirm';
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
@@ -54,6 +55,11 @@ export function DeleteAccountButton() {
       setRefusal({ message: res.error.message, lastOwner: reason === 'last_owner' });
       return;
     }
+    // Signed out, like every sign-out (Liquid Glass plan 3.3): the account's
+    // appearance sync record goes and the appearance provider, which outlives
+    // this soft navigation, forgets the account. Only after the deletion
+    // succeeded: a refused one leaves the person signed in.
+    forgetAppearanceAccount();
     setOpen(false);
     toast.success('Your account has been deleted.');
     // Hard navigation so cookies + session caches don't outlive the

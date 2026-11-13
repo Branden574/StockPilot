@@ -17,8 +17,16 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { reportError } from '@/lib/error-reporter';
 import { checkModuleAccess } from '@/lib/modules/module-gate';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 
 import { poImportUploaderLabel, resolveOrgTimezone } from '@stockpilot/core';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/po.css';
 
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the imports list draws. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -37,6 +45,9 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
   }
 
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63). The module gate above stays first.
+  notFoundUnlessUuid(id);
   // The lineage notice dates a later import of this file as a calendar day,
   // and whose day it is matters: in the server's zone (UTC on Vercel) an
   // evening import in California lands on the next date. So the org's zone,
@@ -116,7 +127,7 @@ export default async function PoImportDetailPage({ params }: { params: Promise<{
   });
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="po-import">
       {/* The human name is the H1 (mig 0333); an import nobody named still
           titles itself with its filename, exactly as before. The REAL
           uploaded filename always stays on the page as metadata below — it

@@ -9,7 +9,14 @@ import type {
   PushResult,
 } from '@stockpilot/core';
 
-import { IntacctClient } from './client';
+import { MappingReadError } from '../mapping-read-error';
+import {
+  INTACCT_REQUEST_TIMEOUT_MS,
+  IntacctApiError,
+  IntacctClient,
+  IntacctNoAnswerError,
+  IntacctNotSentError,
+} from './client';
 import {
   buildIntacctPurchaseOrder,
   buildReturnJournalEntry,
@@ -41,10 +48,36 @@ interface IntacctSettings {
 
 /** Classify a thrown Intacct error as transient (retryable) vs caller-error. */
 function isRetryableIntacctError(e: unknown): boolean {
+  // A failed mapping read is StockPilot's own read, made before anything is
+  // posted, not an Intacct answer: retry it with backoff (docket S27). Its
+  // cause can carry PostgREST's status (200 or 204), which is no Intacct status.
+  if (e instanceof MappingReadError) return true;
+  // No Intacct answer (docket B81): a read, or a create that provably never
+  // left, tries again; a create that may have arrived stops at dead, its
+  // message starting with INTACCT_MAY_HAVE_POSTED (client.ts).
+  if (e instanceof IntacctNoAnswerError) return e.retryable;
+  // Held back by the cron run's deadline: nothing was sent.
+  if (e instanceof IntacctNotSentError) return true;
+  // A create answered with a 5xx other than 503 may have been committed.
+  if (e instanceof IntacctApiError && e.mayHavePosted) return false;
   const status = (e as { status?: number })?.status ?? 0;
   // 429 (rate limit) / 5xx (server) / 401 (token, refreshed next tick) are
   // transient → retryable. Other 4xx are caller errors → not retryable.
   return status === 429 || status >= 500 || status === 401;
+}
+
+/**
+ * The answer for an export that failed. A create held back by the cron run's
+ * deadline sent nothing, so it is not an attempt: `notStarted` tells the
+ * drainer to put the event's ledger row back (docket B81).
+ */
+function exportFailed(e: unknown, fallback: string): PushResult {
+  return {
+    ok: false,
+    retryable: isRetryableIntacctError(e),
+    ...(e instanceof IntacctNotSentError ? { notStarted: true } : {}),
+    error: e instanceof Error ? e.message : fallback,
+  };
 }
 
 /**
@@ -68,8 +101,15 @@ function isRetryableIntacctError(e: unknown): boolean {
  * replay-protection rests on (a) the drainer's connection_sync_log never
  * re-dispatching a success row and (b) the connection_mappings row written
  * after each successful create (checked before POSTing — see the mapping
- * short-circuits below). A crash BETWEEN the POST and putMapping can still
- * duplicate on retry — acceptable v1 risk, called out for sandbox testing.
+ * short-circuits below). So a create is tried again only when Intacct cannot
+ * have received it: its host lookup or its connect failed, or Intacct answered
+ * 429, 503 or 401. A create that may have arrived (the connection dropped
+ * after it was sent, no answer within INTACCT_REQUEST_TIMEOUT_MS, any other
+ * 5xx, a 2xx whose body could not be read) stops at dead with
+ * INTACCT_MAY_HAVE_POSTED first, for an admin to check Intacct before Replay
+ * (docket B81). Reads are always tried again. A crash BETWEEN the POST and
+ * putMapping can still duplicate on retry — acceptable v1 risk, called out
+ * for sandbox testing.
  *
  * ⚠ PENDING SANDBOX VERIFICATION (needs the owner's Sage developer license).
  */
@@ -169,7 +209,10 @@ async function handlePurchaseOrderOrdered(
   // builder uses so a sub-cent total is acked, not posted.
   if (round2(amount) <= 0) return { ok: true };
 
-  const client = new IntacctClient(secrets);
+  const client = new IntacctClient(secrets, {
+    requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS,
+    deadlineAt: deps.deadlineAt,
+  });
 
   try {
     const vendorId = supplier
@@ -208,11 +251,7 @@ async function handlePurchaseOrderOrdered(
     }
     return { ok: true, externalId: externalId ?? undefined };
   } catch (e: unknown) {
-    return {
-      ok: false,
-      retryable: isRetryableIntacctError(e),
-      error: e instanceof Error ? e.message : 'intacct purchase order failed',
-    };
+    return exportFailed(e, 'intacct purchase order failed');
   }
 }
 
@@ -284,7 +323,10 @@ async function handleReturnClosed(
   const totalAmount = creditLines.reduce((sum, l) => sum + l.quantity * l.unitCost, 0);
   if (round2(totalAmount) <= 0) return { ok: true };
 
-  const client = new IntacctClient(secrets);
+  const client = new IntacctClient(secrets, {
+    requestTimeoutMs: INTACCT_REQUEST_TIMEOUT_MS,
+    deadlineAt: deps.deadlineAt,
+  });
 
   try {
     const body = buildReturnJournalEntry({
@@ -303,11 +345,7 @@ async function handleReturnClosed(
     }
     return { ok: true, externalId: externalId ?? undefined };
   } catch (e: unknown) {
-    return {
-      ok: false,
-      retryable: isRetryableIntacctError(e),
-      error: e instanceof Error ? e.message : 'intacct return journal entry failed',
-    };
+    return exportFailed(e, 'intacct return journal entry failed');
   }
 }
 

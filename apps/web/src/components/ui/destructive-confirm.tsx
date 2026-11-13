@@ -151,16 +151,16 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent>
+      <DialogContent data-glass-variant="confirm">
         <DialogHeader>
           <DialogTitle className={tone === 'destructive' ? 'text-destructive' : undefined}>
             {title}
           </DialogTitle>
           <DialogDescription asChild>
-            <div className="space-y-2 text-[13px] text-muted-foreground">
+            <div className="text-muted-foreground space-y-2 text-[13px]">
               <div>{description}</div>
               {severity === 'critical' && (
-                <p className="font-medium text-destructive">This cannot be undone.</p>
+                <p className="text-destructive font-medium">This cannot be undone.</p>
               )}
             </div>
           </DialogDescription>
@@ -170,7 +170,7 @@ export function DestructiveConfirm(props: DestructiveConfirmProps) {
           <div className="space-y-1.5">
             <Label htmlFor="destructive-confirm-input">
               Type{' '}
-              <code className="rounded border border-[var(--ed-line-strong)] bg-sunk px-1 py-0.5 font-mono text-xs">
+              <code className="bg-sunk rounded border border-[var(--ed-line-strong)] px-1 py-0.5 font-mono text-xs">
                 {expected}
               </code>{' '}
               to confirm

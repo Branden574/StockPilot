@@ -161,6 +161,39 @@ export function detectPasswordResetBursts(
     .map(([email, count]) => ({ email, count }));
 }
 
+export interface RefusedCodeBursts {
+  byUser: Array<{ userId: string; count: number }>;
+  byIp: Array<{ ip: string; count: number }>;
+}
+
+/** The refused-code events: authenticator codes on the web, and recovery codes. */
+const REFUSED_CODE_EVENTS = new Set(['mfa.code_refused', 'mfa.recovery.failed']);
+
+/**
+ * Flags code guessing: an account, or a source IP, behind a burst of refused
+ * authenticator or recovery codes (`mfa.code_refused`, `mfa.recovery.failed`)
+ * in the window. Grouped two ways, like failed sign-ins: one account's codes
+ * tried from many addresses, or many accounts' codes from one address. A row
+ * with no account (or no IP) is left out of that grouping.
+ */
+export function detectRefusedCodeBursts(
+  rows: AuditRow[],
+  opts: { userThreshold?: number; ipThreshold?: number } = {},
+): RefusedCodeBursts {
+  const userThreshold = opts.userThreshold ?? 5;
+  const ipThreshold = opts.ipThreshold ?? 15;
+  const refused = rows.filter((r) => REFUSED_CODE_EVENTS.has(r.event));
+
+  const byUser = [...countByKey(refused, (r) => r.user_id).entries()]
+    .filter(([, count]) => count >= userThreshold)
+    .map(([userId, count]) => ({ userId, count }));
+  const byIp = [...countByKey(refused, (r) => r.ip).entries()]
+    .filter(([, count]) => count >= ipThreshold)
+    .map(([ip, count]) => ({ ip, count }));
+
+  return { byUser, byIp };
+}
+
 /**
  * Flags an org with a burst of role ELEVATIONS to admin/owner — a compromised
  * account or insider granting access. Only true elevations count: the new role

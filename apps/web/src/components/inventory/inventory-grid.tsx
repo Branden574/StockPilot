@@ -188,9 +188,13 @@ export function InventoryGrid({
 function FactList({ facts }: { facts?: ReadonlyArray<{ label: string; value: React.ReactNode }> }) {
   if (!facts || facts.length === 0) return null;
   return (
-    <dl className="flex flex-col gap-0.5 text-[12px] leading-[18px]">
+    <dl className="flex flex-col gap-0.5 text-[12px] leading-[18px]" data-glass="grid-card-facts">
       {facts.map((f) => (
-        <div key={f.label} className="flex min-w-0 items-baseline justify-between gap-2">
+        <div
+          key={f.label}
+          className="flex min-w-0 items-baseline justify-between gap-2"
+          data-glass-fact={f.label}
+        >
           <dt className="text-muted-foreground shrink-0">{f.label}</dt>
           <dd className="min-w-0 text-right text-[var(--ed-ink-2)] [overflow-wrap:anywhere]">
             {f.value}
@@ -207,7 +211,11 @@ function RecordCard({ card, selectionActive }: { card: GridRecordCard; selection
       <div className="flex flex-col gap-2">
         {card.chip ? <div className="min-w-0 text-[11px]">{card.chip}</div> : null}
         <FactList facts={card.facts} />
-        {card.coverage ? <div className="flex items-center">{card.coverage}</div> : null}
+        {card.coverage ? (
+          <div className="flex items-center" data-glass="grid-card-coverage">
+            {card.coverage}
+          </div>
+        ) : null}
       </div>
     ) : undefined;
   return (
@@ -273,7 +281,11 @@ function GroupCardItems({
                 </div>
               ) : null}
               <FactList facts={card.facts} />
-              {card.coverage ? <div className="flex items-center">{card.coverage}</div> : null}
+              {card.coverage ? (
+                <div className="flex items-center" data-glass="grid-card-coverage">
+                  {card.coverage}
+                </div>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"

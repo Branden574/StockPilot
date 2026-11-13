@@ -13,6 +13,13 @@ import { checkModuleAccess } from '@/lib/modules/module-gate';
 
 import { BOOK_REPORT_CARD_DESCRIPTION, BOOK_REPORT_TITLE, can } from '@stockpilot/core';
 
+// The Liquid Glass insights composition (stage 4): pages/insights.css, the
+// lane's shared frame, and pages/reports.css, the Book-Order-Totals.dc.html board.
+// Every rule is scoped to this page's [data-glass-page] root and to glass,
+// so Classic never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+import '@/styles/liquid-glass/pages/reports.css';
+
 export const dynamic = 'force-dynamic';
 
 /**
@@ -44,7 +51,12 @@ export default async function BookOrderTotalsPage({
   return (
     // The page area every redesigned list shares (DESIGN-SPEC 4 and 5.3):
     // 1320 wide at most, a 16 px gutter on a phone.
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="book-order-totals"
+      data-glass-width="wide"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/reports">← Back to reports</PageHeaderBackLink>}
         title={BOOK_REPORT_TITLE}

@@ -29,6 +29,14 @@ vi.mock('@/components/portal/portal-shop', () => ({
   },
 }));
 
+const accountSync = vi.hoisted(() => ({ userIds: [] as string[] }));
+vi.mock('@/components/theme/appearance-provider', () => ({
+  AppearanceAccountSync: ({ userId }: { userId: string }) => {
+    accountSync.userIds.push(userId);
+    return null;
+  },
+}));
+
 import PortalPage from './page';
 
 beforeEach(() => {
@@ -37,6 +45,7 @@ beforeEach(() => {
   portal.orders = [];
   portal.returnsEnabled = false;
   shopProps.value = null;
+  accountSync.userIds = [];
 });
 
 describe('/portal, not a portal customer', () => {
@@ -105,5 +114,24 @@ describe('/portal, a portal customer (P5.1 step B)', () => {
     const { container } = render(await PortalPage());
     expect(container.querySelector('img')).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: 'Redesign Lab Co' })).toBeInTheDocument();
+  });
+});
+
+describe('/portal and the appearance (plans/REVISION-DEFAULT.md R13, item 23)', () => {
+  it('names the signed-in customer to the appearance layer from the context it already read', async () => {
+    portal.ctx = {
+      userId: '22222222-2222-4222-8222-222222222222',
+      orgName: 'Redesign Lab Co',
+      orgLogoUrl: null,
+      customerName: 'Westfield Academy',
+      pricingMode: 'priced',
+    };
+    render(await PortalPage());
+    expect(accountSync.userIds).toEqual(['22222222-2222-4222-8222-222222222222']);
+  });
+
+  it('names nobody to it on the sign-in prompt: the choice stays on the device', async () => {
+    render(await PortalPage());
+    expect(accountSync.userIds).toEqual([]);
   });
 });

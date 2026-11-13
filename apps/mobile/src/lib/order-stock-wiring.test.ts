@@ -38,16 +38,17 @@ function codeOnly(src: string): string {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 }
 
+/** The end of `load` with its dependencies: what makes it run again. */
 const LOAD_END =
-  '}, [orgId, id, loadAttachments, offline, userId, role, rpApprove, rpItems, rpBuy]);';
+  /\}, \[\s*orgId,\s*id,\s*loads,\s*attachmentReads,\s*readAttachments,\s*offline,\s*permissionsRead,\s*userId,\s*role,\s*rpApprove,\s*rpItems,\s*rpBuy,?\s*\]\);/;
 
 /** The body of the screen's `load` callback. */
 function loadBody(): string {
   const start = screen.indexOf('const load = React.useCallback(async () => {');
   expect(start).toBeGreaterThan(-1);
-  const end = screen.indexOf(LOAD_END, start);
-  expect(end).toBeGreaterThan(start);
-  return screen.slice(start, end);
+  const end = screen.slice(start).search(LOAD_END);
+  expect(end).toBeGreaterThan(0);
+  return screen.slice(start, start + end);
 }
 
 describe('order screen: a failed header or lines read is a load error, not an order', () => {
@@ -163,7 +164,7 @@ describe('order screen: readiness is read alongside the order (F2-1)', () => {
   });
 
   it('reads again when the audience changes (an override landed after the first read)', () => {
-    expect(LOAD_END).toContain('userId, role, rpApprove, rpItems, rpBuy');
+    expect(screen).toMatch(LOAD_END);
   });
 });
 
@@ -253,7 +254,7 @@ describe('order screen: offline (in memory only)', () => {
     const offlineAt = b.indexOf('if (offline) {');
     expect(offlineAt).toBeGreaterThan(-1);
     expect(offlineAt).toBeLessThan(b.indexOf("from('order_requests')"));
-    const branch = b.slice(offlineAt, b.indexOf('const { data, error: headerError'));
+    const branch = b.slice(offlineAt, b.indexOf('if (!permissionsRead) return;'));
     expect(branch).not.toContain('await ');
     expect(branch).not.toContain('setOrder(');
     expect(branch).not.toContain('setLoading(');
@@ -262,7 +263,7 @@ describe('order screen: offline (in memory only)', () => {
     // sentence; online it shows only while nothing is on screen.
     expect(screen).toContain('{loading && !order && !offline ? (');
     // Reconnecting reloads: `offline` is one of load's dependencies.
-    expect(screen).toContain(LOAD_END);
+    expect(screen).toMatch(LOAD_END);
   });
 
   // Mutation caught: showing the recalled view online, or letting a failed
@@ -281,8 +282,10 @@ describe('order screen: offline (in memory only)', () => {
     expect(screen).toContain(
       'const shipment = recalled ? recalled.view.shipment : loadedShipment;',
     );
+    // B65: a malformed link id is "Order not found." offline too (no
+    // connection could ever open it), so the offline sentence needs a uuid.
     expect(screen).toMatch(
-      /const loadError =\s*offline && order === null \? ORDER_OFFLINE_NOTHING_LOADED_COPY : loadErrorState;/,
+      /const loadError =\s*offline && order === null && isUuid\(id\)\s*\? ORDER_OFFLINE_NOTHING_LOADED_COPY\s*: loadErrorState;/,
     );
   });
 

@@ -40,6 +40,23 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
+import { glassChip, glassChipLabel } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_ITEM, sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST, glassListTitle } from '@/components/ui/glass/screens/list';
+import {
+  GLASS_ACTION_BAR,
+  GLASS_ACTION_BAR_LIFT,
+  GLASS_ACTION_BAR_NOTE,
+  GLASS_OPS,
+  GlassFootBackdrop,
+  glassAccentButton,
+  glassAccentLabel,
+  glassGrayCapsule,
+  glassTypedBox,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
@@ -210,6 +227,12 @@ function RequestFormScreen({
   onSaved: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Site-Support.dc.html's form as a
+  // native grouped form): the scene, Back in the glass nav, the title block,
+  // the boxes as glass fields, the choices as iOS capsules and Save on the
+  // floating glass bar as the iOS primary button. Every field, gate and word
+  // stays.
+  const lg = useGlass();
   const router = useRouter();
   const { user } = useAuth();
   const { activeOrgId: orgId, loading: workspaceLoading } = useWorkspace();
@@ -650,20 +673,39 @@ function RequestFormScreen({
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
-        <View style={styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>
-              {createdId ? 'ADD PHOTOS' : escalationId ? 'ESCALATE TO MAINTENANCE' : 'NEW MAINTENANCE REQUEST'}
-            </Eyebrow>
-          </View>
-          <Display size={32} style={{ marginTop: 10 }}>
-            {createdId ? (
+        <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
+          {/* Liquid Glass: the record head (iOS-Item): the title at 26/31 with
+              no emphasis and no full stop, the eyebrow's words under it (the
+              photo step's eyebrow says the title's words, so its title stands
+              alone). */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>
+                {createdId ? 'ADD PHOTOS' : escalationId ? 'ESCALATE TO MAINTENANCE' : 'NEW MAINTENANCE REQUEST'}
+              </Eyebrow>
+            </View>
+          )}
+          <Display
+            size={lg ? 26 : 32}
+            style={lg ? GLASS_ITEM.name : { marginTop: 10 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? (
+              createdId ? (
+                glassListTitle('Add', 'photos.')
+              ) : escalationId ? (
+                glassListTitle('Escalate an', 'exception.')
+              ) : (
+                glassListTitle('Report an', 'issue.')
+              )
+            ) : createdId ? (
               <>
                 Add <Em>photos.</Em>
               </>
@@ -677,6 +719,13 @@ function RequestFormScreen({
               </>
             )}
           </Display>
+          {lg ? (
+            createdId ? null : (
+              <GlassSubline style={GLASS_LIST.sub}>
+                {escalationId ? 'Escalate to maintenance' : 'New maintenance request'}
+              </GlassSubline>
+            )
+          ) : null}
         </View>
       </SafeAreaView>
 
@@ -692,7 +741,7 @@ function RequestFormScreen({
         // Escalating, but no form: the exception is loading, could not be
         // read, or cannot be escalated (with its request to open when it is
         // already escalated). The web shows no form either.
-        <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 40 }}>
+        <ScrollView contentContainerStyle={{ paddingHorizontal: lg ? 16 : 20, paddingBottom: 40 }}>
           <ReplacedNotice text={replacedNotice} />
           <EscalationSourceCard view={escalationView} />
         </ScrollView>
@@ -762,14 +811,16 @@ function GateScreen({
   /** A link opened this screen in place of a form holding unsaved input. */
   notice?: string | null;
 }) {
+  const lg = useGlass();
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={onBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
-      <View style={{ paddingHorizontal: 20, marginTop: 21 }}>
+      <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 21 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
           {action}
@@ -870,19 +921,23 @@ function FormStep({
   notice: string | null;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
   const saveDisabled = saving || (escalation !== null && !escalation.state.saveEnabled);
   // Every box: typed words in ink on the card, with the stronger border a
   // control takes (the shared Field's recipe). What is typed stays uncapped.
-  const box = { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };
+  // Liquid Glass: the glass field (field fill, the 3:1 input line).
+  const box = lg ? glassTypedBox(lg) : { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };
 
   return (
     <>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={{
-            paddingHorizontal: 20,
-            paddingBottom: footerReservation(footerHeight, 140),
+            paddingHorizontal: lg ? 16 : 20,
+            paddingBottom: lg
+              ? footerReservation(footerHeight, 140) + GLASS_ACTION_BAR_LIFT
+              : footerReservation(footerHeight, 140),
           }}
           keyboardShouldPersistTaps="handled"
         >
@@ -1018,11 +1073,22 @@ function FormStep({
       </KeyboardAvoidingView>
 
       <View
-        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        style={[
+          styles.footer,
+          { backgroundColor: c.paper, borderTopColor: c.hair },
+          // Liquid Glass: the floating glass action bar.
+          lg && GLASS_ACTION_BAR,
+        ]}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
       >
+        {lg ? <GlassFootBackdrop /> : null}
         {escalation?.state.reason ? (
-          <Body size={13} muted accessibilityRole="alert" style={{ marginBottom: 10 }}>
+          <Body
+            size={13}
+            muted
+            accessibilityRole="alert"
+            style={lg ? [{ marginBottom: 10 }, GLASS_ACTION_BAR_NOTE] : { marginBottom: 10 }}
+          >
             {escalation.state.reason}
           </Body>
         ) : null}
@@ -1034,12 +1100,18 @@ function FormStep({
           style={({ pressed }) => [
             styles.saveBtn,
             { backgroundColor: c.ink, opacity: pressed || saveDisabled ? 0.7 : 1 },
+            // Liquid Glass: the iOS primary button.
+            lg && glassAccentButton(lg),
           ]}
         >
           {saving ? (
-            <ActivityIndicator color={c.paper} />
+            <ActivityIndicator color={lg ? lg.g.onAccent : c.paper} />
           ) : (
-            <Body size={15} color={c.paper} style={{ fontFamily: FONT.display }}>
+            <Body
+              size={lg ? 17 : 15}
+              color={c.paper}
+              style={[{ fontFamily: FONT.display }, lg && glassAccentLabel(lg)]}
+            >
               Save request
             </Body>
           )}
@@ -1142,6 +1214,7 @@ function PhotosStep({
   onFinish: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const doneCount = entries.filter((e) => e.status === 'done').length;
   const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
@@ -1149,9 +1222,11 @@ function PhotosStep({
     <>
       <ScrollView
         contentContainerStyle={{
-          paddingHorizontal: 20,
+          paddingHorizontal: lg ? 16 : 20,
           paddingTop: 8,
-          paddingBottom: footerReservation(footerHeight, 140),
+          paddingBottom: lg
+            ? footerReservation(footerHeight, 140) + GLASS_ACTION_BAR_LIFT
+            : footerReservation(footerHeight, 140),
         }}
       >
         <Body muted size={13} style={{ marginBottom: 14 }}>
@@ -1173,6 +1248,7 @@ function PhotosStep({
             style={({ pressed }) => [
               photoStyles.addBtn,
               { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
+              lg && glassGrayCapsule(lg),
             ]}
           >
             <Camera size={18} color={c.ink} strokeWidth={1.5} />
@@ -1187,6 +1263,7 @@ function PhotosStep({
             style={({ pressed }) => [
               photoStyles.addBtn,
               { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
+              lg && glassGrayCapsule(lg),
             ]}
           >
             <ImageIcon size={18} color={c.ink} strokeWidth={1.5} />
@@ -1202,15 +1279,28 @@ function PhotosStep({
       </ScrollView>
 
       <View
-        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        style={[
+          styles.footer,
+          { backgroundColor: c.paper, borderTopColor: c.hair },
+          lg && GLASS_ACTION_BAR,
+        ]}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
       >
+        {lg ? <GlassFootBackdrop /> : null}
         <Pressable
           onPress={onFinish}
           accessibilityRole="button"
-          style={({ pressed }) => [styles.saveBtn, { backgroundColor: c.ink, opacity: pressed ? 0.7 : 1 }]}
+          style={({ pressed }) => [
+            styles.saveBtn,
+            { backgroundColor: c.ink, opacity: pressed ? 0.7 : 1 },
+            lg && glassAccentButton(lg),
+          ]}
         >
-          <Body size={15} color={c.paper} style={{ fontFamily: FONT.display }}>
+          <Body
+            size={lg ? 17 : 15}
+            color={c.paper}
+            style={[{ fontFamily: FONT.display }, lg && glassAccentLabel(lg)]}
+          >
             Done
           </Body>
         </Pressable>
@@ -1283,9 +1373,15 @@ function PhotoRow({ entry, onRetry }: { entry: PhotoEntry; onRetry: () => void }
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
+  // Liquid Glass: an iOS section heading (.ios-h) in sentence case.
+  const lg = useGlass();
   return (
     <View style={{ marginTop: 22, marginBottom: 4 }}>
-      <Eyebrow>{String(children)}</Eyebrow>
+      {lg ? (
+        <GlassHeading>{sentenceCase(String(children))}</GlassHeading>
+      ) : (
+        <Eyebrow>{String(children)}</Eyebrow>
+      )}
     </View>
   );
 }
@@ -1405,6 +1501,8 @@ function ChoiceChip({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS capsule (the chosen one in ink), its check kept.
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -1418,12 +1516,13 @@ function ChoiceChip({
           selected
             ? { backgroundColor: c.ink, borderColor: c.ink }
             : { backgroundColor: 'transparent', borderColor: c.hair2 },
+          lg && glassChip(lg, selected),
         ]}
       >
         <Body
-          size={13}
+          size={lg ? 15 : 13}
           color={selected ? c.paper : c.ink}
-          style={{ fontFamily: FONT.display, flexShrink: 1 }}
+          style={[{ fontFamily: FONT.display, flexShrink: 1 }, lg && glassChipLabel(lg, selected)]}
         >
           {label}
         </Body>

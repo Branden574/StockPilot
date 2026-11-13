@@ -12,6 +12,8 @@ import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { fetchAllRowsByIds } from '@/server/services/lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING } from '@/server/services/lib/lookup-ceiling';
+import { postgrestErrorText } from '@/server/services/lib/postgrest-error';
 
 import { type Role } from '@stockpilot/core';
 
@@ -345,12 +347,18 @@ export class TeamService {
 
   async revokeInvite(inviteId: string) {
     assertPermission(this.ctx, 'members:invite');
-    const { error } = await this.ctx.supabase
+    // The deleted row is asked back (S41): a filtered delete that matches no
+    // row is not an error, so only the returned row proves an invite of this
+    // organization was revoked.
+    const { data: row, error } = await this.ctx.supabase
       .from('organization_invites')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', inviteId);
+      .eq('id', inviteId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Invite not found');
   }
 
   /**
@@ -804,6 +812,11 @@ export class TeamService {
 
     // DELETE rows whose charter isn't in the target set.
     const toDelete = existing.filter((r) => !targetSet.has(targetKey(r.charter_id)));
+    // Before any write: a save that removes a member's charter refuses while
+    // the dialog's lists may be cut (B47 decisions round).
+    if (toDelete.some((r) => r.charter_id !== null)) {
+      await this.assertMemberChartersListsComplete(params.warehouseId);
+    }
     if (toDelete.length > 0) {
       const { error: delErr } = await this.ctx.supabase
         .from('user_warehouse_assignments')
@@ -874,6 +887,56 @@ export class TeamService {
       },
       this.ctx,
     );
+  }
+
+  /**
+   * Team's member Charters dialog is built from ChartersService.list (the
+   * active charters) and WarehouseChartersService.listPairs (every warehouse
+   * charter link of the organization), and both stop at LOOKUP_ROW_CEILING
+   * (B47). With either list cut, a member's charter the dialog cannot show
+   * drops out of its selection, so a save that changed nothing would remove
+   * it, or turn a member whose only charters it cannot show into "all
+   * charters" at that warehouse. So while either list is at the ceiling, a
+   * save that removes a member's charter refuses, in plain words, before any
+   * write. A count that cannot be read refuses too. Adding charters, and
+   * narrowing "all charters" to some, never depend on what the dialog could
+   * not show, so they go ahead.
+   */
+  private async assertMemberChartersListsComplete(warehouseId: string): Promise<void> {
+    const [charters, links] = await Promise.all([
+      this.ctx.supabase
+        .from('charters')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('status', 'active'),
+      this.ctx.supabase
+        .from('warehouse_charters')
+        .select('charter_id', { count: 'exact', head: true })
+        .eq('organization_id', this.ctx.organizationId),
+    ]);
+    for (const [check, res] of [
+      ['charters', charters],
+      ['links', links],
+    ] as const) {
+      if (res.error || typeof res.count !== 'number') {
+        void reportError(
+          new Error(
+            `member charters ${check} count failed: ${res.error ? postgrestErrorText(res.error, res) : 'no count in the answer'}`,
+          ),
+          { tag: 'team.member_charters.save_check', extra: { warehouseId, check } },
+        );
+        throw new ServiceError(
+          'conflict',
+          "Could not check this organization's charters, so nothing was changed. Try again.",
+        );
+      }
+    }
+    if ((charters.count ?? 0) >= LOOKUP_ROW_CEILING || (links.count ?? 0) >= LOOKUP_ROW_CEILING) {
+      throw new ServiceError(
+        'conflict',
+        `This organization has ${LOOKUP_ROW_CEILING.toLocaleString('en-US')} or more charters or warehouse charter links, more than this page can list, so a member's charters cannot be removed here. Nothing was changed.`,
+      );
+    }
   }
 
   /**

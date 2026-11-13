@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,7 +12,11 @@ import {
 } from 'react-native';
 
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { SheetChip } from '@/components/move-stock-modal';
 // The write-off's crate verdict shares the move sheet's module deliberately:
 // one precedence chain, one vocabulary, both flavours side by side.
@@ -118,6 +121,7 @@ function RemoveFromRackContent({
   onRemoved: () => void;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   // 0371: managers and above see every holding and skip the elsewhere read.
   const { role } = useRole();
   const [loading, setLoading] = React.useState(true);
@@ -278,6 +282,8 @@ function RemoveFromRackContent({
             {
               backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
             },
+            // Liquid Glass: the --scrim tint (it never blurs the page).
+            lg && glassScrim(lg),
           ]}
         />
         <View
@@ -292,11 +298,21 @@ function RemoveFromRackContent({
               maxHeight: '88%',
             },
             SHADOW.sheet,
+            // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+            lg && GLASS_SHEET_CARD,
           ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
           <View style={{ alignItems: 'center', marginBottom: 18 }}>
             {/* The grabber is a decorative mark in the faint ink. */}
-            <View style={{ width: 36, height: 5, borderRadius: 100, backgroundColor: c.ink5 }} />
+            <View
+              style={{
+                width: 36,
+                height: 5,
+                borderRadius: 100,
+                backgroundColor: lg ? lg.ios.sep : c.ink5,
+              }}
+            />
           </View>
 
           <Eyebrow>REMOVE FROM RACK</Eyebrow>

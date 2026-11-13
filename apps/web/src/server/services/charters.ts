@@ -4,6 +4,11 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import { fetchAllRows } from './lib/paginate';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Structured mailing address for a charter campus. Mirrors `WarehouseAddress`
@@ -55,6 +60,21 @@ export interface CharterRow {
   updated_at: string;
 }
 
+/** A charter's name and status, for a label (namesByIds). */
+export interface CharterNameRow {
+  id: string;
+  name: string;
+  status: CharterRow['status'];
+}
+
+/** A charter's name, short code and status, for a list's Charter cell (listLabels). */
+export interface CharterLabelRow {
+  id: string;
+  name: string;
+  code: string | null;
+  status: CharterRow['status'];
+}
+
 /**
  * Trims an address down to the non-empty fields. Returns `null` when every
  * field is blank so we persist a clean `null` (not `{}`) — keeping the
@@ -82,23 +102,40 @@ export class ChartersService {
    * `status = 'active'`. When `opts.includeArchived` is true, returns
    * ONLY rows with `status = 'archived'`. Inactive rows don't appear in
    * either view by design.
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable (only the code is unique). It was one read, so
+   * PostgREST's 1000-row max_rows cut it off with no error: past 1000
+   * charters, every charter whose name sorts after them was missing from the
+   * Charter filter, the item forms, Team's member Charters dialog,
+   * Admin > Warehouses and the Charters page (B47). One request still answers
+   * an organization under 1000 charters. It stops at LOOKUP_ROW_CEILING rows
+   * (the first by name, then id), reported once.
    */
   async list(opts: { includeArchived?: boolean } = {}): Promise<CharterRow[]> {
     const targetStatus = opts.includeArchived ? 'archived' : 'active';
-    const { data, error } = await this.ctx.supabase
-      .from('charters')
-      .select(
-        `id, name, code, description, notes, status, created_at, updated_at,
-         address, contact_name, contact_email, contact_phone,
-         warehouses:warehouse_charters!charter_id (warehouse_id),
-         users:user_warehouse_assignments!charter_id (user_id)`,
-      )
-      .eq('organization_id', this.ctx.organizationId)
-      .eq('status', targetStatus)
-      .order('name', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
+    const rows = await fetchAllRows(
+      (from, to) =>
+        this.ctx.supabase
+          .from('charters')
+          .select(
+            `id, name, code, description, notes, status, created_at, updated_at,
+             address, contact_name, contact_email, contact_phone,
+             warehouses:warehouse_charters!charter_id (warehouse_id),
+             users:user_warehouse_assignments!charter_id (user_id)`,
+          )
+          .eq('organization_id', this.ctx.organizationId)
+          .eq('status', targetStatus)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('charters.list', { organizationId: this.ctx.organizationId });
+    }
 
-    return (data ?? []).map((r) => {
+    return rows.map((r) => {
       const warehouses = (r as { warehouses?: unknown }).warehouses;
       const users = (r as { users?: unknown }).users;
       return {
@@ -120,6 +157,41 @@ export class ChartersService {
         updated_at: r.updated_at as string,
       };
     });
+  }
+
+  /**
+   * The organization's charters as a list's Charter cell names them: id, name,
+   * short code and status, AT ANY STATUS (or, with `exceptActive`, only the
+   * archived and inactive ones, beside list()'s active ones). Items and Books
+   * named a record tagged to an archived charter "Generic" because their
+   * lookup held active charters only (B97); archiving only sets the status,
+   * so the records keep the charter. A LABEL read: what is offered in a
+   * filter or a form still comes from list(). charters_select admits every
+   * member at any status.
+   *
+   * Every row, page by page, by name and then id, stopping at
+   * LOOKUP_ROW_CEILING rows (reported), as list() does. Throws on a failed
+   * read; the pages catch it and name none (a label, never the page).
+   */
+  async listLabels(opts: { exceptActive?: boolean } = {}): Promise<CharterLabelRow[]> {
+    const rows = await fetchAllRows<CharterLabelRow>(
+      (from, to) => {
+        let q = this.ctx.supabase
+          .from('charters')
+          .select('id, name, code, status')
+          .eq('organization_id', this.ctx.organizationId);
+        if (opts.exceptActive) q = q.neq('status', 'active');
+        return q
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+      },
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('charters.list_labels', { organizationId: this.ctx.organizationId });
+    }
+    return rows.map((r) => ({ id: r.id, name: r.name, code: r.code ?? null, status: r.status }));
   }
 
   async create(input: CreateCharterInput) {
@@ -159,13 +231,37 @@ export class ChartersService {
     if (patch.contactEmail !== undefined)
       updates.contact_email = patch.contactEmail ? patch.contactEmail.toLowerCase() : null;
     if (patch.contactPhone !== undefined) updates.contact_phone = patch.contactPhone ?? null;
-    const { error } = await this.ctx.supabase
+    if (Object.keys(updates).length > 0) {
+      // The changed row is asked back, as archive() and restore() below do
+      // (S41): a filtered update that matches no row is not an error, so only
+      // the returned row proves a charter of this organization changed. No row
+      // answers not_found and records nothing.
+      const { data: row, error } = await this.ctx.supabase
+        .from('charters')
+        .update(updates)
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new ServiceError('internal_error', error.message);
+      if (!row) throw new ServiceError('not_found', 'Charter not found.');
+      await audit(
+        { event: 'charter.updated', entityType: 'charter', entityId: id, after: patch },
+        this.ctx,
+      );
+      return;
+    }
+    // Nothing to change. An update with no columns writes no row, so the
+    // charter is read instead: a miss still answers not_found, and nothing is
+    // recorded because nothing changed.
+    const { data: current, error: readError } = await this.ctx.supabase
       .from('charters')
-      .update(updates)
+      .select('id')
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
-    if (error) throw new ServiceError('internal_error', error.message);
-    await audit({ event: 'charter.updated', entityType: 'charter', entityId: id, after: patch }, this.ctx);
+      .eq('id', id)
+      .maybeSingle();
+    if (readError) throw new ServiceError('internal_error', readError.message);
+    if (!current) throw new ServiceError('not_found', 'Charter not found.');
   }
 
   async archive(id: string) {
@@ -199,5 +295,41 @@ export class ChartersService {
     if (error) throw new ServiceError('internal_error', error.message);
     if (!row) throw new ServiceError('not_found', 'Charter not found.');
     await audit({ event: 'charter.restored', entityType: 'charter', entityId: id }, this.ctx);
+  }
+
+  /**
+   * The names and statuses of the given charters, AT ANY STATUS, read by id
+   * (batched `.in()`, each batch paged: no organization-wide list and no
+   * PostgREST row cap, pattern #3). For a LABEL of a charter a member or a
+   * record already holds that list() does not return: archived and inactive
+   * charters keep their warehouse links and members' assignments, so Team's
+   * member Charters dialog and the item forms name them '(archived)' or
+   * '(inactive)' instead of leaving them out or showing the id (S44).
+   *
+   * A label only: what a member or a record holds is never decided from it.
+   * charters_select admits every member at any status. Ids that are not uuids
+   * are dropped before the read. Throws on a failed read (readCharterLabels
+   * reports it and answers none).
+   */
+  async namesByIds(ids: readonly string[]): Promise<CharterNameRow[]> {
+    const wanted = [...new Set(ids.filter((id) => UUID_RE.test(id)).map((id) => id.toLowerCase()))];
+    if (wanted.length === 0) return [];
+    const ctx = this.ctx;
+    const rows = await fetchAllRowsByIds<{ id: string; name: string; status: string }>(
+      wanted,
+      (batch) => (from, to) =>
+        ctx.supabase
+          .from('charters')
+          .select('id, name, status')
+          .eq('organization_id', ctx.organizationId)
+          .in('id', batch)
+          .order('id')
+          .range(from, to),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      status: r.status as CharterRow['status'],
+    }));
   }
 }

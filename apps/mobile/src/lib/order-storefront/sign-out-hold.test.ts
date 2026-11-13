@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SIGN_IN_HELD_DROPPED_COPY,
@@ -47,7 +47,7 @@ const PENDING: PendingOrderSubmission = {
     warehouseId: WH,
     fulfillmentType: 'delivery',
     deliveryCharterId: '66666666-6666-4666-8666-666666666666',
-    onBehalfOf: { name: 'Maria Lopez', email: 'maria@example.org' },
+    onBehalfOf: { name: 'Pixie Quill', email: 'pixie@example.org' },
     notes: 'Room 12, call Sam',
     neededByLocal: '2026-10-05T10:00',
     lines: [
@@ -57,12 +57,24 @@ const PENDING: PendingOrderSubmission = {
   },
 };
 
+// Every hold in this file was sent at PENDING.firstSentAt, and a hold still
+// unknown 30 days after its send is dropped (ORDER_HOLD_MAX_AGE_MS). Read on
+// the real clock, the cases that keep or offer a hold expired with the
+// calendar on 2026-11-03 at 12:00 UTC, so the file runs a minute after the
+// send; the 30-day case passes its own clock (`now`).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-04T12:01:00.000Z') });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('the hold marker (plan 3.6)', () => {
   it('holds ids, a time and two counts only: no name, email, note or item id', () => {
     const hold = holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING });
     expect(hold).toEqual({ orgId: ORG, warehouseId: WH, key: KEY, sentAt: '2026-10-04T12:00:00.000Z', lineCount: 2, unitCount: 5 });
     const raw = serializeHolds([hold])!;
-    for (const secret of ['Maria', 'maria@example.org', 'Room 12', ITEM, 'call Sam', '66666666']) {
+    for (const secret of ['Pixie', 'pixie@example.org', 'Room 12', ITEM, 'call Sam', '66666666']) {
       expect(raw).not.toContain(secret);
     }
   });
@@ -508,7 +520,7 @@ describe('every account’s live order request becomes its owner’s marker befo
     await holdEveryDeviceSend(store);
     expect(parseHolds(store.data.get(orderHoldKey(USER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: PENDING })]);
     expect(parseHolds(store.data.get(orderHoldKey(OTHER)) ?? null)).toEqual([holdFor({ orgId: ORG, warehouseId: WH, pending: otherPending })]);
-    for (const secret of ['Maria', 'maria@example.org', 'Room 12', ITEM]) {
+    for (const secret of ['Pixie', 'pixie@example.org', 'Room 12', ITEM]) {
       expect(store.data.get(orderHoldKey(OTHER))).not.toContain(secret);
     }
   });

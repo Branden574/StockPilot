@@ -18,6 +18,12 @@ import {
 } from '@stockpilot/core';
 
 import { MIN_TAP } from '@/components/item-verification-card';
+import {
+  GlassPickHead,
+  glassOrderStyles,
+  glassPickRing,
+} from '@/components/ui/glass/screens/order';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
 import { BUTTON_RADIUS } from '@/components/ui/tones';
 import {
@@ -35,6 +41,7 @@ import {
   PICK_QTY_PADDING_X,
 } from '@/lib/pick-qty-field';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
+import { useHoldUpdatePrompt } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -116,6 +123,7 @@ export function DigitalPick({
   readiness?: OrderReadinessResult | null;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const inkAction = [styles.textAction, { color: c.ink }];
   const completeText = [styles.completeLabel, { color: c.paper }];
   const [lines, setLines] = React.useState<OrderDetailLine[] | null>(null);
@@ -171,6 +179,9 @@ export function DigitalPick({
   function isDirty(line: OrderDetailLine): boolean {
     return clampFor(line, qty[line.id] ?? '0') !== (saved[line.id] ?? 0);
   }
+
+  // A picked quantity not yet saved: the phone update pop-up waits (B44).
+  useHoldUpdatePrompt((lines ?? []).some(isDirty), 'pick');
 
   async function saveLine(line: OrderDetailLine) {
     const n = clampFor(line, qty[line.id] ?? '0');
@@ -255,7 +266,13 @@ export function DigitalPick({
   if (!canPick) {
     // Locked to another picker — show a muted notice, never the pick inputs.
     return (
-      <View style={[styles.card, { borderColor: c.hair, backgroundColor: c.card, padding: 14 }]}>
+      <View
+        style={[
+          styles.card,
+          { borderColor: c.hair, backgroundColor: c.card, padding: 14 },
+          lg && glassOrderStyles(lg).lockedCard,
+        ]}
+      >
         <Body size={13} color={c.ink3}>
           Being picked by another picker.
         </Body>
@@ -297,6 +314,15 @@ export function DigitalPick({
 
   return (
     <View style={{ gap: 12 }}>
+      {lg ? (
+        <GlassPickHead
+          lg={lg}
+          lines={lines.map((l) => ({
+            requested: Number(l.quantity_requested) || 0,
+            picked: clampFor(l, qty[l.id] ?? '0'),
+          }))}
+        />
+      ) : null}
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         <Eyebrow>DIGITAL PICKING</Eyebrow>
         <View style={{ flex: 1 }} />
@@ -304,9 +330,14 @@ export function DigitalPick({
         <Pressable
           onPress={fillAll}
           accessibilityRole="button"
-          style={{ minHeight: MIN_TAP, justifyContent: 'center' }}
+          style={
+            lg ? glassOrderStyles(lg).fillAll : { minHeight: MIN_TAP, justifyContent: 'center' }
+          }
         >
-          <Text style={inkAction} maxFontSizeMultiplier={ACTION_CAP}>
+          <Text
+            style={lg ? glassOrderStyles(lg).fillAllLabel : inkAction}
+            maxFontSizeMultiplier={ACTION_CAP}
+          >
             Fill all as requested
           </Text>
         </Pressable>
@@ -320,12 +351,18 @@ export function DigitalPick({
             style={[
               styles.card,
               { borderColor: c.hair, backgroundColor: c.card, padding: 12, gap: 8 },
+              lg && glassOrderStyles(lg).pickCard,
+              lg && glassPickRing(lg, dirty ? 0 : (saved[line.id] ?? 0), requested),
             ]}
           >
-            <Body size={14} color={c.ink} style={{ fontFamily: FONT.display }}>
+            <Body
+              size={lg ? 16 : 14}
+              color={c.ink}
+              style={lg ? glassOrderStyles(lg).pickName : { fontFamily: FONT.display }}
+            >
               {line.item?.name ?? 'Item'}
             </Body>
-            <Mono size={11.5} color={c.ink3}>
+            <Mono size={lg ? 13 : 11.5} color={c.ink3}>
               {line.item?.sku ?? '—'} · requested {requested}
             </Mono>
             {line.item?.charter_name ? (
@@ -383,22 +420,29 @@ export function DigitalPick({
                 // was a fixed 84pt box with uncapped text, so at AX5 "30" showed
                 // as "3" (lib/pick-qty-field.ts).
                 maxFontSizeMultiplier={PICK_QTY_MAX_FONT_SIZE_MULTIPLIER}
-                style={{
-                  minWidth: PICK_QTY_FIELD_MIN_WIDTH,
-                  minHeight: MIN_TAP,
-                  borderWidth: 1,
-                  borderColor: c.hair2,
-                  backgroundColor: c.sunk,
-                  borderRadius: 10,
-                  paddingVertical: 8,
-                  paddingHorizontal: PICK_QTY_PADDING_X,
-                  color: c.ink,
-                  fontFamily: FONT.mono,
-                  fontSize: PICK_QTY_FONT_SIZE,
-                  textAlign: 'center',
-                }}
+                style={[
+                  {
+                    minWidth: PICK_QTY_FIELD_MIN_WIDTH,
+                    minHeight: MIN_TAP,
+                    borderWidth: 1,
+                    borderColor: c.hair2,
+                    backgroundColor: c.sunk,
+                    borderRadius: 10,
+                    paddingVertical: 8,
+                    paddingHorizontal: PICK_QTY_PADDING_X,
+                    color: c.ink,
+                    fontFamily: FONT.mono,
+                    fontSize: PICK_QTY_FONT_SIZE,
+                    textAlign: 'center',
+                  },
+                  lg && glassOrderStyles(lg).pickQty,
+                ]}
               />
-              <Mono size={11.5} color={c.ink3}>
+              <Mono
+                size={lg ? 15 : 11.5}
+                color={c.ink3}
+                style={lg ? glassOrderStyles(lg).pickOf : undefined}
+              >
                 of {requested}
               </Mono>
               <View style={{ flex: 1 }} />
@@ -407,21 +451,34 @@ export function DigitalPick({
                 disabled={!dirty || savingLine === line.id || offline}
                 accessibilityRole="button"
                 accessibilityState={{ disabled: !dirty || savingLine === line.id || offline }}
-                style={{
-                  minHeight: MIN_TAP,
-                  justifyContent: 'center',
-                  borderWidth: 1,
-                  // Unsaved changes: the ink edge (an outline, not a second
-                  // ink fill on the screen); saved: the stronger border.
-                  borderColor: dirty ? c.ink : c.hair2,
-                  borderRadius: 10,
-                  paddingVertical: 8,
-                  paddingHorizontal: 16,
-                  opacity: !dirty || savingLine === line.id || offline ? 0.4 : 1,
-                  backgroundColor: c.card,
-                }}
+                style={[
+                  {
+                    minHeight: MIN_TAP,
+                    justifyContent: 'center',
+                    borderWidth: 1,
+                    // Unsaved changes: the ink edge (an outline, not a second
+                    // ink fill on the screen); saved: the stronger border.
+                    borderColor: dirty ? c.ink : c.hair2,
+                    borderRadius: 10,
+                    paddingVertical: 8,
+                    paddingHorizontal: 16,
+                    opacity: !dirty || savingLine === line.id || offline ? 0.4 : 1,
+                    backgroundColor: c.card,
+                  },
+                  lg && glassOrderStyles(lg).saveCapsule,
+                  lg && (dirty ? glassOrderStyles(lg).saveCapsuleDirty : null),
+                ]}
               >
-                <Text style={inkAction} maxFontSizeMultiplier={ACTION_CAP}>
+                <Text
+                  style={
+                    lg
+                      ? dirty
+                        ? glassOrderStyles(lg).saveLabelDirty
+                        : glassOrderStyles(lg).saveLabel
+                      : inkAction
+                  }
+                  maxFontSizeMultiplier={ACTION_CAP}
+                >
                   {savingLine === line.id ? 'Saving…' : dirty ? 'Save' : 'Saved'}
                 </Text>
               </Pressable>
@@ -435,18 +492,24 @@ export function DigitalPick({
         disabled={!anyPicked || completing || offline}
         accessibilityRole="button"
         accessibilityState={{ disabled: !anyPicked || completing || offline }}
-        style={{
-          minHeight: Math.max(MIN_TAP, 52),
-          justifyContent: 'center',
-          borderRadius: BUTTON_RADIUS.md,
-          paddingVertical: 8,
-          paddingHorizontal: 20,
-          alignItems: 'center',
-          backgroundColor: c.ink,
-          opacity: !anyPicked || completing || offline ? 0.4 : 1,
-        }}
+        style={[
+          {
+            minHeight: Math.max(MIN_TAP, 52),
+            justifyContent: 'center',
+            borderRadius: BUTTON_RADIUS.md,
+            paddingVertical: 8,
+            paddingHorizontal: 20,
+            alignItems: 'center',
+            backgroundColor: c.ink,
+            opacity: !anyPicked || completing || offline ? 0.4 : 1,
+          },
+          lg && glassOrderStyles(lg).complete,
+        ]}
       >
-        <Text style={completeText} maxFontSizeMultiplier={COMPLETE_CAP}>
+        <Text
+          style={lg ? glassOrderStyles(lg).completeLabel : completeText}
+          maxFontSizeMultiplier={COMPLETE_CAP}
+        >
           {completing
             ? 'Completing…'
             : allPicked

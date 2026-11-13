@@ -1,12 +1,12 @@
 'use server';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
 import {
   parseSharedPresetConfig,
   type SharedExportPresetConfig,
 } from '@/lib/exports/preset-config';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { can, err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -126,10 +126,7 @@ export async function listSharedExportPresetsAction(): Promise<
 
     return ok({ available: true, presets });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.export_presets.list_shared_export_presets');
   }
 }
 
@@ -216,10 +213,7 @@ export async function saveSharedExportPresetAction(
       canDelete: true,
     });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.export_presets.save_shared_export_preset');
   }
 }
 
@@ -269,9 +263,6 @@ export async function deleteSharedExportPresetAction(input: {
 
     return ok({ id: row.id });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.export_presets.delete_shared_export_preset');
   }
 }

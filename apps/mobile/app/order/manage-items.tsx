@@ -34,6 +34,9 @@ import { Card } from '@/components/ui/card';
 import { Checkbox, CheckboxMark } from '@/components/ui/checkbox';
 import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Thumb } from '@/components/ui/thumb';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
@@ -227,6 +230,10 @@ function SignedOutFrame() {
 function ManageItemsBody({ scope, scopeKey }: { scope: ManageScope; scopeKey: string }) {
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (inferred from Manage-Items stacked for the phone): the
+  // scene behind the list, Back in the glass nav, the rows and segments in
+  // their glass looks; every show and hide, the selection and the confirm stay.
+  const lg = useGlass();
   const insets = useSafeAreaInsets();
   const offline = useOffline();
   const permissions = useEffectivePermissions();
@@ -648,9 +655,10 @@ function ManageItemsBody({ scope, scopeKey }: { scope: ManageScope; scopeKey: st
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.paper }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel={ORDER_ITEMS_PHONE_BACK_COPY} minTap />
         </View>
       </SafeAreaView>

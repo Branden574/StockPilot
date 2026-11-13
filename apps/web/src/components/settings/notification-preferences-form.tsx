@@ -124,7 +124,7 @@ const TOGGLE_DEFS: ToggleDef[] = [
   {
     key: 'push_maintenance_draft_reminder',
     label: 'Maintenance draft reminders',
-    hint: 'In-app reminder when you opened an email draft for a maintenance request but StockPilot cannot confirm send.',
+    hint: 'One in-app reminder to open the email draft for a maintenance request you saved, if the request still reads Saved a day or more later.',
     group: 'push',
   },
   {

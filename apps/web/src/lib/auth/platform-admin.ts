@@ -9,7 +9,7 @@ import { SESSION_HEADER_USER_EMAIL } from '@/lib/supabase/middleware';
 import { createClient } from '@/lib/supabase/server';
 
 import { requireSession, type ServerSession } from './session';
-import { readVerifiedSessionClaims, type VerifiedSessionClaims } from './verified-claims';
+import { readVerifiedSessionClaimsOf, type VerifiedSessionClaims } from './verified-claims';
 
 /**
  * Platform-admin gate. Distinct from org-scoped roles (owner/admin/manager) —
@@ -30,6 +30,19 @@ export function isPlatformAdmin(email: string | null | undefined): boolean {
 }
 
 /**
+ * The VERIFIED auth user of the current request (auth.getUser() validates the
+ * session against the auth server): its id with its email, so the gates below
+ * can hold the AAL2 claims to the same account whose email is allowlisted.
+ * Cached per render, shared with getVerifiedEmail.
+ */
+const getVerifiedUser = cache(async (): Promise<{ id: string; email: string | null } | null> => {
+  const supabase = await createClient();
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data?.user) return null;
+  return { id: data.user.id, email: data.user.email ?? null };
+});
+
+/**
  * The VERIFIED auth email for the current request — read straight from the
  * Supabase Auth session (auth.getUser() validates against the auth server),
  * NOT from the `user_profiles.email` column.
@@ -41,16 +54,19 @@ export function isPlatformAdmin(email: string | null | undefined): boolean {
  * god-mode. The allowlist check is gated on THIS function only. Cached per
  * render so repeated gate checks share one round-trip.
  */
-export const getVerifiedEmail = cache(async (): Promise<string | null> => {
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data?.user) return null;
-  return data.user.email ?? null;
-});
+export const getVerifiedEmail = cache(
+  async (): Promise<string | null> => (await getVerifiedUser())?.email ?? null,
+);
 
 /** Whether the current request's VERIFIED auth email is an allowlisted admin. */
 export async function currentUserIsPlatformAdmin(): Promise<boolean> {
   return isPlatformAdmin(await getVerifiedEmail());
+}
+
+/** The verified user when its email is on the allowlist, else null. */
+async function verifiedPlatformAdmin(): Promise<{ id: string } | null> {
+  const user = await getVerifiedUser();
+  return user && isPlatformAdmin(user.email) ? user : null;
 }
 
 /**
@@ -83,7 +99,9 @@ export async function currentUserIsPlatformAdminFromRequestHeader(): Promise<boo
 
 /**
  * The current session's claims, its access token verified (a local ES256
- * check, no Auth round trip; see lib/auth/verified-claims), or null.
+ * check, no Auth round trip; see lib/auth/verified-claims), or null, and only
+ * as the session of `adminId`, the account whose verified email passed the
+ * allowlist.
  *
  * The AAL2 and step-up checks below read `aal` and `amr` from THESE claims.
  * They used to read them from the cookie unchecked:
@@ -91,9 +109,17 @@ export async function currentUserIsPlatformAdminFromRequestHeader(): Promise<boo
  * stored user object (auth-js logs that as insecure on a server client), and
  * the step-up read getSession()'s token and decoded `amr` from it. A cookie
  * whose token does not verify now reads as no session: not AAL2, no step-up.
+ *
+ * WHY THE ACCOUNT MUST MATCH (S43a review round 1). This read loads the cookie
+ * session on a new client, after getVerifiedUser() loaded it on another, and a
+ * load refreshes the session with the cookie's own refresh token when the
+ * cookie's own `expires_at` says so. Both fields are the sender's to write: the
+ * admin's password alone (an aal1 token) beside the refresh token of ANY
+ * account with its own authenticator passed the fresh step-up with that other
+ * account's claims. Claims of another account are null here.
  */
-async function currentVerifiedClaims(): Promise<VerifiedSessionClaims | null> {
-  return readVerifiedSessionClaims(await createClient());
+async function currentVerifiedClaims(adminId: string): Promise<VerifiedSessionClaims | null> {
+  return readVerifiedSessionClaimsOf(await createClient(), adminId);
 }
 
 /**
@@ -146,8 +172,9 @@ function stepUpIsFresh(claims: VerifiedSessionClaims | null): boolean {
  */
 export async function requirePlatformAdmin(): Promise<ServerSession> {
   const session = await requireSession();
-  if (!(await currentUserIsPlatformAdmin())) notFound();
-  if ((await currentVerifiedClaims())?.aal !== 'aal2') notFound();
+  const admin = await verifiedPlatformAdmin();
+  if (!admin) notFound();
+  if ((await currentVerifiedClaims(admin.id))?.aal !== 'aal2') notFound();
   return session;
 }
 
@@ -170,13 +197,14 @@ export async function checkPlatformAdmin(
   opts: { requireStepUp?: boolean } = {},
 ): Promise<PlatformAdminCheck> {
   const session = await requireSession();
-  if (!(await currentUserIsPlatformAdmin())) return { ok: false, reason: 'forbidden' };
+  const admin = await verifiedPlatformAdmin();
+  if (!admin) return { ok: false, reason: 'forbidden' };
   if (opts.requireStepUp) {
     // Dangerous actions need a FRESH step-up: AAL2 must be present AND the MFA
     // assertion recent (not just "reached AAL2 at login hours ago"). A stale
     // step-up returns aal2_required; re-authenticating refreshes it. Both are
-    // read from ONE verified set of claims.
-    const claims = await currentVerifiedClaims();
+    // read from ONE verified set of claims, the allowlisted account's own.
+    const claims = await currentVerifiedClaims(admin.id);
     if (claims?.aal !== 'aal2') return { ok: false, reason: 'aal2_required' };
     if (!stepUpIsFresh(claims)) return { ok: false, reason: 'aal2_required' };
   }

@@ -13,6 +13,7 @@
 import type { CartLineState } from './cart';
 import type { StorefrontItem } from './item';
 import { formatOrderNumber } from '../order-number';
+import { ORDER_MAX_UNITS_PER_LINE } from '../place-order';
 
 /**
  * Derived stock status per item (README state model). Named
@@ -235,6 +236,38 @@ export function sortCatalog<T extends StorefrontItem>(
 export function clampQty(value: number, available: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(Math.max(0, available), Math.floor(value)));
+}
+
+/**
+ * "Add all": the quantity one press sets a line to. It is everything
+ * available, in whole units, and never more than one line of an order may
+ * hold: the server refuses a line above that when the order is sent, so the
+ * button never fills a cart it would turn away. 0 for a number that is not
+ * finite.
+ *
+ * The order-wide limit (the same number across all lines) is not applied
+ * here: it would need the cart's total on every card, which would redraw
+ * every card on every cart change. The server applies it at submit with its
+ * own message, as it does for typed quantities.
+ */
+export function addAllTarget(available: number): number {
+  if (!Number.isFinite(available)) return 0;
+  return Math.min(Math.floor(Math.max(0, available)), ORDER_MAX_UNITS_PER_LINE);
+}
+
+/**
+ * What the "Add all" button is for one item, on the web and the phone:
+ *   'hidden' fewer than 2 can be added (nothing available, or the one that
+ *            Add already adds);
+ *   'offer'  a press sets the line to `addAllTarget(available)`;
+ *   'full'   the line already holds that many, or more.
+ * A press never lowers a line.
+ */
+export type AddAllState = 'hidden' | 'offer' | 'full';
+export function addAllState(available: number, inCart: number): AddAllState {
+  const target = addAllTarget(available);
+  if (target < 2) return 'hidden';
+  return inCart >= target ? 'full' : 'offer';
 }
 
 /** itemId → qty map so memoized cards take qty as a scalar prop. */

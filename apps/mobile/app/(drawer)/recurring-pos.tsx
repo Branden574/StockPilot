@@ -288,8 +288,11 @@ function TemplateCard({
             ].join(' · ')}
           </Mono>
         </View>
+        {/* The mode marks a purchase order as ordered and sends nothing to
+            the supplier (B105): the short name of the web's "Mark as
+            ordered automatically", as the web's template list says. */}
         <Pill status={row.send_mode === 'send' ? 'ok' : 'default'}>
-          {row.send_mode === 'send' ? 'Auto-send' : 'Draft'}
+          {row.send_mode === 'send' ? 'Auto-order' : 'Draft'}
         </Pill>
         {/* No visible label sits with the switch, so it carries the
             template's name: VoiceOver said "switch, on" and nothing else. */}

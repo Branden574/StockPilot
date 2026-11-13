@@ -63,7 +63,7 @@ const EV = '33333333-3333-4333-8333-333333333333';
 function photo(o: Record<string, unknown> = {}) {
   return {
     id: EV,
-    uploadedBy: { id: 'u-1', label: 'Maria Lopez' },
+    uploadedBy: { id: 'u-1', label: 'Pixie Quill' },
     capturedAt: '2026-09-27T17:02:00Z',
     uploadedAt: '2026-09-27T17:40:00Z',
     note: 'Shelf 3',
@@ -106,7 +106,7 @@ describe('parseEvidenceBlock: a failed read is never "no photos" or fewer photos
     expect(b.status).toBe('ok');
     if (b.status !== 'ok') return;
     expect(b.photos).toHaveLength(1);
-    expect(b.photos[0]!.uploadedBy.label).toBe('Maria Lopez');
+    expect(b.photos[0]!.uploadedBy.label).toBe('Pixie Quill');
     expect(b.liveCount).toBe(1);
     expect(b.canAdd).toBe(true);
   });
@@ -169,7 +169,7 @@ describe('the detail read carries the photos and the timeline photo times', () =
           id: 'e2',
           kind: 'evidence_added',
           at: '2026-09-27T17:40:00Z',
-          actor: { id: 'u-1', label: 'Maria Lopez' },
+          actor: { id: 'u-1', label: 'Pixie Quill' },
           note: 'Shelf 3',
           evidence: { capturedAt: '2026-09-27T17:02:00Z', uploadedAt: '2026-09-27T17:40:00Z', removed: false },
         },
@@ -322,7 +322,7 @@ describe('the capture time (the device\'s clock, never a made-up one)', () => {
 describe('upload rows: no phantom photo, no photo that vanishes', () => {
   const ok = (ids: string[]): MobileEvidenceBlock => ({
     status: 'ok',
-    photos: ids.map((id) => ({ ...photo({ id }), uploadedBy: { id: 'u-1', label: 'Maria' } }) as never),
+    photos: ids.map((id) => ({ ...photo({ id }), uploadedBy: { id: 'u-1', label: 'Pixie' } }) as never),
     liveCount: ids.length,
     maxPhotos: 8,
     canAdd: true,
@@ -497,12 +497,12 @@ describe('timeline lines (core describeEvidenceEvent)', () => {
   it('an added photo: the headline, both times named by their clocks, and the note', () => {
     const l = evidenceTimelineLines({
       kind: 'evidence_added',
-      actorLabel: 'Maria',
+      actorLabel: 'Pixie',
       note: 'Shelf 3',
       evidence: { capturedAt: '2026-09-27T17:02:00Z', uploadedAt: '2026-09-27T17:40:00Z', removed: false },
       timeZone: 'America/Los_Angeles',
     });
-    expect(l.headline).toBe('Photo added by Maria');
+    expect(l.headline).toBe('Photo added by Pixie');
     expect(l.detail).toBe("Taken 10:02 AM (device's clock) · uploaded 10:40 AM (server's clock)");
     expect(l.note).toBe('Shelf 3');
   });
@@ -512,13 +512,13 @@ describe('timeline lines (core describeEvidenceEvent)', () => {
   it('without the photo\'s info, no times are claimed', () => {
     const l = evidenceTimelineLines({
       kind: 'evidence_added',
-      actorLabel: 'Maria',
+      actorLabel: 'Pixie',
       note: null,
       evidence: null,
       timeZone: null,
     });
     expect(l.detail).toBeNull();
-    expect(l.headline).toBe('Photo added by Maria');
+    expect(l.headline).toBe('Photo added by Pixie');
   });
 
   it('a removal: who, and the reason', () => {

@@ -14,6 +14,7 @@ import { reportError } from '@/lib/error-reporter';
 import { resolveOrgTimezone } from '@stockpilot/core';
 import { formatOrgDateTime } from '@/lib/timezone';
 import { ownAddressVerdict } from '@/server/lib/current-member';
+import { maintenanceRequesterAccountDeleted } from '@/server/lib/kept-address';
 import { listResolutionProofProxyPhotos } from '@/server/services/maintenance-share-links';
 
 /**
@@ -25,7 +26,10 @@ import { listResolutionProofProxyPhotos } from '@/server/services/maintenance-sh
  *
  * Guard order (each a SILENT skip — `sendEmail` is never reached for any of
  * them): row exists -> `status === 'resolved'` -> `requester_email_snapshot`
- * non-null -> `requester_user_id !== resolved_by` (self-resolve: you don't
+ * non-null -> the requester did not delete their account (B23,
+ * maintenanceRequesterAccountDeleted in server/lib/kept-address.ts: the kept
+ * snapshot address is never emailed again, A3) -> `requester_user_id !==
+ * resolved_by` (self-resolve: you don't
  * email someone about their own click; mirrors resolve()'s in-app
  * suppression, same two ids) -> cheap `resolution_email_sent_at` pre-check
  * -> the requester is still a current member of the request's organization
@@ -50,6 +54,7 @@ export type MaintenanceResolvedEmailResult =
         | 'request_not_found'
         | 'not_resolved'
         | 'no_requester_email'
+        | 'requester_deleted'
         | 'self_resolve'
         | 'requester_not_member'
         | 'already_sent'
@@ -112,9 +117,7 @@ async function shareLinksEnabledForEmail(
     .eq('module_id', 'maintenance_requests')
     .maybeSingle();
   const settings = (data as { settings?: unknown } | null)?.settings as
-    | { includeShareLinksInEmail?: boolean }
-    | null
-    | undefined;
+    { includeShareLinksInEmail?: boolean } | null | undefined;
   return settings?.includeShareLinksInEmail !== false;
 }
 
@@ -162,6 +165,12 @@ export async function maybeSendMaintenanceResolvedEmail(
 
     if (request.status !== 'resolved') return { sent: false, reason: 'not_resolved' };
     if (!request.requester_email_snapshot) return { sent: false, reason: 'no_requester_email' };
+    // B23: the requester deleted their account. The snapshot keeps their
+    // address on the record (O-A3-6); it is never emailed again (A3).
+    // server/lib/kept-address.ts says how that is known.
+    if (maintenanceRequesterAccountDeleted(request)) {
+      return { sent: false, reason: 'requester_deleted' };
+    }
     // Self-resolve: you don't email someone about their own click. Compares
     // the same two ids resolve()'s in-app notify suppression does
     // (requester_user_id vs the acting user — here, resolved_by).

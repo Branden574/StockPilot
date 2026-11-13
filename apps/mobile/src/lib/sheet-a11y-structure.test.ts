@@ -343,8 +343,11 @@ describe.each(CONVERTED)('$file — "$heading"', ({ file, heading, layout, close
       expect(layer).toContain('padding: 24');
       // The scrim's parent is unpadded, so it dims the full screen.
       expect(containerStyle).not.toContain('padding');
-      expect(attrText(shape.card, 'style', sf)).toBe(
-        '{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }',
+      // Classic's card; Liquid Glass lays its dialog card over it in a
+      // branch of its own (folded away by the Classic projection).
+      const card = '{ backgroundColor: c.card, borderRadius: 16, padding: 18, gap: 12 }';
+      expect([card, `[${card}, lg && glassOrderStyles(lg).dialog,]`]).toContain(
+        (attrText(shape.card, 'style', sf) ?? '').replace(/\s+/g, ' ').replace(/\[ /g, '[').replace(/ \]/g, ']'),
       );
     }
   });

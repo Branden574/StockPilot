@@ -15,15 +15,25 @@ const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 
 /** A card: radius 8, hairline border, the elevated surface. */
 const CARD = 'border-border bg-card rounded-lg border';
 
+/**
+ * Liquid Glass (stage 4, styles/liquid-glass/states.css): inert hooks only,
+ * so Classic renders exactly as before (app/states.classic-dom.test.tsx).
+ * The page box carries data-glass="skeleton-page", and the width the glass
+ * page takes: "wide" for the 1480 px lists, records and reports, "reading"
+ * for a 768 px reading page; none keeps the box's own width. Cards carry
+ * stage 2's card hook and bars the skeleton hook (the shine).
+ */
+export type SkeletonGlassWidth = 'wide' | 'reading';
+
 function PageHeaderSkeleton({ actions = 2 }: { actions?: number }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
       <div className="min-w-0">
         {/* The title's 42px line box, then its 20px subline. */}
-        <div className="flex h-[42px] items-center">
+        <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
           <Bar w={220} h={26} />
         </div>
-        <div className="mt-0.5 flex h-5 items-center">
+        <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
           <Bar w={300} h={12} />
         </div>
       </div>
@@ -36,18 +46,32 @@ function PageHeaderSkeleton({ actions = 2 }: { actions?: number }) {
   );
 }
 
-export function PageSkeleton({ className }: { className?: string }) {
+export function PageSkeleton({
+  className,
+  glassWidth,
+}: {
+  className?: string;
+  /** The width the glass page takes (inert hook; see SkeletonGlassWidth). */
+  glassWidth?: SkeletonGlassWidth;
+}) {
   return (
-    <div className={cn(PAGE, className)}>
+    <div className={cn(PAGE, className)} data-glass="skeleton-page" data-glass-width={glassWidth}>
       <PageHeaderSkeleton actions={3} />
 
       {/* Stat strip: one card, cells divided by hairlines (DESIGN-SPEC 6.8).
           The 1px gaps over the border colour draw the dividers, so a wrapped
           row never doubles a line against the card's own border. */}
-      <div className={cn(CARD, 'overflow-hidden')}>
-        <div className="bg-border grid grid-cols-2 gap-px lg:grid-cols-4">
+      <div className={cn(CARD, 'overflow-hidden')} data-glass="skeleton-strip">
+        <div
+          className="bg-border grid grid-cols-2 gap-px lg:grid-cols-4"
+          data-glass-role="skeleton-strip-grid"
+        >
           {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="bg-card space-y-2.5 px-[18px] py-4">
+            <div
+              key={i}
+              className="bg-card space-y-2.5 px-[18px] py-4"
+              data-glass-role="skeleton-strip-cell"
+            >
               <Bar w={96} h={11} />
               <Bar w={84} h={22} />
               <Bar w={120} h={10} />
@@ -57,8 +81,11 @@ export function PageSkeleton({ className }: { className?: string }) {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-        <div className={cn(CARD, 'lg:col-span-8')}>
-          <div className="border-border flex items-center justify-between border-b px-[18px] py-3.5">
+        <div className={cn(CARD, 'lg:col-span-8')} data-glass="card">
+          <div
+            className="border-border flex items-center justify-between border-b px-[18px] py-3.5"
+            data-glass-role="skeleton-card-head"
+          >
             <Bar w={160} h={13} />
             <Bar w={72} h={11} />
           </div>
@@ -66,8 +93,11 @@ export function PageSkeleton({ className }: { className?: string }) {
             <Bar w="100%" h={240} radius={6} />
           </div>
         </div>
-        <div className={cn(CARD, 'lg:col-span-4')}>
-          <div className="border-border border-b px-[18px] py-3.5">
+        <div className={cn(CARD, 'lg:col-span-4')} data-glass="card">
+          <div
+            className="border-border border-b px-[18px] py-3.5"
+            data-glass-role="skeleton-card-head"
+          >
             <Bar w={140} h={13} />
           </div>
           {/* Key-value rows, 9 x 18 (DESIGN-SPEC 6.7). */}
@@ -86,8 +116,10 @@ export function PageSkeleton({ className }: { className?: string }) {
 }
 
 export function TablePageSkeleton({ rows = 8, className }: { rows?: number; className?: string }) {
+  // Every page drawn with this skeleton (Items, Books, Orders, purchase
+  // orders and the operations lists) is 1480 px wide in Liquid Glass.
   return (
-    <div className={cn(PAGE, className)}>
+    <div className={cn(PAGE, className)} data-glass="skeleton-page" data-glass-width="wide">
       <PageHeaderSkeleton />
       {/* The toolbar: a segmented track on the left, the search and filter
           triggers on the right, wrapping on a narrow screen. */}
@@ -124,11 +156,14 @@ export function TablePageSkeleton({ rows = 8, className }: { rows?: number; clas
  */
 export function TableBodySkeleton({ rows = 8, className }: { rows?: number; className?: string }) {
   return (
-    <div className={cn(CARD, 'overflow-hidden', className)}>
+    <div className={cn(CARD, 'overflow-hidden', className)} data-glass="card">
       <div className="min-w-[720px]">
         {/* Header: 11px uppercase labels on a 37px row. Same columns as the
             body rows below, written as a class so it is not counted as one. */}
-        <div className="border-border grid h-[37px] grid-cols-[36px_minmax(0,2.4fr)_1fr_1fr_72px_96px_96px_72px] items-center gap-3 border-b pl-4 pr-4">
+        <div
+          className="border-border grid h-[37px] grid-cols-[36px_minmax(0,2.4fr)_1fr_1fr_72px_96px_96px_72px] items-center gap-3 border-b pl-4 pr-4"
+          data-glass-role="skeleton-table-head"
+        >
           <span />
           {[48, 64, 60, 48, 56, 44, 52].map((w, i) => (
             <Bar key={i} w={w} h={8} />
@@ -138,6 +173,7 @@ export function TableBodySkeleton({ rows = 8, className }: { rows?: number; clas
           <div
             key={i}
             className="border-border grid items-center gap-3 border-b pl-4 pr-4 last:border-0"
+            data-glass-role="skeleton-table-row"
             style={{
               gridTemplateColumns: '36px minmax(0,2.4fr) 1fr 1fr 72px 96px 96px 72px',
               paddingTop: 'var(--row-py, 11px)',
@@ -174,6 +210,7 @@ function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: num
   return (
     <div
       className="bg-muted max-w-full shrink-0 animate-pulse"
+      data-glass="skeleton"
       style={{
         width: typeof w === 'number' ? `${w}px` : w,
         height: h,

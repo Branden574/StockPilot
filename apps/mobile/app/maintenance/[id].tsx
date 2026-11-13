@@ -48,6 +48,18 @@ import { Card, Hair } from '@/components/ui/card';
 import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_ITEM } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import {
+  GLASS_OPS,
+  GLASS_RECORD_BODY,
+  GLASS_RECORD_META,
+  glassCopyBox,
+  glassGrayCapsule,
+  glassTextArea,
+} from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { useAuth } from '@/lib/auth-context';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
@@ -158,6 +170,7 @@ import {
   uploadMaintenancePhoto,
 } from '@/lib/maintenance-upload';
 import { FONT } from '@/lib/theme';
+import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -289,6 +302,8 @@ function PhotoSourceButton({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the iOS gray capsule.
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -298,6 +313,7 @@ function PhotoSourceButton({
         styles.addPhotoBtn,
         // A control: the stronger border and the card fill (the outline button's recipe).
         { borderColor: c.hair2, backgroundColor: c.card, opacity: pressed ? 0.7 : 1 },
+        lg && glassGrayCapsule(lg),
       ]}
     >
       <Icon size={16} color={c.ink} strokeWidth={1.5} />
@@ -384,6 +400,12 @@ function DetailRow({ label, value }: { label: string; value: string | null | und
 
 export default function MaintenanceRequestDetailScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html's cards with
+  // Order-Detail.dc.html's timeline): the scene, Back in the glass nav, the
+  // subject under it, the cards on the grouped glass surface, the text boxes
+  // as glass fields. The Outlook draft stays "prepared, not sent"; every
+  // action, gate and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -468,6 +490,13 @@ export default function MaintenanceRequestDetailScreen() {
   const [notesError, setNotesError] = React.useState<string | null>(null);
   const [noteBody, setNoteBody] = React.useState('');
   const [notePending, setNotePending] = React.useState(false);
+
+  // A typed note or a close-out not yet sent: the phone update pop-up waits
+  // (B44), so Restart now is never one tap away from losing it.
+  useHoldUpdatePrompt(
+    noteBody.trim() !== '' || resolveNote.trim() !== '' || resolvePhotos.length > 0,
+    'maintenance-draft',
+  );
 
   React.useEffect(() => {
     if (!enabled || !id) {
@@ -1001,9 +1030,10 @@ export default function MaintenanceRequestDetailScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.root, { backgroundColor: c.paper }]}>
-        <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-          <View style={styles.topbar}>
+      <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+        {lg ? <SceneBackground /> : null}
+        <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+          <View style={lg ? GLASS_LIST.nav : styles.topbar}>
             <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           </View>
         </SafeAreaView>
@@ -1080,19 +1110,33 @@ export default function MaintenanceRequestDetailScreen() {
   const formCommitShowing = resolveFormShowing || notesFormShowing;
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
-        <View style={styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>{handle}</Eyebrow>
-          </View>
-          <Display size={26} style={{ marginTop: 8 }}>
+        <View style={lg ? [styles.head, GLASS_OPS.recordHead] : styles.head}>
+          {/* Liquid Glass: the record head (iOS-Item): the subject at 26/31,
+              the request's handle on the mono line under it. */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Wrench size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>{handle}</Eyebrow>
+            </View>
+          )}
+          <Display
+            size={26}
+            style={lg ? GLASS_ITEM.name : { marginTop: 8 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
             {detail.subject}
           </Display>
+          {lg ? (
+            <Mono size={12.5} tracking={0.04} color={c.ink3} style={GLASS_RECORD_META}>
+              {handle}
+            </Mono>
+          ) : null}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 10 }}>
             <Pill status={pillStatus} dot={false}>
               {MAINTENANCE_STATUS_LABELS[detail.status]}
@@ -1104,7 +1148,10 @@ export default function MaintenanceRequestDetailScreen() {
         </View>
       </SafeAreaView>
 
-      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
+        keyboardShouldPersistTaps="handled"
+      >
         <Card padding={16}>
           <Eyebrow>DESCRIPTION</Eyebrow>
           <Body size={14} color={c.ink} style={{ marginTop: 8 }}>
@@ -1189,13 +1236,17 @@ export default function MaintenanceRequestDetailScreen() {
                   icon={Camera}
                   label="CAMERA"
                   accessibilityLabel="Camera, take a photo for this request"
-                  onPress={() => void pickFromCamera().then(addRequestPhotos)}
+                  onPress={() =>
+                    void whileUpdatePromptHeld(() => pickFromCamera().then(addRequestPhotos))
+                  }
                 />
                 <PhotoSourceButton
                   icon={ImageIcon}
                   label="LIBRARY"
                   accessibilityLabel="Library, choose a photo from your library for this request"
-                  onPress={() => void pickFromLibrary().then(addRequestPhotos)}
+                  onPress={() =>
+                    void whileUpdatePromptHeld(() => pickFromLibrary().then(addRequestPhotos))
+                  }
                 />
               </View>
             </>
@@ -1383,7 +1434,11 @@ export default function MaintenanceRequestDetailScreen() {
                 editable={false}
                 selectTextOnFocus
                 value={generatedShareUrl}
-                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2, minHeight: 44, marginTop: 6 }]}
+                style={[
+                  styles.copyBox,
+                  { color: c.ink, borderColor: c.hair2, minHeight: 44, marginTop: 6 },
+                  lg && glassCopyBox(lg),
+                ]}
                 accessibilityLabel="Photo share link to copy manually"
               />
               <Body size={11.5} muted style={{ marginTop: 6 }}>
@@ -1427,7 +1482,7 @@ export default function MaintenanceRequestDetailScreen() {
                 editable={false}
                 selectTextOnFocus
                 value={prepared.clipboardText}
-                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2 }]}
+                style={[styles.copyBox, { color: c.ink, borderColor: c.hair2 }, lg && glassCopyBox(lg)]}
                 accessibilityLabel="Maintenance request text to copy manually"
               />
               <Body size={11.5} muted style={{ marginTop: 6 }}>
@@ -1466,7 +1521,11 @@ export default function MaintenanceRequestDetailScreen() {
                       placeholder={RESOLVE_NOTE_PLACEHOLDER}
                       placeholderTextColor={c.ink3}
                       editable={!resolvePending}
-                      style={[styles.textarea, { color: c.ink, borderColor: c.hair2 }]}
+                      style={[
+                        styles.textarea,
+                        { color: c.ink, borderColor: c.hair2 },
+                        lg && glassTextArea(lg),
+                      ]}
                     />
                     <Body size={11} muted>
                       {resolveNoteHelperText()}
@@ -1480,13 +1539,17 @@ export default function MaintenanceRequestDetailScreen() {
                         icon={Camera}
                         label="CAMERA"
                         accessibilityLabel="Camera, take a proof photo"
-                        onPress={() => void pickFromCamera().then(addResolvePhotos)}
+                        onPress={() =>
+                          void whileUpdatePromptHeld(() => pickFromCamera().then(addResolvePhotos))
+                        }
                       />
                       <PhotoSourceButton
                         icon={ImageIcon}
                         label="LIBRARY"
                         accessibilityLabel="Library, choose a proof photo from your library"
-                        onPress={() => void pickFromLibrary().then(addResolvePhotos)}
+                        onPress={() =>
+                          void whileUpdatePromptHeld(() => pickFromLibrary().then(addResolvePhotos))
+                        }
                       />
                     </View>
 
@@ -1647,7 +1710,11 @@ export default function MaintenanceRequestDetailScreen() {
                       placeholder={NOTES_PLACEHOLDER}
                       placeholderTextColor={c.ink3}
                       editable={!notePending}
-                      style={[styles.textarea, { color: c.ink, borderColor: c.hair2 }]}
+                      style={[
+                        styles.textarea,
+                        { color: c.ink, borderColor: c.hair2 },
+                        lg && glassTextArea(lg),
+                      ]}
                     />
                     <Button
                       block
@@ -1681,14 +1748,16 @@ function GateScreen({
   onBack: () => void;
   children: React.ReactNode;
 }) {
+  const lg = useGlass();
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={onBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
-      <View style={{ paddingHorizontal: 20, marginTop: 21 }}>
+      <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 21 }}>
         <Card padding={16}>
           <Body size={14.5}>{children}</Body>
         </Card>

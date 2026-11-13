@@ -20,7 +20,8 @@ const idSchema = z.string().uuid();
  *
  * A non-uuid `id` segment is a request-shape error (400). An id that doesn't
  * resolve to a replayable failed row for this org → not_found → 404 (never
- * leaks whether another org owns it).
+ * leaks whether another org owns it). A failed row of this org that the row
+ * rule refused to replay → forbidden → 403.
  */
 export async function POST(
   req: NextRequest,

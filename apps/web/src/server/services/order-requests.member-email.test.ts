@@ -158,6 +158,8 @@ function paperService(
 ) {
   let lineReads = 0;
   const stub = makeSupabaseStub({
+    // The order, read in the active organization before the function (S39).
+    'order_requests.select': servedLikePostgrest([row]),
     'order_request_lines.select': () => {
       lineReads += 1;
       return lineReads === 1

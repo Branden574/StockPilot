@@ -11,6 +11,11 @@ import {
   isActiveOrgMember,
   verifiedSessionUserIdWithoutRefresh,
 } from '@/server/lib/sign-page-session';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root that this route's layout draws (ExternalShell glassPage="links") and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,11 +48,7 @@ export interface OrderSignSummary {
   }>;
 }
 
-export default async function OrderSignPage({
-  params,
-}: {
-  params: Promise<{ token: string }>;
-}) {
+export default async function OrderSignPage({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!SIGNATURE_TOKEN_RE.test(token)) notFound();
 
@@ -127,11 +128,7 @@ export default async function OrderSignPage({
   const [whRes, charterRes, linesRes] = await Promise.all([
     admin.from('warehouses').select('name').eq('id', order.warehouse_id).maybeSingle(),
     order.delivery_charter_id
-      ? admin
-          .from('charters')
-          .select('name')
-          .eq('id', order.delivery_charter_id)
-          .maybeSingle()
+      ? admin.from('charters').select('name').eq('id', order.delivery_charter_id).maybeSingle()
       : Promise.resolve({ data: null }),
     admin
       .from('order_request_lines')
@@ -149,7 +146,7 @@ export default async function OrderSignPage({
   };
   const lines = ((linesRes.data ?? []) as LineRow[]).map((row) => {
     const itemField = row.item;
-    const item = Array.isArray(itemField) ? itemField[0] ?? null : itemField;
+    const item = Array.isArray(itemField) ? (itemField[0] ?? null) : itemField;
     return {
       itemName: item?.name ?? '—',
       quantityPicked: Number(row.quantity_picked ?? 0),
@@ -199,7 +196,7 @@ function InvalidPanel({ reason, status }: { reason: 'invalid' | 'already'; statu
       body={
         reason === 'already'
           ? alreadySignedMessage(status)
-          : "This link is invalid, expired, or the order is no longer awaiting a signature. If you think this is wrong, get in touch with the warehouse."
+          : 'This link is invalid, expired, or the order is no longer awaiting a signature. If you think this is wrong, get in touch with the warehouse.'
       }
     />
   );

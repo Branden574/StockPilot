@@ -27,6 +27,7 @@ vi.mock('@/server/lib/order-secrets', () => ({ resolveReturnToken: vi.fn(async (
 vi.mock('@/lib/auth/warehouse', () => ({ assertWarehouseAccess: vi.fn() }));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 
+import { reportError } from '@/lib/error-reporter';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -44,6 +45,7 @@ const APP_URL = 'https://app.example.com';
 /** One order row carrying every column the four paths read. */
 const ORDER = {
   id: 'order-1',
+  organization_id: ORG,
   status: 'approved',
   warehouse_id: 'wh-1',
   requester_user_id: REQUESTER,
@@ -71,8 +73,12 @@ function wire(requesterIsMember: boolean) {
       ...(requesterIsMember ? [member(REQUESTER)] : []),
     ]),
     'notifications.insert': { data: { id: 'notif-1' }, error: null },
-    // The order, and the return path's preference read (nobody muted).
-    'order_requests.select': { data: ORDER, error: null },
+    // The order, and the return path's preference read (nobody muted). Served
+    // by its own filters: the return path reads it as a list in the order's
+    // organization (returns-notify.ts readOrder, #454), the line edits as one row.
+    'order_requests.select': servedLikePostgrest([ORDER]),
+    // announceLineChange's updated_at touch (its answer is not read).
+    'order_requests.update': { data: null, error: null },
     'notification_preferences.select': { data: [], error: null },
     // The line edits' reads and writes (order-requests.edit-lines.test.ts).
     'order_request_lines.select.maybeSingle': {
@@ -195,11 +201,15 @@ describe.each(PATHS)('requester notice: $name', ({ run }) => {
     const rows = written(stub);
     expect(rows).toHaveLength(1);
     expect(rows[0]![0]).toBe(REQUESTER);
+    expect(reportError).not.toHaveBeenCalled();
   });
 
   it('writes nothing, so pushes nothing, once they were removed or left', async () => {
     const stub = wire(false);
     await run(stub);
     expect(written(stub)).toEqual([]);
+    // Nothing failed on the way: the membership rule, not a broken read, is
+    // why nothing was written.
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

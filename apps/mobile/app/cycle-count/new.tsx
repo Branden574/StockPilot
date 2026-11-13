@@ -13,14 +13,23 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { cycleCountStartedMessage } from '@stockpilot/core';
+import {
+  COUNT_START_MANAGER_ONLY_COPY,
+  countStartManagerOnly,
+  cycleCountStartedMessage,
+} from '@stockpilot/core';
 
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { Card, Hair } from '@/components/ui/card';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import { api } from '@/lib/api';
+import { countStartFailureMessage } from '@/lib/count-select-offers';
+import { footerReservation } from '@/lib/dynamic-type-layout';
 import {
   countPickerPlan,
   mergeRows,
@@ -36,6 +45,8 @@ import {
   type CountPick,
 } from '@/lib/use-count-selection';
 import { FONT, RADIUS } from '@/lib/theme';
+import { useEffectivePermissions } from '@/lib/use-effective-permissions';
+import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 
@@ -59,15 +70,30 @@ const MIN_TAP = 44;
 export default function NewCycleCount() {
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (inferred from the iOS Lookup rows with checkboxes): the
+  // scene behind the picker, the glass nav, the rows on the grouped glass
+  // surface and the Start bar on the glass-strong fill; every choice stays.
+  const lg = useGlass();
   const picks = useCountPicks();
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  // Only a manager with cycle_counts:assign and stock:adjust can start a count
+  // (B42; the server's assertCountStartFloors). Anyone else who reaches this
+  // screen is told so above Start count, which stays off, instead of reading
+  // the server's refusal after picking. Nothing is said while the role is
+  // unknown: the server decides then.
+  const { role } = useRole();
+  const permissions = useEffectivePermissions();
+  const managerOnly = countStartManagerOnly({ role, permissions });
+  // The footer's measured height: the notice makes it taller, so the list
+  // keeps its last rows and the Notes box clear of it.
+  const [footerHeight, setFooterHeight] = React.useState<number | null>(null);
 
   const books = picks.filter((p) => p.itemType === 'book');
   const products = picks.filter((p) => p.itemType !== 'book');
 
   async function start() {
-    if (picks.length === 0 || busy) return;
+    if (picks.length === 0 || busy || managerOnly) return;
     Keyboard.dismiss();
     setBusy(true);
     try {
@@ -89,14 +115,17 @@ export default function NewCycleCount() {
       }
     } catch (e) {
       setBusy(false);
-      Alert.alert('Could not start count', e instanceof Error ? e.message : 'Please try again.');
+      // The server's own words, except the raw permission refusal an older
+      // server sends, which reads as the plain sentence.
+      Alert.alert('Could not start count', countStartFailureMessage(e));
     }
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip
             icon={ArrowLeft}
             onPress={() => {
@@ -123,7 +152,11 @@ export default function NewCycleCount() {
           keyboard covered it with no way to scroll it up. The scroll insets
           itself by the keyboard on iOS and brings the focused box into view. */}
       <ScrollView
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 150, gap: 16 }}
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingBottom: footerReservation(footerHeight, 150),
+          gap: 16,
+        }}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         automaticallyAdjustKeyboardInsets
@@ -165,12 +198,22 @@ export default function NewCycleCount() {
           the spinner while the count starts. */}
       <SafeAreaView
         edges={['bottom']}
-        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
+        style={[
+          styles.footer,
+          { backgroundColor: c.paper, borderTopColor: c.hair },
+          lg && { backgroundColor: lg.g.glassStrong, borderTopColor: lg.g.paneLine },
+        ]}
       >
+        {managerOnly ? (
+          <Body muted size={13} style={{ marginBottom: 10 }}>
+            {COUNT_START_MANAGER_ONLY_COPY}
+          </Body>
+        ) : null}
         <Button
           block
           onPress={start}
-          disabled={busy || picks.length === 0}
+          disabled={busy || picks.length === 0 || managerOnly}
           leading={busy ? <ActivityIndicator color={c.paper} /> : undefined}
         >
           Start count

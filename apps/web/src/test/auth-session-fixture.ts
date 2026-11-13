@@ -17,8 +17,10 @@
  * - The Auth server: `GET /user` accepts a token only when its signature is
  *   the project key's (or the legacy HS256 secret's, when a test sets one) and
  *   it has not expired (GoTrue's own check), then answers session_not_found
- *   for a session a test revoked; a refresh always fails, so an expired
- *   session cannot be revived.
+ *   for a session a test revoked. A refresh fails, so an expired session
+ *   cannot be revived, unless a test registered that refresh token
+ *   (`refreshGrants`): GoTrue refreshes a session it knows, whoever's cookie
+ *   the refresh token arrives in.
  *
  * A forged token is modelled the two ways an attacker can make one: a real
  * token whose payload was edited (its signature no longer matches), and a
@@ -71,6 +73,8 @@ export interface SessionClaimsInput {
   totpAgeSeconds?: number;
   sessionId?: string;
   sub?: string;
+  /** The account's address (FIXTURE_EMAIL by default); GET /user answers with it. */
+  email?: string;
 }
 
 export function sessionClaims(input: SessionClaimsInput = {}): Record<string, unknown> {
@@ -87,7 +91,7 @@ export function sessionClaims(input: SessionClaimsInput = {}): Record<string, un
     iat: now - 60,
     iss: AUTH_BASE,
     sub: input.sub ?? FIXTURE_USER_ID,
-    email: FIXTURE_EMAIL,
+    email: input.email ?? FIXTURE_EMAIL,
     role: 'authenticated',
     aal: input.aal ?? 'aal1',
     amr,
@@ -154,19 +158,28 @@ export async function signLegacyToken(
  * The cookies `@supabase/ssr` would hold for a session carrying `jwt`. The
  * stored user object lists a VERIFIED TOTP factor: what the session cookie of
  * an enrolled member holds, and the field the warning proxy guards.
+ *
+ * `stored` sets the two fields nothing signs, which whoever sends the cookie
+ * can write: the refresh token, and `expires_at` (seconds), which decides when
+ * auth-js refreshes the session (within 90 s of it) instead of the token's own
+ * `exp`. Both default to what auth-js itself writes.
  */
-export function sessionCookies(jwt: string, claims: Record<string, unknown>): Map<string, string> {
+export function sessionCookies(
+  jwt: string,
+  claims: Record<string, unknown>,
+  stored: { refreshToken?: string; expiresAt?: number } = {},
+): Map<string, string> {
   const session = {
     access_token: jwt,
-    refresh_token: REFRESH_REF,
+    refresh_token: stored.refreshToken ?? REFRESH_REF,
     token_type: 'bearer',
     expires_in: 3600,
-    expires_at: claims.exp,
+    expires_at: stored.expiresAt ?? claims.exp,
     user: {
       id: claims.sub,
       aud: 'authenticated',
       role: 'authenticated',
-      email: FIXTURE_EMAIL,
+      email: typeof claims.email === 'string' ? claims.email : FIXTURE_EMAIL,
       app_metadata: { provider: 'email' },
       user_metadata: {},
       factors: [{ id: 'factor-1', factor_type: 'totp', status: 'verified' }],
@@ -176,6 +189,35 @@ export function sessionCookies(jwt: string, claims: Record<string, unknown>): Ma
   const encoded = `base64-${stringToBase64URL(JSON.stringify(session))}`;
   for (const chunk of createChunks(FIXTURE_AUTH_COOKIE, encoded)) jar.set(chunk.name, chunk.value);
   return jar;
+}
+
+/**
+ * GoTrue's answer to a refresh grant for a session carrying `jwt` (register it
+ * in `refreshGrants` under the refresh token that session was given). The
+ * account's factors are its own: verified TOTP unless `enrolled` is false.
+ */
+export function refreshGrant(
+  jwt: string,
+  claims: Record<string, unknown>,
+  nextRefreshToken: string,
+  enrolled = true,
+): Record<string, unknown> {
+  return {
+    access_token: jwt,
+    refresh_token: nextRefreshToken,
+    token_type: 'bearer',
+    expires_in: 3600,
+    expires_at: claims.exp,
+    user: {
+      id: claims.sub,
+      aud: 'authenticated',
+      role: 'authenticated',
+      email: typeof claims.email === 'string' ? claims.email : FIXTURE_EMAIL,
+      app_metadata: { provider: 'email' },
+      user_metadata: {},
+      factors: enrolled ? [{ id: 'factor-2', factor_type: 'totp', status: 'verified' }] : [],
+    },
+  };
 }
 
 /** A `next/headers` cookie store over `jar` (getAll/get/set/delete). */
@@ -211,6 +253,14 @@ export interface FakeAuthServer {
    * after its signature and expiry check out, as GoTrue does.
    */
   revokedSessions: Set<string>;
+  /**
+   * Refresh tokens GoTrue knows, each with the session it answers a refresh
+   * grant with (`access_token`, `refresh_token`, `expires_in`, `user`, ...).
+   * Any other refresh token gets refresh_token_not_found, as before.
+   */
+  refreshGrants: Map<string, Record<string, unknown>>;
+  /** Accounts (token subjects) with no factor: GET /user lists none for them. */
+  unenrolledUsers: Set<string>;
 }
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
@@ -271,6 +321,8 @@ export function fakeAuthServer(projectKeys: SigningKey | SigningKey[]): FakeAuth
     jwksGate: null,
     legacySecret: null,
     revokedSessions: new Set(),
+    refreshGrants: new Map(),
+    unenrolledUsers: new Set(),
     fetch: async (input, init) => {
       const url = new URL(
         typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
@@ -309,13 +361,26 @@ export function fakeAuthServer(projectKeys: SigningKey | SigningKey[]): FakeAuth
           id: claims.sub,
           aud: 'authenticated',
           role: 'authenticated',
-          email: FIXTURE_EMAIL,
+          email: typeof claims.email === 'string' ? claims.email : FIXTURE_EMAIL,
           app_metadata: { provider: 'email' },
           user_metadata: {},
-          factors: [{ id: 'factor-1', factor_type: 'totp', status: 'verified' }],
+          factors: server.unenrolledUsers.has(String(claims.sub))
+            ? []
+            : [{ id: 'factor-1', factor_type: 'totp', status: 'verified' }],
         });
       }
       if (path === '/token') {
+        if (url.searchParams.get('grant_type') === 'refresh_token') {
+          let presented: unknown;
+          try {
+            presented = (JSON.parse(String(init?.body ?? '{}')) as { refresh_token?: unknown })
+              .refresh_token;
+          } catch {
+            presented = undefined;
+          }
+          const grant = typeof presented === 'string' ? server.refreshGrants.get(presented) : null;
+          if (grant) return json(200, grant);
+        }
         return json(400, {
           code: 'refresh_token_not_found',
           error_code: 'refresh_token_not_found',

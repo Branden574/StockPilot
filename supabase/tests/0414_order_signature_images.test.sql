@@ -522,10 +522,18 @@ select is(
   -- signed order), the values the 0395 suite pins as its new bodies;
   -- confirm_order_signature and resume_fulfillment are the bodies this file
   -- was written against.
+  -- Re-pinned by 0416 (security slice E; were
+  -- 14e49293fa670dc2e05a1c1b6930bce5 and 2e2d5aab1db5392250879bfa9ff4bccd):
+  -- reopen_picking and resume_fulfillment refuse an approver who may not
+  -- write to the order's warehouse right after the orders:approve gate, and
+  -- nothing else in either body changed (0416 R5 and R4: removing that block
+  -- gives the old bodies exactly). resume_fulfillment still nulls signed_at
+  -- and signature_data_url with the other hand-over columns (C3 above), and
+  -- reopen_picking still refuses a signed order (already_signed).
   E'confirm_order_signature(uuid,text,text,text,text)|8afdbb68f11dd4e8dcff3283b42f3b13\n'
   'confirm_physical_signature(uuid,text)|c0d1c11d31dd86e072f05b72f299535c\n'
-  'reopen_picking(uuid,text)|14e49293fa670dc2e05a1c1b6930bce5\n'
-  'resume_fulfillment(uuid)|2e2d5aab1db5392250879bfa9ff4bccd',
+  'reopen_picking(uuid,text)|b62fbb68ee0d0eb44a9e641921a757e5\n'
+  'resume_fulfillment(uuid)|ce593a9203c41c1a7311b1af27d4cbd3',
   'P5: the frozen hand-over and reset bodies keep their md5 (the trigger does the move; no body changed)');
 
 select * from finish();

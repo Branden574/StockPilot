@@ -54,6 +54,8 @@ function service(row: Record<string, unknown>, lines: { prior: number; requested
           };
     },
     'rpc:confirm_physical_signature': { data: row, error: null },
+    // The order, read in the organization before the function (S39).
+    'order_requests.select.maybeSingle': { data: { id: 'ord-1' }, error: null },
   });
   return new (OrderRequestsService as unknown as new (ctx: unknown) => OrderRequestsService)(
     makeServiceContext(stub.client, {

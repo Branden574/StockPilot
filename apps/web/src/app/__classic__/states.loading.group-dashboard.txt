@@ -1,0 +1,91 @@
+<div class="flex flex-col gap-4 max-w-[1320px] mx-auto pb-16 pt-6 px-4 sm:pt-7 sm:px-8 w-full">
+  <div class="flex flex-wrap gap-4 items-end justify-between pb-2">
+    <div class="min-w-0">
+      <div class="flex h-[16.5px] items-center mb-1.5">
+        <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 170px; height: 9px; border-radius: 4px;">
+      <div class="flex h-[37px] items-center">
+        <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 300px; height: 28px; border-radius: 4px;">
+    <div class="flex gap-2">
+      <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 60px; height: 26px; border-radius: 999px;">
+      <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 72px; height: 32px; border-radius: 6px;">
+      <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 88px; height: 32px; border-radius: 6px;">
+      <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 112px; height: 32px; border-radius: 6px;">
+  <div class="flex flex-col gap-4 min-w-0">
+    <div class="flex flex-col gap-3">
+      <div class="flex h-5 items-center">
+        <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 210px; height: 11px; border-radius: 4px;">
+      <div class="bg-card border border-border overflow-hidden rounded-lg">
+        <div class="border-b border-border flex h-[49px] items-center justify-between px-[18px]">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 120px; height: 12px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 96px; height: 10px; border-radius: 4px;">
+        <div class="border-b border-border flex gap-3.5 items-center last:border-b-0 px-[18px] py-[13px]">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 8px; height: 8px; border-radius: 999px;">
+          <div class="flex-1 min-w-0 space-y-2">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 220px; height: 12px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 60%; height: 10px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 76px; height: 11px; border-radius: 4px;">
+        <div class="border-b border-border flex gap-3.5 items-center last:border-b-0 px-[18px] py-[13px]">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 8px; height: 8px; border-radius: 999px;">
+          <div class="flex-1 min-w-0 space-y-2">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 220px; height: 12px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 60%; height: 10px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 76px; height: 11px; border-radius: 4px;">
+        <div class="border-b border-border flex gap-3.5 items-center last:border-b-0 px-[18px] py-[13px]">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 8px; height: 8px; border-radius: 999px;">
+          <div class="flex-1 min-w-0 space-y-2">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 220px; height: 12px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 60%; height: 10px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 76px; height: 11px; border-radius: 4px;">
+        <div class="border-b border-border flex gap-3.5 items-center last:border-b-0 px-[18px] py-[13px]">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 8px; height: 8px; border-radius: 999px;">
+          <div class="flex-1 min-w-0 space-y-2">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 220px; height: 12px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 60%; height: 10px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 76px; height: 11px; border-radius: 4px;">
+    <div class="flex flex-col gap-3">
+      <div class="space-y-2">
+        <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 130px; height: 14px; border-radius: 4px;">
+        <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 320px; height: 10px; border-radius: 4px;">
+      <div class="bg-card border border-border hidden lg:block overflow-hidden rounded-lg">
+        <div class="bg-border gap-px grid grid-cols-4">
+          <div class="bg-card px-[18px] py-4 space-y-2.5">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 80px; height: 11px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 72px; height: 22px; border-radius: 4px;">
+          <div class="bg-card px-[18px] py-4 space-y-2.5">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 80px; height: 11px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 72px; height: 22px; border-radius: 4px;">
+          <div class="bg-card px-[18px] py-4 space-y-2.5">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 80px; height: 11px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 72px; height: 22px; border-radius: 4px;">
+          <div class="bg-card px-[18px] py-4 space-y-2.5">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 80px; height: 11px; border-radius: 4px;">
+            <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 72px; height: 22px; border-radius: 4px;">
+    <div class="bg-card border border-border overflow-hidden rounded-lg">
+      <div class="bg-border gap-px grid grid-cols-2 lg:grid-cols-4">
+        <div class="bg-card px-[18px] py-4 space-y-2.5">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 96px; height: 11px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 84px; height: 22px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 120px; height: 10px; border-radius: 4px;">
+        <div class="bg-card px-[18px] py-4 space-y-2.5">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 96px; height: 11px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 84px; height: 22px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 120px; height: 10px; border-radius: 4px;">
+        <div class="bg-card px-[18px] py-4 space-y-2.5">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 96px; height: 11px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 84px; height: 22px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 120px; height: 10px; border-radius: 4px;">
+        <div class="bg-card px-[18px] py-4 space-y-2.5">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 96px; height: 11px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 84px; height: 22px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 120px; height: 10px; border-radius: 4px;">
+    <div class="@container">
+      <div class="@min-[936px]:grid-cols-12 gap-4 grid grid-cols-1">
+        <div class="@min-[936px]:col-span-9 bg-card border border-border overflow-hidden p-[18px] rounded-lg space-y-3">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 160px; height: 12px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 200px; height: 10px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 180px; height: 28px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 100%; height: 200px; border-radius: 6px;">
+        <div class="@min-[936px]:col-span-3 bg-card border border-border overflow-hidden p-[18px] rounded-lg space-y-3">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 130px; height: 12px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 150px; height: 10px; border-radius: 4px;">
+          <div class="animate-pulse bg-muted max-w-full shrink-0" style="width: 100%; height: 120px; border-radius: 6px;">

@@ -88,6 +88,7 @@ function baseProps(overrides: Partial<PanelProps> = {}): PanelProps {
     assignedDeliveryUserId: null,
     signatureToken: null,
     hasSignature: false,
+    canPrintWarehouseSlip: true,
     signedByName: null,
     signedAt: null,
     drivers: [],
@@ -1047,6 +1048,196 @@ describe('ManagerActionsPanel — a viewer is never offered an approval-class ac
     r2.unmount();
     render(<ManagerActionsPanel {...baseProps({ status: 'in_transit', fulfillmentType: 'delivery', assignedDeliveryUserId: 'driver-2', canApprove: true, viewerRole: 'staff' })} />);
     expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+  });
+});
+
+// Security slice E review (0416): an approver outside the order's warehouse
+// keeps the panel's READS (the page shows them the panel from picking
+// complete on with canApprove false): Print pick slip, Print customer slip
+// and View signature ask no warehouse. Print warehouse slip's QR hands the
+// order over, so it follows the hand-over rule the page passes
+// (canPrintWarehouseSlip, the route's mayHandOverOrder); a viewer granted
+// orders:approve was offered it and refused too. Mutation caught: the
+// canPrintWarehouseSlip gate dropped (the button shown to everyone again).
+describe('ManagerActionsPanel — the reads after picking, and Print warehouse slip by the hand-over rule (slice E review)', () => {
+  const STEPS = [
+    /Generate packing slips/, /Reopen picking/, /Mark staged for/, /(Assign|Reassign) delivery/,
+    /Mark in transit/, /Collect signature/, /Physical signature/,
+  ];
+  const outside = { canApprove: false, viewerRole: 'staff' as const, viewerCanPick: false, canPrintWarehouseSlip: false };
+
+  it.each(['packing_slip_generated', 'staged_for_pickup', 'staged_for_delivery', 'completed'] as const)(
+    '%s: Print customer slip and View signature, no step, and no Print warehouse slip for someone who may not hand the order over',
+    (status) => {
+      render(
+        <ManagerActionsPanel
+          {...baseProps({ ...outside, status, hasSignature: true, fulfillmentType: status === 'staged_for_delivery' ? 'delivery' : 'pickup' })}
+        />,
+      );
+      expect(screen.getByRole('button', { name: 'Print customer slip' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'View signature' })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Print warehouse slip' })).toBeNull();
+      for (const name of STEPS) expect(screen.queryByRole('button', { name }), `${status}: ${name}`).toBeNull();
+    },
+  );
+
+  it('picking complete: Print pick slip and no step', () => {
+    render(<ManagerActionsPanel {...baseProps({ ...outside, status: 'picking_complete' })} />);
+    expect(screen.getByRole('button', { name: 'Print pick slip' })).toBeInTheDocument();
+    for (const name of STEPS) expect(screen.queryByRole('button', { name })).toBeNull();
+  });
+
+  it('Print warehouse slip for someone who may hand the order over, beside the same reads', () => {
+    render(<ManagerActionsPanel {...baseProps({ status: 'completed', canApprove: true, viewerRole: 'staff', canPrintWarehouseSlip: true })} />);
+    expect(screen.getByRole('button', { name: 'Print warehouse slip' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print customer slip' })).toBeInTheDocument();
+  });
+});
+
+describe('ManagerActionsPanel — an in-transit delivery whose driver deleted their account (B23)', () => {
+  // 0393 clears the driver of an open order when the driver deletes their
+  // account. The order stays in transit and an approver hands it over as
+  // before; the panel says why nobody else will, and with which buttons.
+  // viewerMayHandOver is the page's handOverAllowed (the link's rule).
+  const gone = {
+    status: 'in_transit' as const,
+    fulfillmentType: 'delivery' as const,
+    assignedDeliveryUserId: null,
+    signatureToken: 'sig-test-token',
+    driverDeleted: true,
+    viewerMayHandOver: true,
+  };
+  const LINE_BOTH =
+    'The driver of this delivery deleted their account. Record the hand-over here with Collect signature or Physical signature.';
+  const LINE_COLLECT =
+    'The driver of this delivery deleted their account. Record the hand-over here with Collect signature.';
+
+  it('a manager reads the line naming both hand-over buttons, and keeps both buttons and Cancel', () => {
+    render(
+      <ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'manager' })} />,
+    );
+    expect(screen.getByTestId('deleted-driver-line')).toHaveTextContent(LINE_BOTH);
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Physical signature/ })).toBeEnabled();
+  });
+
+  it('a staff approver reads the line naming only Collect signature, the button they have', () => {
+    render(
+      <ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'staff' })} />,
+    );
+    expect(screen.getByTestId('deleted-driver-line')).toHaveTextContent(LINE_COLLECT);
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Physical signature/ })).toBeNull();
+  });
+
+  // Review (2026-10-31): below manager rank the hand-over also needs write
+  // access to the order's warehouse (handOverAllowed), and every member reads
+  // every order. A staff approver from another warehouse gets no link, so
+  // Collect signature stays disabled; the line must not send them to it.
+  it('a staff approver who may not hand this order over reads no line, and Collect signature stays disabled', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...gone,
+          signatureToken: null,
+          handOverMfaMessage: null,
+          viewerMayHandOver: false,
+          canApprove: true,
+          viewerRole: 'staff',
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeDisabled();
+  });
+
+  it('a staff approver who may not hand it over reads no line while they owe an MFA step-up either', () => {
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...gone,
+          signatureToken: null,
+          handOverMfaMessage: 'Re-authenticate with MFA to collect a signature.',
+          viewerMayHandOver: false,
+          canApprove: true,
+          viewerRole: 'staff',
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
+  });
+
+  it('a viewer who may hand it over reads the line while the MFA step-up stands in for the link, not when Collect signature has neither', () => {
+    const owed = render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...gone,
+          signatureToken: null,
+          handOverMfaMessage: 'Re-authenticate with MFA to collect a signature.',
+          canApprove: true,
+          viewerRole: 'staff',
+        })}
+      />,
+    );
+    expect(screen.getByTestId('deleted-driver-line')).toHaveTextContent(LINE_COLLECT);
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeEnabled();
+    owed.unmount();
+    render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...gone,
+          signatureToken: null,
+          handOverMfaMessage: null,
+          canApprove: true,
+          viewerRole: 'staff',
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
+    expect(screen.getByRole('button', { name: /Collect signature/ })).toBeDisabled();
+  });
+
+  it('says nothing when the page does not say the viewer may hand it over (the prop left out)', () => {
+    const { viewerMayHandOver: _omitted, ...withoutAnswer } = gone;
+    render(
+      <ManagerActionsPanel
+        {...baseProps({ ...withoutAnswer, canApprove: true, viewerRole: 'manager' })}
+      />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
+  });
+
+  it('says nothing while the order names its driver, before it goes out, or to a viewer', () => {
+    const named = render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...gone,
+          assignedDeliveryUserId: 'driver-2',
+          driverDeleted: false,
+          canApprove: true,
+          viewerRole: 'manager',
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
+    named.unmount();
+    const staged = render(
+      <ManagerActionsPanel
+        {...baseProps({
+          ...gone,
+          status: 'staged_for_delivery',
+          canApprove: true,
+          canAssignDelivery: true,
+          viewerRole: 'manager',
+        })}
+      />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
+    staged.unmount();
+    render(
+      <ManagerActionsPanel {...baseProps({ ...gone, canApprove: true, viewerRole: 'viewer' })} />,
+    );
+    expect(screen.queryByTestId('deleted-driver-line')).toBeNull();
   });
 });
 

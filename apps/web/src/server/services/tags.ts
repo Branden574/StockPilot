@@ -7,6 +7,8 @@ import { encodedInValueLength, IN_FILTER_MAX_ENCODED_CHARS } from '@/lib/supabas
 import { audit, auditMany } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { fetchAllRowsByIds, writeInIdBatches } from './lib/fetch-by-ids';
+import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
+import { fetchAllRows } from './lib/paginate';
 import { assertStoredColor } from './lib/stored-color';
 
 /**
@@ -37,15 +39,32 @@ export class TagsService {
     return new TagsService(await withContext());
   }
 
-  /** All tags in the current org, sorted by name (case-insensitive). */
+  /**
+   * All tags in the current org, sorted by name (case-insensitive).
+   *
+   * Every row, page by page (fetchAllRows), ordered by name and then id so the
+   * pages are stable. It was one read, so PostgREST's 1000-row max_rows cut it
+   * off with no error: past 1000 tags, every tag whose name sorts after them
+   * was missing from the Tags picker and the Tags page (B47). One request
+   * still answers an organization under 1000 tags. It stops at
+   * LOOKUP_ROW_CEILING rows (the first by name, then id), reported once.
+   */
   async list(): Promise<TagRow[]> {
-    const { data, error } = await this.ctx.supabase
-      .from('tags')
-      .select('id, name, color, created_at')
-      .eq('organization_id', this.ctx.organizationId)
-      .order('name', { ascending: true });
-    if (error) throw new ServiceError('internal_error', error.message);
-    return (data ?? []) as TagRow[];
+    const rows = await fetchAllRows(
+      (from, to) =>
+        this.ctx.supabase
+          .from('tags')
+          .select('id, name, color, created_at')
+          .eq('organization_id', this.ctx.organizationId)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to),
+      { cap: LOOKUP_ROW_CEILING },
+    );
+    if (rows.length >= LOOKUP_ROW_CEILING) {
+      reportLookupCeiling('tags.list', { organizationId: this.ctx.organizationId });
+    }
+    return rows as TagRow[];
   }
 
   /**
@@ -146,12 +165,18 @@ export class TagsService {
    */
   async delete(id: string): Promise<void> {
     assertPermission(this.ctx, 'categories:manage');
-    const { error } = await this.ctx.supabase
+    // The deleted row is asked back (S41): a filtered delete that matches no
+    // row is not an error, so only the returned row proves a tag of this
+    // organization was deleted. No row answers not_found and records nothing.
+    const { data: row, error } = await this.ctx.supabase
       .from('tags')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Tag not found');
     void audit({ event: 'tag.deleted', entityType: 'tag', entityId: id }, this.ctx);
   }
 

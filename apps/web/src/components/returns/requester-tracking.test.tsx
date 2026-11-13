@@ -170,3 +170,37 @@ describe('RequesterTracking', () => {
     }
   });
 });
+
+// F14: only a member's own order page passes `returnRequest`. The token page
+// and the B2B portal render this section without it (page.tsx:127 of the
+// token route, portal-shop.tsx), so neither gains a control.
+describe('RequesterTracking: Send return request (F14)', () => {
+  const sendButtons = () => screen.queryAllByRole('button', { name: 'Send return request' });
+
+  it('adds no control when the page passes nothing (the token page and the portal)', () => {
+    render(<RequesterTracking requests={[SUBSTITUTED, REVIEW]} />);
+    expect(sendButtons()).toHaveLength(0);
+    expect(document.querySelectorAll('button')).toHaveLength(0);
+  });
+
+  it("adds one button per open request on a member's own order page", () => {
+    render(
+      <RequesterTracking
+        requests={[SUBSTITUTED, REVIEW, { ...REVIEW, returnNumber: 'RMA-20261011-CCC333', returnStatus: 'closed' }]}
+        returnRequest={{
+          orderId: '11111111-1111-4111-8111-111111111111',
+          recipients: { to: 'intake@warehouse.test', cc: 'copy@warehouse.test' },
+          order: {
+            orderNumber: 'SO-000103',
+            requestedBy: 'Sample Requester',
+            requesterEmail: null,
+            site: null,
+            warehouseName: null,
+            link: null,
+          },
+        }}
+      />,
+    );
+    expect(sendButtons()).toHaveLength(2);
+  });
+});

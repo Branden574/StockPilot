@@ -1,17 +1,26 @@
 import { notFound } from 'next/navigation';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { ScheduleEventForm } from '@/components/schedule/schedule-event-form';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { reportError } from '@/lib/error-reporter';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { BundlesService } from '@/server/services/bundles';
 import { ServiceError } from '@/server/services/context';
 import { ScheduleService } from '@/server/services/schedule';
 import { WarehousesService } from '@/server/services/warehouses';
 
 import { can, resolveOrgTimezone } from '@stockpilot/core';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
 
 export const metadata = { title: 'Edit event · Schedule' };
 
@@ -21,6 +30,15 @@ export default async function EditScheduleEventPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before
+  // anything is read with it (B63).
+  notFoundUnlessUuid(id);
+  // Schedule off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('schedule');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="schedule" access={moduleAccess} />;
+  }
   // Manager+ only. notFound() (not redirect) keeps the surface invisible
   // to lower-role users instead of bouncing them through /dashboard.
   const ctx = await requireOrgContext();
@@ -74,7 +92,12 @@ export default async function EditScheduleEventPage({
   const timeZone = await timeZoneRead;
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="ops"
+      data-glass-view="schedule-edit"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/schedule/${id}`}>

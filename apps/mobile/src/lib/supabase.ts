@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
 
 import { authStorageKeyFor, readStoredAuthSession, type StoredAuthSession } from './auth-storage';
+import { writeTrackingFetch } from './update-prompt-holds';
 
 import type { Database } from '@stockpilot/core';
 
@@ -98,6 +99,10 @@ export const supabase = createClient<Database>(url, anon, {
     persistSession: true,
     detectSessionInUrl: false,
   },
+  // Every request but a GET or a HEAD (row and storage writes, RPC calls, a
+  // token refresh) counts as a write in flight: the phone update's Restart
+  // now waits for it, since a restart cancels it (update-prompt-holds.ts).
+  global: { fetch: writeTrackingFetch },
 });
 
 /**
@@ -110,4 +115,38 @@ export function readDeviceAuthSession(): Promise<StoredAuthSession> {
     { head: (key) => SecureStore.getItemAsync(key), full: (key) => ExpoSecureStoreAdapter.getItem(key) },
     AUTH_STORAGE_KEY,
   );
+}
+
+// The project's /auth/v1/user, resolved as supabase-js resolves its Auth
+// address (SupabaseClient: new URL('auth/v1', the URL with a trailing slash)),
+// and its public key, for the function below.
+const AUTH_USER_URL = new URL(
+  'auth/v1/user',
+  url.trim().endsWith('/') ? url.trim() : `${url.trim()}/`,
+).href;
+const PROJECT_PUBLIC_KEY: string = anon;
+
+/**
+ * Ask the Auth server whether it still accepts an access token: GET
+ * /auth/v1/user, OUTSIDE auth-js, so the answer changes nothing on this device
+ * (session-check.ts). auth-js's own getUser() removes the session from the
+ * device when the server answers session_not_found, even with the token passed
+ * in (auth-js 2.105.1 GoTrueClient.js:2480-2511), and the caller has to keep
+ * it there for what it does next.
+ *
+ * The request auth-js itself makes for getUser(): the project's public key,
+ * the token as the bearer, and the API version that makes the server name its
+ * error codes (auth-js lib/fetch.js _request). Rejects when the request cannot
+ * be made or is aborted.
+ */
+export function fetchAuthUser(accessToken: string, signal: AbortSignal): Promise<Response> {
+  return fetch(AUTH_USER_URL, {
+    method: 'GET',
+    headers: {
+      apikey: PROJECT_PUBLIC_KEY,
+      Authorization: `Bearer ${accessToken}`,
+      'X-Supabase-Api-Version': '2024-01-01',
+    },
+    signal,
+  });
 }

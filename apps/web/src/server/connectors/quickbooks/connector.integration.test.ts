@@ -23,7 +23,11 @@ import { quickbooksConnector } from './index';
  * index.test.ts).
  */
 const { postSpy, querySpy } = vi.hoisted(() => ({ postSpy: vi.fn(), querySpy: vi.fn() }));
-vi.mock('./client', () => ({ QboClient: vi.fn() }));
+// The real QboApiError stays: the connector classifies a failure by that class.
+vi.mock('./client', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./client')>()),
+  QboClient: vi.fn(),
+}));
 
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
@@ -178,7 +182,8 @@ describe('quickbooksConnector via runDrain — end-to-end Bill export + idempote
       suppliers: { data: { id: 'sup-1', name: 'Acme Supplies' } },
       // Pre-existing supplier→Vendor mapping so resolveVendor short-circuits and
       // the only POST is the Bill (keeps the "exactly one Bill" count exact).
-      connection_mappings: { data: { external_id: 'qbo-vendor-7', external_meta: {} } },
+      // getMapping is a list read (docket S27): its answer is a list.
+      connection_mappings: { data: [{ external_id: 'qbo-vendor-7', external_meta: {} }] },
       // integrations module enabled for org-1 (migration 0144 gate) so the
       // drainer dispatches; a disabled-module case is covered in drainer.test.ts.
       organization_modules: { data: [{ organization_id: 'org-1' }] },

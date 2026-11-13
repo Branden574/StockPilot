@@ -26,6 +26,8 @@ const calls = vi.hoisted(() => ({
   awaitingSignature: vi.fn(async () => 0),
   /** The viewer's organization (the Demo Co check). */
   orgId: 'org-1',
+  /** Modules the organization has switched off (checkModuleAccess). */
+  modulesOff: new Set<string>(),
 }));
 
 // ── The fan-out's services. `summary` is held open by the timing tests. ──
@@ -87,10 +89,16 @@ vi.mock('@/lib/auth/session', () => ({
 }));
 vi.mock('@/lib/dashboard/request-cache', () => ({
   getOrgRowForRequest: async () => ({ timezone: 'UTC', dashboard_layout: null }),
-  getMfaFactorsForRequest: async () => [],
+  getMfaFactorsForRequest: async () => ({ userId: 'u1', factors: [] }),
   getWarehousesForRequest: async () => [{ id: 'wh-1', name: 'Main' }],
 }));
 vi.mock('@/lib/warehouse-filter', () => ({ getActiveWarehouseFilter: async () => 'wh-1' }));
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: async (moduleId: string) => ({
+    enabled: !calls.modulesOff.has(moduleId),
+    canManage: false,
+  }),
+}));
 
 // Records each read's full chain and answers per table.
 vi.mock('@/lib/supabase/server', () => ({
@@ -189,6 +197,7 @@ beforeEach(() => {
   calls.approvableApprovals.mockResolvedValue(0);
   calls.awaitingSignature.mockResolvedValue(0);
   calls.orgId = 'org-1';
+  calls.modulesOff = new Set<string>();
   summaryGate = null;
   lowStockRows = [{ id: 'i1', quantity_on_hand: 2 }];
 });
@@ -464,6 +473,65 @@ describe('/dashboard: the pending approvals card follows orders:approve (0390)',
       await startBody()
     ).done;
     expect(attention().map((i) => i.id)).not.toContain('order-approvals');
+  });
+});
+
+// B72 part 2 (follow-up from B11 Part 1): with the Orders module off while
+// requests still wait, an approver still got both order cards, and each link
+// opened the module-unavailable page (can() ignores modules; approve() refuses
+// through assertModuleEnabled). Neither card shows then, and neither count is
+// read. Part 1: the signature card keeps its gate (orders:approve, the list's
+// own), so a viewer granted it who drives an order still gets the card; the
+// count behind it is the orders they could hand over (awaitingSignatureCount,
+// tested in order-requests.awaiting-signature.test.ts).
+describe('/dashboard: the order cards follow the Orders module (B72)', () => {
+  type Item = { id: string; href?: string; title?: string };
+  const attention = () =>
+    ((widgetProps.mock.calls[0]![0] as { attentionItems: Item[] }).attentionItems ?? []) as Item[];
+
+  it('with the Orders module off, an approver gets neither order card and neither count is read', async () => {
+    calls.viewer = { role: 'manager', permissions: effectivePermissions('manager') };
+    calls.modulesOff = new Set(['orders']);
+    calls.pendingApprovals.mockResolvedValue(3);
+    calls.approvableApprovals.mockResolvedValue(3);
+    calls.awaitingSignature.mockResolvedValue(2);
+    await (
+      await startBody()
+    ).done;
+    const ids = attention().map((i) => i.id);
+    expect(ids).not.toContain('order-approvals');
+    expect(ids).not.toContain('orders-awaiting-signature');
+    expect(calls.approvableApprovals).not.toHaveBeenCalled();
+    expect(calls.awaitingSignature).not.toHaveBeenCalled();
+  });
+
+  it('with the Orders module on, the same approver gets both', async () => {
+    calls.viewer = { role: 'manager', permissions: effectivePermissions('manager') };
+    calls.approvableApprovals.mockResolvedValue(3);
+    calls.awaitingSignature.mockResolvedValue(2);
+    await (
+      await startBody()
+    ).done;
+    const ids = attention().map((i) => i.id);
+    expect(ids).toContain('order-approvals');
+    expect(ids).toContain('orders-awaiting-signature');
+  });
+
+  it('a viewer granted orders:approve who drives a waiting order still gets the signature card', async () => {
+    calls.viewer = {
+      role: 'viewer',
+      permissions: effectivePermissions(
+        'viewer',
+        [],
+        [{ permission: 'orders:approve', granted: true }],
+      ),
+    };
+    calls.awaitingSignature.mockResolvedValue(1);
+    await (
+      await startBody()
+    ).done;
+    const card = attention().find((i) => i.id === 'orders-awaiting-signature');
+    expect(card?.title).toBe('1 order waiting for signature');
   });
 });
 

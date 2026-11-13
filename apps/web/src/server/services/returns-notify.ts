@@ -16,6 +16,8 @@ import { resolveReturnToken } from '@/server/lib/order-secrets';
 import { sendReturnUpdateEmail, type ReturnUpdateEmailEvent } from '@/server/email/return-update';
 
 import { fetchAllRowsByIds, rawErrorText } from './lib/fetch-by-ids';
+import { listRows } from './lib/list-rows';
+import { postgrestErrorText } from './lib/postgrest-error';
 import { createNotification } from './notifications';
 
 /**
@@ -92,7 +94,9 @@ async function prefFlags(admin: Admin, userIds: string[], key: string): Promise<
 /**
  * The staff audience for a new requester return: effective returns:manage,
  * read access to the order's warehouse, actor excluded, preference honoured.
- * Never throws; a resolution failure is reported and resolves to [].
+ * Never throws; a resolution failure is reported and resolves to []. So is a
+ * read that answers with no list (an empty body, docket S27): read as "no
+ * rows", it dropped a revoke, or everyone, or the assigned staff, silently.
  */
 export async function resolveReturnStaffAudience(args: {
   organizationId: string;
@@ -129,16 +133,24 @@ export async function resolveReturnStaffAudience(args: {
             .eq('warehouse_id', warehouseId)
         : Promise.resolve({ data: [] as Array<{ user_id: string; warehouse_id: string }>, error: null }),
     ]);
-    if (membersRes.error) throw new Error(membersRes.error.message);
-    if (roleOvRes.error) throw new Error(roleOvRes.error.message);
-    if (userOvRes.error) throw new Error(userOvRes.error.message);
-    if (assignRes.error) throw new Error(assignRes.error.message);
+    // postgrestErrorText: a gateway 5xx with an empty body has an empty
+    // message, and the report said nothing (docket B82).
+    if (membersRes.error) throw new Error(postgrestErrorText(membersRes.error, membersRes));
+    if (roleOvRes.error) throw new Error(postgrestErrorText(roleOvRes.error, roleOvRes));
+    if (userOvRes.error) throw new Error(postgrestErrorText(userOvRes.error, userOvRes));
+    if (assignRes.error) throw new Error(postgrestErrorText(assignRes.error, assignRes));
 
-    const members = (membersRes.data ?? []) as Array<{ user_id: string; role: Role }>;
-    const roleOv = (roleOvRes.data ?? []) as Array<PermissionOverride & { role: Role }>;
-    const userOv = (userOvRes.data ?? []) as Array<PermissionOverride & { user_id: string }>;
+    const members = listRows<{ user_id: string; role: Role }>('organization_members', membersRes);
+    const roleOv = listRows<PermissionOverride & { role: Role }>(
+      'role_permission_overrides',
+      roleOvRes,
+    );
+    const userOv = listRows<PermissionOverride & { user_id: string }>(
+      'user_permission_overrides',
+      userOvRes,
+    );
     const assigned = new Set(
-      ((assignRes.data ?? []) as Array<{ user_id: string; warehouse_id: string }>)
+      listRows<{ user_id: string; warehouse_id: string }>('user_warehouse_assignments', assignRes)
         .filter((a) => a.warehouse_id === warehouseId)
         .map((a) => a.user_id),
     );
@@ -175,26 +187,45 @@ export interface ReturnNotifyRma {
   orderId: string;
 }
 
+/**
+ * The RMA's original order, or null when there is none (docket B82). A list of
+ * at most two, not maybeSingle(): maybeSingle() resolves an empty body (a 2xx,
+ * or a 404 it rewrites to 204) as data null with no error, which read as "no
+ * order" and skipped the notice in silence; the drainer's mapping read is read
+ * the same way. A failed read, an answer that is not a list, or two rows
+ * throws, for the caller to report. The notice stays best-effort: no retry.
+ */
+async function readOrder<Row>(
+  admin: Admin,
+  rma: ReturnNotifyRma,
+  columns: string,
+): Promise<Row | null> {
+  const res = await admin
+    .from('order_requests')
+    .select(columns)
+    .eq('id', rma.orderId)
+    .eq('organization_id', rma.organizationId)
+    .limit(2);
+  if (res.error) throw new Error(postgrestErrorText(res.error, res));
+  const rows = listRows<Row>('order_requests', res);
+  // Two rows for one order is no answer either (maybeSingle refused it too).
+  if (rows.length > 1) throw new Error('order_requests answered more than one order');
+  return rows[0] ?? null;
+}
+
 /** "New return request" to the staff audience. Requester-sourced RMAs only. */
 export async function notifyStaffNewReturnRequest(
   rma: ReturnNotifyRma & { actorUserId: string | null; kind?: 'return' | 'exchange' },
 ): Promise<void> {
   try {
     const admin = createAdminClient();
-    const { data: order, error } = await admin
-      .from('order_requests')
-      .select('id, warehouse_id, order_number, requester_name, requester_email')
-      .eq('id', rma.orderId)
-      .eq('organization_id', rma.organizationId)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    if (!order) return;
-    const o = order as {
+    const o = await readOrder<{
       warehouse_id: string | null;
       order_number: number | null;
       requester_name: string | null;
       requester_email: string | null;
-    };
+    }>(admin, rma, 'id, warehouse_id, order_number, requester_name, requester_email');
+    if (!o) return;
     const recipients = await resolveReturnStaffAudience({
       organizationId: rma.organizationId,
       warehouseId: o.warehouse_id,
@@ -303,15 +334,7 @@ export async function notifyRequesterReturnEvent(
   if (!requesterHearsEvent(rma.event, rma)) return;
   try {
     const admin = createAdminClient();
-    const { data: order, error } = await admin
-      .from('order_requests')
-      .select('id, source, customer_id, requester_user_id, requester_email, requester_name, requester_deleted_at, order_number')
-      .eq('id', rma.orderId)
-      .eq('organization_id', rma.organizationId)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
-    if (!order) return;
-    const o = order as {
+    const o = await readOrder<{
       source: string;
       customer_id: string | null;
       requester_user_id: string | null;
@@ -319,7 +342,12 @@ export async function notifyRequesterReturnEvent(
       requester_name: string | null;
       requester_deleted_at: string | null;
       order_number: number | null;
-    };
+    }>(
+      admin,
+      rma,
+      'id, source, customer_id, requester_user_id, requester_email, requester_name, requester_deleted_at, order_number',
+    );
+    if (!o) return;
     // A requester who deleted their account (0388 requester_deleted_at) is
     // never told again, not even at the address the order kept (A3, 0393; the
     // return prompt and the order emails follow the same rule).

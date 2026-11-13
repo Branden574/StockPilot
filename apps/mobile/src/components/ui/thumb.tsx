@@ -4,6 +4,8 @@ import { Box, type LucideIcon } from 'lucide-react-native';
 
 import { CachedImage } from '@/components/ui/cached-image';
 import { useTheme } from '@/lib/use-theme';
+import { glassThumb } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { PHOTO_BACKGROUND } from './tones';
 
 /**
@@ -29,6 +31,7 @@ export function Thumb({
   recyclingKey?: string;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <View
       style={[
@@ -39,25 +42,20 @@ export function Thumb({
           borderColor: c.hair,
           backgroundColor: imageUrl ? PHOTO_BACKGROUND : c.sunk,
         },
+        // Liquid Glass: the boards' thumbnail (.thumb, radius 9, --surface-3).
+        lg && glassThumb(lg, !!imageUrl),
       ]}
     >
       {imageUrl ? (
         <CachedImage
           uri={imageUrl}
-          style={{ width: size, height: size, borderRadius: 7 }}
+          style={{ width: size, height: size, borderRadius: lg ? 9 : 7 }}
           recyclingKey={recyclingKey}
         />
       ) : (
         <Icon size={size * 0.42} color={c.ink3} strokeWidth={1.4} />
       )}
-      {pip ? (
-        <View
-          style={[
-            styles.pip,
-            { backgroundColor: pip },
-          ]}
-        />
-      ) : null}
+      {pip ? <View style={[styles.pip, { backgroundColor: pip }]} /> : null}
     </View>
   );
 }

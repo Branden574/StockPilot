@@ -1,0 +1,20 @@
+<div aria-label="Access" class="grid gap-1 mt-2" role="radiogroup">
+  <label class="flex items-start gap-2.5 cursor-pointer py-1">
+    <input aria-describedby="«id1»-description" aria-labelledby="«id1»-label" class="bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" data-testid="access-role" name="access" type="radio" value="role">
+    <span class="min-w-0">
+      <span class="block text-[13px] font-medium leading-[18px]" id="«id1»-label">
+        "Follow role default"
+      <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]" id="«id1»-description">
+        "What the role allows."
+  <label class="flex items-start gap-2.5 cursor-pointer py-1">
+    <input aria-describedby="«id2»-description" aria-labelledby="«id2»-label" checked="" class="bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" data-testid="access-allow" name="access" type="radio" value="allow">
+    <span class="min-w-0">
+      <span class="block text-[13px] font-medium leading-[18px]" id="«id2»-label">
+        "Allow"
+      <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]" id="«id2»-description">
+        "Always, whatever the role."
+  <label class="flex items-start gap-2.5 cursor-not-allowed opacity-50 py-1">
+    <input aria-labelledby="«id3»-label" class="bg-card mt-px size-4 shrink-0 appearance-none rounded-full border border-[var(--ed-ink-4)] transition-colors checked:border-foreground checked:bg-foreground checked:shadow-[inset_0_0_0_3px_hsl(var(--card))] forced-colors:appearance-auto disabled:cursor-not-allowed focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" data-testid="access-deny" disabled="" name="access" type="radio" value="deny">
+    <span class="min-w-0">
+      <span class="block text-[13px] font-medium leading-[18px]" id="«id3»-label">
+        "Deny"

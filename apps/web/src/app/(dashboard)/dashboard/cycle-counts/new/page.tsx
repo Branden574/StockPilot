@@ -1,14 +1,24 @@
+import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
 import { NewCycleCount } from '@/components/cycle-counts/new-cycle-count';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
+import { StatePanel } from '@/components/patterns/state-panel';
+import { Button } from '@/components/ui/button';
 import { requireOrgContext } from '@/lib/auth/session';
 import { getModulesForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 import { fetchCountAssignees, type CountAssignee } from '@/server/lib/count-assignees';
 import { WarehousesService } from '@/server/services/warehouses';
 
-import { can } from '@stockpilot/core';
+import { can, COUNT_START_MANAGER_ONLY_COPY, countStartManagerOnly } from '@stockpilot/core';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/counts.css';
 
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the list page and the
  *  shell's loading skeleton draw. */
@@ -21,6 +31,38 @@ export default async function NewCycleCountPage() {
   const ctx = await requireOrgContext();
   if (!can(ctx, 'stock:adjust')) {
     redirect('/dashboard');
+  }
+
+  // Only a manager with cycle_counts:assign and stock:adjust can start a count
+  // (B42; the server's assertCountStartFloors). Staff hold stock:adjust, so
+  // they passed the gate above, filled in the form and learned at Start, from
+  // the raw words "Missing permission: cycle_counts:assign", that it is
+  // refused. The command palette and the n c shortcut still lead here, so the
+  // page says why, with the way back, and reads nothing more.
+  if (countStartManagerOnly({ role: ctx.role, permissions: ctx.permissions })) {
+    return (
+      <div className={PAGE} data-glass-page="ops" data-glass-view="cycle-count-new">
+        <PageHeader
+          back={
+            <PageHeaderBackLink href="/dashboard/cycle-counts">
+              ← Back to cycle counts
+            </PageHeaderBackLink>
+          }
+          title="Start a count"
+          className="max-w-[880px]"
+        />
+        <StatePanel
+          kind="forbidden"
+          title={COUNT_START_MANAGER_ONLY_COPY}
+          className="w-full max-w-[880px]"
+          action={
+            <Button asChild variant="outline">
+              <Link href="/dashboard/cycle-counts">Back to cycle counts</Link>
+            </Button>
+          }
+        />
+      </div>
+    );
   }
 
   const warehousesSvc = await WarehousesService.forCurrentUser();
@@ -44,7 +86,7 @@ export default async function NewCycleCountPage() {
   }
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="cycle-count-new">
       <PageHeader
         back={
           <PageHeaderBackLink href="/dashboard/cycle-counts">

@@ -219,7 +219,13 @@ export function SegmentedTabs({
       );
     }
     return (
-      <nav id={id} aria-label={ariaLabel} data-slot="segmented-tabs" className={trackClass}>
+      <nav
+        id={id}
+        aria-label={ariaLabel}
+        data-slot="segmented-tabs"
+        data-glass="seg"
+        className={trackClass}
+      >
         {tabs}
       </nav>
     );
@@ -227,6 +233,7 @@ export function SegmentedTabs({
   return (
     <div
       id={id}
+      data-glass="seg"
       role="tablist"
       aria-label={ariaLabel}
       data-slot="segmented-tabs"

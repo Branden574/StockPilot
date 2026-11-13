@@ -19,6 +19,10 @@ import { dataListReloadNote, type DataListFailure } from '@/components/ui/data-l
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassHeading, GlassSubline } from '@/components/ui/glass/parts';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LOOKUP } from '@/components/ui/glass/screens/lookup';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { readOrgTimeZone } from '@/lib/order-readiness';
 import { nextKnownOrgZone, receiveOverdueCount, type KnownOrgZone } from '@/lib/receive-overdue';
 import { supabase } from '@/lib/supabase';
@@ -68,6 +72,10 @@ export default function Receive() {
   const router = useRouter();
   const navigation = useNavigation();
   const { c } = useTheme();
+  // Liquid Glass (the iOS boards' list tab, as the Items tab): the scene, the
+  // glass nav, the large title with its count line, and the open purchase
+  // orders as grouped glass cards; every Classic control and message stays.
+  const lg = useGlass();
   const tabBarHeight = useBottomTabBarHeight();
   const openDrawer = () => (navigation as { openDrawer?: () => void }).openDrawer?.();
   const { orgId, loading: workspaceLoading } = useOrg();
@@ -192,10 +200,15 @@ export default function Receive() {
   const overdueCount = receiveOverdueCount(pos, new Date(), timeZone);
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LOOKUP.nav : styles.topbar}>
+          <View
+            style={
+              lg ? GLASS_LOOKUP.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip
               icon={ArrowLeft}
               onPress={() => {
@@ -208,8 +221,9 @@ export default function Receive() {
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
         </View>
-        <View style={styles.head}>
-          {countKnown ? (
+        <View style={lg ? GLASS_LOOKUP.head : styles.head}>
+          {/* Liquid Glass says the count under the title (.ios-sub). */}
+          {lg ? null : countKnown ? (
             <Eyebrow>{`${pos.length} OPEN${overdueCount > 0 ? ` · ${overdueCount} OVERDUE` : ''}`}</Eyebrow>
           ) : (
             // Holds the eyebrow's line at every text size, so the title does not
@@ -222,16 +236,35 @@ export default function Receive() {
               {'\u00a0'}
             </Eyebrow>
           )}
-          <Display size={34} style={{ marginTop: 12 }}>
-            Receive <Em>POs.</Em>
+          <Display
+            size={34}
+            style={lg ? GLASS_LOOKUP.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Receive {lg ? 'POs' : <Em>POs.</Em>}
           </Display>
+          {lg ? (
+            <GlassSubline style={{ marginTop: 2 }}>
+              {countKnown
+                ? `${pos.length} open${overdueCount > 0 ? ` · ${overdueCount} overdue` : ''}`
+                : '\u00a0'}
+            </GlassSubline>
+          ) : null}
         </View>
 
-        <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
+        <View
+          style={
+            lg
+              ? { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 }
+              : { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }
+          }
+        >
           <Pressable
             onPress={() => router.push('/scan-po')}
             accessibilityRole="button"
-            style={({ pressed }) => ({ opacity: pressed ? 0.92 : 1 })}
+            style={({ pressed }) =>
+              lg ? { transform: [{ scale: pressed ? 0.98 : 1 }] } : { opacity: pressed ? 0.92 : 1 }
+            }
           >
             <Card hero style={styles.aiCard}>
               {/* The camera sits in a recessed well (sunk: paper2 is the card
@@ -246,7 +279,7 @@ export default function Receive() {
                   size={16}
                   tracking={-0.012}
                   color={c.ink}
-                  style={{ fontFamily: FONT.display, marginTop: 6 }}
+                  style={[{ fontFamily: FONT.display, marginTop: 6 }, lg && lg.font.displaySemi]}
                 >
                   Scan packing slip <Em>with AI</Em>
                 </Mono>
@@ -258,8 +291,12 @@ export default function Receive() {
           </Pressable>
         </View>
 
-        <View style={styles.sectionHead}>
-          <Eyebrow>OPEN PURCHASE ORDERS</Eyebrow>
+        <View style={[styles.sectionHead, lg && { paddingHorizontal: 16 }]}>
+          {lg ? (
+            <GlassHeading>Open purchase orders</GlassHeading>
+          ) : (
+            <Eyebrow>OPEN PURCHASE ORDERS</Eyebrow>
+          )}
           {/* The rows are ordered by when each purchase order last changed
               (updated_at, newest first); the label used to say ETA (D27). */}
           <Body size={12} muted>
@@ -277,7 +314,7 @@ export default function Receive() {
           data={pos}
           keyExtractor={(p) => p.id}
           contentContainerStyle={{
-            paddingHorizontal: 20,
+            paddingHorizontal: lg ? 16 : 20,
             paddingBottom: tabBarHeight + 24,
             gap: 10,
           }}

@@ -38,6 +38,12 @@ import { CheckboxMark } from '@/components/ui/checkbox';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { glassSegLabel, glassSegment, glassSegTrack } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_FOOT_BAR, GLASS_TABS_WRAP, GlassFootBackdrop } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useAuth } from '@/lib/auth-context';
 import {
   EXCEPTIONS_OFFLINE_NOTHING_LOADED_COPY,
@@ -105,6 +111,11 @@ type ListItem =
 
 export default function ExceptionsScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Routes-Gallery-1's exceptions panel
+  // as an iOS list): the scene, the glass nav, the large title over its line,
+  // Open / Resolved as the iOS segmented control, the rows as grouped glass
+  // cards and the recount bar floating on glass. Every control and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const navigation = useNavigation();
   const { orgId } = useOrg();
@@ -267,10 +278,11 @@ export default function ExceptionsScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={styles.chips}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
+          <View style={lg ? GLASS_LIST.navGroup : styles.chips}>
             <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
@@ -292,22 +304,30 @@ export default function ExceptionsScreen() {
             ) : null}
           </View>
         </View>
-        <View style={styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <AlertTriangle size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>INVENTORY · EXCEPTIONS</Eyebrow>
-          </View>
-          <Display size={32} style={{ marginTop: 12 }}>
-            Exceptions<Em>.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <AlertTriangle size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>INVENTORY · EXCEPTIONS</Eyebrow>
+            </View>
+          )}
+          <Display
+            size={lg ? 34 : 32}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Exceptions{lg ? null : <Em>.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Inventory · Exceptions</GlassSubline> : null}
         </View>
         {/* Open / Resolved as the reference's segmented switch: a recessed
             track with the chosen tab on the card colour, ringed in muted ink
             (3:1 or more on the track in both modes), its words in ink. Each
             tab is a 44pt target (they were 22pt pills); the same buttons,
             words and selected state. */}
-        <View style={styles.tabsWrap}>
-          <View style={[styles.tabs, { backgroundColor: c.sunk }]}>
+        <View style={lg ? GLASS_TABS_WRAP : styles.tabsWrap}>
+          <View style={[styles.tabs, { backgroundColor: c.sunk }, lg && glassSegTrack(lg)]}>
             <StatusTab label="Open" active={status === 'open'} onPress={() => setStatus('open')} />
             <StatusTab
               label={`Resolved, last ${EXCEPTION_RESOLVED_WINDOW_DAYS} days`}
@@ -321,7 +341,7 @@ export default function ExceptionsScreen() {
       {view.kind === 'loading' ? (
         <ActivityIndicator color={c.ink3} style={{ marginTop: 32 }} />
       ) : view.kind === 'error' ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 12 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 12 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {view.message}
@@ -337,7 +357,7 @@ export default function ExceptionsScreen() {
         <FlatList
           data={list!.syncState === null ? [] : items}
           keyExtractor={(i) => i.key}
-          contentContainerStyle={styles.list}
+          contentContainerStyle={lg ? [styles.list, GLASS_LIST.list] : styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void refresh()} tintColor={c.ink} />}
           ListHeaderComponent={
             <View style={{ gap: 10, marginBottom: 6 }}>
@@ -430,7 +450,16 @@ export default function ExceptionsScreen() {
       )}
 
       {selecting && canSelect ? (
-        <SafeAreaView edges={['bottom']} style={[styles.selectBar, { backgroundColor: c.card, borderTopColor: c.hair }]}>
+        <SafeAreaView
+          edges={['bottom']}
+          style={[
+            styles.selectBar,
+            { backgroundColor: c.card, borderTopColor: c.hair },
+            // Liquid Glass: the floating glass bar (.item-actions), 16 in.
+            lg && GLASS_FOOT_BAR,
+          ]}
+        >
+          {lg ? <GlassFootBackdrop /> : null}
           <Body size={13.5} muted>
             {pickedCount === 0
               ? 'Tap the exceptions a count can settle to recount them together.'
@@ -533,6 +562,8 @@ function StatusTab({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: an iOS segment; the chosen one keeps Classic's ink-3 ring.
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
@@ -545,13 +576,18 @@ function StatusTab({
           borderColor: active ? c.ink3 : 'transparent',
           opacity: pressed ? 0.7 : 1,
         },
+        lg && glassSegment(lg, active),
       ]}
     >
       <Body
-        size={13}
-        color={active ? c.ink : c.ink3}
+        size={lg ? 14 : 13}
+        // Liquid Glass: every segment's words in ink (.ios-seg > button).
+        color={lg ? c.ink : active ? c.ink : c.ink3}
         maxFontSizeMultiplier={TAB_LABEL_CAP}
-        style={{ fontFamily: active ? FONT.displaySemi : FONT.display, textAlign: 'center' }}
+        style={[
+          { fontFamily: active ? FONT.displaySemi : FONT.display, textAlign: 'center' },
+          lg && glassSegLabel(lg),
+        ]}
       >
         {label}
       </Body>
@@ -586,6 +622,7 @@ function OccurrenceRow({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const recurred = recurrenceBadge(o.recurrenceIndex);
   // What the linked recount has come to so far.
   const recountNote =
@@ -601,7 +638,15 @@ function OccurrenceRow({
     >
       {/* A picked card takes the accent wash, as a picked Items or Books row
           does (DESIGN-SPEC 6.21); the box is the cue that is not colour. */}
-      <Card padding={14} style={picked && selecting ? { backgroundColor: c.accentWash } : undefined}>
+      <Card
+        padding={14}
+        style={
+          picked && selecting
+            ? // Liquid Glass: a picked row on the selection fill (--sel-fill).
+              { backgroundColor: lg ? lg.g.selFill : c.accentWash }
+            : undefined
+        }
+      >
         {selecting ? (
           // The shared checkbox (P2.5b), drawn only while selecting: the card
           // is the press target and VoiceOver's checkbox, so it draws the

@@ -5,6 +5,8 @@ import * as React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
+import { GLASS_HEADER_ACTION, glassGrayCapsule } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
@@ -89,6 +91,9 @@ export default function POImportsScreen() {
   const router = useRouter();
   const { orgId, loading: workspaceLoading } = useOrg();
   const { c } = useTheme();
+  // Liquid Glass: the list frame draws the screen; Scan PO is the small iOS
+  // gray capsule in the nav.
+  const lg = useGlass();
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const [stored, setStored] = React.useState<ListState<ImportRow> | null>(null);
@@ -228,9 +233,20 @@ export default function POImportsScreen() {
             accessibilityRole="button"
             style={({ pressed }) => [styles.headerActionFrame, { opacity: pressed ? 0.7 : 1 }]}
           >
-            <View style={[styles.headerAction, { borderColor: c.hair2, backgroundColor: c.card }]}>
+            <View
+              style={[
+                styles.headerAction,
+                { borderColor: c.hair2, backgroundColor: c.card },
+                lg && [glassGrayCapsule(lg), GLASS_HEADER_ACTION],
+              ]}
+            >
               <ScanLine size={14} color={c.ink} strokeWidth={1.6} />
-              <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.display }}>
+              <Mono
+                size={lg ? 15 : 11}
+                tracking={lg ? 0 : 0.04}
+                color={c.ink}
+                style={[{ fontFamily: FONT.display }, lg && lg.font.displaySemi]}
+              >
                 Scan PO
               </Mono>
             </View>

@@ -121,7 +121,13 @@ describe('global-error: Sign out and back in', () => {
     };
 
     const imported = importsOf(path.join(__dirname, 'global-error.tsx'));
-    expect(imported).toEqual(['react', '@/lib/interrupted-run', '@/lib/share-paths']);
+    expect(imported).toEqual([
+      'react',
+      '@/components/theme/appearance-flag',
+      '@/components/theme/appearance-recovery-plain',
+      '@/lib/interrupted-run',
+      '@/lib/share-paths',
+    ]);
     for (const spec of imported.filter((s) => s.startsWith('@/'))) {
       const file = path.join(src, `${spec.slice(2)}.ts`);
       expect({ module: spec, imports: importsOf(file) }).toEqual({ module: spec, imports: [] });

@@ -1,7 +1,12 @@
 import 'server-only';
 
 import { assertWarehouseAccess } from '@/lib/auth/warehouse';
-import { BUNDLE_DUPLICATE_COMPONENT, componentItemsDistinct } from '@/lib/bundles/component-set';
+import {
+  BUNDLE_DUPLICATE_COMPONENT,
+  BUNDLE_NO_REQUIRED_COMPONENT,
+  componentItemsDistinct,
+  componentsHaveRequired,
+} from '@/lib/bundles/component-set';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
@@ -15,6 +20,7 @@ import {
 } from './context';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { readInActiveOrg } from './lib/in-active-org';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
 
 export interface BundleRow {
@@ -175,10 +181,16 @@ const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 /** A component set naming one item twice is refused before anything is
  *  written: (bundle_id, item_id) is the table's key, so the second row would
- *  fail the insert, or the upsert, part way through (L10). */
-function assertDistinctComponents(components: ReadonlyArray<{ itemId: string }>): void {
+ *  fail the insert, or the upsert, part way through (L10). So is a set with no
+ *  required component: since 0415 no kit can be built from it. */
+function assertComponentSet(
+  components: ReadonlyArray<{ itemId: string; isOptional?: boolean }>,
+): void {
   if (!componentItemsDistinct(components)) {
     throw new ServiceError('validation_error', BUNDLE_DUPLICATE_COMPONENT);
+  }
+  if (!componentsHaveRequired(components)) {
+    throw new ServiceError('validation_error', BUNDLE_NO_REQUIRED_COMPONENT);
   }
 }
 
@@ -195,6 +207,58 @@ export const BUNDLE_PHANTOM_DELETED =
   "This kit's stock item was deleted, so no more can be assembled.";
 export const BUNDLE_COMPONENT_NOT_VISIBLE =
   "A component of this kit isn't in your inventory view, so the kit can't be built from it.";
+/** 0415: assemble_bundle and distribute_bundle build no kit from a bundle
+ *  whose components are all optional, or that has none. */
+export const BUNDLE_NO_REQUIRED_COMPONENTS =
+  "This kit has no required component, so it can't be built from components. Edit the bundle and mark at least one component as required.";
+/** 0415: a component naming another organization's item is refused by name
+ *  (the component policy no longer lets one be saved). */
+export const BUNDLE_COMPONENT_NOT_IN_ORG =
+  "A component of this kit is an item of another organization, so the kit can't be built. Edit the bundle and remove that component.";
+/** 0415: a distribution linked to an event outside the kit's organization (or
+ *  to one deleted meanwhile) is refused before anything is drawn. */
+export const BUNDLE_SCHEDULE_EVENT_NOT_FOUND =
+  "The linked schedule event wasn't found in this organization, so nothing was distributed. Link another event, or none.";
+/** 0415: a component naming the kit's own item (the item its pre-assembled
+ *  kits are counted on) is refused when kits are built from components;
+ *  assembling one used to count kits that were never put together. */
+export const BUNDLE_COMPONENT_IS_KIT_ITEM =
+  "A component of this kit is the kit's own pre-assembled stock, so the kit can't be built from it. Edit the bundle and remove that component.";
+/** 0415: a kit whose pre-assembled stock is recorded on an item that is not
+ *  its own kit item (another organization's, a regular item, or one another
+ *  bundle names) is refused before anything moves. Only the database links a
+ *  kit item, so only support can repair one. */
+export const BUNDLE_PHANTOM_NOT_KIT_ITEM =
+  "This kit's pre-assembled stock is linked to an item that isn't this kit's own kit item, so nothing was assembled or handed out. Contact support to repair the bundle.";
+
+/**
+ * The refusals assemble_bundle() and distribute_bundle() raise by name (0365,
+ * 0415), as the ServiceError whose sentence the web modal and the phone show
+ * (the phone reaches distribute through the API, which forwards the
+ * message), or null for any other error. ScheduleService's completion shows
+ * the same sentence.
+ */
+export function kitRefusal(message: string): ServiceError | null {
+  if (message.includes('bundle_no_required_components')) {
+    return new ServiceError('validation_error', BUNDLE_NO_REQUIRED_COMPONENTS);
+  }
+  if (message.includes('component_not_in_org')) {
+    return new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_IN_ORG);
+  }
+  if (message.includes('component_not_visible')) {
+    return new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
+  }
+  if (message.includes('schedule_event_not_found')) {
+    return new ServiceError('not_found', BUNDLE_SCHEDULE_EVENT_NOT_FOUND);
+  }
+  if (message.includes('component_is_kit_item')) {
+    return new ServiceError('validation_error', BUNDLE_COMPONENT_IS_KIT_ITEM);
+  }
+  if (message.includes('phantom_not_kit_item')) {
+    return new ServiceError('validation_error', BUNDLE_PHANTOM_NOT_KIT_ITEM);
+  }
+  return null;
+}
 
 /**
  * Whether stock on an item row can be drawn for a kit at `warehouseId`: the
@@ -507,7 +571,7 @@ export class BundlesService {
     if (input.components.length === 0) {
       throw new ServiceError('validation_error', 'A bundle needs at least one component');
     }
-    assertDistinctComponents(input.components);
+    assertComponentSet(input.components);
 
     const { data: bundle, error } = await this.ctx.supabase
       .from('bundles')
@@ -608,8 +672,10 @@ export class BundlesService {
    * The two statements are separate calls, so two saves of one bundle can
    * interleave: A upserts {a}, B upserts {b}, A deletes everything but a, B
    * deletes everything but b, and the bundle has NO components (review
-   * 2026-10-05, a rolled-back probe as a manager under RLS). assemble_bundle
-   * has no "no components" refusal, so it would then make kits from nothing.
+   * 2026-10-05, a rolled-back probe as a manager under RLS). Before 0415,
+   * assemble_bundle then made kits from nothing; since 0415 it refuses a
+   * bundle with no required component (bundle_no_required_components), so
+   * the race would stop kits instead, and this read-back keeps the saved set.
    * The second write is an upsert ONLY, never another delete: the last
    * statement of two interleaved saves is then always one of them writing its
    * whole set, so the bundle is never left empty. It may keep both sets (the
@@ -644,8 +710,26 @@ export class BundlesService {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
 
-    // Block toggling preassembly off while phantom stock exists.
+    // A refused component set (empty, an item twice, or no required
+    // component) is refused before anything is written, the bundle row too.
+    if (patch.components) {
+      if (patch.components.length === 0) {
+        throw new ServiceError('validation_error', 'A bundle needs at least one component');
+      }
+      assertComponentSet(patch.components);
+    }
+
+    // S39: the kit is read in THIS organization before anything is written,
+    // for every patch, and a miss refuses. The kit row's update below is
+    // filtered to this organization, but the component rows are written by
+    // bundle_id alone, which the component policy admits for a manager of the
+    // kit's own organization: from a page left open after a switch, the other
+    // organization's components were rewritten and this organization's audit
+    // log recorded it, and only then did the closing get() refuse. Turning
+    // pre-assembly off reads the whole kit through get() (scoped the same way)
+    // for the phantom check; every other patch reads the row alone.
     if (patch.preassemblyEnabled === false) {
+      // Block toggling preassembly off while phantom stock exists.
       const detail = await this.get(id);
       if ((detail.phantom?.quantityOnHand ?? 0) > 0) {
         throw new ServiceError(
@@ -653,6 +737,8 @@ export class BundlesService {
           'Disassemble or distribute remaining pre-assembled kits before disabling pre-assembly.',
         );
       }
+    } else {
+      await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     }
 
     const updatePayload: Record<string, unknown> = { updated_by: this.ctx.userId };
@@ -673,10 +759,6 @@ export class BundlesService {
     }
 
     if (patch.components) {
-      if (patch.components.length === 0) {
-        throw new ServiceError('validation_error', 'A bundle needs at least one component');
-      }
-      assertDistinctComponents(patch.components);
       // Write the new set first, then drop the rows left out of it (L10). The
       // old delete-then-insert left a bundle with NO components when the
       // insert failed; now a failed upsert changes nothing, and a failed
@@ -724,10 +806,17 @@ export class BundlesService {
     return this.get(id);
   }
 
+  /**
+   * Archive, restore and setActive ask the changed row back (S41). The write
+   * is filtered to this organization, and a filtered write that matches no
+   * row is not an error, so only the returned row proves a kit of this
+   * organization changed. No row answers 'Bundle not found' and records
+   * nothing.
+   */
   async archive(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bundles')
       .update({
         is_active: false,
@@ -735,8 +824,11 @@ export class BundlesService {
         updated_by: this.ctx.userId,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Bundle not found');
     await audit({ event: 'bundle.archived', entityType: 'bundle', entityId: id }, this.ctx);
   }
 
@@ -748,7 +840,7 @@ export class BundlesService {
   async restore(id: string): Promise<void> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bundles')
       .update({
         is_active: true,
@@ -756,8 +848,11 @@ export class BundlesService {
         updated_by: this.ctx.userId,
       })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Bundle not found');
     await audit({ event: 'bundle.restored', entityType: 'bundle', entityId: id }, this.ctx);
   }
 
@@ -769,12 +864,15 @@ export class BundlesService {
       updated_by: this.ctx.userId,
     };
     if (isActive) payload.archived_at = null;
-    const { error } = await this.ctx.supabase
+    const { data: row, error } = await this.ctx.supabase
       .from('bundles')
       .update(payload)
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Bundle not found');
     await audit(
       {
         event: 'bundle.updated',
@@ -799,6 +897,16 @@ export class BundlesService {
   ): Promise<{ phantomItemId: string; phantomQty: number }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:manage');
+    // S39: the kit is read in THIS organization first, and a miss refuses
+    // before the warehouse check and the function. assemble_bundle decides on
+    // the kit's own organization, and assertWarehouseAccess passes an owner,
+    // admin or manager (or an all-warehouses member) by role without asking
+    // whose warehouse it is, so a page left open after a switch assembled the
+    // other organization's kits while the audit row and the cache invalidation
+    // below went to this one. Read first, so the answer is not_found whoever
+    // asks; the function refuses a warehouse outside the kit's organization,
+    // so the kit is the one row to read.
+    await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     // H3: warehouse-scoped managers can hold `bundles:manage` org-wide
     // but must still be assigned to the target warehouse. Without this
     // gate, a manager restricted to warehouse A could pre-assemble kits
@@ -850,9 +958,11 @@ export class BundlesService {
       if (msg.includes('phantom_deleted')) {
         throw new ServiceError('validation_error', BUNDLE_PHANTOM_DELETED);
       }
-      if (msg.includes('component_not_visible')) {
-        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
-      }
+      // 0365 component_not_visible; 0415 bundle_no_required_components,
+      // component_is_kit_item, phantom_not_kit_item and component_not_in_org
+      // (a 42501 with no hint, so before 'forbidden').
+      const named = kitRefusal(msg);
+      if (named) throw named;
       if (msg.includes('forbidden')) {
         throw new ServiceError('forbidden', 'Permission denied');
       }
@@ -880,6 +990,10 @@ export class BundlesService {
   async distribute(id: string, input: DistributeInput): Promise<{ distributionId: string }> {
     assertModuleEnabled(this.ctx, 'bundles');
     assertPermission(this.ctx, 'bundles:distribute');
+    // S39: read the kit in THIS organization first, as assemble() does:
+    // distribute_bundle decides on the kit's own organization, and the audit
+    // row and the cache invalidation below are this organization's.
+    await readInActiveOrg(this.ctx, 'bundles', id, 'Bundle not found');
     // H3: warehouse-scope gate. Same rationale as assemble(): a warehouse-
     // scoped staff member shouldn't be able to draw from a warehouse they
     // aren't assigned to even though they hold `bundles:distribute`.
@@ -894,6 +1008,11 @@ export class BundlesService {
       p_idempotency_key: input.idempotencyKey ?? null,
     });
     if (error) {
+      // 0415: distribute_bundle refuses a direct call without
+      // bundles:distribute itself (42501 forbidden, hint permission), as
+      // assertPermission above does.
+      const guard = dbGuardRefusal(error, 'kit_distribute');
+      if (guard) throw guard;
       const msg = error.message ?? '';
       if (msg.includes('idempotency_conflict')) {
         // The same key arrived with a different request. The original attempt
@@ -913,10 +1032,12 @@ export class BundlesService {
         throw new ServiceError('validation_error', 'This bundle is archived or inactive.');
       }
       // 0365: a required component the caller's inventory view cannot see
-      // used to be skipped, and the kit went out without it.
-      if (msg.includes('component_not_visible')) {
-        throw new ServiceError('validation_error', BUNDLE_COMPONENT_NOT_VISIBLE);
-      }
+      // used to be skipped, and the kit went out without it. 0415: a bundle
+      // with no required component, a component of another organization, the
+      // kit's own item as a component, a kit item that is not the kit's own
+      // and an event outside this organization are refused by name.
+      const named = kitRefusal(msg);
+      if (named) throw named;
       if (msg.includes('forbidden')) {
         throw new ServiceError('forbidden', 'Permission denied');
       }

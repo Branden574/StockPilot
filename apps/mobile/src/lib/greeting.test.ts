@@ -105,8 +105,13 @@ describe('Home reads the clock, and reads it again when it comes back', () => {
   // after a pull to refresh. Mutation caught: the timer or its clean-up
   // dropped, or Refresh not reading the clock.
   it('while Home is open the clock is read again at noon, 5 PM and midnight, and on Refresh', () => {
-    const focus = /useFocusEffect\(\s*React\.useCallback\(\(\) => \{([\s\S]*?)\}, \[\]\),\s*\);/.exec(src)?.[1] ?? '';
-    expect(focus).toMatch(/timer = setTimeout\(readClock, nextDayPartChange\(current\)\.getTime\(\) - current\.getTime\(\) \+ \d+\);/);
+    const focus =
+      /useFocusEffect\(\s*React\.useCallback\(\(\) => \{([\s\S]*?)\}, \[\]\),\s*\);/.exec(
+        src,
+      )?.[1] ?? '';
+    expect(focus).toMatch(
+      /timer = setTimeout\(\s*readClock,\s*nextDayPartChange\(current\)\.getTime\(\) - current\.getTime\(\) \+ \d+,?\s*\);/,
+    );
     expect(focus).toMatch(/readClock\(\);\s*return \(\) => clearTimeout\(timer\);/);
     expect(src).toMatch(/async function onRefresh\(\) \{\s*setNow\(new Date\(\)\);/);
   });

@@ -23,6 +23,11 @@ import { listSnapshots } from '@/server/services/restore-points';
 
 import { can, planAllowsRestorePoints, type OrgBillingState } from '@stockpilot/core';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Backups & restore — Settings' };
 

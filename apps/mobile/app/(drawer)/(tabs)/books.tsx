@@ -45,6 +45,11 @@ import {
 } from '@/components/filter-sheet';
 import { CountSelectBar } from '@/components/count-select-bar';
 import { Card } from '@/components/ui/card';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { glassSearchBox, glassSearchInput } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LOOKUP, glassCountLine } from '@/components/ui/glass/screens/lookup';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { CheckboxMark } from '@/components/ui/checkbox';
 import { Paginator } from '@/components/ui/paginator';
 import { Pill } from '@/components/ui/pill';
@@ -55,6 +60,8 @@ import { Thumb } from '@/components/ui/thumb';
 import { onRecordsUngrouped } from '@/lib/ungroup-selected';
 import { countSelection, useIsPicked } from '@/lib/use-count-selection';
 import { showWriteCtaForRole } from '@/lib/cta-gating';
+import { countSelectOffers } from '@/lib/count-select-offers';
+import { useEnabledModules } from '@/lib/enabled-modules';
 import {
   attachDisplayGroups,
   groupRowAccessibilityActions,
@@ -193,6 +200,12 @@ export default function BooksScreen() {
   const { activeOrgId: orgId, activeWarehouseId } = useWorkspace();
   const navigation = useNavigation();
   const { c } = useTheme();
+  // Liquid Glass (inferred from the iOS Lookup board, as the Items tab): the
+  // scene, the glass nav with its 44 pt circles, the large title, the iOS
+  // search with the scan glyph in the accent, the count line under it, and
+  // the cards on the grouped glass surface; every control, filter, message,
+  // selection and the pager stay where they are.
+  const lg = useGlass();
   // Bottom tab bar is absolute-positioned and overlays content — use
   // the navigator-reported height so the last book row clears the blur.
   const tabBarHeight = useBottomTabBarHeight();
@@ -234,6 +247,12 @@ export default function BooksScreen() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
+  // Select is offered only when the select bar has something to offer (B42):
+  // Review to someone who can start a count, Group and Ungroup to someone who
+  // can edit items. A viewer was offered Select and a bar whose Review the
+  // server always refused.
+  const enabledModules = useEnabledModules();
+  const selectOffers = countSelectOffers({ role, permissions, enabledModules });
   // True ONLY when the read hit PostgREST's cap, i.e. the rows in hand are a
   // prefix of the filtered set. At current volumes (111 books on the largest
   // org, cap 1000) this never fires; when it does it is disclosed above the
@@ -282,6 +301,12 @@ export default function BooksScreen() {
   // Cycle-count select mode: tapping a card toggles it into the shared
   // count-selection store instead of opening the book.
   const [selectMode, setSelectMode] = React.useState(false);
+  // Select mode ends when the bar stops having anything to offer (the role or
+  // the permissions arrived, or changed), so no bar is left with no action.
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- leaves select mode when the offers change; a no-op when it is already off
+    if (!selectOffers.any) setSelectMode(false);
+  }, [selectOffers.any]);
   // The select bar's measured height (it grows when its actions wrap at large
   // text sizes). While it shows, the list's end clears it too, so the last
   // cards and the pager are never left under the bar. Identical to Items.
@@ -875,10 +900,15 @@ export default function BooksScreen() {
   );
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LOOKUP.nav : styles.topbar}>
+          <View
+            style={
+              lg ? GLASS_LOOKUP.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
             <IconChip
               icon={ArrowLeft}
               onPress={() => goBackFromReturn(router, returnPath)}
@@ -887,13 +917,19 @@ export default function BooksScreen() {
             />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
-            <IconChip
-              icon={selectMode ? Check : ListChecks}
-              onPress={() => setSelectMode((v) => !v)}
-              accessibilityLabel={selectMode ? 'Done selecting' : 'Select books'}
-              minTap
-            />
+          <View
+            style={
+              lg ? GLASS_LOOKUP.navGroup : { flexDirection: 'row', alignItems: 'center', gap: 2 }
+            }
+          >
+            {selectOffers.any ? (
+              <IconChip
+                icon={selectMode ? Check : ListChecks}
+                onPress={() => setSelectMode((v) => !v)}
+                accessibilityLabel={selectMode ? 'Done selecting' : 'Select books'}
+                minTap
+              />
+            ) : null}
             <IconChip
               icon={Plus}
               onPress={() => router.push({ pathname: '/item/new', params: { type: 'book' } })}
@@ -902,7 +938,7 @@ export default function BooksScreen() {
             />
           </View>
         </View>
-        <View style={styles.head}>
+        <View style={lg ? GLASS_LOOKUP.head : styles.head}>
           {/* Counts inventory_items ROWS, and under Model B one title is one
               row PER charter/rack — so calling it "BOOKS" claimed a title
               count the list itself contradicts the moment a collapse happens
@@ -912,21 +948,40 @@ export default function BooksScreen() {
               except when truncated, where it quotes the server's count and the
               line below says the list is showing less than that. A failed
               read holds no rows, so it quotes no count rather than "0". */}
-          <Eyebrow>
-            {loadError !== null
-              ? 'INVENTORY · PLACEMENTS'
-              : `INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}
-          </Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            Book <Em>catalog.</Em>
+          {/* Liquid Glass says the count under the search field, as the board. */}
+          {lg ? null : (
+            <Eyebrow>
+              {loadError !== null
+                ? 'INVENTORY · PLACEMENTS'
+                : `INVENTORY · ${datasetRowCount.toLocaleString()} PLACEMENTS`}
+            </Eyebrow>
+          )}
+          <Display
+            size={34}
+            style={lg ? GLASS_LOOKUP.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Book {lg ? 'catalog' : <Em>catalog.</Em>}
           </Display>
         </View>
 
-        <View style={{ paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }}>
+        <View
+          style={
+            lg
+              ? GLASS_LOOKUP.searchArea
+              : { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 8 }
+          }
+        >
           {/* The Items twin's search box: the stronger border, the muted-ink
               icon and placeholder (the faint ink4 held it under AA). */}
-          <View style={[styles.searchBox, { backgroundColor: c.card, borderColor: c.hair2 }]}>
-            <Search size={16} color={c.ink3} strokeWidth={1.4} />
+          <View
+            style={[
+              styles.searchBox,
+              { backgroundColor: c.card, borderColor: c.hair2 },
+              lg && glassSearchBox(lg),
+            ]}
+          >
+            <Search size={lg ? 20 : 16} color={c.ink3} strokeWidth={lg ? 1.8 : 1.4} />
             <TextInput
               value={q}
               onChangeText={setQ}
@@ -942,7 +997,11 @@ export default function BooksScreen() {
               autoFocus={false}
               returnKeyType="search"
               onSubmitEditing={() => Keyboard.dismiss()}
-              style={[styles.searchInput, { color: c.ink, fontFamily: FONT.displayRegular }]}
+              style={[
+                styles.searchInput,
+                { color: c.ink, fontFamily: FONT.displayRegular },
+                lg && glassSearchInput(lg),
+              ]}
             />
             <FilterButton onPress={() => setSheetOpen(true)} count={filterCount} />
             {/* D29: the scan button had no name and no role, so VoiceOver
@@ -954,9 +1013,22 @@ export default function BooksScreen() {
               accessibilityRole="button"
               accessibilityLabel="Open scanner"
             >
-              <Barcode size={18} color={c.ink} strokeWidth={1.6} />
+              <Barcode
+                size={lg ? 20 : 18}
+                color={lg ? lg.g.accentText : c.ink}
+                strokeWidth={lg ? 1.8 : 1.6}
+              />
             </Pressable>
           </View>
+
+          {/* The board's count line (.ios-sub num): the placements the list holds. */}
+          {lg ? (
+            <GlassSubline style={GLASS_LOOKUP.count}>
+              {loadError !== null
+                ? 'Placements'
+                : glassCountLine(datasetRowCount, 'placement', 'placements')}
+            </GlassSubline>
+          ) : null}
 
           <ActiveFilterPill
             state={filter}
@@ -1001,7 +1073,7 @@ export default function BooksScreen() {
           data={groupedRows}
           keyExtractor={groupedKeyExtractor}
           contentContainerStyle={{
-            paddingHorizontal: 20,
+            paddingHorizontal: lg ? 16 : 20,
             // In select mode the list ends 12pt above the floating bar, so
             // the pager under the last card is never hidden behind it.
             paddingBottom: tabBarHeight + 24 + (selectMode ? selectBarHeight : 0),

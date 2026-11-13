@@ -2,7 +2,6 @@ import { Check, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -27,8 +26,12 @@ import {
 
 import { OptionRow, SHEET_MIN_TAP, sheetStyles } from '@/components/book-order-sheet-parts';
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { MonthCalendar } from '@/components/ui/month-calendar';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassFieldBox, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import {
   BOOK_REPORT_DATE_CHOICES,
   bookReportCustomRangeQuery,
@@ -101,6 +104,9 @@ function DatesContent({
   onApply,
 }: React.ComponentProps<typeof BookOrderDatesSheet>) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [initial] = React.useState(() => bookReportDatesSheetStart({ query: value, echo, today }));
   const [choice, setChoice] = React.useState<BookReportRange>(value.range);
   // The custom range as typed or picked. The calendar reads only real days,
@@ -177,9 +183,19 @@ function DatesContent({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            lg && glassScrim(lg),
           ]}
         />
-        <View style={[styles.card, { backgroundColor: c.card }, SHADOW.sheet]}>
+        <View
+          style={[
+            styles.card,
+            { backgroundColor: c.card },
+            SHADOW.sheet,
+            lg && GLASS_SHEET_CARD,
+          ]}
+        >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Mono
               size={13}
@@ -351,6 +367,8 @@ function DateField({
   onBlur: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the glass field; the refusal edge and the typed figures' face kept.
+  const lg = useGlass();
   const title = which === 'start' ? BOOK_REPORT_UI.startDate : BOOK_REPORT_UI.endDate;
   return (
     <View style={{ flex: 1, minWidth: 140, gap: 6 }}>
@@ -375,6 +393,7 @@ function DateField({
             backgroundColor: c.sunk,
             fontFamily: FONT.mono,
           },
+          lg && [glassFieldBox(lg, false), invalid && { borderColor: c.critText }],
         ]}
       />
     </View>

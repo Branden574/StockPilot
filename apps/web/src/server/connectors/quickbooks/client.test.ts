@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ConnectorSecrets } from '@stockpilot/core';
 
-import { QboClient } from './client';
+import { QBO_REQUEST_TIMEOUT_MS, QboClient } from './client';
 
 const secrets: ConnectorSecrets = {
   accessToken: 'tok-abc',
@@ -106,5 +106,22 @@ describe('QboClient', () => {
     expect((err as { status?: number }).status).toBe(400);
     // The Bearer token must never appear in the surfaced error.
     expect(err!.message).not.toContain('tok-abc');
+  });
+
+  // docket B81: a call that got no answer held the whole drain-outbox cron
+  // until the platform ended it (still pending after 62 s in a loopback probe).
+  it('post() and query() each stop after 15 s', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ Bill: { Id: '42' } }));
+    fetchSpy.mockResolvedValueOnce(jsonResponse({ QueryResponse: {} }));
+    const client = new QboClient('realm-5', secrets, 'sandbox');
+
+    await client.post('/bill', {}, 'rcpt-1');
+    await client.query('select * from Vendor');
+
+    expect(QBO_REQUEST_TIMEOUT_MS).toBe(15_000);
+    expect(timeoutSpy.mock.calls).toEqual([[15_000], [15_000]]);
+    expect(callAt(0)[1].signal).toBe(timeoutSpy.mock.results[0]?.value);
+    expect(callAt(1)[1].signal).toBe(timeoutSpy.mock.results[1]?.value);
   });
 });

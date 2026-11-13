@@ -3,14 +3,19 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { z } from 'zod';
 
-import { requireSession } from '@/lib/auth/session';
-import { rethrowControlFlow } from '@/lib/control-flow';
+import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { ORG_TIMEZONE_OPTIONS } from '@/lib/timezone-options';
-import { audit } from '@/server/services/audit';
+import { audit, insertAuditRowReported } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
+import { recordPlatformAudit } from '@/server/services/platform/audit';
 import { slugify } from '@/lib/utils';
+import {
+  actionErrorResult,
+  NOT_SET_UP_MESSAGE,
+  unexpectedActionError,
+} from '@/server/lib/action-error-result';
 
 import {
   createOrganizationSchema,
@@ -21,16 +26,38 @@ import {
 } from '@stockpilot/core';
 
 /**
- * Bootstraps a new organization. Uses the admin (service-role) client because:
+ * Bootstraps a new organization, owned by the caller. PLATFORM ADMINS ONLY
+ * (owner decision b.9, docket S20), with the same gate as Platform > Provision:
+ * `checkPlatformAdmin({ requireStepUp: true })`, the VERIFIED sign-in email on
+ * the STOCKPILOT_PLATFORM_ADMIN_EMAILS allowlist plus an authenticator code from
+ * the last 15 minutes. It used to check only that the caller was signed in, and
+ * a Server Action is a public POST endpoint, so any account (a member of any
+ * workspace included) could create workspaces without the /onboarding form.
+ * The gate runs first, before the input is read or the service-role client is
+ * made, and outside any try: it redirects a signed-out caller to sign-in.
+ *
+ * Uses the admin (service-role) client because:
  *   - The current user can't be an org member of an org that doesn't exist yet,
  *     so RLS would reject the INSERT.
  *   - We bind the membership to `session.userId` taken from the validated
  *     server session, NOT from any client input — so this remains safe.
+ *
+ * Every workspace made here is recorded twice, once the owner membership
+ * exists (never for an organization rolled back): in the new organization's
+ * own audit log, and on Platform > Audit as "Provisioned org".
  */
 export async function createOrganizationAction(
   input: CreateOrganizationInput,
 ): Promise<ActionResult<{ organizationId: string; slug: string }>> {
-  const session = await requireSession();
+  const gate = await checkPlatformAdmin({ requireStepUp: true });
+  if (!gate.ok) {
+    return gate.reason === 'aal2_required'
+      ? err('forbidden', 'Re-authenticate with MFA to create a workspace.', {
+          reason: 'aal2_required',
+        })
+      : err('forbidden', 'Not authorized.');
+  }
+  const session = gate.session;
 
   const parsed = createOrganizationSchema.safeParse(input);
   if (!parsed.success) {
@@ -40,11 +67,14 @@ export async function createOrganizationAction(
   let admin;
   try {
     admin = createAdminClient();
-  } catch {
-    return err(
-      'internal_error',
-      'Server is missing SUPABASE_SERVICE_ROLE_KEY. Add it to apps/web/.env.local and restart the dev server.',
-    );
+  } catch (e) {
+    // Only a server without the service-role key throws here (a local or
+    // preview server). The person reads that the feature is not set up, never
+    // the setting's name (S31); the report names it.
+    return unexpectedActionError(e, 'actions.organization.create', {
+      message: NOT_SET_UP_MESSAGE,
+      level: 'warning',
+    });
   }
 
   const candidateSlug = parsed.data.slug?.length ? parsed.data.slug : slugify(parsed.data.name);
@@ -65,7 +95,10 @@ export async function createOrganizationAction(
     .single();
 
   if (orgError || !org) {
-    return err('internal_error', orgError?.message ?? 'Failed to create organization');
+    return unexpectedActionError(
+      orgError ?? new Error('organization insert returned no row'),
+      'actions.organization.create',
+    );
   }
 
   const orgId = org.id as string;
@@ -82,7 +115,9 @@ export async function createOrganizationAction(
   if (memberError) {
     // Best-effort cleanup — try to roll back the org so the user can retry.
     await admin.from('organizations').delete().eq('id', orgId);
-    return err('internal_error', memberError.message);
+    return unexpectedActionError(memberError, 'actions.organization.create', {
+      organizationId: orgId,
+    });
   }
 
   // 3) Set as default org on the user profile.
@@ -96,6 +131,24 @@ export async function createOrganizationAction(
     organization_id: orgId,
     name: 'Main Warehouse',
     type: 'warehouse',
+  });
+
+  // 5) Audit, awaited: the new organization's own row (the event Provision
+  //    writes, with via 'onboarding'), then the platform console's
+  //    org_provisioned. Neither writer throws; a lost row is reported.
+  await insertAuditRowReported({
+    organization_id: orgId,
+    user_id: session.userId,
+    event: 'organization.provisioned_by_platform_admin',
+    metadata: { entity_type: 'organization', entity_id: orgId, via: 'onboarding' },
+  });
+  await recordPlatformAudit({
+    actorUserId: session.userId,
+    actorEmail: session.email,
+    action: 'org_provisioned',
+    targetOrganizationId: orgId,
+    targetUserId: session.userId,
+    detail: { via: 'onboarding', slug: orgSlug },
   });
 
   revalidatePath('/dashboard');
@@ -170,10 +223,7 @@ export async function updateTerminologyAction(
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.organization.update_terminology');
   }
 }
 
@@ -253,10 +303,7 @@ export async function updateOrgPoTermsAction(
     revalidatePath('/dashboard/settings/organization');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.organization.update_org_po_terms');
   }
 }
 
@@ -328,10 +375,7 @@ export async function updateOrgTimezoneAction(
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.organization.update_org_timezone');
   }
 }
 
@@ -399,10 +443,7 @@ export async function renameOrganizationAction(input: {
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.organization.rename_organization');
   }
 }
 

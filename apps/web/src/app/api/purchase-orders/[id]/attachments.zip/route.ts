@@ -7,6 +7,7 @@ import { withApiContext } from '@/lib/auth/api-context';
 import { exportRateLimited } from '@/lib/export-rate-limit';
 import { reportError } from '@/lib/error-reporter';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
+import { invalidPathIdResponse } from '@/server/lib/path-id';
 import { PoAttachmentsService } from '@/server/services/po-attachments';
 import { PurchaseOrdersService } from '@/server/services/purchase-orders';
 import { ServiceError, serviceErrorStatus } from '@/server/services/context';
@@ -49,6 +50,9 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   try {
     const ctx = await withApiContext(req);
     if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+    // A malformed id is a 400 before anything is read or spent (B63).
+    const invalidId = invalidPathIdResponse(id, 'That purchase order id is not valid.');
+    if (invalidId) return invalidId;
     if (!can(ctx, 'purchase_orders:read')) {
       return NextResponse.json({ error: 'forbidden' }, { status: 403 });
     }

@@ -65,18 +65,21 @@ describe("the order screen's runAction reads the order again after a refusal", (
       .replace(/^\s*\/\/.*$/gm, '')
       .replace(/\s+/g, ' ');
 
+  // Through the screen's reload (review of the S2 follow-up): the newest
+  // `load`, and back only once the newest load's order is on screen
+  // (order-load-race.test.ts runs it).
   it('a success still reads the order again', () => {
     expect(tryStatement).toBeDefined();
-    expect(flat(tryStatement!.tryBlock)).toContain('await fn(); await load(); return true;');
+    expect(flat(tryStatement!.tryBlock)).toContain('await fn(); await reload(); return true;');
   });
 
   it('a failure says why, reads the order again when the server answered, and reports the failure', () => {
     const handler = flat(tryStatement!.catchClause!.block);
     expect(handler).toContain("Alert.alert('Could not update order'");
     expect(handler).toContain(
-      'if (reloadAfterFailedOrderAction(e)) await load().catch(() => undefined);',
+      'if (reloadAfterFailedOrderAction(e)) await reload().catch(() => undefined);',
     );
-    expect(handler).toMatch(/await load\(\)\.catch\(\(\) => undefined\);[^]*return false;/);
+    expect(handler).toMatch(/await reload\(\)\.catch\(\(\) => undefined\);[^]*return false;/);
   });
 
   it('the screen imports the rule rather than deciding inline', () => {
@@ -113,7 +116,7 @@ describe("the order screen's return sheets read the order again after a refusal"
     const log: unknown[][] = [];
     return {
       log,
-      load: vi.fn(async () => {
+      reload: vi.fn(async () => {
         log.push(['load']);
         await new Promise((resolve) => setTimeout(resolve, 0));
         await read();
@@ -147,7 +150,7 @@ describe("the order screen's return sheets read the order again after a refusal"
       Alert: { alert: vi.fn() },
       RETURNS_COPY: { releaseBeforeReturn: 'Release replacement before return is received' },
       releaseOutcomeLine: () => 'Released.',
-      load: r.load,
+      reload: r.reload,
     });
     return { run, ...r };
   }
@@ -176,15 +179,15 @@ describe("the order screen's return sheets read the order again after a refusal"
       canReadReturns: false,
       router: { push: vi.fn() },
       Alert: { alert: vi.fn() },
-      load: r.load,
+      reload: r.reload,
     });
     return { run, ...r };
   }
 
   it('a refused release is said in the sheet, then the order is read again before the sheet is free', async () => {
-    const { run, log, load } = release(refusal(409, RETURN_CHANGED));
+    const { run, log, reload } = release(refusal(409, RETURN_CHANGED));
     await run('Swap at delivery.');
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
     expect(log).toEqual([
       ['busy', true],
       ['error', null],
@@ -197,9 +200,9 @@ describe("the order screen's return sheets read the order again after a refusal"
 
   it('a refused return is said in the sheet, then the order is read again before the sheet is free', async () => {
     const overBudget = 'Only 1 of these can still be returned.';
-    const { run, log, load } = createReturn(refusal(409, overBudget));
+    const { run, log, reload } = createReturn(refusal(409, overBudget));
     await run();
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledTimes(1);
     expect(log).toEqual([
       ['busy', true],
       ['error', null],
@@ -212,9 +215,9 @@ describe("the order screen's return sheets read the order again after a refusal"
 
   it('no answer (a timeout) leaves the order as shown, in both sheets', async () => {
     const timeout = new Error(REQUEST_TIMED_OUT_COPY);
-    for (const { run, load, log } of [release(timeout), createReturn(timeout)]) {
+    for (const { run, reload, log } of [release(timeout), createReturn(timeout)]) {
       await (run as (reason?: string) => Promise<void>)('r');
-      expect(load).not.toHaveBeenCalled();
+      expect(reload).not.toHaveBeenCalled();
       expect(log).toContainEqual(['error', REQUEST_TIMED_OUT_COPY]);
       expect(log.at(-1)).toEqual(['busy', false]);
     }
@@ -235,9 +238,9 @@ describe("the order screen's return sheets read the order again after a refusal"
   });
 
   it('a success still closes the sheet and reads the order once', async () => {
-    for (const { run, load, log } of [release(null), createReturn(null)]) {
+    for (const { run, reload, log } of [release(null), createReturn(null)]) {
       await (run as (reason?: string) => Promise<void>)('r');
-      expect(load).toHaveBeenCalledTimes(1);
+      expect(reload).toHaveBeenCalledTimes(1);
       expect(log).toContainEqual(['open', false]);
       expect(log.at(-1)).toEqual(['busy', false]);
     }

@@ -1,7 +1,6 @@
 import { Check, SlidersHorizontal, X } from 'lucide-react-native';
 import * as React from 'react';
 import {
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,7 +12,11 @@ import {
 
 import { Button } from '@/components/ui/button';
 import { CheckboxMark } from '@/components/ui/checkbox';
+import { Modal } from '@/components/ui/modal';
 import { Body, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import { FONT, SHADOW, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -103,6 +106,7 @@ export function FilterSheet({
   showGenericCharter = true,
 }: Props) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   const headerStacked = shouldStackRow(fontScale);
 
@@ -147,6 +151,8 @@ export function FilterSheet({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            // Liquid Glass: the --scrim tint (it never blurs the page).
+            lg && glassScrim(lg),
           ]}
         />
         <View
@@ -158,16 +164,22 @@ export function FilterSheet({
               paddingBottom: Platform.OS === 'ios' ? 28 : 22,
             },
             SHADOW.sheet,
+            // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+            lg && GLASS_SHEET_CARD,
           ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
           {Platform.OS === 'ios' ? (
             <View style={styles.grabberRow}>
               <View
                 style={[
                   styles.grabber,
                   {
-                    backgroundColor:
-                      mode === 'dark' ? 'rgba(250,250,247,0.22)' : 'rgba(14,15,13,0.18)',
+                    backgroundColor: lg
+                      ? lg.ios.sep
+                      : mode === 'dark'
+                        ? 'rgba(250,250,247,0.22)'
+                        : 'rgba(14,15,13,0.18)',
                   },
                 ]}
               />

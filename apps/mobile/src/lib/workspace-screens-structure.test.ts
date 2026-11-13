@@ -17,6 +17,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm, printClassic } from './__fixtures__/classic-projection';
 import { syncBadgeState } from './sync-badge';
 import { palette, type Palette } from './theme';
 
@@ -317,6 +318,11 @@ describe('contrast: every pair the screens draw, both modes', () => {
 describe('Home: real figures, real sync words, no fake sparklines (D26)', () => {
   const home = sourceOf(HOME);
   const code = codeOnly(home);
+  // Home draws Liquid Glass differences as \`lg\` branches (stage 4); a pin
+  // on Classic's shape reads Classic's projection, every branch folded to
+  // Classic (lib/__fixtures__/classic-projection.ts), which is the code
+  // Classic runs, printed on one line per element.
+  const classic = codeOnly(printClassic(home, HOME));
   type Read = { count?: number | null; data?: unknown; error: unknown };
   const { homeSummary, FIGURES_LOAD_ERROR, RECENT_LOAD_ERROR } = screenDeclarations(HOME, [
     'homeSummary',
@@ -363,7 +369,7 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
   // Mutation caught: the tiles drawn from a null summary (zeros again), or
   // the failure shown without the alert role.
   it('the tiles render only from read figures; otherwise the failure, as an alert', () => {
-    expect(code).toMatch(/\{figures \? \(\s*<View style=\{styles\.statGrid\}>/);
+    expect(classic).toMatch(/\{figures \? \(\s*<View style=\{styles\.statGrid\}>/);
     expect(code).toMatch(
       /<Body size=\{14\.5\} accessibilityRole="alert">\s*\{FIGURES_LOAD_ERROR\}\s*<\/Body>/,
     );
@@ -423,8 +429,12 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
 
   it('keeps the tour target, every link and the header controls', () => {
     expect(code).toContain("const scanTargetRef = useTourTarget('home-scan');");
-    expect(code).toMatch(
+    expect(classic).toMatch(
       /<View ref=\{scanTargetRef\} collapsable=\{false\}[^>]*>\s*<Pressable\s+onPress=\{\(\) => router\.push\('\/scan'\)\}/,
+    );
+    // Liquid Glass keeps the same target around the same card.
+    expect(code).toMatch(
+      /<View\s+ref=\{scanTargetRef\}\s+collapsable=\{false\}\s+style=\{lg \? GLASS_HOME\.block : \{ paddingHorizontal: 20, marginTop: 20 \}\}\s*>\s*<Pressable\s+onPress=\{\(\) => router\.push\('\/scan'\)\}/,
     );
     for (const href of [
       "'/settings'",
@@ -477,8 +487,12 @@ describe('Home: real figures, real sync words, no fake sparklines (D26)', () => 
     // the frame and the heading row with it (-15 + 15), where centred ones
     // spilled out of the row into the card below at AX4 and AX5.
     expect(block).toMatch(/paddingVertical: 15,\s*marginVertical: -15,/);
+    expect(classic).toMatch(
+      /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[\s*styles\.seeAll[\s\S]{0,120}color=\{c\.accent\}>\s*See all/,
+    );
+    // Liquid Glass: the same named button in the board's 44pt link frame.
     expect(code).toMatch(
-      /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[styles\.seeAll[\s\S]{0,120}color=\{c\.accent\}>\s*See all/,
+      /accessibilityLabel="See all movements"\s+style=\{\(\{ pressed \}\) => \[\s*lg \? GLASS_HOME\.seeAll : styles\.seeAll,/,
     );
   });
 
@@ -623,6 +637,101 @@ describe('AI chat: Send has a name, both buttons are 44pt frames', () => {
     expect(code).toMatch(
       /behavior=\{Platform\.OS === 'ios' \? 'padding' : undefined\}\s*keyboardVerticalOffset=\{Platform\.OS === 'ios' \? 0 : 24\}/,
     );
+  });
+});
+
+// Docket B75: the screen resent its whole transcript as `history` with every
+// message and listened for a `session` event nothing sent, so about the 22nd
+// message of a chat was refused (and every message after a reply over 8,000
+// characters), each message became a chat of its own on the web, a refusal
+// showed "AI chat 400: " and the raw body, and there was no New chat. The
+// request and the answer are now built and read by lib/ai-chat.ts
+// (ai-chat.test.ts runs them); these pin the screen's wiring to it.
+describe('AI chat: one session per chat, a sentence for every failure, New chat', () => {
+  const code = codeOnly(sourceOf(CHAT));
+
+  it('builds the request and reads the answer through lib/ai-chat, never inline', () => {
+    for (const gone of [
+      "event.type === 'session'",
+      'JSON.parse(line)',
+      'const history = turns',
+      'AI chat ${res.status}',
+      'setSessionId',
+    ]) {
+      expect(code, gone).not.toContain(gone);
+    }
+    expect(code).toMatch(/from '@\/lib\/ai-chat'/);
+    const send = functionBody(CHAT, 'send');
+    expect(send).toContain('JSON.stringify(buildChatRequestBody(text, sessionRef.current, turns))');
+    expect(send).toContain('parseChatStream(await res.text())');
+  });
+
+  // A ref, not state: send() reads it when it runs, so the photo flow's send()
+  // (from the render attachPhoto started in) sends the chat's current id too.
+  // The id is kept before an error event is thrown: the route names the
+  // session in `done` after any error.
+  it('keeps the session id in a ref, taken from the answer before an error is thrown', () => {
+    expect(code).toContain('const sessionRef = React.useRef<string | null>(null);');
+    const send = functionBody(CHAT, 'send');
+    const keep = send.indexOf('sessionRef.current = answer.sessionId;');
+    expect(keep).toBeGreaterThan(-1);
+    expect(send.indexOf('throw new ChatFailure(answer.errorMessage)')).toBeGreaterThan(keep);
+  });
+
+  it('a refusal reads as a sentence, asks for the account probe, and anything else is the connection sentence', () => {
+    const send = functionBody(CHAT, 'send');
+    expect(send).toContain('notifyUnauthorized({ status: res.status });');
+    expect(send).toContain('throw new ChatFailure(chatRefusalSentence(res.status, raw));');
+    expect(send).toContain(
+      "Alert.alert('Chat error', err instanceof ChatFailure ? err.message : CONNECTION_FAILURE_COPY);",
+    );
+    expect(send).not.toMatch(/err instanceof Error \? err\.message/);
+  });
+
+  it('New chat: a + chip once the chat has started, hidden while an answer or a photo is pending', () => {
+    const { sf, els } = elements(
+      CHAT,
+      (el, s) => tagOf(el, s) === 'IconChip' && attrText(el, 'icon', s) === 'Plus',
+    );
+    expect(els).toHaveLength(1);
+    const chip = els[0]!.el;
+    expect(attrText(chip, 'onPress', sf)).toBe('startNewChat');
+    expect(attrText(chip, 'accessibilityLabel', sf)).toBe('New chat');
+    expect(attrText(chip, 'minTap', sf)).toBe('true');
+    // In the top bar, opposite Back, where the 44pt spacer was: Classic's
+    // projection (lib/__fixtures__/classic-projection.ts) keeps it in
+    // styles.topbar; Liquid Glass draws that same bar as the glass nav.
+    const classicSf = parseTsx(printClassic(sourceOf(CHAT), CHAT), CHAT);
+    const classicChips: JsxNode[][] = [];
+    walkJsx(classicSf, (el, ancestors) => {
+      if (tagOf(el, classicSf) === 'IconChip' && attrText(el, 'icon', classicSf) === 'Plus')
+        classicChips.push([...ancestors]);
+    });
+    expect(classicChips).toHaveLength(1);
+    expect(classicChips[0]!.map((a) => attrText(a, 'style', classicSf))).toContain('styles.topbar');
+    expect(els[0]!.ancestors.map((a) => attrText(a, 'style', sf))).toContain(
+      'lg ? GLASS_LIST.nav : styles.topbar',
+    );
+    let node: ts.Node | undefined = chip;
+    while (node && !ts.isConditionalExpression(node)) node = node.parent;
+    expect(node, 'the chip is shown under a condition').toBeDefined();
+    const shown = node as ts.ConditionalExpression;
+    expect(shown.condition.getText(sf)).toBe('turns.length > 0 && !busy && !uploading');
+    // Otherwise the spacer keeps the label centred.
+    let otherwise: ts.Expression = shown.whenFalse;
+    while (ts.isParenthesizedExpression(otherwise)) otherwise = otherwise.expression;
+    expect(otherwise.getText(sf)).toBe('<View style={{ width: 44 }} />');
+  });
+
+  // The chat counter keeps an answer still on its way out of the new chat;
+  // ai-chat-screen.test.ts runs send(), startNewChat() and attachPhoto().
+  it('New chat empties the chat, the box and the session; the old chat stays on the web', () => {
+    const start = functionBody(CHAT, 'startNewChat');
+    expect(start).toContain('chatRef.current += 1;');
+    expect(start).toContain('sessionRef.current = null;');
+    expect(start).toContain('setTurns([]);');
+    expect(start).toContain("setInput('');");
+    expect(wordsOf(CHAT)).toContain('New chat');
   });
 });
 
@@ -838,8 +947,15 @@ describe('Notifications (M-WS-06)', () => {
   });
 
   it('unread is the accent wash with an accent edge, per mode', () => {
-    expect(code).toContain(
-      'style={unread ? { backgroundColor: c.accentWash, borderColor: c.accent } : undefined}',
+    // Classic's text, read from its projection (lib/__fixtures__/classic-projection.ts).
+    expect(classicFlat(sourceOf(NOTIFICATIONS), NOTIFICATIONS)).toContain(
+      flatNorm(
+        'style={unread ? { backgroundColor: c.accentWash, borderColor: c.accent } : undefined}',
+      ),
+    );
+    // Liquid Glass: unread on the selection fill of the grouped surface.
+    expect(code.replace(/\s+/g, ' ')).toContain(
+      'lg ? unread ? [GLASS_BARE_CARD, { backgroundColor: lg.g.selFill }] : GLASS_BARE_CARD',
     );
     expect(code).toContain("backgroundColor: unread ? c.accent : 'transparent',");
   });
@@ -913,8 +1029,14 @@ describe('Team and Accounts (M-WS-07, 08)', () => {
     expect(code).toContain('const mailto = plainAddressMailtoUrl(email);');
     expect(code).not.toMatch(/`mailto:\$\{/);
     expect(code).toMatch(/\{email && mailto \? \( <Pressable onPress=\{\(\) => Linking\.openURL\(mailto\)/);
+    expect(classicFlat(sourceOf(TEAM), TEAM)).toContain(
+      flatNorm(
+        ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}',
+      ),
+    );
+    // Liquid Glass: the same words in the same frame, still no touchable.
     expect(code).toContain(
-      ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3}> {email} </Mono> </View> ) : null}',
+      ') : email ? ( <View style={{ marginTop: 3 }}> <Mono size={11.5} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined} > {email} </Mono> </View> ) : null}',
     );
   });
 
@@ -1128,13 +1250,17 @@ describe('Maintenance request (M-WS-10)', () => {
     expect(code.match(/placeholderTextColor=\{c\.ink3\}/g)).toHaveLength(2);
     expect(styleBlock(REQUEST, 'textarea')).toMatch(/fontFamily: FONT\.displayRegular,/);
     // The two typed boxes and the two copy boxes are controls: hair2, never
-    // the hairline alone.
+    // the hairline alone. Classic is read through the classic projection.
+    const classic = classicFlat(sourceOf(REQUEST), REQUEST);
     expect(
-      code.match(/styles\.textarea, \{ color: c\.ink, borderColor: c\.hair2 \}/g),
+      classic.match(/styles\.textarea,\{color: c\.ink,borderColor: c\.hair2\}/g),
     ).toHaveLength(2);
-    expect(code.match(/styles\.copyBox, \{ color: c\.ink, borderColor: c\.hair2\b/g)).toHaveLength(
+    expect(classic.match(/styles\.copyBox,\{color: c\.ink,borderColor: c\.hair2\b/g)).toHaveLength(
       2,
     );
+    // Liquid Glass: each typed box a glass field, each copy box on the field fill.
+    expect(code.match(/lg && glassTextArea\(lg\)/g)).toHaveLength(2);
+    expect(code.match(/lg && glassCopyBox\(lg\)/g)).toHaveLength(2);
   });
 
   it('keeps every word', () => {
@@ -1184,10 +1310,13 @@ describe('New maintenance request (M-WS-11)', () => {
     // Dynamic Type: a site or category name is content, uncapped before the
     // restyle; capped at the 22pt control ceiling it stopped growing at AX2
     // and read smaller than its own field label.
+    // Classic 13; Liquid Glass draws the capsule's words at 15.
     const labels = elements(
       NEW_REQUEST,
       (el, s) =>
-        tagOf(el, s) === 'Body' && attrText(el, 'size', s) === '13' && textOf(el, s) === '',
+        tagOf(el, s) === 'Body' &&
+        attrText(el, 'size', s) === 'lg ? 15 : 13' &&
+        textOf(el, s) === '',
     );
     const chipLabel = labels.els.filter(({ ancestors }) =>
       ancestors.some((a) => attrText(a, 'style', labels.sf)?.includes('styles.chip,')),
@@ -1221,9 +1350,11 @@ describe('New maintenance request (M-WS-11)', () => {
       expect(attrText(el, 'style', sf)).toMatch(/box\]$/);
       expect(attrText(el, 'maxFontSizeMultiplier', sf)).toBeUndefined();
     }
-    expect(code).toContain(
-      'const box = { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };',
+    expect(classicFlat(sourceOf(NEW_REQUEST), NEW_REQUEST)).toContain(
+      flatNorm('const box = { color: c.ink, borderColor: c.hair2, backgroundColor: c.card };'),
     );
+    // Liquid Glass: every box a glass field.
+    expect(code).toContain('const box = lg ? glassTypedBox(lg) :');
   });
 
   it('the photo step: named source buttons, a named Retry in a 44pt frame, a Done button', () => {

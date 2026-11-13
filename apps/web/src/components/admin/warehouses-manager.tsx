@@ -431,7 +431,7 @@ function WarehouseDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
-        <DialogHeader>
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>
             {editing ? `Edit ${termSingular.toLowerCase()}` : `New ${termSingular.toLowerCase()}`}
           </DialogTitle>
@@ -439,7 +439,7 @@ function WarehouseDialog({
             Stock and assigned users are scoped to a {termSingular.toLowerCase()}.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4" noValidate>
+        <form data-glass="dialog-form" onSubmit={onSubmit} className="space-y-4" noValidate>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="wh-name">Name</Label>
@@ -557,7 +557,7 @@ function WarehouseDialog({
             <Textarea id="wh-notes" rows={2} {...register('notes', { maxLength: 2000 })} />
           </div>
 
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"

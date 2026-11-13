@@ -27,6 +27,7 @@ import {
   formatLastActive,
   resolveLastActive,
 } from '@/lib/platform/last-active';
+import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { recordPlatformAudit } from '@/server/services/platform/audit';
 import {
   DETAIL_PREVIEW_LIMIT,
@@ -49,6 +50,13 @@ import {
   orderCatalogAccessSourceCopy,
   resolveOrgTimezone,
 } from '@stockpilot/core';
+
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css), then the console's own frame (pages/platform.css): every
+// rule is scoped to this area's [data-glass-page] root and to glass, so Classic
+// never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+import '@/styles/liquid-glass/pages/platform.css';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organization · Platform' };
@@ -91,6 +99,10 @@ export default async function PlatformOrgDetailPage({
   await requirePlatformAdmin();
 
   const { id } = await params;
+  // A malformed id (a mistyped or cut-off link) is Page not found before any
+  // read or audit row (B63): the overview read threw on it, which the root
+  // error page showed as "Something went wrong".
+  notFoundUnlessUuid(id);
   const { tab: tabParam, q, page: pageParam } = await searchParams;
   const tab: Tab = (TABS.find((t) => t.key === firstParam(tabParam))?.key ?? 'overview') as Tab;
   // A repeated `?q=` (a stray double-submit, a hand-edited URL) gives
@@ -196,6 +208,7 @@ export default async function PlatformOrgDetailPage({
 
       {/* ── Danger zone ──────────────────────────────────────────────── */}
       <DetailSection
+        data-glass-role="danger-zone"
         className="border-destructive/40 mt-6"
         title={<span className="text-destructive">Danger zone</span>}
       >

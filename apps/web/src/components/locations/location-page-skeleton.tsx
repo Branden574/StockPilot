@@ -10,6 +10,8 @@ export function LocationPageSkeleton({ rows = 6 }: { rows?: number }) {
   return (
     <div
       className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass="skeleton-page"
+      data-glass-width="wide"
       aria-busy="true"
       data-testid="location-page-skeleton"
     >
@@ -17,14 +19,20 @@ export function LocationPageSkeleton({ rows = 6 }: { rows?: number }) {
       <div>
         <Skeleton className="mb-2 h-4 w-24" />
         <Skeleton className="mb-1.5 h-3 w-40" />
-        <div className="flex h-[42px] items-center">
+        <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
           <Skeleton className="h-[26px] w-64 max-w-full" />
         </div>
       </div>
       <div className="@container min-w-0">
         <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
-          <div className="border-border bg-card @min-[856px]:col-start-2 @min-[856px]:row-start-1 rounded-lg border">
-            <div className="border-border border-b px-[18px] py-4">
+          <div
+            className="border-border bg-card @min-[856px]:col-start-2 @min-[856px]:row-start-1 rounded-lg border"
+            data-glass="card"
+          >
+            <div
+              className="border-border border-b px-[18px] py-4"
+              data-glass-role="skeleton-card-head"
+            >
               <Skeleton className="h-4 w-32" />
             </div>
             <div className="space-y-2 p-[18px]">
@@ -32,8 +40,14 @@ export function LocationPageSkeleton({ rows = 6 }: { rows?: number }) {
               <Skeleton className="h-3 w-40" />
             </div>
           </div>
-          <div className="border-border bg-card @min-[856px]:col-start-1 @min-[856px]:row-start-1 rounded-lg border">
-            <div className="border-border flex items-center justify-between border-b px-[18px] py-4">
+          <div
+            className="border-border bg-card @min-[856px]:col-start-1 @min-[856px]:row-start-1 rounded-lg border"
+            data-glass="card"
+          >
+            <div
+              className="border-border flex items-center justify-between border-b px-[18px] py-4"
+              data-glass-role="skeleton-card-head"
+            >
               <Skeleton className="h-4 w-24" />
               <Skeleton className="h-7 w-36" />
             </div>

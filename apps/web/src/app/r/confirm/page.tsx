@@ -7,6 +7,11 @@ import {
   ExternalStatusCard,
 } from '@/components/auth/external-shell';
 import { Button } from '@/components/ui/button';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root that app/r/layout.tsx draws and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,8 +84,8 @@ export default async function ConfirmOrderRequestPage({
         title="Confirm your order request"
         description={
           <>
-            This link works once. Press the button below and we&apos;ll send
-            your request to the team for review.
+            This link works once. Press the button below and we&apos;ll send your request to the
+            team for review.
           </>
         }
       />
@@ -103,7 +108,7 @@ function RequestIdCard({ id, className }: { id: string; className?: string }) {
   return (
     <ExternalCard className={className}>
       <p className="text-muted-foreground text-xs">Request ID</p>
-      <p className="font-mono text-[13.5px] break-all">{id}</p>
+      <p className="break-all font-mono text-[13.5px]">{id}</p>
     </ExternalCard>
   );
 }
@@ -116,8 +121,8 @@ function ConfirmedPanel({ id }: { id: string }) {
         title="Request confirmed"
         body={
           <>
-            Thanks — your order request has been sent to the team for review.
-            You&apos;ll get another email when a manager approves or declines it.
+            Thanks — your order request has been sent to the team for review. You&apos;ll get
+            another email when a manager approves or declines it.
           </>
         }
         action={
@@ -142,8 +147,8 @@ function InvalidPanel() {
         title={"We couldn't confirm this request"}
         body={
           <>
-            This link is either invalid, expired, or already used. If you still
-            need to place the order, submit a fresh request from the order page.
+            This link is either invalid, expired, or already used. If you still need to place the
+            order, submit a fresh request from the order page.
           </>
         }
         action={

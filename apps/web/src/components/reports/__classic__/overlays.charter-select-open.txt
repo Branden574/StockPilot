@@ -1,0 +1,28 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div aria-hidden="true" data-aria-hidden="true">
+  <button aria-autocomplete="none" aria-controls="radix-«id1»" aria-expanded="true" aria-label="Filter by charter" class="[&>span]:line-clamp-1 bg-card border border-[var(--ed-line-strong)] data-[placeholder]:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50 flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-2 h-8 items-center justify-between max-sm:h-11 max-sm:text-base max-w-full px-2.5 py-1 rounded-md text-[13px] text-left transition-colors w-[220px]" data-radix-popper-align="start" data-radix-popper-side="bottom" data-state="open" dir="ltr" role="combobox" type="button">
+    <span style="pointer-events: none;">
+      "All charters"
+    <svg aria-hidden="true" class="h-4 lucide lucide-chevron-down shrink-0 text-muted-foreground w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="m6 9 6 6 6-6">
+<div data-radix-popper-content-wrapper="" dir="ltr" style="position: fixed; left: 0px; top: 0px; transform: translate(0px, 0px); min-width: max-content; --radix-popper-available-width: -20px; --radix-popper-available-height: -20px; --radix-popper-anchor-width: 0px; --radix-popper-anchor-height: 0px; --radix-popper-transform-origin: 0% 0px;">
+  <div class="bg-popover border border-[var(--ed-line-strong)] data-[side=bottom]:translate-y-1 data-[side=left]:-translate-x-1 data-[side=right]:translate-x-1 data-[side=top]:-translate-y-1 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 focus-visible:ring-0 focus-visible:ring-offset-0 min-w-[8rem] overflow-x-hidden overflow-y-auto relative rounded-lg shadow-md text-popover-foreground z-50" data-align="start" data-side="bottom" data-state="open" dir="ltr" id="radix-«id1»" role="listbox" style="box-sizing: border-box; display: flex; flex-direction: column; max-height: min(var(--radix-select-content-available-height), 18rem); --radix-select-content-transform-origin: var(--radix-popper-transform-origin); --radix-select-content-available-width: var(--radix-popper-available-width); --radix-select-content-available-height: var(--radix-popper-available-height); --radix-select-trigger-width: var(--radix-popper-anchor-width); --radix-select-trigger-height: var(--radix-popper-anchor-height); pointer-events: auto; outline-color: none; outline-style: none; outline-width: initial;" tabindex="-1">
+    <style>
+      "[data-radix-select-viewport]{scrollbar-width:none;-ms-overflow-style:none;-webkit-overflow-scrolling:touch;}[data-radix-select-viewport]::-webkit-scrollbar{display:none}"
+    <div class="h-[var(--radix-select-trigger-height)] min-w-[var(--radix-select-trigger-width)] p-1 w-full" data-radix-select-viewport="" role="presentation" style="position: relative; overflow: hidden auto; flex-grow: 1; flex-shrink: 1; flex-basis: 0%;">
+      <div aria-labelledby="radix-«id2»" aria-selected="true" class="cursor-pointer data-[disabled]:opacity-50 data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[highlighted]:text-foreground flex focus:bg-muted focus:text-foreground items-center outline-none pl-8 pr-2 py-1.5 relative rounded-sm select-none text-[13px] transition-colors w-full" data-highlighted="" data-radix-collection-item="" data-state="checked" role="option" tabindex="-1">
+        <span class="absolute flex h-3.5 items-center justify-center left-2 w-3.5">
+          <span aria-hidden="true">
+            <svg aria-hidden="true" class="h-4 lucide lucide-check w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M20 6 9 17l-5-5">
+        <span id="radix-«id2»">
+          "All charters"
+      <div aria-labelledby="radix-«id3»" aria-selected="false" class="cursor-pointer data-[disabled]:opacity-50 data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[highlighted]:text-foreground flex focus:bg-muted focus:text-foreground items-center outline-none pl-8 pr-2 py-1.5 relative rounded-sm select-none text-[13px] transition-colors w-full" data-radix-collection-item="" data-state="unchecked" role="option" tabindex="-1">
+        <span class="absolute flex h-3.5 items-center justify-center left-2 w-3.5">
+        <span id="radix-«id3»">
+          "Example Academy · EXA"
+      <div aria-labelledby="radix-«id4»" aria-selected="false" class="cursor-pointer data-[disabled]:opacity-50 data-[disabled]:pointer-events-none data-[highlighted]:bg-muted data-[highlighted]:text-foreground flex focus:bg-muted focus:text-foreground items-center outline-none pl-8 pr-2 py-1.5 relative rounded-sm select-none text-[13px] transition-colors w-full" data-radix-collection-item="" data-state="unchecked" role="option" tabindex="-1">
+        <span class="absolute flex h-3.5 items-center justify-center left-2 w-3.5">
+        <span id="radix-«id4»">
+          "Sample Prep"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

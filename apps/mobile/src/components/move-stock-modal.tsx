@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -13,7 +12,11 @@ import {
 } from 'react-native';
 
 import { Button } from '@/components/ui/button';
+import { Modal } from '@/components/ui/modal';
 import { Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { CRATE_COLOR_OPTIONS, selectedCrateColor } from '@/lib/crate-color-options';
 import {
   bookCrateRefusal,
@@ -296,6 +299,7 @@ export function MoveStockModal({
   onMoved: () => void;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   // 0371: the role decides whether the stock-in-other-warehouses read is needed
   // (managers and above skip it) and how far the destinations are narrowed
   // (owner decision Q4). The user id keys the assignment read.
@@ -907,6 +911,8 @@ export function MoveStockModal({
               {
                 backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)',
               },
+              // Liquid Glass: the --scrim tint (it never blurs the page).
+              lg && glassScrim(lg),
             ]}
           />
           <View
@@ -921,11 +927,21 @@ export function MoveStockModal({
                 maxHeight: '88%',
               },
               SHADOW.sheet,
+              // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+              lg && GLASS_SHEET_CARD,
             ]}
           >
+            {lg ? <GlassSheetBackdrop /> : null}
             <View style={{ alignItems: 'center', marginBottom: 18 }}>
               {/* The grabber is a decorative mark in the faint ink. */}
-              <View style={{ width: 36, height: 5, borderRadius: 100, backgroundColor: c.ink5 }} />
+              <View
+                style={{
+                  width: 36,
+                  height: 5,
+                  borderRadius: 100,
+                  backgroundColor: lg ? lg.ios.sep : c.ink5,
+                }}
+              />
             </View>
 
             <Eyebrow>{isPutAway ? 'PUT AWAY' : 'MOVE STOCK'}</Eyebrow>
