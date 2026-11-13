@@ -115,7 +115,8 @@
 -- conflicts only with ACCESS EXCLUSIVE, so no read, write, row lock or
 -- autovacuum waits for it; only a held or queued ALTER TABLE, VACUUM FULL or
 -- another migration on one of those tables makes the file wait, and
--- lock_timeout then ends it with 55P03 and nothing applied. The four plpgsql
+-- lock_timeout 900ms (the house form, as in 0416, 0417 and 0418) then ends
+-- it with 55P03 and nothing applied. The four plpgsql
 -- bodies are checked for syntax only. COMMENT holds a
 -- ShareUpdateExclusiveLock on its function (only other DDL on the same
 -- function waits). A call already running finishes on the body it started
@@ -144,12 +145,13 @@
 -- notice_audience_preflight. Never 40001 or 40P01 (PostgREST retries those
 -- forever).
 
-set lock_timeout = '5s';
+set lock_timeout = '900ms';
 
 -- ═══ 0. Preflight ══════════════════════════════════════════════════════════
 -- The five bodies restated here, and the two this file's new code calls,
--- must be the ones it was written against (main at 0414; production's md5s
--- are read again by the release kit before the push). Anything else is
+-- must be the ones it was written against (main at 0414, and unchanged on
+-- main through 0418; production's md5s are read again by the release kit
+-- before the push). Anything else is
 -- drift: stop before changing anything.
 do $preflight$
 declare
@@ -802,5 +804,3 @@ comment on function public._notify_replacement_order_changes() is
   'approval, cancellation, denial and the picking statuses, and on ready for pickup after a counter receipt. Staff '
   'are never pinged for a replacement. Since 0422 the requester is pinged only while still a member of the '
   'organization (_notify_is_current_member). SECURITY DEFINER, no EXECUTE.';
-
-reset lock_timeout;

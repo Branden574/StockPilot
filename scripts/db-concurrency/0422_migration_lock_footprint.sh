@@ -23,7 +23,7 @@
 #       notify trigger) and wrote a membership row does not hold the file up:
 #       replacing a function never waits for a caller.
 #   4.  A held ACCESS EXCLUSIVE on organization_members (an ALTER TABLE, say)
-#       longer than lock_timeout: the file waits 5 s and fails 55P03, never
+#       longer than lock_timeout: the file waits 900 ms and fails 55P03, never
 #       40P01 or 40001, and nothing is applied.
 #   5.  Nothing was applied: every run rolls back; the head and the five
 #       restated bodies are as they were.
@@ -214,7 +214,7 @@ else
   rc=$?
   t1="$(now_ms)"
   if [ $rc -ne 0 ] && grep -q '55P03' "$TMP/4m.err" && ! grep -qE '40P01|40001' "$TMP/4m.err" \
-    && [ $((t1 - t0)) -ge 4500 ] && [ $((t1 - t0)) -lt 7500 ]; then
+    && [ $((t1 - t0)) -ge 800 ] && [ $((t1 - t0)) -lt 3000 ]; then
     ok "4: behind an ACCESS EXCLUSIVE holder the file waited $((t1 - t0)) ms and failed 55P03 (lock_timeout), never 40P01 or 40001"
   else
     bad "4: rc $rc after $((t1 - t0)) ms: $(tr '\n' ' ' < "$TMP/4m.err" | cut -c1-300)"

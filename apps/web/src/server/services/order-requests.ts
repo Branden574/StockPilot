@@ -1423,7 +1423,7 @@ export class OrderRequestsService {
    * Access that could not be read lists no warehouse (getWarehouseAccess), so
    * that caller is counted only what they drive, as the rule then allows. The
    * Orders module is the caller's to ask. A failed count read throws, as
-   * pendingCount()'s does.
+   * approvablePendingCount()'s does.
    */
   async awaitingSignatureCount(): Promise<number> {
     const approves = can(this.ctx, 'orders:approve') && this.ctx.role !== 'viewer';
