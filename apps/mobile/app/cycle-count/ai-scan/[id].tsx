@@ -32,13 +32,18 @@ import { API_BASE, orgHeader } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { reviewNotACountMessage } from '@/lib/count-box-words';
 import {
+  countStoredForLiveAccount,
   getCycleCount,
   mirrorRecordedCount,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
-import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
@@ -160,8 +165,19 @@ export default function AiScanScreen() {
   // count" over a camera that could only scan nothing.
   async function loadCachedLines() {
     if (!cycleCountId || access === 'unknown') return;
-    if (access === 'denied') {
-      Alert.alert('Not available', CYCLE_COUNTS_NOT_AVAILABLE, [
+    // Not for a member who may not see cycle counts, nor while what the
+    // phone saved about the member's access is unreadable; not synced yet,
+    // only a count this account fetched here (screen-access.ts).
+    const refused =
+      access === 'denied'
+        ? CYCLE_COUNTS_NOT_AVAILABLE
+        : access === 'unreadable'
+          ? SAVED_ACCESS_UNREADABLE
+          : access === 'not-synced' && !(await countStoredForLiveAccount(cycleCountId).catch(() => false))
+            ? NOT_SYNCED_YET
+            : null;
+    if (refused !== null) {
+      Alert.alert(access === 'denied' ? 'Not available' : 'Could not open this count', refused, [
         { text: 'OK', onPress: () => router.back() },
       ]);
       return;

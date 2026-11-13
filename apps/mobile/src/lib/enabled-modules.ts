@@ -84,12 +84,14 @@ export interface EnabledModulesState {
    *  default, not this workspace's set. Never goes back to false. */
   read: boolean;
   /** What the device store last answered: false until a read has come back
-   *  (never the wait, never a read that threw), however long it takes; then
-   *  'saved' (`modules` is the saved set) or 'nothing-saved' (no set, or one
-   *  that does not parse: `modules` is only the menu's default or the set
-   *  shown before). Never goes back to false. A screen deciding what it reads
-   *  or shows uses this alone (screen-access.ts); the menu keeps `modules`. */
-  answered: false | 'saved' | 'nothing-saved';
+   *  (never the wait), however long it takes; then 'saved' (`modules` is the
+   *  saved set) or 'nothing-saved' (no set, or one that does not parse:
+   *  `modules` is only the menu's default or the set shown before), or
+   *  'failed' when the latest read threw (a re-read after a workspace switch
+   *  that throws must not let the previous workspace's set stand). Never goes
+   *  back to false. A screen deciding what it reads or shows uses this alone
+   *  (screen-access.ts); the menu keeps `modules`. */
+  answered: false | 'saved' | 'nothing-saved' | 'failed';
 }
 
 /**
@@ -130,10 +132,10 @@ export function useEnabledModulesState(): EnabledModulesState {
       try {
         persisted = await readPersistedEnabledModules();
       } catch {
-        // The device store could not be read: the last set read stays, a
-        // first read still counts as read, and nothing is answered.
+        // The device store could not be read: the last set read stays for
+        // the menu, a first read still counts as read, and the read failed.
         stopWaiting();
-        if (!cancelled) setState((prev) => (prev.read ? prev : { ...prev, read: true }));
+        if (!cancelled) setState((prev) => ({ ...prev, read: true, answered: 'failed' }));
         return;
       }
       stopWaiting();

@@ -49,7 +49,7 @@ import {
   type CloseGateState,
 } from '@/lib/count-close-gate';
 import {
-  COUNT_LINE_NOT_SAVED,
+  createLineGoneNotice,
   countNotClearedAlert,
   countNotSavedAlert,
 } from '@/lib/count-save-refusal';
@@ -61,6 +61,7 @@ import {
   cacheCycleCount,
   cacheWriteScope,
   clearLocalLine,
+  countStoredForLiveAccount,
   getCycleCount,
   pendingCountFor,
   updateLocalLine,
@@ -81,8 +82,13 @@ import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
-import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
-import { useDrawerEntryAccess } from '@/lib/use-screen-access';
+import { countReadFailedView } from '@/lib/count-read-failed';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
@@ -334,6 +340,11 @@ export default function CycleCountDetail() {
   // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
   // to be dropped (see draft-debouncer.ts). Created once; the save touches
   // only stable state setters and module functions.
+  const [lineGoneNotice] = React.useState(() =>
+    createLineGoneNotice((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
   const [lineSaver] = React.useState(() => {
     const saver = createDraftDebouncer(SAVE_DEBOUNCE_MS, (lineId, raw) => {
       void (async () => {
@@ -398,11 +409,10 @@ export default function CycleCountDetail() {
         }
         if (queued === null) {
           // The line is no longer in this phone's copy of the count: nothing
-          // was saved or queued, so nothing is marked saved. Said; OK loads
-          // the count again or leaves (reloadAfterLineGone).
-          Alert.alert(COUNT_LINE_NOT_SAVED.title, COUNT_LINE_NOT_SAVED.message, [
-            { text: 'OK', onPress: () => setLineGoneAnswered((n) => n + 1) },
-          ]);
+          // was saved or queued, so nothing is marked saved. Said, once at a
+          // time and never after the screen closed; OK loads the count again
+          // or leaves (reloadAfterLineGone).
+          lineGoneNotice.say(() => setLineGoneAnswered((n) => n + 1));
           return;
         }
         setLines((curr) =>
@@ -459,14 +469,25 @@ export default function CycleCountDetail() {
   const loadOnce = React.useCallback(async (): Promise<LoadPass> => {
     if (!id) return;
     // Not before it is known (the spinner stays; this runs again once it is),
-    // and not at all for a member who may not see cycle counts.
-    if (access !== 'allowed') {
-      if (access === 'denied') {
-        setReadError(CYCLE_COUNTS_NOT_AVAILABLE);
-        setEmptyState('read-failed');
-        setLoading(false);
-      }
+    // and not at all for a member who may not see cycle counts, or when what
+    // the phone saved about the member's access could not be read (said, with
+    // Retry, never a spinner that does not end).
+    if (access === 'unknown') return;
+    if (access === 'denied' || access === 'unreadable') {
+      setReadError(access === 'denied' ? CYCLE_COUNTS_NOT_AVAILABLE : SAVED_ACCESS_UNREADABLE);
+      setEmptyState('read-failed');
+      setLoading(false);
       return;
+    }
+    // Not synced yet for this member (screen-access.ts): of what is stored,
+    // only a count this account fetched from the server in this workspace.
+    let mayReadStored = access === 'allowed';
+    if (access === 'not-synced') {
+      try {
+        mayReadStored = await countStoredForLiveAccount(id);
+      } catch {
+        mayReadStored = false;
+      }
     }
 
     // The copy saved on this phone. A read that fails is said, never a
@@ -475,10 +496,12 @@ export default function CycleCountDetail() {
     // Online, the fetch below still runs (and stores and re-reads the count).
     let cached: Awaited<ReturnType<typeof getCycleCount>> = null;
     let cacheUnreadable = false;
-    try {
-      cached = await getCycleCount(id);
-    } catch {
-      cacheUnreadable = true;
+    if (mayReadStored) {
+      try {
+        cached = await getCycleCount(id);
+      } catch {
+        cacheUnreadable = true;
+      }
     }
     if (cached) {
       hydrateFromSnapshot(cached);
@@ -499,6 +522,9 @@ export default function CycleCountDetail() {
         // copy; a store that could not be read says so.
         if (cacheUnreadable) {
           setReadError(COUNT_UNREADABLE_ON_PHONE);
+          setEmptyState('read-failed');
+        } else if (access === 'not-synced') {
+          setReadError(NOT_SYNCED_YET);
           setEmptyState('read-failed');
         } else {
           setEmptyState('offline-uncached');
@@ -678,9 +704,12 @@ export default function CycleCountDetail() {
    */
   async function reloadAfterLineGone() {
     let onPhone: Awaited<ReturnType<typeof getCycleCount>> = null;
-    if (access === 'allowed' && id) {
+    if ((access === 'allowed' || access === 'not-synced') && id) {
       try {
-        onPhone = await getCycleCount(id);
+        // Not synced yet: only a count this account fetched here (as loadOnce).
+        if (access === 'allowed' || (await countStoredForLiveAccount(id))) {
+          onPhone = await getCycleCount(id);
+        }
       } catch {
         onPhone = null;
       }
@@ -763,9 +792,14 @@ export default function CycleCountDetail() {
   // cancelling it. The state updates the save makes afterwards land on an
   // unmounted screen and are ignored; the local write and the outbox row are
   // what matter.
+  // The notice closes first: a save flushed here that finds its line gone
+  // says nothing on a screen that has gone.
   React.useEffect(() => {
-    return () => lineSaver.flushAll();
-  }, [lineSaver]);
+    return () => {
+      lineGoneNotice.close();
+      lineSaver.flushAll();
+    };
+  }, [lineSaver, lineGoneNotice]);
 
   function setDraftValue(lineId: string, v: string) {
     setDraft((d) => ({ ...d, [lineId]: v }));
@@ -903,6 +937,7 @@ export default function CycleCountDetail() {
   });
 
   if (emptyState === 'read-failed') {
+    const failedView = countReadFailedView(readError);
     return (
       <SafeAreaView
         style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
@@ -932,25 +967,33 @@ export default function CycleCountDetail() {
           <Text
             style={[styles.emptyTitle, { color: c.ink }, lg && glassCountStyles(lg).emptyTitle]}
           >
-            Could not load this count
+            {failedView.title}
           </Text>
           <Text style={[styles.emptyBody, { color: c.ink3 }, lg && glassCountStyles(lg).emptyBody]}>
             {readError}
-            {readError === CYCLE_COUNTS_NOT_AVAILABLE ? null : (
+            {failedView.catchingUpNote ? (
               <>{'\n\n'}If the app was just updated, the server may still be catching up.</>
-            )}
+            ) : null}
           </Text>
           <Button
             variant="outline"
             style={styles.retry}
             onPress={() => {
+              // Denied: nothing to try again, Back leaves.
+              if (failedView.action === 'back') {
+                leave();
+                return;
+              }
               setLoading(true);
               setReadError(null);
               setEmptyState('none');
-              void load();
+              // Unreadable: the saved access is read again first (a change
+              // of it loads the count again on its own, too).
+              if (failedView.rereadAccess) void retrySavedAccess().then(() => load());
+              else void load();
             }}
           >
-            Retry
+            {failedView.action === 'back' ? 'Back' : 'Retry'}
           </Button>
         </View>
       </SafeAreaView>

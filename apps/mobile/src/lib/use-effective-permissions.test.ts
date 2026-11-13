@@ -123,12 +123,12 @@ describe('useEffectivePermissionsState', () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     useEffectivePermissionsState();
     await settle();
-    // Read, for the order screen; never answered, for a screen that must not
-    // decide from the defaults (screen-access.ts).
+    // Read, for the order screen; failed, for a screen that must not decide
+    // from the defaults (screen-access.ts offers Try again).
     expect(useEffectivePermissionsState()).toEqual({
       permissions: undefined,
       read: true,
-      answered: false,
+      answered: 'failed',
     });
   });
 
@@ -140,7 +140,10 @@ describe('useEffectivePermissionsState', () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     refreshEffectivePermissions();
     await settle();
-    expect(useEffectivePermissionsState()).toBe(before);
+    // The menu keeps the set (S75: a screen sees the read failed, below).
+    const after = useEffectivePermissionsState();
+    expect(after.permissions).toBe(before.permissions);
+    expect(after.read).toBe(true);
   });
 
   // Review of the S2 follow-up, F5: the order screen's load waits for
@@ -258,24 +261,27 @@ describe('answered: the device store has answered, never the wait (S75)', () => 
     expect(useEffectivePermissionsState().answered).toBe(true);
   });
 
-  it('a store that throws has not answered; a later read that comes back answers', async () => {
+  it('a store that throws answers failed; a later read that comes back answers', async () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     useEffectivePermissionsState();
     await settle();
-    expect(useEffectivePermissionsState().answered).toBe(false);
+    expect(useEffectivePermissionsState().answered).toBe('failed');
     db.getMeta.mockResolvedValue(saved('items:create'));
     await refreshEffectivePermissions();
     expect(useEffectivePermissionsState().answered).toBe(true);
   });
 
-  it('once answered, a later read that throws keeps it answered, with the set read', async () => {
+  // A re-read is asked for after a wipe (a workspace switch): one that
+  // throws must not let the previous answer stand for the new workspace.
+  it('a later read that throws stops counting as answered; the menu keeps the set read', async () => {
     db.getMeta.mockResolvedValue(saved('items:create'));
     useEffectivePermissionsState();
     await settle();
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     await refreshEffectivePermissions();
     const now = useEffectivePermissionsState();
-    expect(now.answered).toBe(true);
+    expect(now.answered).toBe('failed');
+    expect(now.read).toBe(true);
     expect([...(now.permissions ?? [])]).toEqual(['items:create']);
   });
 });

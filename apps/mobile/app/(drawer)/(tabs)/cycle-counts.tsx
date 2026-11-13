@@ -53,6 +53,7 @@ import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
 import {
   dirtyLineCounts,
   listCachedCycleCounts,
+  listCountsStoredForLiveAccount,
   type CachedCycleCountHeader,
 } from '@/lib/cycle-count-cache';
 import {
@@ -71,10 +72,14 @@ import { useEnabledModules } from '@/lib/enabled-modules';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
-import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
-import { useDrawerEntryAccess } from '@/lib/use-screen-access';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useRole } from '@/lib/use-role';
@@ -165,6 +170,20 @@ function startCountHint(booksOn: boolean): string {
 async function readDownloaded(): Promise<CachedCycleCountHeader[] | null> {
   try {
     return await listCachedCycleCounts();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Of the downloaded counts, only those this account fetched from the server in
+ * this workspace (cycle-count-cache.ts listCountsStoredForLiveAccount), or
+ * null when the device store cannot be read: what is shown while the member's
+ * access is 'not-synced' (screen-access.ts).
+ */
+async function readDownloadedForAccount(): Promise<CachedCycleCountHeader[] | null> {
+  try {
+    return await listCountsStoredForLiveAccount();
   } catch {
     return null;
   }
@@ -289,22 +308,36 @@ export default function CycleCounts() {
       if (!online) {
         // Offline: only what this device downloaded, and only for a member
         // who may see cycle counts; until that is known, nothing is claimed.
+        // Not synced yet for this member: only the counts this account
+        // fetched here (screen-access.ts), and said when there are none.
         needsAccessRef.current = true;
         const access = storedAccessRef.current;
-        if (access !== 'allowed') {
+        if (access !== 'allowed' && access !== 'not-synced') {
           setPage(null);
           setDownloaded(null);
-          setError(access === 'denied' ? CYCLE_COUNTS_NOT_AVAILABLE : null);
+          setError(
+            access === 'denied'
+              ? CYCLE_COUNTS_NOT_AVAILABLE
+              : access === 'unreadable'
+                ? SAVED_ACCESS_UNREADABLE
+                : null,
+          );
           setBusy(false);
           return;
         }
         // Read, never written back.
-        const cached = await readDownloaded();
+        const cached = access === 'allowed' ? await readDownloaded() : await readDownloadedForAccount();
         if (!guard.current.isCurrent(token)) return;
         // null (the read failed) stays null: the screen never claims "none
         // downloaded" about a store it could not read.
         setDownloaded(cached);
-        setError(cached ? null : 'Could not read the counts saved on this device.');
+        setError(
+          !cached
+            ? 'Could not read the counts saved on this device.'
+            : access === 'not-synced' && cached.length === 0
+              ? NOT_SYNCED_YET
+              : null,
+        );
         setBusy(false);
         return;
       }
@@ -342,19 +375,26 @@ export default function CycleCounts() {
         // labelled as downloaded counts only.
         setPage(null);
         setError(e instanceof Error ? e.message : 'Could not load cycle counts.');
-        // The server's refusal (no access to cycle counts, or the module
-        // off) is its answer about this member: the downloaded counts are
-        // never shown in its place. Nor to a member who may not see them.
-        if (e instanceof ApiError && e.status === 403) {
+        // A 403 with the route's `forbidden` or `module_disabled` is the
+        // server's answer about this member, so the list shows that answer
+        // alone. Any other 403 is a failed read, and the downloaded counts
+        // follow the saved access: shown when allowed, only the counts this
+        // account fetched here when not synced yet, none when denied.
+        if (
+          e instanceof ApiError &&
+          e.status === 403 &&
+          (e.code === 'forbidden' || e.code === 'module_disabled')
+        ) {
           setDownloaded(null);
           return;
         }
         needsAccessRef.current = true;
-        if (storedAccessRef.current !== 'allowed') {
+        const access = storedAccessRef.current;
+        if (access !== 'allowed' && access !== 'not-synced') {
           setDownloaded(null);
           return;
         }
-        const cached = await readDownloaded();
+        const cached = access === 'allowed' ? await readDownloaded() : await readDownloadedForAccount();
         if (guard.current.isCurrent(token)) setDownloaded(cached);
       } finally {
         if (guard.current.isCurrent(token)) setBusy(false);
@@ -457,6 +497,9 @@ export default function CycleCounts() {
 
   async function refresh() {
     setRefreshing(true);
+    // What the phone saved about this member's access could not be read: a
+    // pull reads it again first (a change of it loads the list again too).
+    if (storedAccessRef.current === 'unreadable') await retrySavedAccess();
     await load(viewRef.current, { withSummary: true });
     setRefreshing(false);
   }

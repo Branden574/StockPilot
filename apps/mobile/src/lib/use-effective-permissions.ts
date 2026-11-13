@@ -88,13 +88,15 @@ export interface EffectivePermissionsState {
    *  `permissions` means "not read yet", not "nothing saved". Never goes
    *  back to false. */
   read: boolean;
-  /** The device store has answered a read: found, absent or unparseable.
-   *  Never set by the wait, nor by a read that threw: false until a read
-   *  comes back, however long it takes. Never goes back to false. A screen
-   *  deciding what it reads or shows by the saved set uses this alone
+  /** The device store has answered a read: true when it came back (found,
+   *  absent or unparseable), 'failed' when the latest read threw (a first
+   *  read or a re-read: a re-read asked for after a workspace switch that
+   *  throws must not let the previous answer stand). Never set by the wait:
+   *  false until a read answers, however long it takes. A screen deciding
+   *  what it reads or shows by the saved set uses this alone
    *  (screen-access.ts), so it never decides from the static defaults the
    *  wait falls back to. */
-  answered: boolean;
+  answered: boolean | 'failed';
 }
 
 const UNREAD: EffectivePermissionsState = {
@@ -142,11 +144,14 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
       try {
         persisted = await readPersistedPermissions();
       } catch {
-        // The device store could not be read. The last set read stays; a
-        // first read still counts as read, with nothing saved, so a screen
-        // that waits for it is never held and decides as before.
+        // The device store could not be read. The last set read stays for
+        // the menu; a first read still counts as read, with nothing saved, so
+        // the order screen is never held. For a screen gated on the saved set
+        // the read failed (it offers Try again), whatever was answered before.
         stopWaiting();
-        if (!cancelled) setState((prev) => (prev.read ? prev : READ_NOTHING_SAVED));
+        if (!cancelled) {
+          setState((prev) => ({ ...(prev.read ? prev : READ_NOTHING_SAVED), answered: 'failed' }));
+        }
         return;
       }
       stopWaiting();

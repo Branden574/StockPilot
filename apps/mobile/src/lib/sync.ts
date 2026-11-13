@@ -53,6 +53,7 @@ import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
 import { listPending, markFailed, markHeld, markOk, markRejected, markSending } from './queue';
 import { liveOutboxScope } from './session-scope';
 import { unconfirmedStock } from './unconfirmed-stock';
+import { refreshCacheOwner } from './use-cache-owner';
 import { WAREHOUSE_SCOPE_META_KEY, refreshWarehouseScope } from './warehouse-scope';
 
 /**
@@ -409,6 +410,7 @@ export async function pullSnapshot(
     refreshEnabledModules();
     refreshEffectivePermissions();
     refreshWarehouseScope();
+    void refreshCacheOwner();
   }
   if (liveUserId && ownerAction === 'adopt') {
     // No owner recorded: a fresh install, a cache a sign-out or an eviction
@@ -447,6 +449,7 @@ export async function pullSnapshot(
     refreshEnabledModules();
     refreshEffectivePermissions();
     refreshWarehouseScope();
+    void refreshCacheOwner();
   }
   if (liveUserId && ownerAction === 'clear-photos') {
     // This account's own cache, with a photo clear still owed: the one its
@@ -837,7 +840,10 @@ export async function pullSnapshot(
       `[sync] a full pull did not send ${n} active kit${n === 1 ? '' : 's'} the server lists; it is not asked for again until the list changes`,
     );
   }
-  // Notify the live readers only after the new values are committed.
+  // Notify the live readers only after the new values are committed. Whose
+  // cache this is was recorded with them (a screen counts the saved access as
+  // the signed-in member's only once it is theirs: use-cache-owner.ts).
+  void refreshCacheOwner();
   if (modulesChanged) refreshEnabledModules();
   if (permissionsChanged) refreshEffectivePermissions();
   if (scopeChanged) refreshWarehouseScope();

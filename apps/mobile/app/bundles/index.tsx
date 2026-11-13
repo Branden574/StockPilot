@@ -27,10 +27,11 @@ import {
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { listBundles, type CachedBundle } from '@/lib/db-reads';
-import { BUNDLES_NOT_AVAILABLE } from '@/lib/screen-access';
+import { bundlesGateView } from '@/lib/bundles-gate-view';
 import { syncNow } from '@/lib/sync';
 import { FONT, space } from '@/lib/theme';
-import { useDrawerEntryAccess } from '@/lib/use-screen-access';
+import { useNotSyncedPull } from '@/lib/use-not-synced-pull';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
 /** Where the read of the offline cache is: not answered yet, read, or failed. */
@@ -89,6 +90,10 @@ export default function BundlesList() {
   // A pull's own spinner: the list's pull-to-refresh shows it, so the body's
   // spinner stays away and one refresh never shows two.
   const [pulling, setPulling] = React.useState(false);
+  // Not synced yet for this member: a sync is asked for, with the spinner
+  // while it is out (use-not-synced-pull.ts).
+  const waitingForPull = useNotSyncedPull(access);
+  const gate = bundlesGateView(access, waitingForPull || refreshing);
 
   // A cache read that throws is caught here and said on screen
   // (bundlesListBody): it used to escape as an unhandled rejection from the
@@ -114,12 +119,20 @@ export default function BundlesList() {
   // cache read that threw used to leave Refresh busy for good. Neither step
   // rejects (syncNow and load catch their own failures), so neither does
   // this, from the button or from a pull.
+  //
+  // By the access (bundles-gate-view.ts): allowed, a sync and the kits read
+  // again; not synced yet, a sync (the kits are read once it makes them this
+  // member's); unreadable, the saved access read again; otherwise nothing.
   async function refresh() {
-    if (!allowed) return;
+    if (gate.refresh === null) return;
     setRefreshing(true);
     try {
-      await syncNow();
-      await load();
+      if (gate.refresh === 'reread') {
+        await retrySavedAccess();
+      } else {
+        await syncNow();
+        if (allowed) await load();
+      }
     } finally {
       setRefreshing(false);
     }
@@ -138,7 +151,7 @@ export default function BundlesList() {
 
   const body = allowed
     ? bundlesListBody(read, rows.length, refreshing, pulling)
-    : { spinner: access === 'unknown', words: null, staleNote: false };
+    : { spinner: gate.spinner && !pulling, words: null, staleNote: false };
 
   return (
     <SafeAreaView
@@ -167,7 +180,7 @@ export default function BundlesList() {
         >
           Bundles
         </Display>
-        {allowed ? (
+        {gate.refresh !== null ? (
           <Pressable
             onPress={refresh}
             style={[styles.refreshBtn, lg && GLASS_NAV_CAPSULE]}
@@ -203,9 +216,9 @@ export default function BundlesList() {
         }
       >
         {body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}
-        {access === 'denied' ? (
+        {gate.words ? (
           <Body muted style={styles.empty}>
-            {BUNDLES_NOT_AVAILABLE}
+            {gate.words}
           </Body>
         ) : null}
         {body.words === 'failed' ? (

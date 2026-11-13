@@ -103,6 +103,45 @@ export const CACHED_CYCLE_COUNTS_LIST_SQL = `
    where cc.status = 'in_progress' or cc.status is null
    order by cc.started_at desc`;
 
+/**
+ * THE COUNTS THIS ACCOUNT FETCHED FROM THE SERVER IN THIS WORKSPACE: the only
+ * stored counts a screen shows while the member's access is 'not-synced'
+ * (screen-access.ts). The row proves it:
+ *   - `cached_at` is set: only the count screen's own store
+ *     (cycle-count-cache.ts cacheCycleCount) writes it; a pull's upsert
+ *     (CYCLE_COUNT_HEADER_UPSERT_SQL) never does, so a pull's row, a pull
+ *     stopped half way included, has none;
+ *   - `organization_id` is the workspace on screen: that store writes the
+ *     fetched count's workspace and stores only the active one's;
+ *   - `last_synced_at` is not UNCONFIRMED_ROW_STAMP (0): an adopted cache's
+ *     rows can be anyone's (db.ts markCacheUnconfirmed);
+ *   - and, checked by the caller (cycle-count-cache.ts), the cache is recorded
+ *     as the signed-in account's (db.ts getCacheOwner): that store never
+ *     writes into a cache recorded as another account's, and a cache another
+ *     account left is not this member's until its reset.
+ * Params: (workspace id).
+ */
+const STORED_FOR_ACCOUNT_WHERE = `
+  cc.organization_id = ?
+  and cc.cached_at is not null
+  and cc.last_synced_at <> 0`;
+
+/** Params: (count id, workspace id). */
+export const COUNT_STORED_FOR_ACCOUNT_SQL = `
+  select 1 as ok from cycle_counts cc
+   where cc.id = ? and ${STORED_FOR_ACCOUNT_WHERE}`;
+
+/** CACHED_CYCLE_COUNTS_LIST_SQL narrowed to them. Params: (workspace id). */
+export const CACHED_CYCLE_COUNTS_FOR_ACCOUNT_LIST_SQL = `
+  select cc.id, cc.organization_id, cc.status, cc.warehouse_id,
+         coalesce(cc.warehouse_name, w.name) as warehouse_name,
+         cc.started_at, cc.posted_at, cc.assigned_to, cc.cached_at, cc.count_number, cc.notes
+    from cycle_counts cc
+    left join warehouses w on w.id = cc.warehouse_id
+   where (cc.status = 'in_progress' or cc.status is null)
+     and ${STORED_FOR_ACCOUNT_WHERE}
+   order by cc.started_at desc`;
+
 /*
  * ── Edits on a count no pull has confirmed (B18 review of 43256f0da) ───────
  *

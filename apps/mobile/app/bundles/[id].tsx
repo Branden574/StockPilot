@@ -41,8 +41,9 @@ import {
   type DistributionPreview,
 } from '@/lib/bundle-distribute-preview';
 import { showDistributeCta } from '@/lib/cta-gating';
-import { BUNDLES_NOT_AVAILABLE } from '@/lib/screen-access';
-import { useDrawerEntryAccess } from '@/lib/use-screen-access';
+import { bundlesGateView } from '@/lib/bundles-gate-view';
+import { useNotSyncedPull } from '@/lib/use-not-synced-pull';
+import { retrySavedAccess, useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import {
@@ -116,6 +117,9 @@ export default function BundleDetail() {
   // (screen-access.ts): a deep link opens nothing else, and nothing is read
   // before it is known.
   const access = useDrawerEntryAccess('/bundles');
+  // Not synced yet for this member: a sync is asked for, with the spinner
+  // while it is out (use-not-synced-pull.ts).
+  const waitingForPull = useNotSyncedPull(access);
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
   // The cache has been read for this bundle (found or not).
   const [looked, setLooked] = React.useState(false);
@@ -316,11 +320,16 @@ export default function BundleDetail() {
   }
 
   if (!bundle || access !== 'allowed') {
-    // No id at all is a bundle this phone cannot hold either.
+    // No id at all is a bundle this phone cannot hold either. Not allowed:
+    // the gate's words in place of the bundle (bundles-gate-view.ts), or its
+    // spinner.
+    const gate = bundlesGateView(access, waitingForPull);
     const state =
-      access === 'denied'
-        ? 'denied'
-        : bundleScreenState(bundle, looked || !id, failedRead === 'bundle');
+      access === 'allowed'
+        ? bundleScreenState(bundle, looked || !id, failedRead === 'bundle')
+        : gate.words !== null
+          ? 'gate'
+          : 'loading';
     return (
       <SafeAreaView
         style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
@@ -331,12 +340,17 @@ export default function BundleDetail() {
         <View style={[styles.header, { borderBottomColor: c.hair }, lg && GLASS_RECORD_HEADER]}>
           <BackLink onPress={() => router.back()} />
         </View>
-        {state === 'denied' ? (
+        {state === 'gate' ? (
           <View style={[styles.body, lg && GLASS_OPS.scroll]}>
             <Card padding={16}>
               <Body size={14.5} accessibilityRole="alert">
-                {BUNDLES_NOT_AVAILABLE}
+                {gate.words}
               </Body>
+              {gate.refresh === 'reread' ? (
+                <Button variant="outline" onPress={() => void retrySavedAccess()}>
+                  Try again
+                </Button>
+              ) : null}
             </Card>
           </View>
         ) : state === 'failed' ? (

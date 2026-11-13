@@ -56,3 +56,52 @@ export const COUNT_LINE_NOT_SAVED: { title: string; message: string } = {
   message:
     'This line is no longer in the count saved on this phone, so this number was not saved. Tap OK to load the count again, or to close it if it is no longer open to you.',
 };
+
+/** What a count screen's "Count not saved" asks Alert.alert for. */
+type ShowAlert = (
+  title: string,
+  message: string,
+  buttons: { text: string; onPress: () => void }[],
+  options: { cancelable: boolean; onDismiss: () => void },
+) => void;
+
+/**
+ * "Count not saved" for a line no longer on the phone (COUNT_LINE_NOT_SAVED),
+ * for one count screen: never two at once, so OK is answered once (it loads
+ * the count again or leaves the screen, once), and nothing once the screen
+ * has closed (the count screen's unmount flushes its waiting saves, whose
+ * answers land after it has gone).
+ */
+export interface LineGoneNotice {
+  /** Says it, unless it is already up or the screen has closed. True when said. */
+  say(onAnswered: () => void): boolean;
+  /** The screen closed: nothing more is said, and an answer still to come does nothing. */
+  close(): void;
+}
+
+export function createLineGoneNotice(show: ShowAlert): LineGoneNotice {
+  let open = false;
+  let closed = false;
+  return {
+    say(onAnswered) {
+      if (open || closed) return false;
+      open = true;
+      // OK, or a dismissal on Android: answered once.
+      const answer = () => {
+        if (!open) return;
+        open = false;
+        if (!closed) onAnswered();
+      };
+      show(
+        COUNT_LINE_NOT_SAVED.title,
+        COUNT_LINE_NOT_SAVED.message,
+        [{ text: 'OK', onPress: answer }],
+        { cancelable: true, onDismiss: answer },
+      );
+      return true;
+    },
+    close() {
+      closed = true;
+    },
+  };
+}

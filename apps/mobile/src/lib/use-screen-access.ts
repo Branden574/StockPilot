@@ -1,28 +1,62 @@
 import type { Permission } from '@stockpilot/core';
 
-import { useEnabledModulesState } from './enabled-modules';
+import { useAuth } from './auth-context';
+import { refreshEnabledModules, useEnabledModulesState } from './enabled-modules';
 import { drawerEntryAccess, permissionAccess, type ScreenAccess } from './screen-access';
-import { useEffectivePermissionsState } from './use-effective-permissions';
+import { refreshCacheOwner, useCacheOwnerState } from './use-cache-owner';
+import {
+  refreshEffectivePermissions,
+  useEffectivePermissionsState,
+} from './use-effective-permissions';
 import { useRole } from './use-role';
 
 /**
  * Whether the screen behind this side-menu link opens for the member, by the
- * menu's own rule, once the saved permissions, the saved modules and (with
- * nothing saved) the role are known (screen-access.ts drawerEntryAccess).
+ * menu's own rule, decided only from what this account saved
+ * (screen-access.ts drawerEntryAccess).
  */
 export function useDrawerEntryAccess(href: string): ScreenAccess {
   const saved = useEffectivePermissionsState();
   const modules = useEnabledModulesState();
+  const owner = useCacheOwnerState();
+  const { user } = useAuth();
   const { role, loading: roleLoading } = useRole();
-  return drawerEntryAccess(href, { saved, modules, role, roleLoading });
+  return drawerEntryAccess(href, {
+    saved,
+    modules,
+    owner,
+    liveUserId: user?.id ?? null,
+    role,
+    roleLoading,
+  });
 }
 
 /**
- * Whether the member holds this permission, once the saved permissions (and,
- * with nothing saved, the role) are known (screen-access.ts permissionAccess).
+ * Whether the member holds this permission, decided only from what this
+ * account saved (screen-access.ts permissionAccess).
  */
 export function usePermissionAccess(permission: Permission): ScreenAccess {
   const saved = useEffectivePermissionsState();
+  const owner = useCacheOwnerState();
+  const { user } = useAuth();
   const { role, loading: roleLoading } = useRole();
-  return permissionAccess(permission, { saved, role, roleLoading });
+  return permissionAccess(permission, {
+    saved,
+    owner,
+    liveUserId: user?.id ?? null,
+    role,
+    roleLoading,
+  });
+}
+
+/**
+ * Try again after a read of the saved access failed ('unreadable'): reads the
+ * saved permissions, modules and whose cache this is again. Never rejects.
+ */
+export function retrySavedAccess(): Promise<void> {
+  return Promise.all([
+    refreshEffectivePermissions(),
+    refreshEnabledModules(),
+    refreshCacheOwner(),
+  ]).then(() => undefined);
 }

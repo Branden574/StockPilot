@@ -29,7 +29,7 @@ describe('the cycle-count history screen', () => {
   });
 
   it('keeps the downloaded counts reachable under a failed read, labelled as downloaded', () => {
-    expect(screen).toMatch(/const cached = await readDownloaded\(\);\s*if \(guard\.current\.isCurrent\(token\)\) setDownloaded\(cached\);/);
+    expect(screen).toMatch(/const cached = access === 'allowed' \? await readDownloaded\(\) : await readDownloadedForAccount\(\);\s*if \(guard\.current\.isCurrent\(token\)\) setDownloaded\(cached\);/);
     expect(screen).toMatch(/const showingDownloaded = offline \|\| \(error !== null && downloaded !== null\);/);
     expect(screen).toContain("'Searching downloaded counts only'");
     expect(screen).toContain('Offline · searching downloaded counts only');
@@ -54,7 +54,7 @@ describe('the cycle-count history screen', () => {
 describe('cycle-counts list: "none downloaded" only after a successful read', () => {
   it('keeps a failed or skipped read as null, never an empty list', () => {
     expect(screen).not.toMatch(/setDownloaded\(cached \?\? \[\]\)/);
-    expect(screen).toMatch(/const cached = await readDownloaded\(\);\s*if \(!guard\.current\.isCurrent\(token\)\) return;[\s\S]{0,200}setDownloaded\(cached\);/);
+    expect(screen).toMatch(/const cached = access === 'allowed' \? await readDownloaded\(\) : await readDownloadedForAccount\(\);\s*if \(!guard\.current\.isCurrent\(token\)\) return;[\s\S]{0,200}setDownloaded\(cached\);/);
   });
 
   it('says "No counts are downloaded" under an error only when the store was read', () => {

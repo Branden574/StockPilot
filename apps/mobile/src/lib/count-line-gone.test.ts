@@ -5,7 +5,11 @@ import { countFromText } from '@stockpilot/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { screenFunction, stateInitializer } from './__fixtures__/screen-functions';
-import { countNotClearedAlert, countNotSavedAlert } from './count-save-refusal';
+import {
+  countNotClearedAlert,
+  countNotSavedAlert,
+  createLineGoneNotice,
+} from './count-save-refusal';
 import { reportPhoneSaveFailure } from './phone-save-report';
 
 /**
@@ -56,6 +60,7 @@ describe('the count screen', () => {
     const setDraft = vi.fn();
     const sync = syncStub();
     const setLineGoneAnswered = vi.fn();
+    const notice = createLineGoneNotice(alert);
     const init = stateInitializer<() => { persist: (lineId: string, raw: string) => void }>(
       COUNT,
       'lineSaver',
@@ -75,7 +80,7 @@ describe('the count screen', () => {
         clearLocalLine: vi.fn(async () => null),
         countNotSavedAlert,
         countNotClearedAlert,
-        COUNT_LINE_NOT_SAVED: LINE_GONE,
+        lineGoneNotice: notice,
         setLineGoneAnswered,
         reportPhoneSaveFailure,
         Alert: { alert },
@@ -84,7 +89,7 @@ describe('the count screen', () => {
         cycleCountSync: sync,
       },
     );
-    return { saver: init(), alert, setLines, setDraft, sync, setLineGoneAnswered };
+    return { saver: init(), alert, setLines, setDraft, sync, setLineGoneAnswered, notice };
   }
 
   it('a line no longer on the phone: said, never marked saved, nothing sent; OK loads again or leaves', async () => {
@@ -109,6 +114,42 @@ describe('the count screen', () => {
     expect(setLineGoneAnswered).not.toHaveBeenCalled();
     buttons[0]!.onPress!();
     expect(setLineGoneAnswered).toHaveBeenCalledTimes(1);
+  });
+
+  it('one "Count not saved" at a time: a second line gone while it is up says nothing more', async () => {
+    const { saver, alert, setLineGoneAnswered } = lineSaver(vi.fn(async () => null));
+    saver.persist('l1', '7');
+    saver.persist('l2', '8');
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+    const buttons = alert.mock.calls[0]![2] as { onPress: () => void }[];
+    buttons[0]!.onPress();
+    // Pressed twice (or dismissed after OK): answered once.
+    buttons[0]!.onPress();
+    expect(setLineGoneAnswered).toHaveBeenCalledTimes(1);
+    // Up again for the next one.
+    saver.persist('l3', '9');
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(2);
+  });
+
+  it('after the screen closed: a save that finds the line gone says nothing, and an OK still to come does nothing', async () => {
+    const { saver, alert, setLineGoneAnswered, notice } = lineSaver(vi.fn(async () => null));
+    saver.persist('l1', '7');
+    await settle();
+    const buttons = alert.mock.calls[0]![2] as { onPress: () => void }[];
+    notice.close();
+    buttons[0]!.onPress();
+    expect(setLineGoneAnswered).not.toHaveBeenCalled();
+    // The unmount's flush saves what was waiting; its answer is not said.
+    saver.persist('l2', '8');
+    await settle();
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('the screen closes the notice before it flushes the waiting saves on unmount', () => {
+    const src = readFileSync(path.resolve(__dirname, '../..', COUNT), 'utf8').replace(/\s+/g, ' ');
+    expect(src).toContain('return () => { lineGoneNotice.close(); lineSaver.flushAll(); };');
   });
 
   it('the screen runs reloadAfterLineGone each time OK is answered', () => {
@@ -178,6 +219,7 @@ describe('the count scanner', () => {
     const setBusy = vi.fn();
     const afterScanLineGone = vi.fn(async () => undefined);
     const sync = syncStub();
+    const notice = createLineGoneNotice(alert);
     const run = screenFunction<(line: { id: string }, qty: number) => Promise<boolean>>(
       SCAN,
       'recordCount',
@@ -186,7 +228,7 @@ describe('the count scanner', () => {
         updateLocalLine,
         reportPhoneSaveFailure,
         countNotSavedAlert,
-        COUNT_LINE_NOT_SAVED: LINE_GONE,
+        lineGoneNotice: notice,
         afterScanLineGone,
         Alert: { alert },
         setScannedMap,
@@ -194,7 +236,7 @@ describe('the count scanner', () => {
         cycleCountSync: sync,
       },
     );
-    return { run, alert, setScannedMap, setLines, setBusy, afterScanLineGone, sync };
+    return { run, alert, setScannedMap, setLines, setBusy, afterScanLineGone, sync, notice };
   }
 
   it('a line no longer on the phone: said, not tallied, not marked saved; OK frees the scanner and loads again', async () => {
@@ -218,6 +260,25 @@ describe('the count scanner', () => {
     expect(setBusy).toHaveBeenLastCalledWith(false);
     expect(afterScanLineGone).toHaveBeenCalledTimes(1);
     expect(typeof options.onDismiss).toBe('function');
+  });
+
+  it('one "Count not saved" at a time, and none once the scanner has closed', async () => {
+    const { run, alert, afterScanLineGone, notice } = recordCount(vi.fn(async () => null));
+    expect(await run({ id: 'l1' }, 3)).toBe(false);
+    expect(await run({ id: 'l2' }, 4)).toBe(false);
+    expect(alert).toHaveBeenCalledTimes(1);
+    notice.close();
+    const buttons = alert.mock.calls[0]![2] as { onPress: () => void }[];
+    buttons[0]!.onPress();
+    // Closed: the scanner does not read again or leave a second time.
+    expect(afterScanLineGone).not.toHaveBeenCalled();
+    expect(await run({ id: 'l3' }, 5)).toBe(false);
+    expect(alert).toHaveBeenCalledTimes(1);
+  });
+
+  it('the scanner closes the notice when it unmounts', () => {
+    const src = readFileSync(path.resolve(__dirname, '../..', SCAN), 'utf8').replace(/\s+/g, ' ');
+    expect(src).toContain('React.useEffect(() => () => lineGoneNotice.close(), [lineGoneNotice]);');
   });
 
   function afterScan(onPhone: boolean, access: 'allowed' | 'denied' = 'allowed') {

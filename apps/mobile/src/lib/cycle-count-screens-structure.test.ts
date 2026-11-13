@@ -324,6 +324,18 @@ describe('every cycle-count screen draws in the device mode', () => {
 describe('count screen: every word, name and role survives the restyle', () => {
   const words = wordsOf(COUNT);
 
+  // S75: the read-failed state's title comes from countReadFailedView
+  // (count-read-failed.ts), which keeps "Could not load this count" for every
+  // failed read but a refusal and a phone not synced yet.
+  it('says "Could not load this count" through countReadFailedView', () => {
+    expect(sourceOf(COUNT)).toContain('{failedView.title}');
+    expect(
+      sourceOf('src/lib/count-read-failed.ts').match(
+        /title: 'Could not load this count'/g,
+      ),
+    ).toHaveLength(2);
+  });
+
   it.each([
     '← Back',
     'Back',
@@ -345,7 +357,6 @@ describe('count screen: every word, name and role survives the restyle', () => {
     'an exception',
     'This count has no lines yet. Add lines from the web first.',
     'Check again',
-    'Could not load this count',
     'If the app was just updated, the server may still be catching up.',
     'This count could not be read on this phone.',
     'Not cached for offline use',
@@ -690,10 +701,11 @@ describe('count screen: offline capture and the Post rule', () => {
   it('a copy on the phone that cannot be read is said, never an endless spinner', () => {
     const code = codeOnly(src);
     expect(code).toMatch(
-      /let cacheUnreadable = false;\s*try \{\s*cached = await getCycleCount\(id\);\s*\} catch \{\s*cacheUnreadable = true;\s*\}/,
+      /let cacheUnreadable = false;\s*if \(mayReadStored\) \{\s*try \{\s*cached = await getCycleCount\(id\);\s*\} catch \{\s*cacheUnreadable = true;\s*\}\s*\}/,
     );
+    // S75: not synced yet for this member says so in place of "not cached".
     expect(code).toMatch(
-      /if \(!online\) \{\s*if \(!cached\) \{\s*if \(cacheUnreadable\) \{\s*setReadError\(COUNT_UNREADABLE_ON_PHONE\);\s*setEmptyState\('read-failed'\);\s*\} else \{\s*setEmptyState\('offline-uncached'\);\s*\}\s*setLoading\(false\);/,
+      /if \(!online\) \{\s*if \(!cached\) \{\s*if \(cacheUnreadable\) \{\s*setReadError\(COUNT_UNREADABLE_ON_PHONE\);\s*setEmptyState\('read-failed'\);\s*\} else if \(access === 'not-synced'\) \{\s*setReadError\(NOT_SYNCED_YET\);\s*setEmptyState\('read-failed'\);\s*\} else \{\s*setEmptyState\('offline-uncached'\);\s*\}\s*setLoading\(false\);/,
     );
     expect(code).toContain(
       "const COUNT_UNREADABLE_ON_PHONE = 'This count could not be read on this phone.';",

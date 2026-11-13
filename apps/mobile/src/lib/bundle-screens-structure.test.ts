@@ -216,9 +216,10 @@ describe('Bundles', () => {
   // threw left Refresh busy for good).
   it('a refresh ends when it ends, whatever happened', () => {
     expect(code).toContain(
-      // S75: nothing is synced or read for a member who may not see bundles
+      // S75: by the member's access (bundles-gate-view.ts); nothing is synced
+      // or read for a member who may not see bundles
       // (bundle-screens-access.test.ts runs it).
-      'async function refresh() { if (!allowed) return; setRefreshing(true); try { await syncNow(); await load(); } finally { setRefreshing(false); } }',
+      "async function refresh() { if (gate.refresh === null) return; setRefreshing(true); try { if (gate.refresh === 'reread') { await retrySavedAccess(); } else { await syncNow(); if (allowed) await load(); } } finally { setRefreshing(false); } }",
     );
   });
 
@@ -232,9 +233,9 @@ describe('Bundles', () => {
       'async function pull() { setPulling(true); try { await refresh(); } finally { setPulling(false); } }',
     );
     // S75: the rule decides for a member who may see bundles; otherwise the
-    // spinner only while that is not known (bundle-screens-access.test.ts).
+    // gate's spinner, never beside the pull's (bundle-screens-access.test.ts).
     expect(code).toContain(
-      "const body = allowed ? bundlesListBody(read, rows.length, refreshing, pulling) : { spinner: access === 'unknown', words: null, staleNote: false };",
+      'const body = allowed ? bundlesListBody(read, rows.length, refreshing, pulling) : { spinner: gate.spinner && !pulling, words: null, staleNote: false };',
     );
     expect(code).toContain(
       '{body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}',
@@ -332,9 +333,9 @@ describe('a bundle', () => {
       /\} catch \(e\) \{ console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ setLooked\(true\); \}/,
     );
     expect(code).toContain(
-      // S75: a member who may not see bundles is told so first
-      // (bundle-screens-access.test.ts).
-      "const state = access === 'denied' ? 'denied' : bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
+      // S75: a member the side menu does not offer Bundles to sees the gate's
+      // words, or its spinner (bundle-screens-access.test.ts).
+      "const state = access === 'allowed' ? bundleScreenState(bundle, looked || !id, failedRead === 'bundle') : gate.words !== null ? 'gate' : 'loading';",
     );
     expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
       flatNorm(
@@ -419,7 +420,14 @@ describe('a bundle', () => {
   // Mutation caught: Distribute back on a bespoke Pressable with no role, a
   // variant other than the ink primary, or its words hidden while it sends.
   it('Distribute is the ink button that commits the work, with its words beside the spinner', () => {
-    const { sf, els } = elements(DETAIL, (el, s) => tagOf(el, s) === 'Button');
+    // S75: the screen's other Button is Try again, shown only when what the
+    // phone saved about the member's access could not be read
+    // (bundle-screens-access.test.ts).
+    const { sf, els } = elements(
+      DETAIL,
+      (el, s) =>
+        tagOf(el, s) === 'Button' && attrText(el, 'onPress', s) !== '() => void retrySavedAccess()',
+    );
     expect(els).toHaveLength(1);
     const btn = els[0]!;
     expect(attrText(btn, 'variant', sf)).toBeUndefined(); // the default, primary (ink)

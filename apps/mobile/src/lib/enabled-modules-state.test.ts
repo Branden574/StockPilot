@@ -18,8 +18,8 @@ import {
  * true after MODULES_READ_WAIT_MS whatever the store is doing. Neither can
  * tell a screen what is saved for this workspace, so a screen deciding what
  * it reads or shows (screen-access.ts) uses `answered`: false until a read
- * came back, however long it takes (never the wait, never a read that threw),
- * then 'saved' or 'nothing-saved'. `modules` and `read` keep their meaning
+ * came back, however long it takes (never the wait), then 'saved' or
+ * 'nothing-saved', or 'failed' when a read threw. `modules` and `read` keep their meaning
  * for the menu.
  *
  * React is replaced so a call is a render: the first runs the effect (a
@@ -137,14 +137,14 @@ describe('useEnabledModulesState', () => {
     });
   });
 
-  it('a store that throws: read, the default kept, not answered', async () => {
+  it('a store that throws: read, the default kept, answered failed', async () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     useEnabledModulesState();
     await settle();
     expect(useEnabledModulesState()).toEqual({
       modules: DEFAULT_ENABLED_MODULES,
       read: true,
-      answered: false,
+      answered: 'failed',
     });
   });
 
@@ -160,13 +160,17 @@ describe('useEnabledModulesState', () => {
     expect([...now.modules]).toEqual(['bundles']);
   });
 
-  it('once answered, a later read that throws keeps what was answered', async () => {
+  // A re-read is asked for after a wipe (a workspace switch): one that
+  // throws must not let the previous workspace's set stand for the new one.
+  it('a later read that throws answers failed; the menu keeps the set it shows', async () => {
     db.getMeta.mockResolvedValue(saved('bundles'));
     useEnabledModulesState();
     await settle();
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     await refreshEnabledModules();
-    expect(useEnabledModulesState().answered).toBe('saved');
+    const now = useEnabledModulesState();
+    expect(now.answered).toBe('failed');
+    expect([...now.modules]).toEqual(['bundles']);
   });
 });
 

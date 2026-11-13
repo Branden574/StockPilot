@@ -6,6 +6,7 @@ import { useAuth } from './auth-context';
 import { cycleCountSync } from './cycle-count-sync';
 import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
+import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
 import { refreshEffectivePermissions } from './use-effective-permissions';
@@ -516,6 +517,7 @@ async function rereadSavedAccess(): Promise<void> {
     refreshEffectivePermissions(),
     refreshEnabledModules(),
     refreshWarehouseScope(),
+    refreshCacheOwner(),
   ]);
 }
 

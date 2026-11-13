@@ -7,7 +7,11 @@ import { screenFunction } from './__fixtures__/screen-functions';
 
 /** What the count screens say (screen-access.ts CYCLE_COUNTS_NOT_AVAILABLE, pinned there). */
 const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
-type ScreenAccess = 'unknown' | 'allowed' | 'denied';
+const NOT_SYNCED_YET =
+  'This phone has not finished syncing this workspace yet. Connect to the internet and try again.';
+const SAVED_ACCESS_UNREADABLE =
+  'What this phone saved about your access could not be read. Try again.';
+type ScreenAccess = 'unknown' | 'unreadable' | 'not-synced' | 'allowed' | 'denied';
 
 /**
  * THE COUNT SCANNERS OPEN THE COUNT SAVED ON THIS PHONE ONLY FOR A MEMBER WHO
@@ -28,8 +32,9 @@ const AI_SCAN = 'app/cycle-count/ai-scan/[id].tsx';
 const COUNT_ID = '0a000000-0000-0000-0000-0000000000b2';
 const LINES = [{ id: 'l1', counted: 3 }];
 
-function harness(file: string, name: string, access: ScreenAccess) {
+function harness(file: string, name: string, access: ScreenAccess, fetchedHere = false) {
   const getCycleCount = vi.fn(async () => ({ header: { id: COUNT_ID }, lines: LINES }));
+  const countStoredForLiveAccount = vi.fn(async () => fetchedHere);
   const alert = vi.fn();
   const back = vi.fn();
   const shown: unknown[] = [];
@@ -38,6 +43,9 @@ function harness(file: string, name: string, access: ScreenAccess) {
     cycleCountId: COUNT_ID,
     access,
     CYCLE_COUNTS_NOT_AVAILABLE,
+    NOT_SYNCED_YET,
+    SAVED_ACCESS_UNREADABLE,
+    countStoredForLiveAccount,
     getCycleCount,
     Alert: { alert },
     router: { back },
@@ -74,6 +82,27 @@ describe.each([
     expect(message).toBe(CYCLE_COUNTS_NOT_AVAILABLE);
     buttons[0]!.onPress();
     expect(h.back).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['not synced yet, not fetched here by this account', 'not-synced', NOT_SYNCED_YET],
+    ['the saved access could not be read', 'unreadable', SAVED_ACCESS_UNREADABLE],
+  ] as const)('%s: said and taken back; nothing is read', async (_l, access, words) => {
+    const h = harness(file, name, access);
+    await h.run();
+    expect(h.getCycleCount).not.toHaveBeenCalled();
+    expect(h.shown).toEqual([]);
+    expect(h.alert.mock.calls[0]![1]).toBe(words);
+    (h.alert.mock.calls[0]![2] as { onPress: () => void }[])[0]!.onPress();
+    expect(h.back).toHaveBeenCalledTimes(1);
+  });
+
+  it('not synced yet, a count this account fetched here: its lines, as before', async () => {
+    const h = harness(file, name, 'not-synced', true);
+    await h.run();
+    expect(h.getCycleCount).toHaveBeenCalledWith(COUNT_ID);
+    expect(h.shown).toContainEqual(LINES);
+    expect(h.alert).not.toHaveBeenCalled();
   });
 
   it('before it is known, nothing is read and nothing is said', async () => {

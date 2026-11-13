@@ -24,15 +24,20 @@ import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
-import { COUNT_LINE_NOT_SAVED, countNotSavedAlert } from '@/lib/count-save-refusal';
+import { countNotSavedAlert, createLineGoneNotice } from '@/lib/count-save-refusal';
 import {
+  countStoredForLiveAccount,
   getCycleCount,
   updateLocalLine,
   type CachedCycleCountLine,
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
-import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  NOT_SYNCED_YET,
+  SAVED_ACCESS_UNREADABLE,
+} from '@/lib/screen-access';
 import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
@@ -108,14 +113,32 @@ function CycleCountScanScreenInner() {
   const [burstMode, setBurstMode] = React.useState(false);
   const [lastScan, setLastScan] = React.useState<{ code: string; at: number } | null>(null);
   const [scannedMap, setScannedMap] = React.useState<Map<string, number>>(new Map());
+  // "Count not saved", once at a time, and nothing once the scanner has closed.
+  const [lineGoneNotice] = React.useState(() =>
+    createLineGoneNotice((title, message, buttons, options) =>
+      Alert.alert(title, message, buttons, options),
+    ),
+  );
+  React.useEffect(() => () => lineGoneNotice.close(), [lineGoneNotice]);
   // The count screen's question (screen-access.ts): the lines saved on this
   // phone are read only for a member who may see cycle counts.
   const access = useDrawerEntryAccess('/cycle-counts');
 
   async function loadLines() {
     if (!id || access === 'unknown') return;
-    if (access === 'denied') {
-      Alert.alert('Not available', CYCLE_COUNTS_NOT_AVAILABLE, [
+    // Not for a member who may not see cycle counts, nor while what the
+    // phone saved about the member's access is unreadable; not synced yet,
+    // only a count this account fetched here (screen-access.ts).
+    const refused =
+      access === 'denied'
+        ? CYCLE_COUNTS_NOT_AVAILABLE
+        : access === 'unreadable'
+          ? SAVED_ACCESS_UNREADABLE
+          : access === 'not-synced' && !(await countStoredForLiveAccount(id).catch(() => false))
+            ? NOT_SYNCED_YET
+            : null;
+    if (refused !== null) {
+      Alert.alert(access === 'denied' ? 'Not available' : 'Could not open this count', refused, [
         { text: 'OK', onPress: () => router.back() },
       ]);
       return;
@@ -177,19 +200,14 @@ function CycleCountScanScreenInner() {
     }
     if (queued === null) {
       // The line is no longer in this phone's copy of the count: nothing was
-      // saved or queued, so nothing is tallied or marked saved. Said; the
-      // scanner stays busy until it is answered, then reads the lines on this
-      // phone again, or closes when the count is gone (afterScanLineGone).
-      const after = () => {
+      // saved or queued, so nothing is tallied or marked saved. Said, once at
+      // a time and never after the scanner closed; the scanner stays busy
+      // until it is answered, then reads the lines on this phone again, or
+      // closes when the count is gone (afterScanLineGone).
+      lineGoneNotice.say(() => {
         setBusy(false);
         void afterScanLineGone();
-      };
-      Alert.alert(
-        COUNT_LINE_NOT_SAVED.title,
-        COUNT_LINE_NOT_SAVED.message,
-        [{ text: 'OK', onPress: after }],
-        { cancelable: true, onDismiss: after },
-      );
+      });
       return false;
     }
     setScannedMap((m) => new Map(m).set(line.id, qty));
@@ -209,7 +227,11 @@ function CycleCountScanScreenInner() {
   async function afterScanLineGone() {
     let snap: Awaited<ReturnType<typeof getCycleCount>> = null;
     try {
-      snap = id && access === 'allowed' ? await getCycleCount(id) : null;
+      // As loadLines: not synced yet, only a count this account fetched here.
+      const mayRead =
+        access === 'allowed' ||
+        (access === 'not-synced' && !!id && (await countStoredForLiveAccount(id)));
+      snap = id && mayRead ? await getCycleCount(id) : null;
     } catch {
       snap = null;
     }
