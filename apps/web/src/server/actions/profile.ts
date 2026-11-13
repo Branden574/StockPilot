@@ -39,6 +39,7 @@ import {
   settleFailedDelete,
   soleOwnedOrganizationsWithMembers,
 } from '@/server/lib/account-deletion';
+import { orgLogoBucketUrlPrefix, removePreviousOrgLogo } from '@/server/lib/org-logo-object';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
@@ -392,19 +393,11 @@ function expectedLogoPrefix(orgId: string): string {
   return `${orgLogoBucketUrlPrefix()}${orgId}/`;
 }
 
-/** Everything in a logo's public URL up to (and including) the bucket name —
- *  i.e. the point where the BUCKET-RELATIVE object path begins. Slicing here
- *  rather than at `expectedLogoPrefix` keeps the org id inside the derived
- *  path, so the storage-path shape check validates that segment too instead of
- *  taking the string prefix check's word for it. */
-function orgLogoBucketUrlPrefix(): string {
-  const base = (env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/$/, '');
-  return `${base}/storage/v1/object/public/org-logos/`;
-}
-
 /**
  * Persists a new logo_url on the organization. Owner/admin only. Same
- * upload-then-record split as setAvatarUrlAction.
+ * upload-then-record split as setAvatarUrlAction. Once the save succeeded,
+ * the object the column held before (Replace or Remove) is removed when it is
+ * this organization's logo object (removePreviousOrgLogo, S76).
  */
 export async function setOrgLogoUrlAction(input: {
   url: string | null;
@@ -523,6 +516,14 @@ export async function setOrgLogoUrlAction(input: {
     // Fail closed: a 0-row update means the org row didn't match — never report
     // a silent success.
     if (!updated) throw new ServiceError('not_found', 'Organization not found.');
+    // S76: the save stands; now remove the object the column held before, if
+    // it is this organization's logo object and not the one just saved. Never
+    // throws: a failed removal is reported and the save stays.
+    await removePreviousOrgLogo({
+      organizationId: ctx.organizationId,
+      previousUrl: prev?.logo_url ?? null,
+      savedUrl: persistUrl,
+    });
     await audit({
       // S3.2: org logo updates are an *organization* event, not a
       // warehouse one. The pre-staged event type makes this audit

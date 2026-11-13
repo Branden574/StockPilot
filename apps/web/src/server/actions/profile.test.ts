@@ -647,6 +647,157 @@ describe('setOrgLogoUrlAction', () => {
     if (!result.ok) expect(result.error.code).toBe('validation_error');
     expect(audit).not.toHaveBeenCalled();
   });
+
+  // S76: once the column holds the new value, the object the column held
+  // before is removed, when (and only when) it is this organization's own
+  // logo object in the logo bucket and not the object just saved.
+  describe('the previous logo object (S76)', () => {
+    function withPrevious(previous: string | null, update?: { data: unknown; error: { message: string } | null }) {
+      stubHolder.stub = makeSupabaseStub({
+        'organizations.select': { data: [{ logo_url: previous }], error: null },
+        'organizations.update': update ?? { data: { id: 'org-1' }, error: null },
+      });
+    }
+
+    it('Replace removes the previous object once the new logo is saved', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png?t=200` });
+      expect(result.ok).toBe(true);
+      expect(stubHolder.stub!.chainArgs.get('organizations.update')?.[0]?.[0]).toEqual({
+        logo_url: `${LOGO_URL_BASE}logo-200.png`,
+      });
+      expect(logoStorage.remove).toHaveBeenCalledTimes(1);
+      expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-100.png']);
+      expect(audit).toHaveBeenCalledTimes(1);
+    });
+
+    it('Remove removes the previous object once the column is cleared', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.webp`);
+      const result = await setOrgLogoUrlAction({ url: null });
+      expect(result.ok).toBe(true);
+      expect(stubHolder.stub!.chainArgs.get('organizations.update')?.[0]?.[0]).toEqual({ logo_url: null });
+      expect(logoStorage.remove).toHaveBeenCalledTimes(1);
+      expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-100.webp']);
+    });
+
+    it('a previous value saved with a query string still names its object', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png?t=100`);
+      const result = await setOrgLogoUrlAction({ url: null });
+      expect(result.ok).toBe(true);
+      expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-100.png']);
+    });
+
+    it.each([
+      ['an empty value', ''],
+      ['no value', null],
+      ['a URL on another host', 'https://cdn.example.org/brand/logo.png'],
+      ['the same path on another host', 'https://other.example.com/storage/v1/object/public/org-logos/org-1/logo-100.png'],
+      ['another organization folder', 'https://supa.example.com/storage/v1/object/public/org-logos/org-2/logo-100.png'],
+      ['another bucket', 'https://supa.example.com/storage/v1/object/public/user-avatars/org-1/logo-100.png'],
+      ['the bucket root', 'https://supa.example.com/storage/v1/object/public/org-logos/logo-100.png'],
+      ['a folder below the organization folder', `${LOGO_URL_BASE}sub/logo-100.png`],
+      ['a path that steps out of the folder', `${LOGO_URL_BASE}../org-2/logo-100.png`],
+      ['an encoded step out of the folder', `${LOGO_URL_BASE}%2e%2e/org-2/logo-100.png`],
+      ['a signed link of the bucket', 'https://supa.example.com/storage/v1/object/sign/org-logos/org-1/logo-100.png'],
+      ['a value that is not a link', 'org-1/logo-100.png'],
+    ])('a previous value that is %s removes nothing, on Replace and on Remove', async (_l, previous) => {
+      withPrevious(previous);
+      const replaced = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png` });
+      expect(replaced.ok).toBe(true);
+      withPrevious(previous);
+      const removed = await setOrgLogoUrlAction({ url: null });
+      expect(removed.ok).toBe(true);
+      expect(logoStorage.remove).not.toHaveBeenCalled();
+      expect(reportErrorMock).not.toHaveBeenCalled();
+    });
+
+    it('saving the object the column already names removes nothing', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-200.png?t=1`);
+      const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png?t=2` });
+      expect(result.ok).toBe(true);
+      expect(logoStorage.remove).not.toHaveBeenCalled();
+    });
+
+    it('the object just saved is never in a removal', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png` });
+      for (const call of logoStorage.remove.mock.calls) {
+        expect(call[0]).not.toContain('org-1/logo-200.png');
+      }
+      expect(logoStorage.remove).toHaveBeenCalledTimes(1);
+    });
+
+    it('a removal that answers an error is reported and the save stands', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      logoStorage.remove.mockImplementation(async () => ({ data: null, error: { message: 'storage unavailable' } }));
+      const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png` });
+      expect(result.ok).toBe(true);
+      expect(stubHolder.stub!.chainArgs.get('organizations.update')?.[0]?.[0]).toEqual({
+        logo_url: `${LOGO_URL_BASE}logo-200.png`,
+      });
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(revalidateTag).toHaveBeenCalledWith('dashboard-org', 'max');
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tag: 'org.logo.remove_previous' }),
+      );
+      // The report names no object path.
+      expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain('logo-100');
+    });
+
+    it('a removal that throws is reported and the save stands', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      logoStorage.remove.mockImplementation(async () => {
+        throw new Error('network down');
+      });
+      const result = await setOrgLogoUrlAction({ url: null });
+      expect(result.ok).toBe(true);
+      expect(audit).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'org.logo.remove_previous' }),
+      );
+      expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain('logo-100');
+    });
+
+    it('a save that answers an error removes nothing', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`, { data: null, error: { message: 'write refused' } });
+      const replaced = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png` });
+      expect(replaced.ok).toBe(false);
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`, { data: null, error: { message: 'write refused' } });
+      const removed = await setOrgLogoUrlAction({ url: null });
+      expect(removed.ok).toBe(false);
+      expect(logoStorage.remove).not.toHaveBeenCalled();
+      expect(audit).not.toHaveBeenCalled();
+    });
+
+    it('a save that matches no row removes nothing', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`, { data: null, error: null });
+      const result = await setOrgLogoUrlAction({ url: null });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('not_found');
+      expect(logoStorage.remove).not.toHaveBeenCalled();
+    });
+
+    it('a refused upload removes only the refused upload, never the current logo', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      logoStorage.body = new TextEncoder().encode('not an image');
+      const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png` });
+      expect(result.ok).toBe(false);
+      expect(logoStorage.remove).toHaveBeenCalledTimes(1);
+      expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-200.png']);
+      expect(stubHolder.stub!.chainArgs.get('organizations.update')).toBeUndefined();
+    });
+
+    it('a staff member removes nothing', async () => {
+      sessionState.role = 'staff';
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      const result = await setOrgLogoUrlAction({ url: null });
+      expect(result.ok).toBe(false);
+      expect(logoStorage.remove).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('deleteOwnAccountAction', () => {
