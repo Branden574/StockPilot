@@ -422,6 +422,33 @@ describe('the real SDK through /ingest, with the options the provider gives it',
     await expectPassedOn(base64);
   });
 
+  it('a batch with every kind of value in an event reaches PostHog too: the SDK writes it with JSON.stringify, the one writing the route takes', async () => {
+    postHogAnswers(null);
+    const instance = sdk('s38_values', QUIET);
+    const holdsItself: Record<string, unknown> = { name: 'placeholder' };
+    holdsItself.itself = holdsItself;
+    instance.capture('s38_placeholder_values', {
+      marks: '" \\ / : , { } [ ] \n \u0000 \u2028 \uFEFF \u00E9 \uD840\uDC00 \uD840',
+      looksLikeABatch: `{"api_key":"${OTHER_PROJECT}","api_key":"${PROJECT_REF}","batch":[]}`,
+      numbers: [0, -0, 0.1 + 0.2, 1e20, 1e21, 1e-7, Number.MAX_VALUE, NaN, Infinity],
+      big: BigInt('12345678901234567890'),
+      names: { b: 1, 10: 2, 2: 3 },
+      error: new Error('placeholder'),
+      when: new Date(0),
+      nothing: undefined,
+      none: null,
+      holdsItself,
+    });
+
+    const sent = await eventBatchSent();
+    expect(sent.headers.get('content-type')).toBe('text/plain');
+    const text = gunzipSync(sent.body!).toString('utf8');
+    expect(text).toContain('s38_placeholder_values');
+    // Written by JSON.stringify: read and written again, it is the same text.
+    expect(JSON.stringify(JSON.parse(text))).toBe(text);
+    await expectPassedOn(sent);
+  });
+
   it('a batch the SDK builds for another PostHog project goes no further than the route, whichever way it is packed', async () => {
     interceptScripts();
     postHogAnswers(null);

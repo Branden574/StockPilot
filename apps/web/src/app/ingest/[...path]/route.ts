@@ -57,10 +57,11 @@ export const dynamic = 'force-dynamic';
  *     skipTrailingSlashRedirect in next.config.ts keeps /e/?compression=...
  *     as the SDK spelled it).
  *   - the body: a POST is an event batch, and only one that names this app's
- *     project and no other, in one of the three ways the SDK packs it
- *     (eventBatch and ownBatch below). Its bytes go on as they came, up to
- *     the platform's request body limit (BODY_CAP below); a larger one, or
- *     one that unpacks to more, answers 413.
+ *     project and no other, in one of the three ways the SDK packs it and
+ *     written as the SDK writes it (eventBatch, ownBatch and asJsonWritesIt
+ *     below). Its bytes go on as they came, up to the platform's request
+ *     body limit (BODY_CAP below); a larger one, or one that unpacks to
+ *     more, answers 413.
  *
  * So every place a request names a PostHog project is held to this app's
  * key: the /array/ path, the query's token, Authorization, and the batch.
@@ -493,10 +494,33 @@ function ownEvent(event: unknown, key: string): boolean {
 }
 
 /**
+ * Whether a JSON text is the one text JSON.stringify writes for the value
+ * JSON.parse read from it. Every body the SDK sends is: it writes each with
+ * JSON.stringify (request.js:137-171, :230, through @posthog/browser-common
+ * utils/request-utils.js jsonStringify, and @posthog/core utils/
+ * string-utils.js safeJsonStringify when that throws).
+ *
+ * JSON.parse keeps the last of two members with one name; another reader
+ * may keep the first, or refuse both. A text JSON.stringify writes has no
+ * name twice, in the batch, in an event or in anything inside one, so
+ * whichever a reader does, it finds the value read here. A value nested
+ * deeper than JSON.stringify goes makes it throw: that text is refused
+ * too, as it cannot be shown to be the one.
+ */
+function asJsonWritesIt(json: string, read: unknown): boolean {
+  try {
+    return JSON.stringify(read) === json;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Whether a batch's JSON is one the SDK builds for this app's project: an
  * object of api_key, batch and sent_at and nothing else, whose api_key is
  * this app's key, with at least one event, and no event naming another
- * project. With no key set, analytics is off and no batch passes.
+ * project, written as the SDK writes it (asJsonWritesIt). With no key set,
+ * analytics is off and no batch passes.
  *
  * PostHog files a batch under its api_key, before any key an event carries
  * (rust/capture utils.rs extract_and_verify_token), so that field must be
@@ -505,6 +529,8 @@ function ownEvent(event: unknown, key: string): boolean {
  * untagged choice), and an event's key is read from fields a batch does not
  * have: with only these three, there is no second reading to file under
  * another project. An event without a key of its own takes the batch's.
+ * And every name in it once (asJsonWritesIt), so that the batch read here
+ * is the batch any reader finds in the text.
  */
 function ownBatch(json: string): boolean {
   const key = env.NEXT_PUBLIC_POSTHOG_KEY;
@@ -521,7 +547,9 @@ function ownBatch(json: string): boolean {
     batch.api_key === key &&
     Array.isArray(batch.batch) &&
     batch.batch.length > 0 &&
-    batch.batch.every((event) => ownEvent(event, key))
+    batch.batch.every((event) => ownEvent(event, key)) &&
+    // Last: it writes the whole batch out again.
+    asJsonWritesIt(json, batch)
   );
 }
 

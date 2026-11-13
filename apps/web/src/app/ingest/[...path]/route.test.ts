@@ -1076,7 +1076,7 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
     ['JSON that is a number', '1'],
     ['text that is not JSON', `{"api_key":"${PROJECT_REF}","batch":[`],
     ['nothing', ''],
-    ['our batch with a byte order mark before it', `﻿${batchJson()}`],
+    ['our batch with a byte order mark before it', `\uFEFF${batchJson()}`],
     ["our batch with another project's after it", `${batchJson()}${batchJson(OTHER_PROJECT)}`],
   ])('refuses %s, however it is packed, on both event paths', async (_label, json) => {
     await expectRefused(
@@ -1091,6 +1091,229 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
         }),
       ),
     );
+  });
+
+  // The SDK writes every batch with JSON.stringify (@posthog/browser-common
+  // utils/request-utils.js jsonStringify), and only a text written that one
+  // way goes on. JSON.parse keeps the last of two members with one name;
+  // another reader may keep the first, or refuse both. A text JSON.stringify
+  // writes has no name twice, so every reader finds the batch the route
+  // read. Each text below is a batch of OURS as JSON.parse reads it: written
+  // again by JSON.stringify it passes, so each refusal is for how it is
+  // written.
+  const oursText = JSON.stringify(ours);
+  const theirsText = JSON.stringify(theirs);
+  /** A batch whose one event is this text, with our key. */
+  const withEvent = (event: string) =>
+    `{"api_key":"${PROJECT_REF}","batch":[${event}],"sent_at":"${SENT_AT}"}`;
+
+  it.each([
+    // A name twice, wherever the route reads a key: another project's
+    // first, ours last.
+    [
+      "with its key written twice, another project's first",
+      `{"api_key":"${OTHER_PROJECT}","api_key":"${PROJECT_REF}","batch":[${oursText}],"sent_at":"${SENT_AT}"}`,
+    ],
+    [
+      "with its key written twice, another project's first with its name spelled with an escape",
+      `{"api\\u005fkey":"${OTHER_PROJECT}","api_key":"${PROJECT_REF}","batch":[${oursText}],"sent_at":"${SENT_AT}"}`,
+    ],
+    [
+      "with its events written twice, another project's first",
+      `{"api_key":"${PROJECT_REF}","batch":[${theirsText}],"batch":[${oursText}],"sent_at":"${SENT_AT}"}`,
+    ],
+    [
+      "with an event whose token is written twice, another project's first",
+      withEvent(`{"event":"$pageview","token":"${OTHER_PROJECT}","token":"${PROJECT_REF}"}`),
+    ],
+    [
+      "with an event whose api_key is written twice, another project's first",
+      withEvent(`{"event":"$pageview","api_key":"${OTHER_PROJECT}","api_key":"${PROJECT_REF}"}`),
+    ],
+    [
+      "with an event whose $token is written twice, another project's first",
+      withEvent(`{"event":"$pageview","$token":"${OTHER_PROJECT}","$token":"${PROJECT_REF}"}`),
+    ],
+    [
+      "with an event whose properties are written twice, another project's first",
+      withEvent(
+        `{"event":"$pageview","properties":{"token":"${OTHER_PROJECT}"},"properties":{"token":"${PROJECT_REF}"}}`,
+      ),
+    ],
+    [
+      "with an event whose properties.token is written twice, another project's first",
+      withEvent(
+        `{"event":"$pageview","properties":{"token":"${OTHER_PROJECT}","token":"${PROJECT_REF}"}}`,
+      ),
+    ],
+    [
+      "with no sent_at and its key written twice, another project's first",
+      `{"api_key":"${OTHER_PROJECT}","api_key":"${PROJECT_REF}","batch":[${oursText}]}`,
+    ],
+    // A name twice where no key is read: the same rule, at any depth.
+    [
+      'with its key written twice, ours both times',
+      `{"api_key":"${PROJECT_REF}","api_key":"${PROJECT_REF}","batch":[${oursText}],"sent_at":"${SENT_AT}"}`,
+    ],
+    [
+      'with its sent_at written twice',
+      `{"api_key":"${PROJECT_REF}","batch":[${oursText}],"sent_at":"${SENT_AT}","sent_at":"${SENT_AT}"}`,
+    ],
+    [
+      'with a name written twice deep inside an event',
+      withEvent(
+        `{"event":"$pageview","properties":{"token":"${PROJECT_REF}","$set":{"plan":[{"tier":"a","tier":"b"}]}}}`,
+      ),
+    ],
+    // Each name once, but not as JSON.stringify writes it.
+    ['with a space before it', ` ${batchJson()}`],
+    ['with a line break after it', `${batchJson()}\n`],
+    ['with a space after a comma', batchJson().replace(',"batch"', ', "batch"')],
+    [
+      "with its key's name spelled with an escape",
+      batchJson().replace('"api_key"', '"api\\u005fkey"'),
+    ],
+    [
+      'with its key spelled with an escape',
+      batchJson().replace(`"${PROJECT_REF}"`, `"\\u0070${PROJECT_REF.slice(1)}"`),
+    ],
+    [
+      'with a slash spelled with an escape',
+      batchJson(PROJECT_REF, [{ ...ours, at: '/dashboard' }]).replace(
+        '"/dashboard"',
+        '"\\/dashboard"',
+      ),
+    ],
+    [
+      'with a number written another way',
+      batchJson(PROJECT_REF, [{ ...ours, offset: 1000 }]).replace(':1000', ':1e3'),
+    ],
+    // The same length as JSON.stringify's text, which puts whole-number
+    // names first, lowest first.
+    [
+      'with whole-number names in another order',
+      batchJson(PROJECT_REF, [{ ...ours, sizes: { 1: 'a', 2: 'b' } }]).replace(
+        '"1":"a","2":"b"',
+        '"2":"b","1":"a"',
+      ),
+    ],
+  ])('refuses our batch %s, however it is packed, on both event paths', async (_label, json) => {
+    // What the route reads from it is a batch of ours: written the one way,
+    // it goes on.
+    const writtenAgain = JSON.stringify(JSON.parse(json));
+    expect(writtenAgain).not.toBe(json);
+    const control = await route.POST(
+      incoming('/ingest/e/', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: bytes(writtenAgain),
+      }),
+    );
+    expect(control.status).toBe(200);
+    expect(upstream).toHaveBeenCalledTimes(1);
+    upstream.mockClear();
+
+    await expectRefused(
+      EVENT_PATHS.flatMap((path) =>
+        PACKINGS.map((packing) => {
+          const { query, contentType, body } = packed(packing, json);
+          return incoming(`${path}${query ? `?${query}` : ''}`, {
+            method: 'POST',
+            headers: { 'content-type': contentType },
+            body,
+          });
+        }),
+      ),
+    );
+  });
+
+  it('refuses our batch nested deeper than JSON.stringify writes, however it is packed, on both event paths', async () => {
+    const DEPTH = 200_000;
+    const json = withEvent(
+      `{"event":"$pageview","properties":{"token":"${PROJECT_REF}","deep":${'['.repeat(DEPTH)}${']'.repeat(DEPTH)}}}`,
+    );
+    // JSON.parse reads it; JSON.stringify gives up on what was read, so it
+    // cannot be told whether the text is the one JSON.stringify writes.
+    const read = JSON.parse(json) as { api_key: unknown };
+    expect(read.api_key).toBe(PROJECT_REF);
+    expect(() => JSON.stringify(read)).toThrow(RangeError);
+
+    await expectRefused(
+      EVENT_PATHS.flatMap((path) =>
+        PACKINGS.map((packing) => {
+          const { query, contentType, body } = packed(packing, json);
+          return incoming(`${path}${query ? `?${query}` : ''}`, {
+            method: 'POST',
+            headers: { 'content-type': contentType },
+            body,
+          });
+        }),
+      ),
+    );
+  });
+
+  it('passes on our batch whatever JSON.stringify wrote into it: marks inside text, every kind of number, names in its own order', async () => {
+    const json = batchJson(PROJECT_REF, [
+      {
+        ...ours,
+        // Text that reads like a batch of another project's, and every mark
+        // JSON.stringify escapes or leaves as it is.
+        note: `{"api_key":"${OTHER_PROJECT}","api_key":"${PROJECT_REF}","batch":[${theirsText}]}`,
+        marks: '" \\ / : , { } [ ] \b \f \n \r \t \u0000 \u001f \u007f \u2028 \u2029 \uFEFF \u00E9',
+        // Half of a pair is written as an escape, a whole pair as it is.
+        halfPair: 'a\uD840b',
+        pair: '\uD840\uDC00',
+        numbers: [
+          0,
+          -0,
+          -1.5,
+          1e20,
+          1e21,
+          1e-6,
+          1e-7,
+          Number.MIN_VALUE,
+          Number.MAX_VALUE,
+          Number.MAX_SAFE_INTEGER,
+          0.1 + 0.2,
+          NaN,
+          Infinity,
+        ],
+        // Whole-number names come out first, lowest first, however they
+        // were set; the rest in the order they were set.
+        names: { b: 1, 10: 2, 2: 3, a: 4, '': 5, '-1': 6, '007': 7, ['__proto__']: 8 },
+        empty: [{}, [], null, true, false, '', undefined],
+        left: undefined,
+      },
+    ]);
+    // As JSON.stringify wrote them.
+    for (const written of [
+      String.raw`"marks":"\" \\ / : , { } [ ] \b \f \n \r \t \u0000 \u001f ` +
+        '\u007f \u2028 \u2029 \uFEFF \u00E9"',
+      String.raw`"halfPair":"a\ud840b"`,
+      '"pair":"\uD840\uDC00"',
+      '"numbers":[0,0,-1.5,100000000000000000000,1e+21,0.000001,1e-7,5e-324,1.7976931348623157e+308,9007199254740991,0.30000000000000004,null,null]',
+      '"names":{"2":3,"10":2,"b":1,"a":4,"":5,"-1":6,"007":7,"__proto__":8}',
+      '"empty":[{},[],null,true,false,"",null]}',
+    ]) {
+      expect(json).toContain(written);
+    }
+
+    for (const packing of PACKINGS) {
+      upstream.mockClear();
+      const { query, contentType, body } = packed(packing, json);
+      const res = await route.POST(
+        incoming(`/ingest/e/${query ? `?${query}` : ''}`, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body,
+        }),
+      );
+
+      expect(res.status, packing).toBe(200);
+      expect(upstream, packing).toHaveBeenCalledTimes(1);
+      expect((await sentToPostHog()).body, packing).toEqual(body);
+    }
+    expect(refusals()).toEqual([]);
   });
 
   it("passes on our batch whose events carry our key under every name, or none of their own: PostHog files those under the batch's", async () => {
