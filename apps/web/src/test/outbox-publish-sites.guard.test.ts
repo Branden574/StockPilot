@@ -35,8 +35,8 @@
  *   template unless TABLE_NAMED lists it, and every insert, upsert, update or
  *   delete on a database client's `.from(` whose table is not a literal is
  *   listed in DYNAMIC_FROM_WRITES with the tables it can name. A
- *   `<x>.storage.from(bucket)` is a storage bucket, not a table, and is not
- *   counted.
+ *   `<client>.storage.from(bucket)` is a storage bucket, not a table, and is
+ *   not counted; a variable merely named `storage` is not exempt.
  *   Rule 4. In the helper, publish_outbox is called once, directly on
  *   `createAdminClient()` imported from '@/lib/supabase/admin', and the
  *   module exports only HELPER_EXPORTS.
@@ -44,9 +44,10 @@
  *   and only by a plain named import with no alias (no default, no namespace,
  *   no `as`); never re-exported, never loaded by `import(...)`, `require(...)`
  *   or `import x = require(...)`. A load whose path is not a literal is
- *   listed in DYNAMIC_LOADS, except a template path that ends in a data
- *   extension (.json .css .svg .png .jpg .jpeg .webp .txt .md), which cannot
- *   load code. The helper's two functions are referenced only as the callee
+ *   listed in DYNAMIC_LOADS, except a template path that starts with a fixed
+ *   `./` or `@/` folder, holds no `?`, `#` or `..` in any fixed piece, and
+ *   ends in a data extension (.json .css .svg .png .jpg .jpeg .webp .txt
+ *   .md), which cannot load code. The helper's two functions are referenced only as the callee
  *   of a call (never kept in a variable or handed on).
  *   Rule 6. The helper is called only at the sites in SITES, each with its
  *   topic. The event is an object literal with exactly topic, aggregateId and
@@ -496,25 +497,30 @@ function literalEventTopic(o: ts.ObjectLiteralExpression, sf: ts.SourceFile): st
 }
 
 /**
- * A storage bucket, not a table: `.from(` read off `<x>.storage` or off a
- * name `storage`. Storage's `.update(path, file)` moves an object; a
- * database client's `.from(` is never reached through `.storage`.
+ * A storage bucket, not a table: `.from(` read off `<client>.storage`, a
+ * member access on another expression. Storage's `.update(path, file)` moves
+ * an object; a database client's `.from(` is never reached through
+ * `.storage`. A variable merely named `storage` is not exempt: what it holds
+ * cannot be told from its name.
  */
 function isStorageReceiver(receiver: ts.Expression): boolean {
   const u = unwrap(receiver);
-  return (
-    (ts.isPropertyAccessExpression(u) && u.name.text === 'storage') ||
-    (ts.isIdentifier(u) && u.text === 'storage')
-  );
+  return ts.isPropertyAccessExpression(u) && u.name.text === 'storage';
 }
 
-/** A template load path whose last piece ends in a data extension (cannot load code). */
+/**
+ * A template load path that can only name a data file: it starts with a fixed
+ * relative or alias folder (`./` or `@/`), no fixed piece holds `?`, `#` or
+ * `..`, and the last piece ends in a data extension.
+ */
 function isDataLoad(arg: ts.Expression | undefined): boolean {
   if (!arg) return false;
   const u = unwrap(arg);
   if (!ts.isTemplateExpression(u)) return false;
-  const tail = u.templateSpans[u.templateSpans.length - 1]!.literal.text;
-  return DATA_LOAD.test(tail);
+  const pieces = [u.head.text, ...u.templateSpans.map((s) => s.literal.text)];
+  if (pieces.some((t) => /[?#]|\.\./.test(t))) return false;
+  if (!/^(\.\/|@\/)./.test(u.head.text)) return false;
+  return DATA_LOAD.test(pieces[pieces.length - 1]!);
 }
 
 /**
@@ -771,7 +777,7 @@ const ADVICE = {
   rpcLoose:
     'Call .rpc( on the client where you read it, with the function named as a literal; do not index, keep, destructure and hand on, or .call() it.',
   fromWrite:
-    'Add this site to DYNAMIC_FROM_WRITES with the tables it can name, after reading that none can be the export queue. If .from( here is a storage bucket, reach it through `<client>.storage` or list it there as a bucket.',
+    'Add this site to DYNAMIC_FROM_WRITES with the tables it can name, after reading that none can be the export queue. If .from( here is a storage bucket, reach the bucket through `<client>.storage`, or list this site.',
   dynamicLoad:
     'Add this file to DYNAMIC_LOADS with the paths it can load, after reading that none can be the export-event helper.',
   badImport:
@@ -1473,6 +1479,44 @@ describe('the guard can fail (planted probes)', () => {
     expect(hit).toBeDefined();
     expect(hit).toContain('storage bucket');
   });
+
+  it('a database client kept in a variable named storage gets no bucket exemption', () => {
+    const all = verdict(
+      withFile(
+        REAL,
+        NEW_FILE,
+        "import { createAdminClient } from '@/lib/supabase/admin';\nexport async function f(t: string) { const storage = createAdminClient(); await storage.from(t).insert({}); }",
+      ),
+    );
+    const hit = all.find((f) => f.startsWith(`${NEW_FILE}#f writes through .from(`));
+    expect(hit).toBeDefined();
+    expect(hit).toContain('reach the bucket through `<client>.storage`, or list this site');
+  });
+
+  it.each([
+    ['nothing fixed in front', 'export const load = (p: string) => import(`${p}.json`);'],
+    [
+      'a query after the extension',
+      'export const load = (l: string) => import(`./locales/${l}.json?x`);',
+    ],
+    [
+      'a query before the extension',
+      'export const load = (l: string) => import(`./locales/${l}?x.json`);',
+    ],
+    ['a fragment', 'export const load = (l: string) => import(`./locales/${l}#a.json`);'],
+    [
+      'a parent step in a later piece',
+      'export const load = (l: string) => import(`./locales/${l}/../x.json`);',
+    ],
+    [
+      'a parent step in the head',
+      'export const load = (l: string) => import(`../locales/${l}.json`);',
+    ],
+    ['a bare folder head', 'export const load = (l: string) => import(`locales/${l}.json`);'],
+    ['a code file', 'export const load = (l: string) => import(`./locales/${l}.ts`);'],
+  ])('a template load path with %s is a dynamic load that must be listed', (_label, source) => {
+    expect(planted(source)).toContain(`${NEW_FILE} loads a module whose path is not a literal`);
+  });
 });
 
 describe('what the guard does not flag (each was a false alarm)', () => {
@@ -1486,8 +1530,8 @@ describe('what the guard does not flag (each was a false alarm)', () => {
       'export async function f(sb, bucket: string, path: string, file: Blob) { await sb.storage.from(bucket).update(path, file); }',
     ],
     [
-      'a storage client kept as storage',
-      'export async function f(storage, bucket: string) { await storage.from(bucket).remove(["a"]); await storage.from(bucket).update("a", new Blob()); }',
+      'a storage bucket reached through this.client.storage',
+      'export class S { client: any; async f(bucket: string) { await this.client.storage.from(bucket).update("a", new Blob()); } }',
     ],
     [
       'setting rpc on a stub',
@@ -1504,6 +1548,10 @@ describe('what the guard does not flag (each was a false alarm)', () => {
     [
       'a data file loaded by a template path',
       'export async function load(lang: string) { return import(`./locales/${lang}.json`); }',
+    ],
+    [
+      'a data file loaded by an alias template path',
+      'export async function load(lang: string) { return import(`@/messages/${lang}.json`); }',
     ],
   ])('%s', (_label, source) => {
     expect(onFile(source)).toEqual([]);
