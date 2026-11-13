@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { orphanAccountNotices } from '@/components/platform/remove-org-notices';
 import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock';
 
 /**
@@ -20,6 +21,10 @@ import { callArgs, makeSupabaseStub, type MockCall } from '@/test/supabase-mock'
  * account while its email is on the allowlist (O-A3-7), read from GoTrue
  * first; an email read that fails is FAILED; and each deleted account's
  * avatar files are removed (O-A3-9).
+ *
+ * A membership read that answers an error is never read as "no other
+ * organization": the account is kept and counted as failed, and a member list
+ * that could not be read removes nothing at all.
  */
 
 const { deleteUser, getUserById, recordPlatformAudit, reportError, avatarList, avatarRemove } = vi.hoisted(() => ({
@@ -62,6 +67,20 @@ const ORG_ID = '0a000000-0000-0000-0000-000000000099';
 /** account_deletion_check's answer per orphan. */
 const answers: Record<string, unknown> = {};
 
+/**
+ * Per test: the member list to answer, a failed read of it, and a failed
+ * membership count for one account (`otherOrgsOnly`: the count taken before
+ * the organization is deleted, of the account's OTHER organizations; else the
+ * count taken again right before the account would be deleted).
+ */
+const memberReads: {
+  memberIds: string[] | null;
+  membersFail: boolean;
+  countFails: { uid: string; otherOrgsOnly: boolean } | null;
+} = { memberIds: null, membersFail: false, countFails: null };
+
+const READ_FAILED = { message: 'canceling statement due to statement timeout', code: '57014' };
+
 const adminStub = makeSupabaseStub({
   'platform_settings.select': {
     data: { org_deletion_passphrase_hash: 'h', org_deletion_passphrase_salt: 's' },
@@ -72,6 +91,9 @@ const adminStub = makeSupabaseStub({
   'organization_members.select': (call: MockCall) => {
     // The pre-delete member list, then the membership counts (0 = orphan).
     if (callArgs(call, 'select')?.[0] === 'user_id') {
+      if (memberReads.membersFail) return { data: null, error: READ_FAILED };
+      const ids = memberReads.memberIds;
+      if (ids) return { data: ids.map((user_id) => ({ user_id })), error: null };
       return {
         data: [
           { user_id: 'u-free' },
@@ -87,6 +109,12 @@ const adminStub = makeSupabaseStub({
         ],
         error: null,
       };
+    }
+    const uid = callArgs(call, 'eq')?.[1];
+    const otherOrgsOnly = call.methods.includes('neq');
+    const fails = memberReads.countFails;
+    if (fails && fails.uid === uid && fails.otherOrgsOnly === otherOrgsOnly) {
+      return { data: null, error: READ_FAILED, count: null };
     }
     return { data: null, error: null, count: 0 };
   },
@@ -108,6 +136,9 @@ import { removeOrgAction } from './platform-admin';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  memberReads.memberIds = null;
+  memberReads.membersFail = false;
+  memberReads.countFails = null;
   for (const k of Object.keys(answers)) delete answers[k];
   answers['u-blocked'] = {
     deletable: false,
@@ -233,5 +264,84 @@ describe('removeOrgAction orphan cleanup', () => {
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.data).toEqual({ deletedUsers: 0, keptUsers: 0, failedUsers: 0 });
     expect(deleteUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('removeOrgAction when a membership read fails', () => {
+  const orgDeletes = () => adminStub.chainsAll.get('organizations.delete')?.length ?? 0;
+
+  it('keeps a member whose other-memberships count could not be read, and counts them as failed', async () => {
+    memberReads.memberIds = ['u-free', 'u-unread'];
+    memberReads.countFails = { uid: 'u-unread', otherOrgsOnly: true };
+    const res = await removeOrgAction({
+      orgId: ORG_ID,
+      passphrase: 'pp',
+      confirmName: 'Throwaway',
+      alsoDeleteOrphanedUsers: true,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(deleteUser.mock.calls.map((c) => c[0])).toEqual(['u-free']);
+    expect(res.data).toEqual({ deletedUsers: 1, keptUsers: 0, failedUsers: 1 });
+    // The dialog's sentence for it: left in place, the report has the details.
+    expect(orphanAccountNotices(res.data).failed).toBe(
+      '1 account could not be deleted right now and was left in place. The error report has the details.',
+    );
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'platform-admin.orphan-membership-read', extra: { uid: 'u-unread' } }),
+    );
+    expect(recordPlatformAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'org_deleted',
+        detail: expect.objectContaining({ deletedOrphanUsers: 1, keptOrphanUsers: 0, failedOrphanUsers: 1 }),
+      }),
+    );
+  });
+
+  it('keeps a member whose membership count could not be read again right before the delete', async () => {
+    memberReads.memberIds = ['u-free', 'u-unread'];
+    memberReads.countFails = { uid: 'u-unread', otherOrgsOnly: false };
+    const res = await removeOrgAction({
+      orgId: ORG_ID,
+      passphrase: 'pp',
+      confirmName: 'Throwaway',
+      alsoDeleteOrphanedUsers: true,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(deleteUser.mock.calls.map((c) => c[0])).toEqual(['u-free']);
+    expect(adminStub.rpcCalls.filter((c) => c.name === 'account_deletion_check').map((c) => c.args)).toContainEqual({
+      p_user_id: 'u-free',
+    });
+    expect(res.data).toEqual({ deletedUsers: 1, keptUsers: 0, failedUsers: 1 });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'platform-admin.orphan-membership-read', extra: { uid: 'u-unread' } }),
+    );
+  });
+
+  it('removes nothing when the member list could not be read', async () => {
+    memberReads.membersFail = true;
+    const before = orgDeletes();
+    const res = await removeOrgAction({
+      orgId: ORG_ID,
+      passphrase: 'pp',
+      confirmName: 'Throwaway',
+      alsoDeleteOrphanedUsers: true,
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.code).toBe('internal_error');
+    expect(res.error.message).toBe(
+      "Could not read the organization's members, so nothing was removed. Try again.",
+    );
+    expect(orgDeletes()).toBe(before);
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'platform-admin.orphan-members-read' }),
+    );
   });
 });

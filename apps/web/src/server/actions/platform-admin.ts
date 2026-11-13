@@ -383,12 +383,21 @@ export async function setOrgDeletionPassphraseAction(
     return err('rate_limited', 'Too many attempts — wait a minute and try again.');
   }
   // If a passphrase already exists, the caller must prove they know it before
-  // rotating it — a stolen session cannot silently swap it out.
-  const { data: existing } = await admin
+  // rotating it — a stolen session cannot silently swap it out. A read that
+  // answers an error refuses: only a read that succeeded and found no
+  // passphrase is the first-ever set.
+  const { data: existing, error: readErr } = await admin
     .from('platform_settings')
     .select('org_deletion_passphrase_hash, org_deletion_passphrase_salt')
     .eq('id', true)
     .maybeSingle();
+  if (readErr) {
+    await reportError(new Error(readErr.message), { tag: 'platform-admin.passphrase-read' });
+    return err(
+      'internal_error',
+      'Could not read the current deletion passphrase, so it was not changed. Try again.',
+    );
+  }
   const cur = existing as
     | { org_deletion_passphrase_hash: string | null; org_deletion_passphrase_salt: string | null }
     | null;
@@ -501,22 +510,45 @@ export async function removeOrgAction(
   // 3. Collect members whose ONLY membership is this org BEFORE the cascade
   //    removes the membership rows (so we can optionally delete those orphan
   //    accounts — the common "created under the wrong email" case).
+  //    A read that answers an error is never "no other organization": a
+  //    member list that could not be read removes nothing (once the cascade
+  //    runs, that list is gone), and a member whose count could not be read is
+  //    kept and counted as failed.
   const orphanUserIds: string[] = [];
+  let unreadMembers = 0;
   if (parsed.data.alsoDeleteOrphanedUsers) {
-    const { data: members } = await admin
+    const { data: members, error: membersErr } = await admin
       .from('organization_members')
       .select('user_id')
       .eq('organization_id', parsed.data.orgId);
+    if (membersErr) {
+      await reportError(new Error(membersErr.message), {
+        tag: 'platform-admin.orphan-members-read',
+        extra: { orgId: parsed.data.orgId },
+      });
+      return err(
+        'internal_error',
+        "Could not read the organization's members, so nothing was removed. Try again.",
+      );
+    }
     for (const m of (members ?? []) as Array<{ user_id: string }>) {
       // NEVER delete the acting admin's own account, even if they happen to be
       // the sole member of a throwaway org.
       if (m.user_id === gate.session.userId) continue;
-      const { count } = await admin
+      const { count, error: countErr } = await admin
         .from('organization_members')
         .select('organization_id', { count: 'exact', head: true })
         .eq('user_id', m.user_id)
         .neq('organization_id', parsed.data.orgId);
-      if ((count ?? 0) === 0) orphanUserIds.push(m.user_id);
+      if (countErr || typeof count !== 'number') {
+        unreadMembers += 1;
+        await reportError(new Error(countErr?.message ?? 'membership count answered no count'), {
+          tag: 'platform-admin.orphan-membership-read',
+          extra: { uid: m.user_id },
+        });
+        continue;
+      }
+      if (count === 0) orphanUserIds.push(m.user_id);
     }
   }
 
@@ -540,17 +572,26 @@ export async function removeOrgAction(
   //    deleteUser `{ error }` is read and settled: if GoTrue no longer has the
   //    user, the delete happened and only its reply failed (review R7). An
   //    account already gone is neither. After each deleted orphan its avatar
-  //    files are removed (O-A3-9).
+  //    files are removed (O-A3-9). A count that could not be read (here or
+  //    in step 3) keeps the account and counts it as FAILED, reported.
   let deletedUsers = 0;
   let keptUsers = 0;
-  let failedUsers = 0;
+  let failedUsers = unreadMembers;
   for (const uid of orphanUserIds) {
     try {
-      const { count } = await admin
+      const { count, error: countErr } = await admin
         .from('organization_members')
         .select('organization_id', { count: 'exact', head: true })
         .eq('user_id', uid);
-      if ((count ?? 0) > 0) continue; // gained another org in the meantime — keep
+      if (countErr || typeof count !== 'number') {
+        failedUsers += 1;
+        await reportError(new Error(countErr?.message ?? 'membership count answered no count'), {
+          tag: 'platform-admin.orphan-membership-read',
+          extra: { uid },
+        });
+        continue;
+      }
+      if (count > 0) continue; // gained another org in the meantime — keep
       const orphanAuth = await readAuthEmail(admin, uid);
       if (orphanAuth.kind === 'gone') continue; // already deleted elsewhere: neither
       if (orphanAuth.kind === 'failed') {
