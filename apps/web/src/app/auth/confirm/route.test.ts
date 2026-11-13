@@ -1014,6 +1014,33 @@ describe('POST /auth/confirm takes a press only through the press gate (S25)', (
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 
+  it('a post with no Sec-Fetch-Site and no Origin is held to the field as well: refused without it with nothing spent, verified with it', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    const fields = { token_hash: HASH_A, type: 'recovery', next: '/reset/complete' };
+    const refused = await POST(postWithoutGate(fields, {}));
+    expect(refused.status).toBe(303);
+    expect(refused.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
+    expect(refused.headers.get('set-cookie')).toBeNull();
+    const change = await POST(postWithoutGate({ token_hash: HASH_A, type: 'email_change' }, {}));
+    expect(change.status).toBe(200);
+    expect(await change.text()).toContain('This link has expired or was already used');
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(completeEmailChange).not.toHaveBeenCalled();
+    expect(info.mock.calls).toEqual([
+      [GATE_LOG, { type: 'recovery' }],
+      [GATE_LOG, { type: 'email_change' }],
+    ]);
+    info.mockRestore();
+
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    verifyOtp.mockResolvedValue({ data: { session: { user: { id: USER_A } } }, error: null });
+    const res = await POST(postReq(fields, {}));
+    expect(verifyOtp).toHaveBeenCalledTimes(1);
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: HASH_A });
+    expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
+    vi.mocked(console.info).mockRestore();
+  });
+
   it('any other value in the field, an empty one, or no form at all is refused the same way', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
     const fields = { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' };
