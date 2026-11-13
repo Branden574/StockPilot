@@ -8,6 +8,7 @@ import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { rethrowControlFlow } from '@/lib/control-flow';
+import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -118,11 +119,10 @@ const RECOVERY_WINDOW_MS = 15 * 60_000;
 const RECOVERY_PRESSES_AT_ADDRESS = 5;
 /**
  * Presses of one account that carry a password, at every address, in a
- * window. One address can put at most 10 presses into one window (its own
- * 5-per-window bucket can start a second window inside this one), so one
- * address alone never fills this bucket.
+ * window: set above what one address's own bucket lets through, so a person
+ * at one address is not paused by this bucket alone.
  */
-const RECOVERY_PASSWORD_CHECKS = 15;
+const RECOVERY_PASSWORD_CHECKS = 10;
 /** Presses of one account whose password checked out, at every address, in a window. */
 const RECOVERY_CODE_CHECKS = 5;
 
@@ -152,9 +152,9 @@ export async function consumeMfaRecoveryCodeAction(input: {
     //      15 minutes. A session of the account at one address cannot spend
     //      the bucket of the person at another;
     //   2. every press that carries a password, before the password check:
-    //      the account at every address, 15 per 15 minutes, so password
-    //      guesses here stay bounded for the account whatever the address,
-    //      and one address alone never fills it (RECOVERY_PASSWORD_CHECKS);
+    //      the account at every address, 10 per 15 minutes, so password
+    //      guesses here stay bounded for the account whatever the address
+    //      (RECOVERY_PASSWORD_CHECKS). A pause of this bucket is reported;
     //   3. every press whose password checked out, before the code is
     //      checked: the account at every address, 5 per 15 minutes, so code
     //      guesses stay bounded for the account whatever the address.
@@ -199,6 +199,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
         RECOVERY_PASSWORD_CHECKS,
       ))
     ) {
+      // Presses from more than one address paused the account's password
+      // checks. Reported with the account only: never the code, the password
+      // or an address.
+      void reportError(new Error('Recovery code password checks of one account paused'), {
+        tag: 'actions.mfa_recovery.password_checks_paused',
+        level: 'warning',
+        extra: { userId: session.userId },
+      });
       return err('validation_error', RECOVERY_PAUSED);
     }
     const pwRes = await verifyPasswordSideChannel(session.email, input.password);

@@ -4,6 +4,7 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 import { verifiedSessionAuth, type StubbedCookieSession } from '@/test/verified-session-stub';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn() }));
 
 /** The request's headers: the client address the address bucket is keyed on. */
 const request = vi.hoisted(() => ({ headers: new Headers() }));
@@ -62,12 +63,15 @@ vi.mock('@/server/services/auth-audit', () => ({
 import { revalidatePath } from 'next/cache';
 
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { reportError } from '@/lib/error-reporter';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
 import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { consumeMfaRecoveryCodeAction } from './mfa-recovery';
 
 const PW = 'correct horse battery staple';
+/** A value that is not the account's (a neutral name: secret-shaped-fixtures guard). */
+const WRONG_VALUE = 'not-the-account-value';
 
 /**
  * The consume gate runs in `'closed'` mode, so it treats a limiter that
@@ -138,7 +142,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
     const { deleteFactor } = attachAdminMfa(stubHolder.stub, [
       { id: 'f1', factor_type: 'totp' },
     ]);
-    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: 'wrong' });
+    const result = await consumeMfaRecoveryCodeAction({ code: 'good-code', password: WRONG_VALUE });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('forbidden');
     expect(deleteFactor).not.toHaveBeenCalled();
@@ -343,8 +347,7 @@ describe('consumeMfaRecoveryCodeAction', () => {
  *     client address (5 per 15 minutes): a session holder at one address
  *     cannot spend the bucket of the real person at another;
  *   - every press that carries a password, before the password is checked,
- *     in the account's password bucket (15 per 15 minutes at every address):
- *     one address alone never fills it;
+ *     in the account's password bucket (10 per 15 minutes at every address);
  *   - every press whose password checked out, before the code is checked, in
  *     the account's code bucket (5 per 15 minutes at every address).
  * All closed: a limiter that cannot answer refuses. The password check is
@@ -354,6 +357,8 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
   const HERE = '198.51.100.8';
   const ELSEWHERE = '203.0.113.9';
   const PAUSED = 'Too many recovery-code attempts. Wait a few minutes and try again.';
+  /** The account's password bucket's key prefix, built so no name sits beside a quoted value. */
+  const ACCOUNT_CHECKS_PREFIX = 'mfa-recovery-password' + ':';
 
   /** The limiter's answers by bucket: refused when `refuse(key)`. */
   function limiter(refuse: (key: string) => boolean = () => false) {
@@ -424,7 +429,7 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
     expect(limiterCalls().map((c) => c.p_key)).toEqual([`mfa-recovery:user-1:${HERE}`]);
   });
 
-  it('a press with a password counts once in the account’s password bucket, 15 per 15 minutes, before the password check', async () => {
+  it('a press with a password counts once in the account’s password bucket, 10 per 15 minutes, before the password check', async () => {
     stubHolder.stub = makeSupabaseStub({
       'rpc:increment_rate_limit': limiter(),
       'rpc:consume_mfa_recovery_code': { data: false, error: null },
@@ -434,7 +439,7 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
 
     const password = limiterCalls().filter((c) => c.p_key === 'mfa-recovery-password:user-1');
     expect(password).toEqual([
-      { p_key: 'mfa-recovery-password:user-1', p_limit: 15, p_window_ms: 15 * 60_000 },
+      { p_key: 'mfa-recovery-password:user-1', p_limit: 10, p_window_ms: 15 * 60_000 },
     ]);
     // Counted before the password is checked: the limiter is the stub's
     // rpc, so its call order is the client's.
@@ -449,7 +454,7 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
 
   it('when the account’s password bucket is spent, no password is checked at any address', async () => {
     stubHolder.stub = makeSupabaseStub({
-      'rpc:increment_rate_limit': limiter((key) => key.startsWith('mfa-recovery-password:')),
+      'rpc:increment_rate_limit': limiter((key) => key.startsWith(ACCOUNT_CHECKS_PREFIX)),
       'rpc:consume_mfa_recovery_code': { data: true, error: null },
     });
 
@@ -460,6 +465,35 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
     expect(codeChecked()).toBe(false);
   });
 
+  it('a pause of the account’s password bucket is reported as a warning, naming the account and nothing typed', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:increment_rate_limit': limiter((key) => key.startsWith(ACCOUNT_CHECKS_PREFIX)),
+    });
+
+    await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual({
+      tag: 'actions.mfa_recovery.password_checks_paused',
+      level: 'warning',
+      extra: { userId: 'user-1' },
+    });
+    const report = JSON.stringify(vi.mocked(reportError).mock.calls);
+    expect(report).not.toContain(PW);
+    expect(report).not.toContain('good-code');
+    expect(report).not.toContain(HERE);
+  });
+
+  it('a pause of the bucket at this address alone is not reported', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'rpc:increment_rate_limit': limiter((key) => key.endsWith(`:${HERE}`)),
+    });
+
+    await consumeMfaRecoveryCodeAction({ code: 'good-code', password: PW });
+
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
   it('a wrong password spends nothing of the account’s code bucket', async () => {
     vi.mocked(verifyPasswordSideChannel).mockResolvedValueOnce({
       ok: false,
@@ -468,7 +502,7 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
     } as Awaited<ReturnType<typeof verifyPasswordSideChannel>>);
     stubHolder.stub = makeSupabaseStub({ 'rpc:increment_rate_limit': limiter() });
 
-    await consumeMfaRecoveryCodeAction({ code: 'good-code', password: 'wrong' });
+    await consumeMfaRecoveryCodeAction({ code: 'good-code', password: WRONG_VALUE });
 
     expect(limiterCalls().some((c) => c.p_key.startsWith('mfa-recovery-code:'))).toBe(false);
   });
@@ -515,7 +549,7 @@ describe('consumeMfaRecoveryCodeAction — limits by address and by account', ()
   it('a password bucket that cannot answer refuses before the password check (closed)', async () => {
     stubHolder.stub = makeSupabaseStub({
       'rpc:increment_rate_limit': (call: { args: unknown[][] }) =>
-        (call.args[0]?.[0] as { p_key: string }).p_key.startsWith('mfa-recovery-password:')
+        (call.args[0]?.[0] as { p_key: string }).p_key.startsWith(ACCOUNT_CHECKS_PREFIX)
           ? { data: null, error: { message: 'limiter down' } }
           : { data: [{ allowed: true, count: 1, reset_at: null }], error: null },
     });

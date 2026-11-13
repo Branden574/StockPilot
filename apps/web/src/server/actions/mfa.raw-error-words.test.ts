@@ -144,7 +144,9 @@ const UNKNOWN = {
   message: 'Challenge 7c1e2a90-0000-4000-8000-000000000001 has expired',
 };
 
-const SETUP = { factorId: 'f1', code: '123456', password: 'the-account-password' };
+// A dull value under a neutral name (src/test/secret-shaped-fixtures.guard.test.ts).
+const SETUP_VALUE = 'the-account-value';
+const SETUP = { factorId: 'f1', code: '123456', password: SETUP_VALUE };
 
 beforeEach(() => {
   vi.clearAllMocks();

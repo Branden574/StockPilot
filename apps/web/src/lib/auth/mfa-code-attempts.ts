@@ -4,7 +4,7 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { headers } from 'next/headers';
 
 import { SESSION_ENDED_NOTICE } from '@/lib/auth/auth-page-notices';
-import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
+import { sessionAccountNow } from '@/lib/auth/session-account';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -53,9 +53,11 @@ import { emitAuthAudit } from '@/server/services/auth-audit';
  * and the challenge and the verify each load the cookie session again; a load
  * can refresh it into another account's (lib/auth/verified-claims,
  * readVerifiedSessionClaimsOf). So once GoTrue has judged the code (accepted
- * or refused it), the session is read again, held to the account the press
- * was checked for: a session that no longer verifies as that account is
- * signed out here, the press is not verified, and no row names the account.
+ * or refused it), the session is read again against the account the press
+ * was checked for (lib/auth/session-account): a verified session of another
+ * account is signed out here, the press is not verified, and no row names the
+ * account; a session that could not be verified just now is left alone, and
+ * the press is answered as not checked, with no row.
  *
  * ROWS ONLY FOR A CODE GOTRUE JUDGED WRONG. mfa.code_refused is written only
  * for GoTrue's wrong-code answer (classifyMfaCodeError's `refused`), never for
@@ -172,6 +174,8 @@ export type MfaCodeCheck =
   | { kind: 'budget_spent' }
   /** GoTrue judged the code while the session held another account: signed out here. */
   | { kind: 'account_changed' }
+  /** GoTrue judged the code, then the session could not be verified: not counted, left alone. */
+  | { kind: 'unconfirmed' }
   | { kind: 'challenge_failed'; outcome: MfaCodeOutcome }
   | { kind: 'verify_failed'; outcome: MfaCodeOutcome };
 
@@ -181,8 +185,8 @@ type MfaClient = Pick<SupabaseClient, 'auth'>;
 /**
  * One code press, in this order: the budget, the challenge, the verify, the
  * classification of GoTrue's answer, for an answer that judged the code the
- * session read again as the account the press was checked for, and a row for
- * a refused code only. An
+ * session read again against the account the press was checked for, and a
+ * row for a refused code only. An
  * answer this does not know is reported (its name, code and status only) so
  * a change in GoTrue's answers shows on the first day.
  */
@@ -213,10 +217,12 @@ export async function checkMfaCode(
   if (!vErr || outcome === 'refused') {
     // GoTrue judged the code: it counts only for the account the budget was
     // spent on. A local signature check once the key set is cached.
-    if (!(await readVerifiedSessionClaimsOf(supabase, params.userId))) {
+    const now = await sessionAccountNow(supabase, params.userId);
+    if (now.kind === 'other') {
       await signOutThisSession(supabase);
       return { kind: 'account_changed' };
     }
+    if (now.kind === 'unverified') return { kind: 'unconfirmed' };
   }
   if (!vErr || !outcome) return { kind: 'verified' };
 

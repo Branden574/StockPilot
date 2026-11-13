@@ -26,7 +26,8 @@ import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { isSessionEndedError } from '@/lib/auth/session-ended';
-import { readVerifiedSessionClaims, readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
+import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
+import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -74,6 +75,36 @@ function mfaCodeFailure(
   }
   return err('internal_error', MFA_CODE_NOT_CHECKED);
 }
+
+/** The set-up could not confirm the session's account before the code was checked. */
+const SETUP_SESSION_UNCONFIRMED = 'Could not confirm your sign-in just now. Try again in a moment.';
+/**
+ * The set-up's code was accepted, then the session's account could not be
+ * confirmed: the authenticator may be on, and the page shows it after a reload.
+ */
+const SETUP_ADDED_UNCONFIRMED =
+  'Could not confirm your sign-in just now. Reload this page to see whether the authenticator was added.';
+
+/**
+ * The set-up's answer when the session no longer verifies as the account
+ * whose password was checked: another account is signed out here; a session
+ * that could not be verified is left alone.
+ */
+async function setUpSessionRefusal(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  now: Exclude<SessionAccountNow, { kind: 'same' }>,
+  unverifiedMessage: string,
+): Promise<ActionResult<never>> {
+  if (now.kind === 'other') {
+    await signOutThisSession(supabase);
+    return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+  }
+  return err('internal_error', unverifiedMessage);
+}
+
+/** Reports of refused factor ids per account in one window (a closed counter, reports only). */
+const REFUSED_FACTOR_REPORTS = 3;
+const REFUSED_FACTOR_REPORT_WINDOW_MS = 60 * 60_000;
 
 /**
  * Begin TOTP enrollment for the current user. Supabase issues an unverified
@@ -207,12 +238,13 @@ export async function verifyEnrollmentAction(input: {
     }
     // Only for the account whose password was just checked: the factor list
     // loads the cookie session, and a load can refresh it into another
-    // account's (lib/auth/verified-claims). Read held to that account here
-    // and again after GoTrue's answer; anything else is signed out here and
-    // refused.
-    if (!(await readVerifiedSessionClaimsOf(supabase, session.userId))) {
-      await signOutThisSession(supabase);
-      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    // account's (lib/auth/verified-claims). Read against that account here
+    // and again after GoTrue's answer (lib/auth/session-account): another
+    // account is signed out here and refused; a session that could not be
+    // verified is refused and left alone.
+    const beforeCode = await sessionAccountNow(supabase, session.userId);
+    if (beforeCode.kind !== 'same') {
+      return setUpSessionRefusal(supabase, beforeCode, SETUP_SESSION_UNCONFIRMED);
     }
 
     const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
@@ -229,9 +261,18 @@ export async function verifyEnrollmentAction(input: {
     if (vErr) {
       return mfaCodeFailure('verify', vErr, 'actions.mfa.verify_enrollment');
     }
-    if (!(await readVerifiedSessionClaimsOf(supabase, session.userId))) {
-      await signOutThisSession(supabase);
-      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    const afterCode = await sessionAccountNow(supabase, session.userId);
+    if (afterCode.kind === 'unverified') {
+      // GoTrue accepted the code, so the factor is verified on the account the
+      // session holds; only the account could not be confirmed. No row; the
+      // report shows the missing one.
+      void reportError(new Error('An authenticator set-up was accepted but its account could not be confirmed'), {
+        tag: 'actions.mfa.verify_enrollment_unconfirmed',
+        level: 'warning',
+      });
+    }
+    if (afterCode.kind !== 'same') {
+      return setUpSessionRefusal(supabase, afterCode, SETUP_ADDED_UNCONFIRMED);
     }
     await audit({
       event: 'mfa.enrolled',
@@ -348,9 +389,9 @@ export async function unenrollFactorAction(input: {
  * writes an mfa.code_refused row (lib/auth/mfa-code-attempts.ts).
  *
  * The answer counts only for the account the budget was spent on: once GoTrue
- * has judged the code, the session is read again held to that account, and a
- * session that now holds another account is signed out here and refused
- * (checkMfaCode).
+ * has judged the code, the session is read again against that account; a
+ * session that now holds another account is signed out here and refused, and
+ * one that could not be verified is refused and left alone (checkMfaCode).
  *
  * Auth round trips per press: the factor list (one), the challenge and the
  * verify. The verified claims, before and after, are a local signature check
@@ -399,8 +440,17 @@ export async function challengeFactorAction(input: {
     }
     const factor = factors.find((f) => f.id === parsed.data.factorId);
     if (factor?.status !== 'verified') {
-      // The same words as a challenge that could not start. Reported with
-      // what the id named (never the id or the code).
+      // The same words as a challenge that could not start, and no code
+      // attempt spent. Reported with what the id named (never the id or the
+      // code), at most REFUSED_FACTOR_REPORTS times per account in a window:
+      // a closed counter that decides only whether to report.
+      const report = await checkRateLimit(
+        `mfa-factor-refused-report:${claims.userId}`,
+        REFUSED_FACTOR_REPORTS,
+        REFUSED_FACTOR_REPORT_WINDOW_MS,
+        'closed',
+      );
+      if (!report.allowed) return err('internal_error', MFA_CHALLENGE_NOT_STARTED);
       return unexpectedActionError(
         new Error('A code press named a factor that is not a verified authenticator of the account'),
         'actions.mfa.challenge',
@@ -424,6 +474,9 @@ export async function challengeFactorAction(input: {
     // GoTrue judged the code while the session held another account than the
     // one the budget was spent on: this session was signed out here.
     if (check.kind === 'account_changed') return err('unauthenticated', MFA_SESSION_ENDED);
+    // GoTrue judged the code, then the session could not be verified: the
+    // answer is not counted and the session stays; the person can press again.
+    if (check.kind === 'unconfirmed') return err('internal_error', MFA_CODE_NOT_CHECKED);
     // Plain words, never GoTrue's: its message can carry factor and challenge
     // identifiers.
     if (check.outcome === 'session_gone') return err('unauthenticated', MFA_SESSION_ENDED);

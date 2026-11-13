@@ -64,7 +64,10 @@ afterEach(() => {
  * changes it, for instance from inside the verify: a session that refreshed
  * into another account while GoTrue checked the code).
  */
-function fakeClient(verifyError: unknown, holder: { sub: string } = { sub: 'u1' }) {
+function fakeClient(
+  verifyError: unknown,
+  holder: { sub: string; read?: 'answer' | 'error' } = { sub: 'u1' },
+) {
   const challenge = vi.fn(async () => ({ data: { id: 'challenge-1' }, error: null }));
   const verify = vi.fn(async () => ({ data: null, error: verifyError }));
   const signOut = vi.fn(async () => ({ error: null }));
@@ -74,7 +77,7 @@ function fakeClient(verifyError: unknown, holder: { sub: string } = { sub: 'u1' 
       mfa: { challenge, verify },
       signOut,
       ...verifiedSessionAuth(
-        () => ({ sub: holder.sub, aal: 'aal1' }),
+        () => ({ sub: holder.sub, aal: 'aal1', read: holder.read ?? 'answer' }),
         (call) => reads.push(call),
       ),
     },
@@ -390,6 +393,34 @@ describe('checkMfaCode — the answer counts only for the account the press was 
     expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
     expect(auditInsert).not.toHaveBeenCalled();
   });
+
+  // S78: a read that cannot verify the session is not another account. The
+  // answer is not counted (not verified, no row) and the session stays.
+  it.each([
+    ['accepted', null, 'challenge'],
+    ['refused', GOTRUE_WRONG_CODE, 'password_reset'],
+  ] as const)(
+    'a code GoTrue %s while the session could not be verified is unconfirmed: no row, nobody signed out',
+    async (_label, verifyError, path) => {
+      const holder: { sub: string; read?: 'answer' | 'error' } = { sub: 'u1' };
+      const { client, verify, signOut } = fakeClient(null, holder);
+      verify.mockImplementation(async () => {
+        holder.read = 'error';
+        return { data: null, error: verifyError };
+      });
+
+      const res = await checkMfaCode(client as never, {
+        userId: 'u1',
+        factorId: 'f1',
+        code: WRONG_CODE,
+        path,
+      });
+
+      expect(res).toEqual({ kind: 'unconfirmed' });
+      expect(signOut).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    },
+  );
 
   it('control: the same account throughout is verified, read again only after GoTrue answered', async () => {
     const { client, verify, signOut, reads } = fakeClient(null);

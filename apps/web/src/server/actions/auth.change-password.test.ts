@@ -70,6 +70,10 @@ vi.mock('@/lib/auth/verify-password', async (importOriginal) => {
   };
 });
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn() }));
+vi.mock('@/server/services/auth-audit', () => ({
+  emitAuthAudit: vi.fn(async () => {}),
+  resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-9', role: 'member' })),
+}));
 vi.mock('@/lib/env', () => ({
   env: {
     NEXT_PUBLIC_SUPABASE_URL: 'https://sb.example.com',
@@ -109,13 +113,17 @@ vi.mock('@supabase/supabase-js', () => ({
 
 import { reportError } from '@/lib/error-reporter';
 import { audit } from '@/server/services/audit';
+import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { changePasswordAction } from './auth';
 
+// Dull values under neutral names (src/test/secret-shaped-fixtures.guard.test.ts).
+const OLD_VALUE = 'OldPassw0rd!';
+const NEW_VALUE = 'NewPassw0rd!123';
 const INPUT = {
-  currentPassword: 'OldPassw0rd!',
-  newPassword: 'NewPassw0rd!123',
-  confirmPassword: 'NewPassw0rd!123',
+  currentPassword: OLD_VALUE,
+  newPassword: NEW_VALUE,
+  confirmPassword: NEW_VALUE,
 };
 
 describe('changePasswordAction — account status', () => {
@@ -277,9 +285,14 @@ describe('changePasswordAction — session revocation + shared password check', 
   it('skips the broadcast when the current session id cannot be derived', async () => {
     // A `keepId: null` payload means "evict EVERY session" (signOutAction's
     // semantics) — broadcasting that here would sign the user out of the very
-    // tab they just changed their password in.
-    getClaims.mockResolvedValue({ data: null, error: null });
-    getSession.mockResolvedValue({ data: { session: null } });
+    // tab they just changed their password in. The session stops verifying
+    // only after the update: before it, an unverifiable session changes
+    // nothing (S78).
+    updateUser.mockImplementation(async () => {
+      getClaims.mockResolvedValue({ data: null, error: null });
+      getSession.mockResolvedValue({ data: { session: null } });
+      return { error: null };
+    });
 
     const res = await changePasswordAction(INPUT);
 
@@ -289,10 +302,14 @@ describe('changePasswordAction — session revocation + shared password check', 
 
   it('never aims the broadcast with a session id from a token that does not verify', async () => {
     // getClaims() refuses the stored token and so does GoTrue: the id it names
-    // is not this session's, so nothing is kept and nothing is broadcast.
-    getClaims.mockResolvedValue({
-      data: null,
-      error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+    // is not this session's, so nothing is kept and nothing is broadcast. The
+    // token stops verifying only after the update (S78).
+    updateUser.mockImplementation(async () => {
+      getClaims.mockResolvedValue({
+        data: null,
+        error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+      });
+      return { error: null };
     });
     getUser.mockImplementation(async (jwt?: string) =>
       jwt
@@ -394,6 +411,67 @@ describe('changePasswordAction — the update acts only as the account it checke
     expect(audit).not.toHaveBeenCalled();
   });
 
+  it('a sign-in that cannot be verified right before the update changes nothing, and nobody is signed out', async () => {
+    listFactors.mockImplementation(async () => {
+      getClaims.mockResolvedValue({
+        data: null,
+        error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+      });
+      return { data: { totp: [] } };
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm your sign-in just now, so your password was not changed. Try again in a moment.',
+      },
+    });
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('an update that answers for another account is reported, that account is signed out everywhere, and its row is written', async () => {
+    updateUser.mockResolvedValue({
+      data: { user: { id: 'u-9', email: 'other@example.com' } },
+      error: null,
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'auth.password_change_account_changed', level: 'error' }),
+    );
+    expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+    expect(signOut).not.toHaveBeenCalledWith({ scope: 'others' });
+    expect(broadcastToChannel).toHaveBeenCalledWith('user:u-9:sessions', 'revoked', {
+      keepId: null,
+    });
+    expect(emitAuthAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.password.changed',
+        userId: 'u-9',
+        organizationId: 'org-9',
+      }),
+    );
+    // Not the checked account's row.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it('control: the same account is read again before the update, and the password changes as before', async () => {
     const res = await changePasswordAction(INPUT);
 
@@ -477,8 +555,12 @@ describe('changePasswordAction — when the sign-out of the other sessions retur
   });
 
   it('never calls the database revoke without a verified session id', async () => {
-    getClaims.mockResolvedValue({ data: null, error: null });
-    getSession.mockResolvedValue({ data: { session: null } });
+    // The session stops verifying only after the update (S78).
+    updateUser.mockImplementation(async () => {
+      getClaims.mockResolvedValue({ data: null, error: null });
+      getSession.mockResolvedValue({ data: { session: null } });
+      return { error: null };
+    });
 
     const res = await changePasswordAction(INPUT);
 

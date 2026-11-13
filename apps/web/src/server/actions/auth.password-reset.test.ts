@@ -235,9 +235,17 @@ describe('completePasswordResetAction', () => {
    * moves it to another account mid-press: a session that refreshed into
    * another account's while the press ran.
    */
-  const linkSession: { sub: string; amr: unknown } = { sub: 'u1', amr: [] };
-  /** The `amr` of a session a reset link made `secondsAgo` seconds ago (S77). */
-  const linkOpened = (secondsAgo = 60, method = 'recovery') => [
+  const linkSession: { sub: string; amr: unknown; verifiable: boolean } = {
+    sub: 'u1',
+    amr: [],
+    verifiable: true,
+  };
+  /**
+   * The `amr` of a session an emailed link made `secondsAgo` seconds ago
+   * (S77). `otp` is what the confirm route's verify writes for every emailed
+   * link (lab Auth server v2.188.1).
+   */
+  const linkOpened = (secondsAgo = 60, method = 'otp') => [
     { method, timestamp: Math.floor(Date.now() / 1000) - secondsAgo },
   ];
 
@@ -252,14 +260,26 @@ describe('completePasswordResetAction', () => {
       error: null,
     });
     linkSession.sub = 'u1';
-    // Default: the session a reset link made a minute ago.
+    // Default: the session an emailed link made a minute ago.
     linkSession.amr = linkOpened();
-    getClaims.mockImplementation(async () => ({
-      data: {
-        claims: { sub: linkSession.sub, session_id: 's1', aal: 'aal1', amr: linkSession.amr },
-      },
-      error: null,
-    }));
+    linkSession.verifiable = true;
+    // A session that cannot be verified: getClaims() refuses its token, which
+    // is a verdict (verified-claims.ts), so no other read is made.
+    getClaims.mockImplementation(async () =>
+      linkSession.verifiable
+        ? {
+            data: {
+              claims: {
+                sub: linkSession.sub,
+                session_id: 's1',
+                aal: 'aal1',
+                amr: linkSession.amr,
+              },
+            },
+            error: null,
+          }
+        : { data: null, error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' } },
+    );
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
     // Default: no MFA enrolled.
@@ -855,6 +875,48 @@ describe('completePasswordResetAction', () => {
       expect(broadcastToChannel).not.toHaveBeenCalled();
     });
 
+    // S78: a read that cannot verify the session is not another account: the
+    // press is refused with could-not-check words and the link's session
+    // stays, so the person can press again.
+    it('a session that cannot be verified after the factor list spends nothing and stays signed in', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.verifiable = false;
+        return { data: { totp: [{ id: 'f1', status: 'verified' }] }, error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'internal_error',
+          message:
+            'Could not confirm your reset link just now, so your password was not changed. Try again in a moment.',
+        },
+      });
+      expect(codeBudgetCalls()).toEqual([]);
+      expect(challenge).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('a code GoTrue judged while the session could not be verified: not checked, no row, and the link session stays', async () => {
+      verify.mockImplementation(async () => {
+        linkSession.verifiable = false;
+        return { error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({
+        ok: false,
+        error: { code: 'forbidden', message: NOT_CHECKED, details: { reason: 'aal2_required' } },
+      });
+      expect(signOut).not.toHaveBeenCalled();
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(refusedRows()).toEqual([]);
+    });
+
     it("GoTrue's own rate limit is answered as one, and writes nothing", async () => {
       verify.mockResolvedValue({
         error: { name: 'AuthApiError', status: 429, code: 'over_request_rate_limit', message: 'x' },
@@ -895,6 +957,55 @@ describe('completePasswordResetAction', () => {
       expect(auditInsert).not.toHaveBeenCalled();
     });
 
+    const UNCONFIRMED =
+      'Could not confirm your reset link just now, so your password was not changed. Try again in a moment.';
+
+    it('a session that cannot be verified at the update changes nothing, and the link session stays', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.verifiable = false;
+        return { data: { totp: [] }, error: null };
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: UNCONFIRMED } });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    });
+
+    it('an update that answers for another account is reported, that account is signed out everywhere, and its row is written', async () => {
+      updateUser.mockResolvedValue({
+        data: { user: { id: 'u9', email: 'other@example.test' } },
+        error: null,
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({
+        ok: false,
+        error: {
+          code: 'unauthenticated',
+          message: 'Sign in again, then try again.',
+          details: { reason: 'session_changed' },
+        },
+      });
+      expect(reportError).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ tag: 'auth.password_reset_account_changed', level: 'error' }),
+      );
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(broadcastToChannel).toHaveBeenCalledWith('user:u9:sessions', 'revoked', {
+        keepId: null,
+      });
+      expect(auditInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ event: 'user.password.reset_completed', user_id: 'u9' }),
+      );
+      expect(
+        auditInsert.mock.calls.some((c) => (c[0] as { user_id?: string }).user_id === 'u1'),
+      ).toBe(false);
+    });
+
     it('control: the verified session is read after the factor list and before the update', async () => {
       const res = await completePasswordResetAction(INPUT);
 
@@ -930,21 +1041,19 @@ describe('completePasswordResetAction', () => {
       expect(auditInsert).not.toHaveBeenCalled();
     }
 
-    // Every way a person reaches /reset/complete today, by the link that
-    // brings them and the amr entry that link's session carries. The senders
-    // and their landings are held elsewhere: lib/auth/password-reset-email,
-    // team.password-reset, platform/users.password-reset, the phone's
-    // api/v1/auth/password-reset (the same email), the QA recovery link,
-    // platform-admin's new organization invite, and lib/auth/confirm-landing.
+    // What the tests vary is the session's amr: the method name and its age.
+    // `otp` is what the confirm route's verify writes for every emailed link
+    // (every way a person reaches /reset/complete today goes through it);
+    // `recovery` and `invite` are the names a code-exchange path would write.
+    // The senders and their landings are held elsewhere
+    // (lib/auth/password-reset-email, team.password-reset,
+    // platform/users.password-reset, the phone's api/v1/auth/password-reset,
+    // the QA recovery link, platform-admin's invite, lib/auth/confirm-landing).
     it.each([
-      ['Forgot? on the sign-in page', 'recovery'],
-      ['Forgot? on the phone (the same emailed link, opened in a browser)', 'recovery'],
-      ["Team's Send password reset", 'recovery'],
-      ["the platform console's Send password reset", 'recovery'],
-      ['the QA recovery link', 'recovery'],
-      ["a new organization owner's first password (the platform console's invite)", 'invite'],
-      ['an emailed link the Auth server records as an emailed code', 'otp'],
-    ])('%s: sets the password', async (_path, method) => {
+      ['an emailed link through the confirm route', 'otp'],
+      ['a reset link through a code exchange', 'recovery'],
+      ['an invite through a code exchange', 'invite'],
+    ])('%s (%s): sets the password', async (_label, method) => {
       linkSession.amr = linkOpened(90, method);
 
       const res = await completePasswordResetAction(INPUT);
@@ -952,6 +1061,26 @@ describe('completePasswordResetAction', () => {
       expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
       expect(updateUser).toHaveBeenCalledWith({ password: RESET_VALUE });
       expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+    });
+
+    it('an authenticator code entered after the link: the read before the update holds both, and the password is set', async () => {
+      listFactors.mockResolvedValue({
+        data: { totp: [{ id: 'f1', status: 'verified' }] },
+        error: null,
+      });
+      verify.mockImplementation(async () => {
+        const now = Math.floor(Date.now() / 1000);
+        linkSession.amr = [
+          { method: 'totp', timestamp: now },
+          { method: 'otp', timestamp: now - 90 },
+        ];
+        return { error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: '123456' });
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      expect(updateUser).toHaveBeenCalledTimes(1);
     });
 
     it('a signed-in session that did not come from a reset link is refused, pointed to Change password, and nothing is written', async () => {
@@ -964,10 +1093,13 @@ describe('completePasswordResetAction', () => {
     });
 
     it.each([
-      ['a reset link opened more than an hour ago', () => linkOpened(3700)],
-      ['a sign-in link', () => linkOpened(60, 'magiclink')],
+      ['an emailed link opened more than an hour ago', () => linkOpened(3700)],
+      [
+        'a password sign-in with an authenticator code',
+        () => [...linkOpened(60, 'password'), ...linkOpened(30, 'totp')],
+      ],
       ['an authenticator code alone', () => linkOpened(60, 'totp')],
-      ['methods without times', () => ['recovery']],
+      ['methods without times', () => ['otp']],
       ['no amr at all', () => undefined],
     ])('%s is refused the same way', async (_label, amr) => {
       linkSession.amr = amr();
