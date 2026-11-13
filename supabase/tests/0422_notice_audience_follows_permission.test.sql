@@ -442,7 +442,7 @@ select is(
   || ',stf:' || pg_temp.mine('purchase_order.status_changed', 'po_id', :poStf, :stf)
   || '|' || pg_temp.who('purchase_order.status_changed', 'po_id', :poGone),
   'dis:0,gone:0,seat:0,stf:1|adm,admRev,mgr,mgrRev,own',
-  'T8a: a purchase order''s status change no longer tells a creator who was removed, is disabled or is an Act-as seat; a current creator (staff) is still told, and so are the owners, admins and managers');
+  'T8a: a purchase order''s status change tells its creator only while they are a current member (not one removed, disabled or an Act-as seat): a current creator (staff) is told, and so are the owners, admins and managers');
 insert into public.receipts (id, organization_id, purchase_order_id, warehouse_id, receipt_number, status, received_by, immutable_hash) values
   (:rcStf,  :orgA, :poStf,  :whA1, 'S36A-R-1', 'posted', :mgr, 'hash-s36a-1'),
   (:rcGone, :orgA, :poGone, :whA1, 'S36A-R-2', 'posted', :mgr, 'hash-s36a-2'),
@@ -455,7 +455,7 @@ select is(
   || ',stf:' || pg_temp.mine('po.received', 'po_id', :poStf, :stf)
   || '|' || pg_temp.who('po.received', 'po_id', :poGone),
   'dis:0,gone:0,seat:0,stf:1|adm,admRev,mgr,mgrRev,own',
-  'T8b: a posted receipt no longer tells a creator who was removed, is disabled or is an Act-as seat; a current creator is still told, and so are the owners, admins and managers');
+  'T8b: a posted receipt tells the purchase order''s creator only while they are a current member (not one removed, disabled or an Act-as seat): a current creator is told, and so are the owners, admins and managers');
 update public.order_requests set status = 'denied', denied_reason = 'Not this term' where id in (:oDenStf, :oDenGone);
 update public.order_requests set status = 'staged_for_pickup' where id in (:oStgStf, :oStgGone);
 select is(
@@ -464,7 +464,7 @@ select is(
   || ',stf:' || (pg_temp.mine('order_request.denied', 'order_request_id', :oDenStf, :stf)
                  + pg_temp.mine('order_request.staged_for_pickup', 'order_request_id', :oStgStf, :stf)),
   'gone:0,stf:2',
-  'T8c: a requester who was removed is not told their order was denied or is ready; a current requester is told both');
+  'T8c: a requester is told their order was denied or is ready only while a current member: one removed is not, and a current requester is told both');
 update public.order_requests set status = 'staged_for_pickup' where id in (:oRepStf, :oRepGone);
 select is(
   'gone:' || pg_temp.mine('order_request.staged_for_pickup', 'order_request_id', :oRepGone, :gone)
@@ -472,7 +472,7 @@ select is(
   || '|' || coalesce((select string_agg(n.title, ',') from public.notifications n
                        where n.user_id = :stf and n.metadata->>'order_request_id' = :oRepStf), 'none'),
   'gone:0,stf:1|Your replacement is ready',
-  'T8d: a replacement order''s requester who was removed is not pinged; a current requester still hears it in the replacement''s own words');
+  'T8d: a replacement order''s requester is pinged only while a current member: one removed is not, and a current requester hears it in the replacement''s own words');
 select is(
   (select string_agg(n.name || '=' || pg_temp.member(:orgA, n.id), ',' order by n.name collate "C")
      from pg_temp.names n where n.name in ('own', 'stf', 'vwrAp', 'gone', 'dis', 'inv', 'seat', 'old', 'ownB'))

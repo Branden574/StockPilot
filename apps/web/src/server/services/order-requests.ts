@@ -5572,12 +5572,11 @@ export class OrderRequestsService {
 
   /**
    * Who a status email goes to. An address the order recorded (on-behalf-of,
-   * the public request link, a portal buyer) as before, whoever placed the
-   * order. A member's own address (the order kept none: their profile's) only
-   * while they are a current member of the order's organization (docket S36:
-   * readCurrentMember, the rule of 0422 and createNotification); someone
-   * removed from the organization, or who left it, is no longer emailed about
-   * it, and a read that fails sends nothing and is reported.
+   * the public request link, a portal buyer), whoever placed the order. A
+   * member's own address (the order kept none: their profile's) only while
+   * they are a current member of the order's organization (docket S36:
+   * readCurrentMember, the rule of 0422 and createNotification); a read that
+   * fails sends nothing and is reported.
    */
   private async resolveRecipient(
     row: OrderRequestRow,

@@ -6,12 +6,10 @@ import { isModuleEnabled, type ServiceContext } from './context';
 
 /**
  * Who may read each line of the briefing (Today's briefing, the morning
- * briefing notice). Docket S36, part a, with B72 part 3: every line used to
- * go to anyone who could open the briefing (items:update), so a staff member
- * without orders:approve read "N orders awaiting approval" for the whole
- * organization and its link opened their own requests. Each line now follows
+ * briefing notice). Docket S36, part a, with B72 part 3: each line follows
  * the gate of the page it links to, so a reader is told only what they can
- * open and act on.
+ * open and act on; "orders awaiting approval", for example, shows only to an
+ * approver, counted in the warehouses they can approve in.
  *
  * Kept apart from insights.ts on purpose: the daily briefing's route test
  * mocks that module with its two exports only.

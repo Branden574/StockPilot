@@ -54,18 +54,16 @@ export async function createNotification(
     // (docket S36): an accepted membership that is not a support Act-as seat,
     // the rule the database's own notices follow (0422,
     // _notify_is_current_member). Several callers address a stored id, such as
-    // an order's requester, and removing a member or leaving deletes only the
-    // membership row, so the person kept getting pushes about the
-    // organization's orders.
+    // an order's requester, which stays when the membership row goes, so the
+    // membership is read here for every notice.
     //
     // Both facts come from the one current-member read the app's emails to a
     // member's own address use too (server/lib/current-member.ts), from the
     // tables rather than the 0422 function, so a web deploy never depends on
     // the migration. Both fail CLOSED (docket S36, integrator decision
     // 2026-11-01): a read that fails is reported and nothing is written, so
-    // nothing is pushed. The disable check used to fail OPEN, an unreadable
-    // profile counting as "not disabled" under this function's best-effort
-    // contract. Best-effort delivery makes a notice dropped on a read error
+    // nothing is pushed. An unreadable profile never counts as "not
+    // disabled". Best-effort delivery makes a notice dropped on a read error
     // acceptable; a push carrying the organization's data to an account
     // disabled for suspected compromise is not.
     const recipient = await readCurrentMember(admin, args.organizationId, args.userId);

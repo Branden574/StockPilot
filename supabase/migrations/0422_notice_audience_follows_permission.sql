@@ -8,37 +8,27 @@
 --
 -- ── WHY ────────────────────────────────────────────────────────────────────
 -- The database can ask a permission question only about the caller:
--- has_permission(org, perm) reads auth.uid() (0310). No SQL function answered
--- "which members hold this permission", so the trigger writers kept the role
--- list from before configurable permissions: _notify_recipients is the
--- accepted owners, admins and managers (0313). The New order request alert
--- ('A request is waiting for approval.') used it on both of its paths. Since
--- 0390 approving follows orders:approve alone, an override winning either
--- way, and the app also asks write access to the request's warehouse
+-- has_permission(org, perm) reads auth.uid() (0310). Approving an order
+-- follows orders:approve alone since 0390, an override winning either way,
+-- and the app also asks write access to the request's warehouse
 -- (OrderRequestsService.requireWarehouseAccess 'write'; slice E puts the same
--- term in the order functions). So:
---   * a manager or admin whose orders:approve was removed was still told about
---     every new request, although they could approve none of them;
---   * a staff member given orders:approve was never told about a request in a
---     warehouse they work in, and had to keep checking the Orders list.
--- And a support "Act as" seat (a real owner membership, accepted, with
--- impersonation_expires_at set, for 45 minutes) matched _notify_recipients,
--- so during a session the platform admin's own account received the
--- organization's notices, in the app and as a push. The app's recipient reads
--- already leave such a seat out (schedule-reminders, daily-briefing,
--- auto-reorder, recurring purchase orders, purchase order updated).
+-- term in the order functions). The New order request alert ('A request is
+-- waiting for approval.') follows the same two terms. So this file adds a
+-- resolver that answers "which members hold this permission" for a subject
+-- other than the caller, and the alert reads it in place of the role list of
+-- _notify_recipients (the accepted owners, admins and managers, 0313).
 --
--- Separately, the person a notice names by a stored id was told with no
--- membership check: a purchase order's creator on every status change
--- (_notify_po_status, 0092) and every posted receipt (_notify_receipt_posted,
--- 0157), and an order's requester on its status changes
--- (_notify_order_request_changes, 0395; a replacement order's,
--- _notify_replacement_order_changes, 0396). Removing a member, or leaving,
--- deletes only the membership row: purchase_orders.created_by and
+-- A notice goes to the organization's current members. A support "Act as"
+-- seat (a real owner membership, accepted, with impersonation_expires_at set,
+-- for 45 minutes) is support tooling, not a member to tell; the app's
+-- recipient reads leave such a seat out too (schedule-reminders,
+-- daily-briefing, auto-reorder, recurring purchase orders, purchase order
+-- updated). The person a notice names by a stored id (a purchase order's
+-- creator, an order's or a replacement order's requester) is told only while
+-- they are a current member: removing a member, or their leaving, deletes
+-- only the membership row, while purchase_orders.created_by and
 -- order_requests.requester_user_id stay, and notifications and push tokens
--- belong to the person, not the organization. So someone who had left kept
--- getting in-app rows and lock-screen pushes about the organization's
--- purchase orders and orders.
+-- belong to the person, not the organization.
 --
 -- ── WHAT IT DOES ───────────────────────────────────────────────────────────
 --   1. public._notify_recipients_with_permission(org, perm): the accepted
@@ -70,10 +60,11 @@
 --      branch (still _notify_recipients) and every title and body are byte
 --      for byte as they were.
 --   4. _notify_recipients: one added line, `and om.impersonation_expires_at
---      is null`. Subtractive: every recipient it answered before, but an
---      Act-as seat. Its other callers (low or out of stock 0091, bundle
---      shortage 0042, purchase order status 0092, purchase order received
---      0157 and cancelled after approval) stop telling a seat too.
+--      is null`. It answers the accepted owners, admins and managers whose
+--      account is not disabled, never an Act-as seat, and so do its other
+--      callers (low or out of stock 0091, bundle shortage 0042, purchase
+--      order status 0092, purchase order received 0157 and cancelled after
+--      approval).
 --   5. _notify_po_status and _notify_receipt_posted: the purchase order's
 --      creator is told only while 2 holds. The owners, admins and managers
 --      (_notify_recipients) and the push_po_status gate are unchanged.
@@ -81,24 +72,23 @@
 --      is pinged only while 2 holds; nothing else changes.
 --
 -- ── WHO CHANGES ────────────────────────────────────────────────────────────
--- Staff members given orders:approve start getting the alert for requests in
--- their warehouses. An admin or manager whose orders:approve was removed
--- stops getting it (the release's read-only census counts both before the
--- push). A viewer given orders:approve is still never told: the app refuses
--- a viewer every write.
--- Someone removed from the organization, or who left it, stops getting the
--- notices this file writes about the purchase orders they created and the
--- orders they requested. So does a customer portal buyer, who is never a
--- member (0250): the portal has no notification list, and the buyer hears
--- about an order by email, which this file does not touch. The app writes
--- its own notices about such orders (a partial hand-over, backordered items
--- shipped, a line changed or removed by someone else, return events), all
--- through createNotification, and the same release limits that function to
--- current members by the same rule: neither half alone stops the notices. A
--- disabled account is no longer written an in-app row as a creator or
--- requester; its push was already suppressed (0313). Everyone who keeps
--- orders:approve by their role, every current member's own notices, and
--- every "New order requests" opt-out, are unchanged.
+-- The New order request alert goes to staff members given orders:approve for
+-- the requests in their warehouses, and not to an admin or manager whose
+-- orders:approve was removed (the release's read-only census counts both
+-- before the push). A viewer given orders:approve is never told: the app
+-- refuses a viewer every write.
+-- The notices this file writes about a purchase order or an order go to its
+-- creator or requester only while they are a current member. A customer
+-- portal buyer is never a member (0250): the portal has no notification
+-- list, and the buyer hears about an order by email, which this file does
+-- not touch. The app writes its own notices about such orders (a partial
+-- hand-over, backordered items shipped, a line changed or removed by someone
+-- else, return events), all through createNotification, which the same
+-- release limits to current members by the same rule. A disabled account is
+-- written no in-app row as a creator or requester, and its push is
+-- suppressed (0313). Everyone who keeps orders:approve by their role, every
+-- current member's own notices, and every "New order requests" opt-out, are
+-- unchanged.
 --
 -- ── PARITY ─────────────────────────────────────────────────────────────────
 -- The resolver restates has_permission's precedence for a subject other than

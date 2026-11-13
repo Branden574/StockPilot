@@ -184,10 +184,9 @@ export async function maybeSendMaintenanceResolvedEmail(
     // fills it from their profile, and only a member files a request), so it
     // is emailed only while they are a current member of the request's
     // organization (readCurrentMember: accepted, not an Act-as seat, not
-    // disabled; the rule of 0422 and createNotification). Someone removed from
-    // the organization, or who left it, no longer gets its resolution note and
-    // photos. Checked before the claim, so a skipped send never burns the
-    // one-shot marker; a read that fails sends nothing and is reported.
+    // disabled; the rule of 0422 and createNotification). Checked before the
+    // claim, so a skipped send never burns the one-shot marker; a read that
+    // fails sends nothing and is reported.
     const verdict = await ownAddressVerdict(
       admin,
       { organizationId: request.organization_id, userId: request.requester_user_id },
