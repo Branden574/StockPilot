@@ -19,6 +19,8 @@ let invite: Invite = null;
 let session: { email: string; userId?: string } | null = null;
 /** The signed-in person's membership of the invite's organization, or a failed read. */
 let membership: { accepted_at: string | null } | null | 'read-fails' = null;
+/** How many times the page read a membership. */
+let membershipReads = 0;
 
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_APP_URL: 'https://app.example.test' } }));
 vi.mock('@/lib/auth/session', () => ({ getServerSession: async () => session }));
@@ -35,6 +37,11 @@ vi.mock('@/lib/supabase/admin', () => ({
         maybeSingle: async () => {
           if (table === 'organization_invites') return { data: invite, error: null };
           if (table === 'organization_members') {
+            membershipReads += 1;
+            // Only the invite's own addressee is ever looked up.
+            if (session?.email.toLowerCase() !== invite?.email.toLowerCase()) {
+              throw new Error('membership read for someone the invite is not for');
+            }
             if (membership === 'read-fails') return { data: null, error: { message: 'down' } };
             // Answered only for this organization and this person.
             const asked =
@@ -91,6 +98,7 @@ beforeEach(() => {
   invite = null;
   session = null;
   membership = null;
+  membershipReads = 0;
 });
 
 describe('/invite/[token]', () => {
@@ -154,6 +162,7 @@ describe('/invite/[token]', () => {
     invite = makeInvite();
     session = { email: 'other@example.test' };
     await open();
+    expect(membershipReads).toBe(0);
     expect(screen.getByText(/You're signed in as/)).toHaveTextContent(
       "You're signed in as other@example.test, but this invite is for new.person@example.test. Sign out and sign in with the right email to accept.",
     );
@@ -173,6 +182,7 @@ describe('/invite/[token]', () => {
     session = { email: 'new.person@example.test', userId: 'user-1' };
     membership = { accepted_at: PAST };
     await open();
+    expect(membershipReads).toBe(1);
     expect(
       screen.getByRole('heading', { level: 1, name: "You're already a member" }),
     ).toBeInTheDocument();
@@ -205,5 +215,17 @@ describe('/invite/[token]', () => {
       screen.getByRole('heading', { level: 1, name: "You're invited to Lab Charter School" }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Accept invite' })).toBeInTheDocument();
+  });
+  it('valid, signed in as someone else who is a member: says so, and reads no membership', async () => {
+    invite = makeInvite();
+    session = { email: 'other@example.test', userId: 'user-2' };
+    membership = { accepted_at: PAST };
+    await open();
+    expect(membershipReads).toBe(0);
+    expect(screen.getByText(/You're signed in as/)).toHaveTextContent(
+      "You're signed in as other@example.test, but this invite is for new.person@example.test. Sign out and sign in with the right email to accept.",
+    );
+    expect(screen.queryByRole('heading', { level: 1, name: "You're already a member" })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Accept invite' })).toBeNull();
   });
 });
