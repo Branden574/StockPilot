@@ -62,7 +62,11 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
-import { checkPlatformAdmin, requirePlatformAdmin } from './platform-admin';
+import {
+  checkPlatformAdmin,
+  currentUserIsPlatformAdmin,
+  requirePlatformAdmin,
+} from './platform-admin';
 
 /** Any account the caller owns, with its own authenticator. */
 const OTHER = '33333333-3333-4333-8333-333333333333';
@@ -165,6 +169,66 @@ describe("the console's gates read the claims of the allowlisted account's own s
       refreshGrant(await signAccessToken(projectKey, renewed), renewed, 'admin-own-refresh-2'),
     );
     await expect(checkPlatformAdmin({ requireStepUp: true })).resolves.toMatchObject({
+      ok: true,
+      session: { userId: FIXTURE_USER_ID },
+    });
+    expect(authCalls).toContain('/token');
+  });
+});
+
+/**
+ * The same invariant for the gates that ask no fresh step-up (docket S43c):
+ * currentUserIsPlatformAdmin(), the gate of the platform pages under
+ * /dashboard/admin, of support triage and of "stop acting as", and
+ * checkPlatformAdmin() with no option. Both serve an allowlisted account that
+ * has an authenticator only on a session at aal2, and that level is read from
+ * the allowlisted account's own verified claims: claims of any other subject
+ * are no level at all.
+ *
+ * One gate per test: the first load that refreshes writes the other account's
+ * session to the cookie store, so a second gate in the same test would start
+ * from a different cookie.
+ */
+describe("the gates without a fresh step-up read the level of the allowlisted account's own session", () => {
+  it("control: the admin's password alone (aal1) is not a platform admin, and no refresh happens", async () => {
+    await adminCookie('aal1', OTHER_REFRESH, 3_600_000);
+    await otherAccountSession();
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(false);
+    await expect(checkPlatformAdmin()).resolves.toEqual({ ok: false, reason: 'aal2_required' });
+    expect(authCalls).not.toContain('/token');
+  });
+
+  it("currentUserIsPlatformAdmin() is false when the session refreshes into another account's aal2 after the email read", async () => {
+    await adminCookie('aal1', OTHER_REFRESH, CROSSES_DURING_USER);
+    await otherAccountSession();
+    const served = await currentUserIsPlatformAdmin();
+    // The swap did happen: GoTrue was asked for the other account's session.
+    expect(authCalls).toEqual(expect.arrayContaining(['/user', '/token']));
+    expect(served).toBe(false);
+  });
+
+  it('checkPlatformAdmin() with no option answers aal2_required the same way', async () => {
+    await adminCookie('aal1', OTHER_REFRESH, CROSSES_DURING_USER);
+    await otherAccountSession();
+    const check = await checkPlatformAdmin();
+    expect(authCalls).toEqual(expect.arrayContaining(['/user', '/token']));
+    expect(check).toEqual({ ok: false, reason: 'aal2_required' });
+  });
+
+  it("control: the admin's own aal2 session refreshing mid-gate is still served by both", async () => {
+    const renewed = sessionClaims({ aal: 'aal2', totpAgeSeconds: 20 * 60 });
+    const grant = async (next: string) =>
+      refreshGrant(await signAccessToken(projectKey, renewed), renewed, next);
+
+    await adminCookie('aal2', ADMIN_REFRESH, CROSSES_DURING_USER);
+    server.refreshGrants.set(ADMIN_REFRESH, await grant('admin-own-refresh-2'));
+    await expect(currentUserIsPlatformAdmin()).resolves.toBe(true);
+    expect(authCalls).toContain('/token');
+
+    authCalls = [];
+    await adminCookie('aal2', ADMIN_REFRESH, CROSSES_DURING_USER);
+    server.refreshGrants.set(ADMIN_REFRESH, await grant('admin-own-refresh-3'));
+    await expect(checkPlatformAdmin()).resolves.toMatchObject({
       ok: true,
       session: { userId: FIXTURE_USER_ID },
     });

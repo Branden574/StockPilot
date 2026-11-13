@@ -4,6 +4,7 @@ import { z } from 'zod';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { readInActiveOrg } from './lib/in-active-org';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
 
@@ -330,6 +331,10 @@ export class WarehousesService {
 
   async update(id: string, patch: UpdateWarehouseInput) {
     assertPermission(this.ctx, 'organization:update');
+    // S41: the warehouse is read in THIS organization before anything else,
+    // and a miss refuses. Everything below names the warehouse by id: the
+    // charter list's checks and writes, the row's update and the audit row.
+    await readInActiveOrg(this.ctx, 'warehouses', id, 'Warehouse not found.');
     const updates: Record<string, unknown> = {};
     if (patch.name !== undefined) updates.name = patch.name;
     if (patch.code !== undefined) updates.code = patch.code;
@@ -357,12 +362,17 @@ export class WarehousesService {
     }
 
     if (Object.keys(updates).length > 0) {
-      const { error } = await this.ctx.supabase
+      // The changed row is asked back: a warehouse removed between the read
+      // above and this write is not found, and nothing is recorded.
+      const { data: row, error } = await this.ctx.supabase
         .from('warehouses')
         .update(updates)
         .eq('organization_id', this.ctx.organizationId)
-        .eq('id', id);
+        .eq('id', id)
+        .select('id')
+        .maybeSingle();
       if (error) throw new ServiceError('internal_error', error.message);
+      if (!row) throw new ServiceError('not_found', 'Warehouse not found.');
     }
 
     if (applyCharters) await applyCharters();

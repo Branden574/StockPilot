@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { CreateOrgForForm } from '@/components/admin/create-org-for-form';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
+import { requireOrgContext } from '@/lib/auth/session';
 
 // The Liquid Glass settings and administration composition (stage 4:
 // pages/admin.css): every rule is scoped to this area's [data-glass-page] root
@@ -14,6 +15,10 @@ export const metadata = {
 };
 
 export default async function PlatformAdminCreateOrgPage() {
+  // The member's context first, as on every dashboard page: no session, no
+  // organization and an authenticator code still owed are answered here, by
+  // the page itself.
+  await requireOrgContext();
   // Hard 404 (not 403) so the existence of the route isn't observable
   // to users who aren't on the platform-admin allowlist. Gated on the
   // VERIFIED auth email, never the user-writable profile column.
