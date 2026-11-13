@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 import { recordPlatformAudit } from './audit';
@@ -66,13 +67,22 @@ export async function sweepExpiredImpersonations(
       .update({ default_organization_id: row.previous_organization_id })
       .eq('id', row.admin_user_id)
       .eq('default_organization_id', row.target_organization_id);
-    // Delete only the impersonation grant (never a real membership).
-    await admin
+    // Delete only the impersonation grant (never a real membership). A delete
+    // that fails is reported and its session stays open, so the next sweep
+    // tries it again; the other sessions are still swept.
+    const { error: grantErr } = await admin
       .from('organization_members')
       .delete()
       .eq('organization_id', row.target_organization_id)
       .eq('user_id', row.admin_user_id)
       .not('impersonation_expires_at', 'is', null);
+    if (grantErr) {
+      await reportError(new Error(grantErr.message), {
+        tag: 'platform.impersonation.sweep-grant-delete',
+        extra: { sessionId: row.id },
+      });
+      continue;
+    }
     await admin
       .from('platform_impersonation_sessions')
       .update({ ended_at: nowIso })
@@ -109,7 +119,7 @@ export async function getActiveImpersonation(
 
 export type StartActingAsResult =
   | { ok: true; alreadyMember: boolean }
-  | { ok: false; reason: 'org_not_found' };
+  | { ok: false; reason: 'org_not_found' | 'org_unreadable' };
 
 export interface StartActingAsInput {
   adminUserId: string;
@@ -122,36 +132,53 @@ export async function startActingAs(input: StartActingAsInput): Promise<StartAct
   const now = input.now ?? Date.now();
   const admin = createAdminClient();
 
+  // The organization is read FIRST, before anything is written: an unknown
+  // organization, or a read that answers an error, changes nothing at all (no
+  // sweep, no earlier session ended). A read that answers an error is reported
+  // and says so; it is never "not found".
+  const { data: org, error: orgErr } = await admin
+    .from('organizations')
+    .select('id, name')
+    .eq('id', input.organizationId)
+    .maybeSingle();
+  if (orgErr) {
+    await reportError(new Error(orgErr.message), {
+      tag: 'platform.impersonation.org-read',
+      extra: { organizationId: input.organizationId },
+    });
+    return { ok: false, reason: 'org_unreadable' };
+  }
+  if (!org) return { ok: false, reason: 'org_not_found' };
+
   // Defensive: tear down any stale grants for this admin first.
   await sweepExpiredImpersonations(now, input.adminUserId);
   // Also end any *active* prior impersonation (one at a time) so we never
   // leave two grants outstanding.
   await stopActingAs({ adminUserId: input.adminUserId, adminEmail: input.adminEmail, now, silent: true });
 
-  const { data: org } = await admin
-    .from('organizations')
-    .select('id, name')
-    .eq('id', input.organizationId)
-    .maybeSingle();
-  if (!org) return { ok: false, reason: 'org_not_found' };
-
-  // Already a REAL member? Then they don't need a grant — just switch.
-  const { data: existing } = await admin
+  // Already a REAL member? Then they don't need a grant — just switch. Fail
+  // closed: a read that answers an error is not "not a member"; the grant
+  // below is written only once the membership is known, so a real membership
+  // is never touched.
+  const { data: existing, error: existingErr } = await admin
     .from('organization_members')
     .select('id, impersonation_expires_at')
     .eq('organization_id', input.organizationId)
     .eq('user_id', input.adminUserId)
     .maybeSingle();
+  if (existingErr) throw new Error(`impersonation membership read: ${existingErr.message}`);
   const alreadyRealMember = Boolean(
     existing && (existing as { impersonation_expires_at: string | null }).impersonation_expires_at === null,
   );
 
-  // Capture the admin's current active org to restore on exit.
-  const { data: profile } = await admin
+  // Capture the admin's current active org to restore on exit. Fail closed
+  // too: a read that answers an error is not "no active org".
+  const { data: profile, error: profileErr } = await admin
     .from('user_profiles')
     .select('default_organization_id')
     .eq('id', input.adminUserId)
     .maybeSingle();
+  if (profileErr) throw new Error(`impersonation profile read: ${profileErr.message}`);
   const previousOrgId = (profile as { default_organization_id: string | null } | null)?.default_organization_id ?? null;
 
   const expiresAtIso = new Date(now + IMPERSONATION_TTL_MS).toISOString();
@@ -210,8 +237,10 @@ export async function stopActingAs(input: StopActingAsInput): Promise<{ stopped:
   const now = input.now ?? Date.now();
   const admin = createAdminClient();
 
-  // Find the active session (if any).
-  const { data: session } = await admin
+  // Find the active session (if any). Fail closed, as getActiveImpersonation
+  // does: a read that answers an error is not "no session"; the action reports
+  // it and the Exit button shows an error instead of "Stopped".
+  const { data: session, error: sessionErr } = await admin
     .from('platform_impersonation_sessions')
     .select('id, target_organization_id, previous_organization_id')
     .eq('admin_user_id', input.adminUserId)
@@ -219,6 +248,7 @@ export async function stopActingAs(input: StopActingAsInput): Promise<{ stopped:
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (sessionErr) throw new Error(`impersonation session read: ${sessionErr.message}`);
   if (!session) return { stopped: false };
   const s = session as {
     id: string;
@@ -227,13 +257,16 @@ export async function stopActingAs(input: StopActingAsInput): Promise<{ stopped:
   };
 
   // Delete ONLY the impersonation grant (never a real membership): scoped to
-  // impersonation_expires_at not null.
-  await admin
+  // impersonation_expires_at not null. A delete that fails throws before the
+  // profile restore and the session end, so nothing else is written and the
+  // session can still be swept.
+  const { error: grantErr } = await admin
     .from('organization_members')
     .delete()
     .eq('organization_id', s.target_organization_id)
     .eq('user_id', input.adminUserId)
     .not('impersonation_expires_at', 'is', null);
+  if (grantErr) throw new Error(`impersonation grant delete: ${grantErr.message}`);
 
   // Restore the admin's previous active org.
   await admin

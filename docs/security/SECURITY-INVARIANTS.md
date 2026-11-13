@@ -69,6 +69,13 @@
      first release were reworded. Nothing else in this document was
      re-verified.
 
+     AMENDED 2026-11-13 (docket S25, second of two releases): INV-E5 says
+     that a link without the signed account reference is refused on GET and
+     POST before anything is read or spent, in its Enforced by, Tested at and
+     "Also not covered" texts; the transitional sentences on links written
+     before the first release were removed. Nothing else in this document was
+     re-verified.
+
      AMENDED 2026-11-12 (docket T23): the "Tested at" fields of INV-B3,
      INV-B4 and INV-D2 were rewritten for the detectors as they now stand
      (INV-15/16 bind a CHECK to its column by conkey; INV-26 and INV-31 share
@@ -1819,10 +1826,12 @@ application structure.
   behind the gate as a second line: the two that refuse a frame
   (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) and the opener policy;
   [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
-  holds all three to the page's path. A link written by a build from before the first S25 release carries
-  no `r`: it gets the page it got before, with the signed-in notice and the
-  gate, and is logged (type only); the second release requires `r` on every
-  link. Where a link lands is fixed by its type
+  holds all three to the page's path. A link without `r` gets the type's
+  refused answer, on `GET` before the session is read or any account is
+  looked up and on `POST` before `verifyOtp`, and is logged (type only):
+  every link the app writes carries one. A link GoTrue's own mailer writes
+  from a dashboard email template carries none, so it is refused as well.
+  Where a link lands is fixed by its type
   ([`confirm-landing.ts`](../../apps/web/src/lib/auth/confirm-landing.ts)),
   not chosen by the link. The two `GET`s that spend something of the person's
   ask `sentFromAnotherOrigin` (`Sec-Fetch-Site` present and neither
@@ -1845,8 +1854,8 @@ application structure.
   App Route module);
   [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
   (login CSRF: a post from another site, `r` checked on `GET` and `POST`
-  before any lookup or `verifyOtp`, the account's address and the notices,
-  the failed lookup, a session made for another account, the gate on the
+  before any lookup or `verifyOtp`, a link without `r` refused on both, the
+  account's address and the notices, the failed lookup, a session made for another account, the gate on the
   page after a form whose one button is disabled as sent, the words for a
   browser that runs no script, a post without the gate's field refused
   before anything is spent, the fixed landing);
@@ -1949,9 +1958,8 @@ application structure.
     again later, which the gate cannot tell from a real press (the address has
     then been on screen for at least a second, though the page may have been
     scrolled on since); and a lookalike address made to match the full one
-    (much harder than matching a mask). The second S25 release requires `r`
-    on every link; until then a link written before the first release gets
-    the page it got before, which names no account. The first version of
+    (much harder than matching a mask). A link without `r` names no account,
+    and is refused before anything is read or spent. The first version of
     this entry presented the login CSRF as closed for every browser that
     sends Fetch Metadata; it was not.
   - A post from a browser that sends no `Sec-Fetch-Site` (one without Fetch
