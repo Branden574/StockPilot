@@ -71,10 +71,13 @@
      `select plan(58)`, and the two file counts beside it were counted from
      the manifests in `scripts/security-test.sh` on that date.
 
-     AMENDED 2026-11-02 (docket S62, migration 0431): INV-C8 added. Its
-     policy facts were read from migrations 0215, 0322 and 0431 and checked
-     by the 0431 test on a local Postgres at main 1ce98c290 with 0431
-     applied; the counts in section 10 were not re-derived. -->
+     AMENDED 2026-11-12 (docket S62, migration 0420): INV-C8 added. Its
+     policy facts were read from migrations 0215, 0322 and 0420 and checked
+     by the 0420 test on a local Postgres with migrations 0001-0418 and 0420
+     applied. The two file counts in section 10 were counted again from the
+     manifests in `scripts/security-test.sh`, which gain one pgTAP file and
+     one vitest file with this entry; the assertion count beside them was
+     not re-derived. -->
 
 # Security invariants
 
@@ -1432,7 +1435,7 @@ actually fire.
 - **Enforced by**: each table's write rules. INSERT, and UPDATE's
   `WITH CHECK`: a grant needs the permission (0215). DELETE: a restriction
   needs it (0322). UPDATE's `USING`: the row an update starts from is read as
-  the DELETE rule reads it (0431). In the app, the two single-toggle
+  the DELETE rule reads it (0420). In the app, the two single-toggle
   actions re-read the row when the database refuses re-writing a
   restriction that is already there, and answer as before (nothing changed,
   so no audit row and no broadcast).
@@ -1440,7 +1443,7 @@ actually fire.
   (grants), section 3 of
   [`0322_quantity_guards_avatar_scope_override_clears.test.sql`](../../supabase/tests/0322_quantity_guards_avatar_scope_override_clears.test.sql)
   (deletes), and
-  [`0431_permission_override_updates_follow_0322.test.sql`](../../supabase/tests/0431_permission_override_updates_follow_0322.test.sql)
+  [`0420_permission_override_updates_follow_0322.test.sql`](../../supabase/tests/0420_permission_override_updates_follow_0322.test.sql)
   (updates: S1-S6 pin each UPDATE rule's `USING` to the table's DELETE rule
   and its `WITH CHECK` to the INSERT rule; R, W, H, O and N run the app's
   shapes and plain updates per persona; M1 is the mutation control). App
@@ -2197,8 +2200,8 @@ checked.
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 100 other pgTAP
-  files and the 341 vitest files on the manifests of
+  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
+  files and the 342 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a

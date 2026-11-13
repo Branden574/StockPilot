@@ -1,4 +1,4 @@
--- 0431_permission_override_updates_follow_0322.sql
+-- 0420_permission_override_updates_follow_0322.sql
 --
 -- The database now asks for the same permission the app asks before a
 -- restriction changes (docket S62). The UPDATE rules of
@@ -51,7 +51,7 @@
 -- permission reads (has_permission reads both tables in many rules),
 -- sign-ins, token refreshes, and storage and realtime requests wait for the
 -- hold. lock_timeout 900ms bounds anything unforeseen.
--- scripts/db-concurrency/0431_migration_lock_footprint.sh measures all of
+-- scripts/db-concurrency/0420_migration_lock_footprint.sh measures all of
 -- this.
 --
 -- ── ERRORS ────────────────────────────────────────────────────────────────

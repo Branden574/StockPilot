@@ -830,13 +830,13 @@ PGTAP_TESTS=(
   # own preflight is replayed from the recorded statements. The lock footprint
   # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
   supabase/tests/0417_recovery_codes_need_aal2.test.sql
-  # Permission override updates (0431, docket S62): the database asks for the
+  # Permission override updates (0420, docket S62): the database asks for the
   # same permission the app asks before a restriction changes. The UPDATE
   # rules of user_permission_overrides and role_permission_overrides ask of
   # the row being changed what their DELETE rules ask (0322); WITH CHECK
   # stays 0215's. The lock footprint is
-  # scripts/db-concurrency/0431_migration_lock_footprint.sh.
-  supabase/tests/0431_permission_override_updates_follow_0322.test.sql
+  # scripts/db-concurrency/0420_migration_lock_footprint.sh.
+  supabase/tests/0420_permission_override_updates_follow_0322.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql

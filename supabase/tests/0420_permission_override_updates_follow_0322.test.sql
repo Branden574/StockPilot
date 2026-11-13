@@ -1,5 +1,5 @@
--- supabase/tests/0431_permission_override_updates_follow_0322.test.sql
--- pgTAP proof for migration 0431 (docket S62): the UPDATE rules of
+-- supabase/tests/0420_permission_override_updates_follow_0322.test.sql
+-- pgTAP proof for migration 0420 (docket S62): the UPDATE rules of
 -- user_permission_overrides and role_permission_overrides ask, of the row
 -- being changed, what their DELETE rules ask since 0322: an admin, and either
 -- the row is a grant or the writer holds the permission it is about. The
@@ -27,7 +27,7 @@
 --     so they measure the new term (M1).
 -- A.  The migration's own preflight and lock prelude, replayed from the
 --     statements the CLI recorded (0415's method): the preflight refuses a
---     second run, passes on the pre-0431 state under any search_path, and
+--     second run, passes on the pre-0420 state under any search_path, and
 --     names each planted drift; the prelude takes ACCESS EXCLUSIVE on the two
 --     tables and on every table supautils.policy_grants lists for this role,
 --     and on nothing else.
@@ -506,8 +506,8 @@ create function pg_temp.mig_count(p_tag text) returns bigint language sql stable
     from supabase_migrations.schema_migrations m, unnest(m.statements) st
    where m.name = 'permission_override_updates_follow_0322' and position(p_tag in st) > 0
 $$;
--- The pre-0431 state: 0215's two UPDATE rules.
-create function pg_temp.pre_0431() returns text language sql immutable as $$
+-- The pre-0420 state: 0215's two UPDATE rules.
+create function pg_temp.pre_0420() returns text language sql immutable as $$
   select $p$drop policy user_permission_overrides_update on public.user_permission_overrides;
 create policy user_permission_overrides_update on public.user_permission_overrides
   for update to authenticated
@@ -595,23 +595,23 @@ select is(
   'A2: run again after the migration, the preflight stops before changing anything (55000) and names both tables'' UPDATE rules');
 
 select is(
-  pg_temp.try_pre(pg_temp.pre_0431()) || ' / ' || pg_temp.try_pre(pg_temp.pre_0431() || $p$;set local search_path = ''$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0431() || $p$;set local search_path = pg_catalog$p$),
+  pg_temp.try_pre(pg_temp.pre_0420()) || ' / ' || pg_temp.try_pre(pg_temp.pre_0420() || $p$;set local search_path = ''$p$)
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0420() || $p$;set local search_path = pg_catalog$p$),
   'ok / ok / ok',
-  'A3: on the pre-0431 state the preflight passes, under the session''s search_path, an empty one and pg_catalog alone');
+  'A3: on the pre-0420 state the preflight passes, under the session''s search_path, an empty one and pg_catalog alone');
 
 select is(
-  pg_temp.try_pre(pg_temp.pre_0431() || $p$;
+  pg_temp.try_pre(pg_temp.pre_0420() || $p$;
 create or replace function public.has_permission(org_id uuid, perm text) returns boolean
 language sql stable security definer set search_path = public as $f$ select true $f$$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0431() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0420() || $p$;
 create or replace function public.has_org_role(org_id uuid, min_role text) returns boolean
 language sql stable security definer set search_path = public as $f$ select true $f$$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0431() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0420() || $p$;
 revoke execute on function public.has_permission(uuid, text) from public, authenticated$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0431() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0420() || $p$;
 create policy s62_extra_update on public.role_permission_overrides for update to authenticated using (true)$p$)
-  || ' / ' || pg_temp.try_pre(pg_temp.pre_0431() || $p$;
+  || ' / ' || pg_temp.try_pre(pg_temp.pre_0420() || $p$;
 create policy s62_extra_all on public.user_permission_overrides for all to authenticated using (true)$p$),
   '55000:s62_preflight:public.has_permission(uuid,text) drifted / '
   '55000:s62_preflight:public.has_org_role(uuid,text) drifted / '
