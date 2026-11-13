@@ -4,7 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
+import {
+  makeServiceContext,
+  makeSupabaseStub,
+  servedLikePostgrest,
+  type SupabaseStub,
+} from '@/test/supabase-mock';
 
 import type { ModuleId } from '@stockpilot/core';
 
@@ -43,6 +48,13 @@ vi.mock('./returns-workbench', () => ({
 
 const invalidateMock = vi.hoisted(() => vi.fn());
 vi.mock('./lib/inventory-list-cache', () => ({ invalidateInventoryListAfterWrite: invalidateMock }));
+
+// Export events are recorded through the service client
+// (server/lib/outbox-events.ts): every createAdminClient() here is this stub.
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.client }));
+const reportErrorMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock('@/lib/error-reporter', () => ({ reportError: reportErrorMock }));
 
 import { ServiceError } from './context';
 import { RMAService, returnRpcError } from './returns';
@@ -85,8 +97,28 @@ function rpcError(hint: string, code = 'P0001', details: string | null = null) {
   return { data: null, error: { code, hint, message: hint, details } };
 }
 
-beforeEach(() => vi.clearAllMocks());
+let admin: SupabaseStub;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  admin = makeSupabaseStub({ 'rpc:publish_outbox': { data: 'evt-1', error: null } });
+  adminHolder.client = admin.client;
+});
 afterEach(() => vi.restoreAllMocks());
+
+function outboxCalls(stub: SupabaseStub) {
+  return stub.rpcCalls.filter((c) => c.name === 'publish_outbox');
+}
+
+/** The return.created event exactly as it has always been sent (the number is the RMA's own, read back by get). */
+const RETURN_CREATED_EVENT = {
+  p_org_id: 'org-test',
+  p_topic: 'return.created',
+  p_aggregate_type: 'return',
+  p_aggregate_id: RET_ID,
+  p_payload: { returnId: RET_ID, returnNumber: 'RMA-20261005-ABC123', orderRequestId: ORDER_ID },
+  p_dedupe_key: `return.created:${RET_ID}`,
+};
 
 describe('database refusals are mapped by hint', () => {
   it.each([
@@ -161,6 +193,11 @@ describe('createFromOrder (create_return_request)', () => {
     expect(stub.fromCalls.filter((t) => t === 'returns' || t === 'return_lines')).toEqual(['returns', 'return_lines']);
     expect(stub.chainsAll.get('returns.insert')).toBeUndefined();
     expect(stub.chainsAll.get('return_lines.insert')).toBeUndefined();
+    // The export event: through the service client, once, as always sent.
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(outboxCalls(admin)).toEqual([{ name: 'publish_outbox', args: RETURN_CREATED_EVENT }]);
+    expect(JSON.stringify(outboxCalls(admin)[0]!.args)).toBe(JSON.stringify(RETURN_CREATED_EVENT));
+    expect(reportErrorMock).not.toHaveBeenCalled();
   });
 
   it('mints a fresh key for a body without one (installed phones, plan A-4)', async () => {
@@ -180,6 +217,59 @@ describe('createFromOrder (create_return_request)', () => {
     expect(auditMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(stub.rpcCalls.map((c) => c.name)).not.toContain('publish_outbox');
+    expect(outboxCalls(admin)).toHaveLength(0);
+  });
+
+  it('a member without returns:manage is refused before anything, and no event is recorded', async () => {
+    const { stub, svc } = svcFor(
+      {
+        'rpc:create_return_request': {
+          data: {
+            changed: true,
+            replay: false,
+            returnId: RET_ID,
+            returnNumber: 'RMA-1',
+            status: 'requested',
+            channel: 'staff',
+          },
+          error: null,
+        },
+      },
+      { role: 'staff' },
+    );
+    await expect(
+      svc.createFromOrder(ORDER_ID, INPUT, { idempotencyKey: KEY }),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(outboxCalls(admin)).toHaveLength(0);
+    expect(reportErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('a failed write is reported and the return stands', async () => {
+    admin = makeSupabaseStub({
+      'rpc:publish_outbox': { data: null, error: { message: 'publish failed' } },
+    });
+    adminHolder.client = admin.client;
+    const { svc } = svcFor({
+      'rpc:create_return_request': {
+        data: {
+          changed: true,
+          replay: false,
+          returnId: RET_ID,
+          returnNumber: 'RMA-1',
+          status: 'requested',
+          channel: 'staff',
+        },
+        error: null,
+      },
+    });
+    await expect(
+      svc.createFromOrder(ORDER_ID, INPUT, { idempotencyKey: KEY }),
+    ).resolves.toMatchObject({ id: RET_ID });
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      { message: 'publish failed' },
+      expect.objectContaining({ tag: 'outbox.publish', organizationId: 'org-test' }),
+    );
   });
 
   it.each([
@@ -346,6 +436,7 @@ describe('close (close_return)', () => {
       extra: { detail: { rule: 'archived', locationId: 'loc-1' } },
     });
     expect(invalidateMock).not.toHaveBeenCalled();
+    expect(outboxCalls(admin)).toHaveLength(0);
   });
 
   it('a close that moved stock audits per line, publishes the outbox event and invalidates the inventory list', async () => {
@@ -380,8 +471,24 @@ describe('close (close_return)', () => {
       event: 'return.closed',
       extra: { lines: [{ returnLineId: RLINE_ID, disposition: 'restock', destination: 'original', locationIds: ['loc-31c'] }] },
     });
-    const outbox = stub.rpcCalls.find((c) => c.name === 'publish_outbox')!;
-    expect(outbox.args).toMatchObject({ p_topic: 'return.closed', p_dedupe_key: `return.closed:${RET_ID}`, p_payload: { total: 12.5 } });
+    // The export event: through the service client, once, as always sent.
+    const returnClosed = {
+      p_org_id: 'org-test',
+      p_topic: 'return.closed',
+      p_aggregate_type: 'return',
+      p_aggregate_id: RET_ID,
+      p_payload: {
+        orderRequestId: ORDER_ID,
+        returnNumber: 'RMA-20261005-ABC123',
+        lineCount: 1,
+        total: 12.5,
+      },
+      p_dedupe_key: `return.closed:${RET_ID}`,
+    };
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(outboxCalls(admin)).toEqual([{ name: 'publish_outbox', args: returnClosed }]);
+    expect(JSON.stringify(outboxCalls(admin)[0]!.args)).toBe(JSON.stringify(returnClosed));
+    expect(reportErrorMock).not.toHaveBeenCalled();
     expect(invalidateMock).toHaveBeenCalledWith('org-test', 'return.close');
   });
 
@@ -394,6 +501,23 @@ describe('close (close_return)', () => {
     expect(answer).toMatchObject({ changed: false, byName: 'dana@example.com' });
     expect(auditMock).not.toHaveBeenCalled();
     expect(invalidateMock).not.toHaveBeenCalled();
+    expect(outboxCalls(admin)).toHaveLength(0);
+  });
+
+  it('a member without returns:manage is refused before anything, and no event is recorded', async () => {
+    const { stub, svc } = svcFor(
+      {
+        'rpc:close_return': {
+          data: { changed: true, status: 'closed', lines: [], legs: [] },
+          error: null,
+        },
+      },
+      { role: 'staff' },
+    );
+    await expect(svc.close(RET_ID)).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.rpcCalls).toHaveLength(0);
+    expect(outboxCalls(admin)).toHaveLength(0);
+    expect(reportErrorMock).not.toHaveBeenCalled();
   });
 
   it('a destination changed at processing travels in the same call (C-9)', async () => {
@@ -423,7 +547,10 @@ describe('runSteps (the steps endpoint)', () => {
       { step: 'approve', outcome: 'already' },
       { step: 'process', outcome: 'done' },
     ]);
-    expect(stub.rpcCalls.map((c) => c.name).filter((n) => n !== 'publish_outbox')).toEqual(['approve_return', 'close_return']);
+    expect(stub.rpcCalls.map((c) => c.name)).toEqual(['approve_return', 'close_return']);
+    expect(outboxCalls(admin).map((c) => (c.args as { p_topic: string }).p_topic)).toEqual([
+      'return.closed',
+    ]);
     expect(result.workbench).toMatchObject({ marker: 'workbench' });
   });
 

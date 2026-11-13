@@ -9,6 +9,7 @@ import { hasArrayLongerThan } from '@/lib/oversized-array';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
+import { publishOutboxEventForResolvedOrganization } from '@/server/lib/outbox-events';
 import { isLinkOpen } from '@/server/services/public-catalog';
 
 import type { OrderRequestRow } from '@/server/services/order-requests';
@@ -712,23 +713,23 @@ export async function POST(req: NextRequest) {
   // (best-effort; dormant until a zendesk connection is active). NOTE: fires at
   // submit, before email confirmation — acceptable for v1; a follow-up could
   // move this to the confirmation RPC to avoid unconfirmed/bot submissions.
-  try {
-    await admin.rpc('publish_outbox', {
-      p_org_id: organizationId,
-      p_topic: 'public_request.created',
-      p_aggregate_type: 'order_request',
-      p_aggregate_id: header.id,
-      p_payload: {
+  // Recorded through the service client by the one export-event helper
+  // (server/lib/outbox-events.ts), in the link's organization resolved above;
+  // it never throws, so a failed write never fails the submission, and it
+  // reports one.
+  await publishOutboxEventForResolvedOrganization(
+    { organizationId, resolvedBy: 'public_request_link' },
+    {
+      topic: 'public_request.created',
+      aggregateId: header.id,
+      payload: {
         orderRequestId: header.id,
         requesterEmail,
         requesterName: body.requesterName,
         status: 'pending_confirmation',
       },
-      p_dedupe_key: `public_request.created:${header.id}`,
-    });
-  } catch {
-    /* best-effort: never fail the submission on a publish error */
-  }
+    },
+  );
 
   // 7. Send the confirm-click email. The row is sitting at
   // `pending_confirmation`; until the recipient clicks the link the
