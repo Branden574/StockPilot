@@ -11,15 +11,15 @@ vi.mock('./nav-icons', () => ({ NAV_ICONS: new Proxy({}, { get: () => () => null
 vi.mock('./api', () => ({ api: vi.fn() }));
 
 /**
- * A SHARED PHONE: ACCOUNT B SIGNS IN OVER ACCOUNT A'S CACHE AND OPENS A COUNT
- * LINK (S75). Nothing of A's is read or shown.
+ * A COUNT LINK OPENED OFFLINE READS ONLY A COUNT THE SIGNED-IN ACCOUNT STORED
+ * (S75).
  *
- * A's session ended without a wipe (a "Use a different account", a revoked
- * session, an expired refresh token), so A's saved permissions, modules and
- * counts are still on the phone, recorded as A's (cache-owner.ts), until B's
- * first pull resets them. Here B is offline, so no pull runs. The access is
- * computed from what the real store answers (db.ts on node:sqlite) for B,
- * and the count screen's own loadOnce runs with the real stores.
+ * The cache, its saved access and a stored count are recorded as another
+ * account's (cache-owner.ts) until the signed-in account's first pull resets
+ * them. Offline, no pull runs. The access is computed from what the real store
+ * answers (db.ts on node:sqlite) for the signed-in account, and the count
+ * screen's own loadOnce runs with the real stores: the access is 'not-synced',
+ * and nothing stored is read or shown.
  */
 
 const sqlite = vi.hoisted(() => ({ open: vi.fn() }));
@@ -36,7 +36,7 @@ vi.mock('./session-scope', () => ({
 
 const COUNT = 'app/cycle-count/[id].tsx';
 const NOT_SYNCED_YET =
-  'This phone has not finished syncing this workspace yet. Connect to the internet and try again.';
+  'This phone has not finished syncing this workspace yet. Check your connection and try again.';
 
 let raw: DatabaseSync;
 
@@ -46,7 +46,7 @@ beforeEach(async () => {
   sqlite.open.mockReset().mockImplementation(async () => handle);
   vi.resetModules();
   await (await import('./db')).getDb();
-  // A's cache: A's own fetched count, A's saved access, recorded as A's.
+  // The cache as account u-a left it: its own fetched count and saved access.
   live.userId = 'u-a';
   raw.prepare("insert into meta (key, value) values ('cache_user_id', 'u-a')").run();
   const cache = await import('./cycle-count-cache');
@@ -81,12 +81,12 @@ beforeEach(async () => {
   raw
     .prepare("insert into meta (key, value) values ('enabled_modules', ?)")
     .run(JSON.stringify(['cycle_counts']));
-  // B signs in; its first pull has not run.
+  // u-b is signed in; its first pull has not run.
   live.userId = 'u-b';
 });
 
-describe("account B over account A's cache, offline, opening a count link", () => {
-  it("is not synced for B, and nothing of A's is read or shown", async () => {
+describe('a count link opened offline reads only a count the signed-in account stored', () => {
+  it('a count stored under another account: not synced yet, and nothing of it is read or shown', async () => {
     const db = await import('./db');
     const { readPersistedPermissions } = await import('./use-effective-permissions');
     const { readPersistedEnabledModules } = await import('./enabled-modules');
@@ -103,7 +103,7 @@ describe("account B over account A's cache, offline, opening a count link", () =
       role: 'staff',
       roleLoading: false,
     });
-    // A's saved set would allow it; it is not B's.
+    // The saved set would allow it; it is recorded as another account's.
     expect(access).toBe('not-synced');
 
     const getCycleCount = vi.fn(cache.getCycleCount);

@@ -37,15 +37,22 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // 42d3d7a1...9750, the pin it had.
   // Re-pinned again for B124 (Classic is meant to change: the Inventory tour leaves out its New
   // item step for a member who cannot create items). Before this the pin was 3e54e722...cc54.
+  // Re-pinned again for B124 round 2 (Classic is meant to change: New item follows
+  // createControlOffer, and the tour mounts only once that answer is settled and keeps its
+  // definition while open). Before this the pin was fc38bb35...52b1.
   'app/(drawer)/(tabs)/inventory.tsx':
-    'fc38bb35d23c53da287c210a2102419f5c1923faf080fd260faf9a83792052b1',
+    '3d61fa5137a2d5cbefb00f3f72cd2ea6f5125a80251d6459f532a9cbe4228fa2',
   'app/(drawer)/(tabs)/receive.tsx':
     '6d32450d4607d50dfe274dc2c06b9fc3d655c40dbe673efa8f546910de3b43f6',
   // Re-pinned for B124 (Classic is meant to change: a code or photo that matches nothing opens
   // the add book or add item card only for a member who can create items; anyone else gets a
   // plain Not found). Before B124 the projection was 99ebd17a...50da, the pin it had.
+  // Re-pinned again for B124 round 2 (Classic is meant to change: the add cards follow
+  // createControlOffer; a lookup in the workspace that failed says Lookup failed; a photo, where
+  // no create control is offered, is matched against the workspace's own items; an existing-item
+  // card shows for everyone). Before this the pin was ea9a0ffb...2c08.
   'app/(drawer)/(tabs)/scan.tsx':
-    'ea9a0ffb13c4efc5e5a37527cd191967bb35eb6f671a6365341870991f122c08',
+    '80ab8f3369cc5bb8dcd62da3ea2d79e34e7d8233e14b989a5f71c1f3cd939461',
   // Re-pinned for S75 (Classic is meant to change: the count is read only for a member who may
   // see cycle counts, and the not-available state leaves out the catching-up sentence). Before
   // S75 the projection was 225237c6...e731e, the pin it had.
@@ -57,7 +64,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // not be read is said with Retry; the not-available state has its own title and Back; Count not
   // saved shows one alert at a time and nothing after the screen closes). Before this the pin was
   // 594dacd1...d83d.
-  'app/cycle-count/[id].tsx': 'f8e71e101eaa62862305be5fdd83cc079d05900ef415d3ae3ec9a5c5f8e8c3f5',
+  // Re-pinned again for S75 round 2 (Classic is meant to change: when the phone finishes syncing
+  // with a count on screen, the count is read again in place, with no spinner). Before this the
+  // pin was f8e71e10...c3f5.
+  'app/cycle-count/[id].tsx': '3f44ec8acbc47e32024d682d96b4809b0cff426639da71d14a7077bbc2a6d683',
   // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
   // configured host; a production build opens the same address). Before B124 the projection was
   // 0e3f35aa...a3fa, the pin it had.
@@ -124,8 +134,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned for B124 (Classic is meant to change: New book shows only for a member who holds
   // items:create, once the saved permissions are read). Before B124 the projection was
   // 19ccb3b8...c46c, the pin it had.
+  // Re-pinned again for B124 round 2 (Classic is meant to change: New book follows the one rule
+  // for create controls, createControlOffer, so a phone not synced yet offers it by the role's
+  // defaults once the role is known). Before this the pin was 0355c3b0...e67d.
   'app/(drawer)/(tabs)/books.tsx':
-    '0355c3b0feb54353f1e14ce6d9834f80e7041be10ee91c7e6e6afbd183e9b67d',
+    '00460d67235ee833c8199e990395561836ec13020609f32090d1849fa7c5d9cb',
   // Re-pinned for S75 (Classic is meant to change: the counts downloaded to this phone are shown
   // only to a member who may see cycle counts, never in place of the server's refusal). Before
   // S75 the projection was 1c00180e...c412, the pin it had.
@@ -162,8 +175,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // only a count this account fetched here, saved access that could not be read is said, and
   // Count not saved shows one alert at a time and nothing after the screen closes). Before this
   // the pin was b26f7e81...6047.
+  // Re-pinned again for S75 round 2 (Classic is meant to change: a read of the lines merges into
+  // the tally, so a count scanned on this screen stays). Before this the pin was 33f84bae...a54e.
   'app/cycle-count/scan/[id].tsx':
-    '33f84baeb12efe316300d4e303eaa15e90fc065757a215104790bf679ddba54e',
+    'd5c5ef7234d08aaea8c199cb15ae2f1ae8b6c13e29b7815ef01b255497959199',
   // Re-pinned for B124 (Classic is meant to change: a member without items:create is told so
   // beside Create and refused before anything is sent). Before B124 the projection was
   // 1869d65f...7806, the pin it had.
@@ -193,7 +208,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned again for S75 (Classic is meant to change: not synced yet for this member syncs
   // with a spinner and then says the phone has not finished syncing; saved access that could not
   // be read is said with Try again). Before this the pin was f873779c...8646.
-  'app/bundles/[id].tsx': 'e9bb82a1cc4df02cb91b022990e1ec6b11af6dd6164e298064f73206c9b1048a',
+  // Re-pinned again for S75 round 2 (Classic is meant to change: Try again sits space.md below
+  // the sentence, the gap the file uses above Distribute). Before this the pin was
+  // e9bb82a1...048a.
+  'app/bundles/[id].tsx': 'efb66e97ff13b2b5749c35bd51ced610968467dc1b37dbc6827f209ac0a4e1cd',
   // Re-pinned for S75 (Classic is meant to change: the list is read and shown, and Refresh
   // offered, only for a member the side menu offers Bundles to). Before S75 the projection was
   // edbf916d...8aff, the pin it had.
