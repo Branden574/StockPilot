@@ -58,13 +58,14 @@
      GoTrue no longer holds now gets the expired answer without the addresses.
      Nothing else in this document was re-verified.
 
-     AMENDED 2026-11-12 (docket S25, merge of main): INV-E5's Tested at text
-     says what the wider sweeps of confirm-landing.test.ts hold, and its
-     Enforced by text names the three headers the confirmation page counts
-     on (the opener policy and the two that refuse a frame), now pinned on
-     that path in security-headers.test.ts, which also records in which
-     browser versions and for which ways of opening the page the opener
-     policy was seen to refuse it. The sentences on links written before the
+     AMENDED 2026-11-12 (docket S25, merge of main and review): INV-E5's
+     Tested at text says what the wider sweeps of confirm-landing.test.ts
+     hold. Its Enforced by text says the confirmation page's button is
+     disabled in the markup until the page's script has run and that POST
+     refuses a press that script did not let through, and names the three
+     headers that stand behind the gate as a second line (the opener policy
+     and the two that refuse a frame), now pinned on that path in
+     security-headers.test.ts. The sentences on links written before the
      first release were reworded. Nothing else in this document was
      re-verified.
 
@@ -1738,8 +1739,7 @@ application structure.
   there with no `Sec-Fetch-Site` is verified and logged (type only), by
   decision: without that header no header tells its own post from another
   site's, so refusing would refuse every browser without Fetch Metadata on a
-  page that works without its one script and opens on whatever device holds
-  the email. Every link the app emails names the account it is for (docket
+  page that opens on whatever device holds the email. Every link the app emails names the account it is for (docket
   S25): `r` carries the user id GoTrue returned with the token and the time
   the link was built, with an HMAC-SHA256 tag over those, the link's type and
   its token hash, keyed with a key derived from the service key under a fixed
@@ -1764,14 +1764,20 @@ application structure.
   window swap (DoubleClickjacking), or a window another site opens small and
   scrolled past the line or into the middle of a long address, therefore
   gets no press before the account's address has been on screen for a
-  second. The button is enabled in the markup, so the page counts on three of
-  the app's headers to keep it from being shown where another site has
-  stopped its script from running: the two that refuse a frame
+  second. The button is disabled in the markup and enabled only by that
+  script, as its last step, and the script adds a field to the form when it
+  lets a press through and takes it away whenever the page is not armed;
+  `POST` gives a post without the field the type's refused answer (logged,
+  type only) before `r` is read or `verifyOtp` is called. So nothing can be
+  pressed where the script does not run, or before the end of it has
+  arrived, and a browser that runs no script reads on the page that it needs
+  JavaScript. A change to the CSP that stops inline scripts therefore stops
+  every emailed link until the gate gets a nonce (the B17 test in
+  `security-headers.test.ts` says so). Three of the app's headers stand
+  behind the gate as a second line: the two that refuse a frame
   (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) and the opener policy;
   [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
-  holds all three to the page's path and records for which ways of opening
-  the page, and in which browser versions, the opener policy was seen to
-  refuse it. A link written by a build from before the first S25 release carries
+  holds all three to the page's path. A link written by a build from before the first S25 release carries
   no `r`: it gets the page it got before, with the signed-in notice and the
   gate, and is logged (type only); the second release requires `r` on every
   link. Where a link lands is fixed by its type
@@ -1799,7 +1805,9 @@ application structure.
   (login CSRF: a post from another site, `r` checked on `GET` and `POST`
   before any lookup or `verifyOtp`, the account's address and the notices,
   the failed lookup, a session made for another account, the gate on the
-  page, the fixed landing);
+  page after a form whose one button is disabled as sent, the words for a
+  browser that runs no script, a post without the gate's field refused
+  before anything is spent, the fixed landing);
   [`route.recipient-session.test.ts`](../../apps/web/src/app/auth/confirm/route.recipient-session.test.ts)
   (the real `@supabase/ssr` and auth-js: a press that GoTrue answers for
   another account leaves with no session cookie, signed out of that session
@@ -1813,8 +1821,9 @@ application structure.
   [`press-gate.test.ts`](../../apps/web/src/app/auth/confirm/press-gate.test.ts)
   (the page's own script: the quiet second, focus, visibility, the window swap,
   every address on screen through the second at any window size or scroll,
-  line by line for one taller than the window, and a browser that never
-  reports focus);
+  line by line for one taller than the window, a browser that never reports
+  focus, the button enabled as the script's last step, and the field on the
+  form only for a press the gate let through);
   [`route.email-change-replaced.test.ts`](../../apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts)
   (the real email-change link builder and route: a link sent to a mistyped
   address, opened after the change was corrected or completed, shows neither

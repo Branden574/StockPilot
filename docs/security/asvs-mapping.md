@@ -311,6 +311,8 @@ account it is for under a server signature (`r`, docket S25): the page checks it
 on `GET` and `POST`, prints that account's full address before anyone presses
 (and both addresses when the browser is signed in as another account), counts a
 press only after a quiet second in front with every address it names on screen,
+keeps its button disabled until the page's script has run and refuses a post
+that script did not let through,
 shows neither address for an email-change link whose change is no longer
 pending, and each link type lands on a fixed page. The second S25 release
 requires `r` on every link; until then a link written before the first release

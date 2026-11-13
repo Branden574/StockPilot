@@ -34,7 +34,7 @@ function headerValues(all: HeaderRule[], key: string): string[] {
   );
 }
 
-/** The emailed-link page (app/auth/confirm), whose press gate counts on three of these headers. */
+/** The emailed-link page (app/auth/confirm): three of these headers stand behind its press gate. */
 const EMAILED_LINK_PAGE = '/auth/confirm';
 
 /**
@@ -117,23 +117,15 @@ describe('COOP / CORP / COEP (MED-28)', () => {
     expect(values).toEqual(['same-origin-allow-popups']);
   });
 
-  // The emailed-link page (app/auth/confirm, docket S25) counts on this
-  // header as well, and on the two that refuse a frame (pinned to its path
-  // further down). Its one script, the press gate, holds a press back until
-  // the account the link is for has been on screen, and its button is left
-  // enabled in the markup on purpose, so the page must not be shown where
-  // another site has stopped its script from running:
-  //   - in a frame: X-Frame-Options DENY and the CSP's frame-ancestors 'none'
-  //     refuse that;
-  //   - in a window opened from a sandboxed frame, or from a page under a CSP
-  //     sandbox, that may not run scripts: with this header sent, Chromium
-  //     156, Firefox 157 and WebKit 27.2 each refused to load the page there
-  //     (review of 2026-11-12; those two ways of opening it and those three
-  //     browser versions are what was tried).
-  // Before one of the three stops reaching that path, or this one says
-  // unsafe-none there, give the page its own answer for a window that runs
-  // no script.
-  it('sends COOP on the emailed-link page, whose press gate counts on it: with it Chromium 156, Firefox 157 and WebKit 27.2 refused to load the page in a window opened from a sandboxed frame or from a page under a CSP sandbox', async () => {
+  // The emailed-link page (app/auth/confirm, docket S25). Its one script,
+  // the press gate, holds a press back until the account the link is for has
+  // been on screen. The page's button is disabled until that script has run,
+  // and POST refuses a press the script did not let through (route.test.ts
+  // and press-gate.test.ts hold both). Three of the app's headers stand
+  // behind that as a second line: this one, and the two that refuse a frame
+  // (pinned to the page's path further down). Each keeps reaching the page,
+  // in one value.
+  it('sends COOP on the emailed-link page, in one value, as a second line behind its press gate', async () => {
     const covering = sending(await rules(), 'Cross-Origin-Opener-Policy', EMAILED_LINK_PAGE);
     // Exactly one rule, so the page gets one value: two would not parse.
     expect(covering).toHaveLength(1);
@@ -218,9 +210,9 @@ describe('the pre-existing header set is not regressed', () => {
   });
 
   // The two pins above read every rule at once, so they would still pass if
-  // the headers moved to a rule for other paths. The emailed-link page counts
-  // on both (see the COOP pin for that page above): no site can show it in a
-  // frame, where a frame's sandbox could stop its press gate from running.
+  // the headers moved to a rule for other paths. Both are part of the second
+  // line behind the emailed-link page's press gate (see the COOP pin for that
+  // page above): no site can show the page in a frame.
   it('sends the two headers that refuse a frame on the emailed-link page, each in one value', async () => {
     const all = await rules();
     const frameOptions = sending(all, 'X-Frame-Options', EMAILED_LINK_PAGE);
@@ -244,8 +236,8 @@ describe('the pre-existing header set is not regressed', () => {
  * requests, images, media, frames and form posts only. When a nonce policy
  * replaces 'unsafe-inline', the first test fails: rewrite both documents with
  * it, and give /auth/confirm's inline press gate (app/auth/confirm/press-gate.ts,
- * docket S25) the nonce, or browsers stop running it and its page loses the
- * gate without a sound (its button is left enabled on purpose).
+ * docket S25) the nonce, or browsers stop running it and nobody can press the
+ * page's button (it is disabled until that script has run).
  */
 describe('SECURITY.md and the ASVS mapping say what this CSP does not stop (B17)', () => {
   const ROOT = path.resolve(__dirname, '../../../..');
