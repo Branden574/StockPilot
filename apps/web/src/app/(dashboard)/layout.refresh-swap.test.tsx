@@ -218,6 +218,40 @@ let authCalls: string[];
 let authAs: string[];
 let restSubjects: string[];
 let onContextAnswered: (() => void) | null;
+/** Every request the fake network below is still answering. */
+const inFlight = new Set<Promise<Response>>();
+
+/**
+ * Wait until every read the render left behind has finished, and every request
+ * it made has been answered.
+ *
+ * A render that redirects leaves reads under way: requireOrgContext()'s code
+ * gate does not wait for the layout's factor list, and the layout does not wait
+ * for its claims read. Each of their requests moves THIS FILE'S fake clock on
+ * when it is answered (the stub in beforeEach). Left running into the next
+ * test, one moved that test's clock after its cookie was made and before its
+ * render, so the cookie it built to cross auth-js's margin during the render
+ * had crossed it already, and the test ran the other scenario (docket T27:
+ * a few runs in a hundred under load, "REDIRECT:/signin" where the code page
+ * was expected; which landed first was the operating system's choice, through
+ * the WebCrypto work both tests wait on). Settled here, a test's requests all
+ * land on its own clock and in its own lists, and each test starts on the
+ * clock and cookie it set.
+ */
+async function settleWhatTheRenderLeftBehind(): Promise<void> {
+  const leftBehind = () => [
+    ...inFlight,
+    ...vi.mocked(getMfaFactorsForRequest).mock.results.map((r) => r.value as unknown),
+    ...vi.mocked(getVerifiedSessionClaimsForRequest).mock.results.map((r) => r.value as unknown),
+  ];
+  for (let seen = -1; seen !== leftBehind().length || inFlight.size > 0;) {
+    seen = leftBehind().length;
+    await Promise.allSettled(leftBehind());
+    // A read that settles can start another (the code gate starts the factor
+    // list once the claims show aal1): one more turn, then look again.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+}
 
 beforeAll(async () => {
   projectKey = await makeSigningKey('project-kid-1');
@@ -282,43 +316,53 @@ beforeEach(() => {
   onContextAnswered = null;
   hoisted.codeGateOut = true;
   server = fakeAuthServer(projectKey);
-  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(
-      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-    );
-    let answer: Response;
-    if (url.pathname.startsWith('/rest/v1/')) {
-      const bearer =
-        new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-      const subject = subOf(bearer);
-      restSubjects.push(subject ?? '(none)');
-      answer = rest(url, subject);
-    } else {
-      const path = url.pathname.replace('/auth/v1', '');
-      const bearer =
-        new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-      authCalls.push(path);
-      authAs.push(`${path} as ${subOf(bearer) ?? '-'}`);
-      answer = await server.fetch(input, init);
-    }
-    // A network answer arrives in a later turn of the event loop, after every
-    // read the render started in this one has loaded the session. Answered in
-    // the same turn, the key-set fetch (paid by whichever test runs first)
-    // would move the clock between two of the render's loads.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    vi.setSystemTime(Date.now() + ROUND_TRIP_MS);
-    if (url.pathname === '/rest/v1/rpc/get_request_context') onContextAnswered?.();
-    return answer;
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+    const answered = answerRoundTrip(input, init);
+    inFlight.add(answered);
+    const done = () => inFlight.delete(answered);
+    answered.then(done, done);
+    return answered;
   });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await settleWhatTheRenderLeftBehind();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** One request to the fake Auth server or PostgREST, answered a round trip later. */
+async function answerRoundTrip(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = new URL(
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+  );
+  let answer: Response;
+  if (url.pathname.startsWith('/rest/v1/')) {
+    const bearer =
+      new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    const subject = subOf(bearer);
+    restSubjects.push(subject ?? '(none)');
+    answer = rest(url, subject);
+  } else {
+    const path = url.pathname.replace('/auth/v1', '');
+    const bearer =
+      new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    authCalls.push(path);
+    authAs.push(`${path} as ${subOf(bearer) ?? '-'}`);
+    answer = await server.fetch(input, init);
+  }
+  // A network answer arrives in a later turn of the event loop, after every
+  // read the render started in this one has loaded the session. Answered in
+  // the same turn, the key-set fetch (paid by whichever test runs first)
+  // would move the clock between two of the render's loads.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  vi.setSystemTime(Date.now() + ROUND_TRIP_MS);
+  if (url.pathname === '/rest/v1/rpc/get_request_context') onContextAnswered?.();
+  return answer;
+}
 
 /**
  * The member's own session, signed by the project key, at `aal`; its cookie
@@ -558,7 +602,27 @@ describe("with requireOrgContext()'s own gate in front, the same sessions get th
     await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
     await noFactorAccountSession();
     await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    // The context is the member's (the proxy's header, confirmed)...
     expect(restSubjects).toEqual([MEMBER]);
+    // ...and the list the code gate left behind did refresh into the no-factor
+    // account: the scenario this test is named for is the one that ran.
+    await settleWhatTheRenderLeftBehind();
+    expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+    expect(authAs).toContain(`/user as ${NO_FACTOR}`);
+  });
+
+  // The other order of the same cookie, forced by its `expires_at`: already
+  // inside the margin when the render starts, so the context's own read
+  // refreshes into the no-factor account too and get_request_context() refutes
+  // the proxy's member. Sign-in, which is as closed as the code page: the
+  // member gets neither the dashboard nor "no authenticator". Before T27 this
+  // order ran by accident, when an earlier test's request moved the clock.
+  it("the same cookie already inside the margin when the render starts: the identity is refuted (sign-in), never 'no authenticator'", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSED_BEFORE_RENDER);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(/^REDIRECT:\/signin$/);
+    expect(restSubjects).toEqual([NO_FACTOR]);
   });
 
   it("control: the member's own aal2 session, refreshing before the render or during it, renders the dashboard", async () => {
