@@ -504,15 +504,18 @@ Two design points in that pair of assertions are load-bearing, the same way
 the trigger-return exclusion and the self-policing allowlist are under INV-B1.
 
 **The allowlist cannot be used as a bypass, and it is not a place to park a
-writer.** Its 14 entries are read-only predicates — the `*_in_org` FK-org
+writer.** Its 13 entries are read-only predicates — the `*_in_org` FK-org
 guards, `user_can_access_inventory`/`user_can_access_warehouse`,
-`module_enabled`, `org_can_enable_module`, `org_effective_tier` — that RLS
+`module_enabled`, `org_can_enable_module` — that RLS
 policies and other function bodies evaluate *as the user*, which is precisely
 why INV-C1 requires them to keep `authenticated` `EXECUTE`. Each answers a
 boolean about a caller-supplied uuid — `assert_location_in_org` returns void and
-raises instead, which is the same answer with a different calling convention —
-and the single exception, `org_effective_tier`, returns the org's plan-tier
-string, which is not tenant data. **None writes**, and that is the property the
+raises instead, which is the same answer with a different calling convention.
+`module_enabled` and `org_can_enable_module` answer only to members of the
+organization asked about (or with no end user). `org_effective_tier`, the
+plan-tier string that `org_can_enable_module` reads, is not on the list:
+`authenticated` holds no `EXECUTE` on it, so it is called only through that
+definer function. **None writes**, and that is the property the
 exemption is bought with: INV-26 withdraws it the day one of them grows a write
 or a side effect, or starts calling something that has one, and INV-30,
 INV-30c and INV-30e prove INV-26 can still see that happen.

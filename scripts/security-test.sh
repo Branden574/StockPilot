@@ -847,6 +847,17 @@ PGTAP_TESTS=(
   # two-session proof is scripts/db-concurrency/0419_release_race.sh; the
   # lock footprint is scripts/db-concurrency/0419_migration_lock_footprint.sh.
   supabase/tests/0419_release_cycle_count_assignee_check.test.sql
+  # Module plan check (0441 placeholder number, docket item S65; no check
+  # reads the number): org_can_enable_module, which the organization_modules
+  # write policies ask before a row turns a module on, names every module the
+  # registry gives a minimum plan, at that plan, and answers only for the
+  # caller's own organization (false for any other; the service role and
+  # migrations are answered as before). org_effective_tier is executable by
+  # service_role only and is called through that definer function. Admins on
+  # each plan, a manager, another organization's admin and the service role
+  # are checked through the policies and the functions; the class guard is
+  # apps/web/src/test/module-min-plan.guard.test.ts (manifest 2).
+  supabase/tests/0441_module_plan_check_matches_registry.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -1782,6 +1793,12 @@ WEB_TESTS=(
   # anywhere else on the web, the phone and core.
   src/test/outbox-publish-sites.guard.test.ts
   src/server/lib/outbox-events.test.ts
+
+  # The database's module plan check (org_can_enable_module, its last
+  # definition across the migrations the CLI applies) names exactly the
+  # modules the registry gives a minimum plan, each at that plan and once; a
+  # last definition whose body cannot be read fails.
+  src/test/module-min-plan.guard.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
