@@ -1007,12 +1007,18 @@ WEB_TESTS=(
   # instead of the page redirect; and two sweeps on the TypeScript syntax tree
   # hold every Server Action, and every dashboard page and layout, to the gate
   # or to a reviewed list (src/test/gate-reach.ts reads what each can call).
-  # platform-admin.gates.test.ts (below) holds the platform-admin gates to the
-  # same rule. Each file carries the "Security invariant" marker.
+  # platform-admin.gates.test.ts and platform-admin.refresh-swap.test.ts
+  # (below) hold the platform-admin gates to the same rule, on the allowlisted
+  # account's own session level. The customer portal is its own identity
+  # funnel (resolvePortalContext, service-role reads): portal.step-up.test.ts
+  # holds it to the rule too, on the real session client, before the
+  # service-role client is made. Each file carries the "Security invariant"
+  # marker.
   src/lib/auth/session.step-up.test.ts
   src/server/actions/step-up.actions.test.ts
   'src/app/(auth)/signin/mfa/page.step-up.test.tsx'
   src/app/api/v1/me/permissions/route.step-up.test.ts
+  src/server/services/portal.step-up.test.ts
   src/test/action-step-up.guard.test.ts
   src/test/page-step-up.guard.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the

@@ -2,10 +2,13 @@ import 'server-only';
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { factorsOf, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { orSessionEnded } from '@/lib/auth/session-ended';
 import {
   getVerifiedSessionClaimsForRequest,
+  readVerifiedSessionClaimsOf,
   type VerifiedSessionClaims,
 } from '@/lib/auth/verified-claims';
 import { getMfaFactorsForRequest } from '@/lib/dashboard/request-cache';
@@ -47,6 +50,10 @@ import { stepUpOwed } from '@stockpilot/core';
  * the gate: a page shows its error screen and an action answers its generic
  * failure. A session that no longer exists goes to sign-in through the
  * session-ended route (lib/auth/session-ended).
+ *
+ * A FUNNEL THAT VALIDATES ITS OWN USER asks stepUpIsOwedByUser (at the bottom):
+ * the customer portal resolves the signed-in account with getUser() instead of
+ * the member context, and is held to the same rule.
  */
 
 /** The reads the gate decides on, started before the context resolves. */
@@ -117,4 +124,31 @@ export async function stepUpIsOwed(reads: StepUpReads, userId: string): Promise<
   if (aal === 'aal2') return false;
   const own = factorsOf(await orSessionEnded(reads.factors()), userId);
   return own ? stepUpOwed(own, aal) : true;
+}
+
+/**
+ * The same question for a funnel that validated its own user with getUser()
+ * instead of asking requireOrgContext(): the customer portal
+ * (resolvePortalContext in server/services/portal.ts). True when that account
+ * has a verified factor and this session is not at aal2.
+ *
+ * `user` is the getUser() answer that named the account, and its `factors` are
+ * GoTrue's list for that same account, from that same answer: there is no
+ * second read that could be of another account, and a getUser() that fails
+ * names nobody, so the funnel has no user to serve. An account with no
+ * verified factor owes nothing and no level is read: no added Auth call. For
+ * one that has a factor the level comes from the session's verified claims (a
+ * local signature check), held to this account by readVerifiedSessionClaimsOf:
+ * claims that do not verify, or that are of another account, are no level at
+ * all, so the code is owed.
+ */
+export async function stepUpIsOwedByUser(
+  supabase: Pick<SupabaseClient, 'auth'>,
+  user: {
+    id: string;
+    factors?: ReadonlyArray<{ readonly status?: string | null }> | null;
+  },
+): Promise<boolean> {
+  if (!stepUpOwed(user.factors, null)) return false;
+  return stepUpOwed(user.factors, (await readVerifiedSessionClaimsOf(supabase, user.id))?.aal);
 }

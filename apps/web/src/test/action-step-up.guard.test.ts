@@ -16,28 +16,37 @@ import { buildCallGraph, shippedSourceFiles, type CallGraph } from './gate-reach
  * syntax tree (test/gate-reach.ts; a comment or a string naming a function is
  * never a call, and a call whose redirect a catch could keep does not count):
  *
- *   1. every function such a module exports reaches requireOrgContext():
+ *   1. every name such a module exports at run time is one function this
+ *      guard can read, and that function reaches requireOrgContext():
  *      directly, through withContext(), through a service's static
  *      forCurrentUser(), or through anything built on them. Or it is listed in
- *      REVIEWED, with its kind and a reason;
+ *      REVIEWED, with its kind and a reason. An export that is not one
+ *      readable function (a wrapped or aliased function, `.bind(...)`, a
+ *      destructured or conditional export, a default expression, a re-export
+ *      from a package) is reported by name, and listing does not excuse it:
+ *      it is written as `export async function` instead;
  *   2. it asks first: the first call it awaits is requireOrgContext() or a
  *      function that itself asks first, all the way down (gate-reach.ts,
  *      "asks first"), so the context is not a branch taken after something
- *      was already read. Or it is listed in ASKS_LATER, with what it does
- *      before and why that is safe;
+ *      was already read, and nothing is started beside it in a Promise.all.
+ *      Or it is listed in ASKS_LATER, with what it does before and why that
+ *      is safe;
  *   3. every listed entry is current: a REVIEWED action exists, still does NOT
- *      reach the gate (one that does leaves the list), gives a reason, and a
+ *      reach the gate (one that does leaves the list), gives a reason, a
  *      'platform' entry reaches one of the platform-admin gates
  *      (lib/auth/platform-admin.ts), which refuse an allowlisted account that
- *      owes its code; an ASKS_LATER action exists, reaches the gate, and still
- *      does not ask first;
+ *      owes its code, and a 'portal' entry asks resolvePortalContext() first
+ *      (server/services/portal.ts), which sends such an account to the code
+ *      page; an ASKS_LATER action exists, reaches the gate, and still does not
+ *      ask first;
  *   4. no Server Action is declared inside another module (a function whose
  *      body starts with 'use server'): none exists, and a new one is read by
  *      rule 1 only once it is added here;
  *   5. the gate is where this guard thinks it is: requireOrgContext() asks
  *      stepUpIsOwed (lib/auth/step-up-gate.ts), and requireSession() and
  *      getServerSession() do not (the code page, the recovery code and
- *      enrolling run on them).
+ *      enrolling run on them); the platform gates exist, and
+ *      resolvePortalContext() asks the same rule (stepUpIsOwedByUser).
  *
  * The self-test at the bottom plants a violation of each rule, so this cannot
  * pass by reading nothing.
@@ -51,15 +60,18 @@ const PLATFORM_GATES = [
   'lib/auth/platform-admin.ts#checkPlatformAdmin',
   'lib/auth/platform-admin.ts#currentUserIsPlatformAdmin',
 ];
+const PORTAL_GATE = 'server/services/portal.ts#resolvePortalContext';
 
 type Kind =
   /** Part of signing in: it must run on a session that has not entered its code. */
   | 'before-the-code'
   /** The platform console: gated by checkPlatformAdmin or currentUserIsPlatformAdmin. */
   | 'platform'
+  /** The customer portal: asks resolvePortalContext() first, which applies the same rule. */
+  | 'portal'
   /** Reads its own principal and asks for the code by its own rule. */
   | 'own-rule'
-  /** No member session is read: a public form, a portal customer, a cookie only. */
+  /** No member session is read: a public form, a cookie only. */
   | 'no-member-session'
   /** Asks for the context only inside a best-effort helper, so it does nothing for such a session. */
   | 'best-effort'
@@ -219,26 +231,28 @@ const REVIEWED: Record<string, Reviewed> = {
     kind: 'no-member-session',
     reason: 'The public support form: no session, limited per IP, written with the service client.',
   },
+  // ── the customer portal (its own funnel, held to the same rule) ──
   'server/actions/portal.ts#submitPortalOrderAction': {
-    kind: 'no-member-session',
+    kind: 'portal',
     reason:
-      'The customer portal: a portal customer (resolvePortalContext), not an organization member, and only its own orders.',
+      'The customer portal: it asks resolvePortalContext() first, which sends an account that has an authenticator to the code page until its session is at aal2, then serves only that customer.',
   },
   'server/actions/portal.ts#requestPortalReturnAction': {
-    kind: 'no-member-session',
+    kind: 'portal',
     reason:
-      'The customer portal: a portal customer (resolvePortalContext), not an organization member, and only its own orders.',
+      'The customer portal: it asks resolvePortalContext() first, which sends an account that has an authenticator to the code page until its session is at aal2, then serves only that customer.',
   },
   'server/actions/portal.ts#portalReturnSheetAction': {
-    kind: 'no-member-session',
+    kind: 'portal',
     reason:
-      'The customer portal: a portal customer (resolvePortalContext), not an organization member, and only its own orders.',
+      'The customer portal: it asks resolvePortalContext() first, which sends an account that has an authenticator to the code page until its session is at aal2, then serves only that customer.',
   },
   'server/actions/portal.ts#portalReturnOptionsAction': {
-    kind: 'no-member-session',
+    kind: 'portal',
     reason:
-      'The customer portal: a portal customer (resolvePortalContext), not an organization member, and only its own orders.',
+      'The customer portal: it asks resolvePortalContext() first, which sends an account that has an authenticator to the code page until its session is at aal2, then serves only that customer.',
   },
+  // ── no member session, continued ──
   'server/actions/saved-views.ts#setActiveWarehouseAction': {
     kind: 'no-member-session',
     reason:
@@ -303,21 +317,31 @@ const targetOf = (tree: Tree, key: string) => {
   return `${tree.abs(file)}#${name}`;
 };
 
-/** Every Server Action: each function a 'use server' module exports. */
+/**
+ * Every Server Action: each name a 'use server' module exports at run time,
+ * whether or not it can be read as a function (rule 1 reports one that
+ * cannot).
+ */
 function actionsOf(tree: Tree): Array<{ file: string; name: string; key: string }> {
   return tree.graph.actionModules.flatMap((file) =>
-    tree.graph
-      .exportedFunctions(file)
-      .map((name) => ({ file, name, key: keyOf(tree, file, name) })),
+    tree.graph.runtimeExports(file).map((name) => ({ file, name, key: keyOf(tree, file, name) })),
   );
 }
 
-/** Rule 1: actions that do not reach the gate and are not listed. */
+const UNREADABLE = 'exported, but not as one function this guard can read';
+
+/**
+ * Rule 1: actions that do not reach the gate and are not listed, and exports
+ * that are not one readable function (listed or not).
+ */
 function openActions(tree: Tree, reviewed: Record<string, Reviewed>): string[] {
   const reach = tree.graph.reach([targetOf(tree, GATE)]);
   return actionsOf(tree)
-    .filter((a) => !reach.exportReaches(a.file, a.name) && !reviewed[a.key])
-    .map((a) => a.key)
+    .flatMap((a) => {
+      const reaches = reach.exportReaches(a.file, a.name);
+      if (reaches === null) return [`${a.key}: ${UNREADABLE}`];
+      return reaches || reviewed[a.key] ? [] : [a.key];
+    })
     .sort();
 }
 
@@ -328,9 +352,15 @@ function lateActions(tree: Tree, asksLater: Record<string, string>): string[] {
   for (const a of actionsOf(tree)) {
     if (!reach.exportReaches(a.file, a.name) || reach.exportAsksFirst(a.file, a.name)) continue;
     if (asksLater[a.key]) continue;
+    const beside = reach.startedBesideFirst(a.file, a.name);
+    if (beside) {
+      late.push(`${a.key}:${beside.line}: starts \`${beside.text}\` beside the context`);
+      continue;
+    }
     const first = reach.firstAwaitedCall(a.file, a.name);
     if (first === null) late.push(`${a.key}: not one function, so its order cannot be read`);
-    else if (first === 'none') late.push(`${a.key}: awaits nothing, and calls nothing that asks first`);
+    else if (first === 'none')
+      late.push(`${a.key}: awaits nothing, and calls nothing that asks first`);
     else late.push(`${a.key}:${first.line}: awaits \`${first.text}\` before the context`);
   }
   return late.sort();
@@ -344,6 +374,7 @@ function staleEntries(
 ): string[] {
   const gate = tree.graph.reach([targetOf(tree, GATE)]);
   const platform = tree.graph.reach(PLATFORM_GATES.map((k) => targetOf(tree, k)));
+  const portal = tree.graph.reach([targetOf(tree, PORTAL_GATE)]);
   const actionModules = new Set(tree.graph.actionModules);
   const problems: string[] = [];
   for (const [key, why] of Object.entries(asksLater)) {
@@ -354,8 +385,10 @@ function staleEntries(
       problems.push(`${key}: no such action`);
       continue;
     }
-    if (!gate.exportReaches(abs, name)) problems.push(`${key}: listed as asking later but never reaches the gate`);
-    else if (gate.exportAsksFirst(abs, name)) problems.push(`${key}: asks first, so it leaves the list`);
+    if (!gate.exportReaches(abs, name))
+      problems.push(`${key}: listed as asking later but never reaches the gate`);
+    else if (gate.exportAsksFirst(abs, name))
+      problems.push(`${key}: asks first, so it leaves the list`);
     if (why.length <= 40) problems.push(`${key}: no reason given`);
   }
   for (const [key, entry] of Object.entries(reviewed)) {
@@ -374,6 +407,9 @@ function staleEntries(
     if (entry.reason.length <= 40) problems.push(`${key}: no reason given`);
     if (entry.kind === 'platform' && !platform.exportReaches(abs, name)) {
       problems.push(`${key}: listed as 'platform' but reaches no platform-admin gate`);
+    }
+    if (entry.kind === 'portal' && !portal.exportAsksFirst(abs, name)) {
+      problems.push(`${key}: listed as 'portal' but does not ask resolvePortalContext() first`);
     }
   }
   return problems.sort();
@@ -442,6 +478,19 @@ describe('every Server Action is held to the step-up rule (docket S43c)', () => 
     const admin = REAL.abs('lib/auth/platform-admin.ts');
     expect(REAL.graph.hasExport(admin, 'checkPlatformAdmin')).toBe(true);
     expect(REAL.graph.hasExport(admin, 'currentUserIsPlatformAdmin')).toBe(true);
+    // The portal's funnel, which the 'portal' entries rely on, asks the rule
+    // itself, and every action of the portal module is such an entry.
+    const byUser = REAL.graph.reach([
+      targetOf(REAL, 'lib/auth/step-up-gate.ts#stepUpIsOwedByUser'),
+    ]);
+    expect(
+      byUser.exportReaches(REAL.abs('server/services/portal.ts'), 'resolvePortalContext'),
+    ).toBe(true);
+    const portalActions = REAL.graph.runtimeExports(REAL.abs('server/actions/portal.ts'));
+    expect(portalActions.length).toBeGreaterThanOrEqual(4);
+    for (const name of portalActions) {
+      expect(REVIEWED[`server/actions/portal.ts#${name}`]?.kind, name).toBe('portal');
+    }
   });
 
   it('the actions the code page needs are on the list, so they are never moved behind the gate', () => {
@@ -470,10 +519,13 @@ describe('self-test: a planted violation of each rule is reported', () => {
   const PLATFORM_SRC = `
     export async function checkPlatformAdmin() { return { ok: true }; }
     export async function currentUserIsPlatformAdmin() { return true; }`;
+  const PORTAL_SRC = `
+    export async function resolvePortalContext() { return null; }`;
   const base = {
     'lib/auth/session.ts': SESSION_SRC,
     'server/services/context.ts': CONTEXT_SRC,
     'lib/auth/platform-admin.ts': PLATFORM_SRC,
+    'server/services/portal.ts': PORTAL_SRC,
   };
   const tree = (files: Record<string, string>) =>
     treeOf(
@@ -515,6 +567,68 @@ describe('self-test: a planted violation of each rule is reported', () => {
       // read from here: such an action is listed with its reason.
       'server/actions/a.ts#wrapped: awaits nothing, and calls nothing that asks first',
     ]);
+  });
+
+  it('1. an export that is not one readable function is reported by name, whatever its shape, and listing does not excuse it', () => {
+    const t = tree({
+      'server/lib/handlers.ts': `
+        import { withContext } from '@/server/services/context';
+        export async function gatedHandler() { return withContext(); }
+        export const pair = { first: gatedHandler, second: gatedHandler };`,
+      'server/actions/a.ts': `'use server';
+        import { cookies } from 'next/headers';
+        import { gatedHandler, pair } from '@/server/lib/handlers';
+        import { withContext } from '@/server/services/context';
+        const handler = async () => (await cookies()).getAll().length;
+        function identity<T>(f: T): T { return f; }
+        const wrappedConst = identity(handler);
+        interface Row { id: string }
+        export const wrappedIdentifier = identity(handler);
+        export const aliasOfLocal = handler;
+        export const aliasOfImport = gatedHandler;
+        export const bound = handler.bind(null);
+        export const { first, second: renamed } = pair;
+        export const conditional = process.env.X ? handler : gatedHandler;
+        export const notAFunction = 5;
+        export { wrappedConst };
+        export { parse } from 'some-package';
+        export * as handlers from '@/server/lib/handlers';
+        export type { Row };
+        export { Row as RowAgain };
+        export enum Mode { A, B }
+        export async function readable() { return withContext(); }
+        export default identity(handler);`,
+      'server/actions/b.ts': `'use server';
+        export * from 'some-package';
+        export default class {}`,
+    });
+    const unreadable = (key: string) =>
+      `${key}: exported, but not as one function this guard can read`;
+    const expected = [
+      unreadable('server/actions/a.ts#Mode'),
+      unreadable('server/actions/a.ts#aliasOfImport'),
+      unreadable('server/actions/a.ts#aliasOfLocal'),
+      unreadable('server/actions/a.ts#bound'),
+      unreadable('server/actions/a.ts#conditional'),
+      unreadable('server/actions/a.ts#default'),
+      unreadable('server/actions/a.ts#first'),
+      unreadable('server/actions/a.ts#handlers'),
+      unreadable('server/actions/a.ts#notAFunction'),
+      unreadable('server/actions/a.ts#parse'),
+      unreadable('server/actions/a.ts#renamed'),
+      unreadable('server/actions/a.ts#wrappedConst'),
+      unreadable('server/actions/a.ts#wrappedIdentifier'),
+      unreadable("server/actions/b.ts#* (a re-export from 'some-package')"),
+      unreadable('server/actions/b.ts#default'),
+    ];
+    // A type is no runtime export, and the one readable function passes.
+    expect(openActions(t, {})).toEqual(expected);
+    expect(
+      openActions(t, {
+        'server/actions/a.ts#wrappedIdentifier': { kind: 'own-rule', reason },
+        'server/actions/a.ts#default': { kind: 'own-rule', reason },
+      }),
+    ).toEqual(expected);
   });
 
   it('1. not reaching it: a session only, a comment or a string naming the gate, an instance method', () => {
@@ -602,9 +716,10 @@ describe('self-test: a planted violation of each rule is reported', () => {
         export async function gated() { const ctx = await requireOrgContext(); return ctx; }
         export async function gatedTwiceRemoved() { return gated(); }`,
       'server/actions/a.ts': `'use server';
+        import { cookies } from 'next/headers';
         import { requireOrgContext, requireSession } from '@/lib/auth/session';
         import { createClient } from '@/lib/supabase/server';
-        import { activeFilter, gatedTwiceRemoved } from '@/lib/filter';
+        import { activeFilter, gated, gatedTwiceRemoved } from '@/lib/filter';
         export async function readsFirst(id: string) {
           const supabase = await createClient();
           const { data } = await supabase.from('t').select('*').eq('id', id);
@@ -624,18 +739,47 @@ describe('self-test: a planted violation of each rule is reported', () => {
           const [ctx] = await Promise.all([requireOrgContext(), fetch('/x')]);
           return ctx;
         }
+        export async function besideAHelperThatCanReturnEarly() {
+          const [ctx, filter] = await Promise.all([requireOrgContext(), activeFilter()]);
+          return [ctx, filter];
+        }
+        export async function besideOthersThatAskFirst(input: Promise<string>) {
+          const [ctx, again, jar, client, value] = await Promise.all([
+            requireOrgContext(),
+            gated().then((c) => fetch('/after/' + c.organizationId)),
+            cookies(),
+            createClient(),
+            input,
+          ]);
+          return [ctx, again, jar, client, value];
+        }
+        export async function besideAnInlineFunctionThatAsksLater() {
+          const [ctx, n] = await Promise.all([
+            requireOrgContext(),
+            (async () => { await fetch('/write'); return requireOrgContext(); })(),
+          ]);
+          return [ctx, n];
+        }
+        export async function besideACallThatOnlyNamesTheContext() {
+          const [ctx, n] = await Promise.all([requireOrgContext(), fetch('/x', { body: String(gated()) })]);
+          return [ctx, n];
+        }
         export async function throughHelpers() { return (await gatedTwiceRemoved()).organizationId; }
         export async function awaitsNothing() { return requireOrgContext(); }`,
     });
     expect(openActions(t, {})).toEqual([]);
     expect(lateActions(t, {})).toEqual([
-      'server/actions/a.ts#readsFirst:6: awaits `await createClient()` before the context',
-      'server/actions/a.ts#sessionFirst:12: awaits `await requireSession()` before the context',
-      'server/actions/a.ts#throughAHelperThatCanReturnEarly:17: awaits `await activeFilter()` before the context',
+      "server/actions/a.ts#besideACallThatOnlyNamesTheContext:47: starts `fetch('/x', { body: String(gated()) })` beside the context",
+      'server/actions/a.ts#besideAHelperThatCanReturnEarly:26: starts `activeFilter()` beside the context',
+      "server/actions/a.ts#besideAnInlineFunctionThatAsksLater:42: starts `(async () => { await fetch('/write'); return requireOrgContext(); })()` beside the context",
+      "server/actions/a.ts#inParallel:22: starts `fetch('/x')` beside the context",
+      'server/actions/a.ts#readsFirst:7: awaits `await createClient()` before the context',
+      'server/actions/a.ts#sessionFirst:13: awaits `await requireSession()` before the context',
+      'server/actions/a.ts#throughAHelperThatCanReturnEarly:18: awaits `await activeFilter()` before the context',
     ]);
     // Listing one, with what comes before it, covers that one only.
     const why = 'x'.repeat(41);
-    expect(lateActions(t, { 'server/actions/a.ts#sessionFirst': why })).toHaveLength(2);
+    expect(lateActions(t, { 'server/actions/a.ts#sessionFirst': why })).toHaveLength(6);
     // And a listed action that asks first, never reaches the gate, or is gone is reported.
     expect(
       staleEntries(
@@ -644,13 +788,14 @@ describe('self-test: a planted violation of each rule is reported', () => {
         {
           'server/actions/a.ts#sessionFirst': why,
           'server/actions/a.ts#inParallel': why,
+          'server/actions/a.ts#besideOthersThatAskFirst': why,
           'server/actions/a.ts#gone': why,
           'server/actions/a.ts#readsFirst': 'short',
         },
       ),
     ).toEqual([
+      'server/actions/a.ts#besideOthersThatAskFirst: asks first, so it leaves the list',
       'server/actions/a.ts#gone: no such action',
-      'server/actions/a.ts#inParallel: asks first, so it leaves the list',
       'server/actions/a.ts#readsFirst: no reason given',
     ]);
   });
@@ -660,9 +805,16 @@ describe('self-test: a planted violation of each rule is reported', () => {
       'server/actions/a.ts': `'use server';
         import { requireOrgContext } from '@/lib/auth/session';
         import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
+        import { resolvePortalContext } from '@/server/services/portal';
+        import { createClient } from '@/lib/supabase/server';
         export async function gated() { return requireOrgContext(); }
         export async function open() { return 1; }
-        export async function console() { return checkPlatformAdmin(); }`,
+        export async function console() { return checkPlatformAdmin(); }
+        export async function portalFirst() { const ctx = await resolvePortalContext(); return ctx; }
+        export async function portalLate() {
+          const rows = await (await createClient()).from('orders').select('*');
+          return [rows, await resolvePortalContext()];
+        }`,
       'server/lib/not-actions.ts': `export async function helper() { return 1; }`,
     });
     expect(
@@ -670,6 +822,8 @@ describe('self-test: a planted violation of each rule is reported', () => {
         'server/actions/a.ts#gated': { kind: 'before-the-code', reason },
         'server/actions/a.ts#open': { kind: 'platform', reason },
         'server/actions/a.ts#console': { kind: 'platform', reason: 'short' },
+        'server/actions/a.ts#portalFirst': { kind: 'portal', reason },
+        'server/actions/a.ts#portalLate': { kind: 'portal', reason },
         'server/actions/a.ts#gone': { kind: 'own-rule', reason },
         'server/actions/missing.ts#x': { kind: 'own-rule', reason },
         'server/lib/not-actions.ts#helper': { kind: 'own-rule', reason },
@@ -679,6 +833,7 @@ describe('self-test: a planted violation of each rule is reported', () => {
       'server/actions/a.ts#gated: reaches the gate, so it leaves the list',
       'server/actions/a.ts#gone: the module exports no such function',
       "server/actions/a.ts#open: listed as 'platform' but reaches no platform-admin gate",
+      "server/actions/a.ts#portalLate: listed as 'portal' but does not ask resolvePortalContext() first",
       "server/actions/missing.ts#x: no such 'use server' module",
       "server/lib/not-actions.ts#helper: no such 'use server' module",
     ]);

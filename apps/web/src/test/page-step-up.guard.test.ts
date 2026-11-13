@@ -29,9 +29,15 @@ import { buildCallGraph, shippedSourceFiles, type CallGraph } from './gate-reach
  *        'redirect-only'  it awaits no call and reads nothing: it only sends
  *                         the browser to another page, which asks;
  *        'delegates'      it awaits no call itself and renders a server
- *                         component that reaches the gate. Checked: so it does;
+ *                         component that reaches the gate. Checked: so it does.
+ *      Asking first in a Promise.all means nothing is started beside the
+ *      context: every other entry that calls something asks first itself
+ *      (gate-reach.ts). A file that does start something beside it is listed
+ *      in STARTS_BESIDE, with what that is and why it reads nothing for a
+ *      session the context turns away;
  *   2. every listed entry is current: the file exists, does not meet rule 1
- *      (one that does leaves the list), still fits its kind, gives a reason.
+ *      (one that does leaves the list), still fits its kind, gives a reason;
+ *      a STARTS_BESIDE file still starts something beside the context.
  *      And no other kind of server entry file sits under the dashboard (a
  *      template, a parallel route's default, a route handler): a new one is
  *      reported until this guard reads it;
@@ -40,7 +46,10 @@ import { buildCallGraph, shippedSourceFiles, type CallGraph } from './gate-reach
  *   4. the sign-in pages can never be sent away by the gate: no page or layout
  *      under src/app/(auth), nor the root layout, reaches requireOrgContext(),
  *      by a call or by a component it renders. /signin/mfa is where the gate
- *      sends people, so reaching it there would be a loop.
+ *      sends people, so reaching it there would be a loop;
+ *   5. the customer portal's page, under src/app/portal, asks its own funnel
+ *      first: resolvePortalContext() (server/services/portal.ts), which holds
+ *      a portal customer to the same rule.
  *
  * The self-test at the bottom plants a violation of each rule.
  */
@@ -49,9 +58,11 @@ const WEB_SRC = path.resolve(__dirname, '..');
 
 const GATE = 'lib/auth/session.ts#requireOrgContext';
 const PLATFORM_GATE = 'lib/auth/platform-admin.ts#requirePlatformAdmin';
+const PORTAL_GATE = 'server/services/portal.ts#resolvePortalContext';
 const DASHBOARD = 'app/(dashboard)/';
 const PLATFORM = 'app/(platform)/';
 const AUTH = 'app/(auth)/';
+const PORTAL = 'app/portal/';
 const ROOT_LAYOUT = 'app/layout.tsx';
 
 interface Reviewed {
@@ -88,6 +99,16 @@ const REVIEWED: Record<string, Reviewed> = {
     reason:
       'Reads nothing itself: the settings navigation is its own server component, which asks requireOrgContext() before its module check.',
   },
+};
+
+/**
+ * Dashboard pages whose first step asks for the context in a Promise.all that
+ * also starts something else, each with what that is and why it reads nothing
+ * for a session the context turns away. Reviewed 2026-11-13 (docket S43c).
+ */
+const STARTS_BESIDE: Record<string, string> = {
+  'app/(dashboard)/dashboard/inventory/page.tsx': `The table section starts beside the header's context so the page waits for the slower of the two, not their sum. Its own first step asks requireOrgContext() beside getActiveWarehouseFilter(), which reads only the caller's own filter cookie and looks a warehouse up only through getWarehouseAccess(), and that asks for the context before any read; the saved views it starts go through SavedViewsService.forCurrentUser(). Every read of rows comes after that step.`,
+  'app/(dashboard)/dashboard/locations/page.tsx': `getActiveWarehouseFilter() starts beside requireOrgContext(): it reads only the caller's own filter cookie and looks a warehouse up only through getWarehouseAccess(), which asks for the context before any read. The other entries ask first themselves.`,
 };
 
 /* ───────────────────────────── the reading ───────────────────────────── */
@@ -133,6 +154,8 @@ function notGateFirst(tree: Tree, page: string, gate: string, name = 'default'):
   if (asks === null) return 'has no default export that is a function';
   if (asks) return null;
   if (!reach.exportReaches(file, name)) return 'never reaches it by its own calls';
+  const beside = reach.startedBesideFirst(file, name);
+  if (beside) return `starts \`${beside.text}\` beside it (line ${beside.line})`;
   const first = reach.firstAwaitedCall(file, name);
   if (first === null) return 'is not one function, so its order cannot be read';
   if (first === 'none') return 'awaits nothing, and calls nothing that asks first';
@@ -151,10 +174,14 @@ function metadataReadsFirst(tree: Tree, page: string, gate: string): string | nu
 }
 
 /** Rule 1: dashboard pages and layouts that do not ask for the context first and are not listed. */
-function openPages(tree: Tree, reviewed: Record<string, Reviewed>): string[] {
+function openPages(
+  tree: Tree,
+  reviewed: Record<string, Reviewed>,
+  startsBeside: Record<string, string> = {},
+): string[] {
   return entriesUnder(tree, DASHBOARD).flatMap((page) => {
     const problems: string[] = [];
-    const why = reviewed[page] ? null : notGateFirst(tree, page, GATE);
+    const why = reviewed[page] || startsBeside[page] ? null : notGateFirst(tree, page, GATE);
     if (why) problems.push(`${page}: ${why}`);
     const metadata = metadataReadsFirst(tree, page, GATE);
     if (metadata) problems.push(`${page}: ${metadata}`);
@@ -163,12 +190,29 @@ function openPages(tree: Tree, reviewed: Record<string, Reviewed>): string[] {
 }
 
 /** Rule 2: listed entries that are no longer true. */
-function staleEntries(tree: Tree, reviewed: Record<string, Reviewed>): string[] {
+function staleEntries(
+  tree: Tree,
+  reviewed: Record<string, Reviewed>,
+  startsBeside: Record<string, string> = {},
+): string[] {
   const calls = tree.graph.reach([targetOf(tree, GATE)]);
   const rendered = tree.graph.reach([targetOf(tree, GATE)], { jsx: true });
   const problems: string[] = [];
   for (const f of unreadEntriesUnder(tree, DASHBOARD)) {
     problems.push(`${f}: a server entry file this guard does not read`);
+  }
+  for (const [page, why] of Object.entries(startsBeside)) {
+    if (reviewed[page]) problems.push(`${page}: in both lists`);
+    if (!entriesUnder(tree, DASHBOARD).includes(page)) {
+      problems.push(`${page}: no such dashboard page or layout`);
+      continue;
+    }
+    if (notGateFirst(tree, page, GATE) === null) {
+      problems.push(`${page}: asks for the context first, so it leaves the list`);
+    } else if (!calls.startedBesideFirst(tree.abs(page), 'default')) {
+      problems.push(`${page}: listed as starting something beside the context but does not`);
+    }
+    if (why.length <= 40) problems.push(`${page}: no reason given`);
   }
   for (const [page, entry] of Object.entries(reviewed)) {
     if (!entriesUnder(tree, DASHBOARD).includes(page)) {
@@ -203,6 +247,14 @@ function staleEntries(tree: Tree, reviewed: Record<string, Reviewed>): string[] 
 function openPlatformPages(tree: Tree): string[] {
   return pagesUnder(tree, PLATFORM).flatMap((page) => {
     const why = notGateFirst(tree, page, PLATFORM_GATE);
+    return why ? [`${page}: ${why}`] : [];
+  });
+}
+
+/** Rule 5: customer portal pages and layouts that do not ask the portal's own funnel first. */
+function openPortalPages(tree: Tree): string[] {
+  return entriesUnder(tree, PORTAL).flatMap((page) => {
+    const why = notGateFirst(tree, page, PORTAL_GATE);
     return why ? [`${page}: ${why}`] : [];
   });
 }
@@ -249,11 +301,12 @@ describe('every dashboard page asks for the member context first (docket S43c)',
   });
 
   it('1. every dashboard page and layout reaches requireOrgContext() by its own calls, before anything else it awaits, or is listed', () => {
-    expect(openPages(REAL, REVIEWED)).toEqual([]);
+    expect(openPages(REAL, REVIEWED, STARTS_BESIDE)).toEqual([]);
   });
 
   it('2. every listed entry is current', () => {
-    expect(staleEntries(REAL, REVIEWED)).toEqual([]);
+    expect(staleEntries(REAL, REVIEWED, STARTS_BESIDE)).toEqual([]);
+    expect(Object.keys(STARTS_BESIDE).length).toBeLessThan(5);
   });
 
   it('3. every platform console page asks requirePlatformAdmin() first', () => {
@@ -266,6 +319,17 @@ describe('every dashboard page asks for the member context first (docket S43c)',
     expect(
       REAL.files.filter((f) => f.startsWith(AUTH) && /(page|layout)\.tsx$/.test(f)).length,
     ).toBeGreaterThanOrEqual(6);
+  });
+
+  it('5. the customer portal page asks resolvePortalContext() first, which asks the same rule', () => {
+    expect(entriesUnder(REAL, PORTAL)).toContain('app/portal/page.tsx');
+    expect(openPortalPages(REAL)).toEqual([]);
+    const byUser = REAL.graph.reach([
+      targetOf(REAL, 'lib/auth/step-up-gate.ts#stepUpIsOwedByUser'),
+    ]);
+    expect(
+      byUser.exportReaches(REAL.abs('server/services/portal.ts'), 'resolvePortalContext'),
+    ).toBe(true);
   });
 });
 
@@ -287,6 +351,7 @@ describe('self-test: a planted violation of each rule is reported', () => {
       import { withContext } from '@/server/services/context';
       export async function Detail() { const ctx = await withContext(); return <p>{String(ctx)}</p>; }`,
     'components/plain.tsx': `export function Plain() { return <p>plain</p>; }`,
+    'server/services/portal.ts': `export async function resolvePortalContext() { return null; }`,
   };
   const tree = (files: Record<string, string>) =>
     treeOf(
@@ -382,6 +447,98 @@ describe('self-test: a planted violation of each rule is reported', () => {
       `${D}/early/page.tsx: awaits \`await activeFilter()\` first (line 5)`,
       `${D}/kept/page.tsx: never reaches it by its own calls`,
       `${D}/profile/page.tsx: never reaches it by its own calls`,
+    ]);
+  });
+
+  it('1. a page that starts something beside the context is reported, unless what it starts asks first or reads nothing', () => {
+    const t = tree({
+      'lib/filter.ts': `
+        import { cookies } from 'next/headers';
+        import { requireOrgContext } from '@/lib/auth/session';
+        export async function activeFilter() {
+          const raw = (await cookies()).get('filter')?.value;
+          if (!raw) return null;
+          await requireOrgContext();
+          return raw;
+        }
+        export async function label() { const ctx = await requireOrgContext(); return String(ctx); }`,
+      [`${D}/read/page.tsx`]: `
+        import { requireOrgContext } from '@/lib/auth/session';
+        import { createAdminClient } from '@/lib/supabase/admin';
+        export default async function Page() {
+          const [ctx, rows] = await Promise.all([
+            requireOrgContext(),
+            createAdminClient().from('items').select('*'),
+          ]);
+          return <p>{String(ctx)}{String(rows)}</p>;
+        }`,
+      [`${D}/filter/page.tsx`]: `
+        import { activeFilter } from '@/lib/filter';
+        import { requireOrgContext } from '@/lib/auth/session';
+        export default async function Page() {
+          const [ctx, filter] = await Promise.all([requireOrgContext(), activeFilter()]);
+          return <p>{String(ctx)}{String(filter)}</p>;
+        }`,
+      [`${D}/section/page.tsx`]: `
+        import { activeFilter } from '@/lib/filter';
+        import { requireOrgContext } from '@/lib/auth/session';
+        async function section() {
+          const [ctx, filter] = await Promise.all([requireOrgContext(), activeFilter()]);
+          return <p>{String(ctx)}{String(filter)}</p>;
+        }
+        export default async function Page() {
+          const [ctx, table] = await Promise.all([requireOrgContext(), section()]);
+          return <p>{String(ctx)}{table}</p>;
+        }`,
+      [`${D}/fine/page.tsx`]: `
+        import { cookies } from 'next/headers';
+        import { label } from '@/lib/filter';
+        import { requireOrgContext } from '@/lib/auth/session';
+        import { createClient } from '@/lib/supabase/server';
+        import { withContext } from '@/server/services/context';
+        export default async function Page({ searchParams }: { searchParams: Promise<object> }) {
+          const [ctx, title, jar, supabase, sp, rows] = await Promise.all([
+            requireOrgContext(),
+            label(),
+            cookies(),
+            createClient(),
+            searchParams,
+            withContext().then((c) => fetch('/rows/' + String(c))),
+          ]);
+          return <p>{String(ctx)}{title}{String(jar)}{String(supabase)}{String(sp)}{String(rows)}</p>;
+        }`,
+      [`${D}/own-cookies/page.tsx`]: `
+        import { requireOrgContext } from '@/lib/auth/session';
+        async function cookies() { return fetch('/not-the-cookie-jar'); }
+        export default async function Page() {
+          const [ctx, jar] = await Promise.all([requireOrgContext(), cookies()]);
+          return <p>{String(ctx)}{String(jar)}</p>;
+        }`,
+    });
+    expect(openPages(t, {})).toEqual([
+      `${D}/filter/page.tsx: starts \`activeFilter()\` beside it (line 5)`,
+      `${D}/own-cookies/page.tsx: starts \`cookies()\` beside it (line 5)`,
+      `${D}/read/page.tsx: starts \`createAdminClient().from('items').select('*')\` beside it (line 7)`,
+      `${D}/section/page.tsx: starts \`section()\` beside it (line 9)`,
+    ]);
+    // Listing one, with what it starts and why that is safe, covers that one only.
+    expect(openPages(t, {}, { [`${D}/filter/page.tsx`]: reason })).toHaveLength(3);
+    // A listed page that asks first, starts nothing beside, gives no reason or is gone is reported.
+    expect(
+      staleEntries(
+        t,
+        {},
+        {
+          [`${D}/filter/page.tsx`]: reason,
+          [`${D}/section/page.tsx`]: 'short',
+          [`${D}/fine/page.tsx`]: reason,
+          [`${D}/gone/page.tsx`]: reason,
+        },
+      ),
+    ).toEqual([
+      `${D}/fine/page.tsx: asks for the context first, so it leaves the list`,
+      `${D}/gone/page.tsx: no such dashboard page or layout`,
+      `${D}/section/page.tsx: no reason given`,
     ]);
   });
 
@@ -503,6 +660,27 @@ describe('self-test: a planted violation of each rule is reported', () => {
     });
     expect(openPlatformPages(t)).toEqual([
       'app/(platform)/platform/b/page.tsx: awaits `await listTickets()` first (line 5)',
+    ]);
+  });
+
+  it('5. a portal page that reads before resolvePortalContext() is reported', () => {
+    const t = tree({
+      'app/portal/page.tsx': `
+        import { resolvePortalContext } from '@/server/services/portal';
+        export default async function Page() { const ctx = await resolvePortalContext(); return <p>{String(ctx)}</p>; }`,
+      'app/portal/orders/page.tsx': `
+        import { createAdminClient } from '@/lib/supabase/admin';
+        import { resolvePortalContext } from '@/server/services/portal';
+        export default async function Page() {
+          const orders = await createAdminClient().from('order_requests').select('*');
+          const ctx = await resolvePortalContext();
+          return <p>{String(orders)}{String(ctx)}</p>;
+        }`,
+      'app/portal/help/page.tsx': `export default function Page() { return <p>help</p>; }`,
+    });
+    expect(openPortalPages(t)).toEqual([
+      'app/portal/help/page.tsx: never reaches it by its own calls',
+      "app/portal/orders/page.tsx: awaits `await createAdminClient().from('order_requests').select('*')` first (line 5)",
     ]);
   });
 

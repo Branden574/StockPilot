@@ -43,10 +43,26 @@ import ts from 'typescript';
  * awaits, in source order, is the target or a function that itself asks
  * first (all the way down), and that call's redirect gets out. Whatever a
  * function awaits first runs on every path through it that awaits anything,
- * so nothing was read before the target answered. `await Promise.all([a(),
- * b()])` counts when either does: both start, and the await rejects with the
- * redirect. A function that awaits no call at all asks first when it calls
- * one that does (`return withContext()`).
+ * so nothing was read before the target answered. A function that awaits no
+ * call at all asks first when it calls one that does (`return withContext()`).
+ *
+ * `await Promise.all([a(), b(), c])` asks first only when EVERY entry that
+ * starts a call asks first: the entries all start together, so a call beside
+ * the target would run for a session the target then turns away. An entry
+ * asks first when the call it begins with does: `a()`, or the `a()` under
+ * `a().then(...)` and `a().catch(...)`. Anything else that starts a call (a
+ * method of a value, an inline function called on the spot, a call inside an
+ * expression) is read as not asking. An entry
+ * that calls nothing (`searchParams`, `params`) starts nothing, and neither
+ * does a bare call of one of INERT_ENTRIES: the request's own cookie jar or
+ * headers, or making the cookie client, none of which reads any data.
+ *
+ * EVERY RUNTIME EXPORT IS LISTED, READABLE OR NOT. runtimeExports() names all
+ * a module exports at run time; an export this reading cannot resolve to a
+ * function (`export const x = wrap(handler)`, an alias of another function,
+ * `.bind(...)`, a destructured or conditional export, `export default
+ * <expression>`, a re-export from a package) answers null to every question
+ * below, and the guards report it by name instead of leaving it out.
  *
  * Parsed with the TypeScript compiler, not a regex: comments and strings never
  * count.
@@ -94,6 +110,12 @@ export interface Reach {
    * when the export is not a single function.
    */
   firstAwaitedCall(file: string, name: string): { line: number; text: string } | 'none' | null;
+  /**
+   * When the first call the export awaits is `Promise.all([...])`: the first
+   * entry that starts a call which does not ask a target first, so it runs
+   * beside the target. Null when there is none (or no such function).
+   */
+  startedBesideFirst(file: string, name: string): { line: number; text: string } | null;
   /** Server Actions declared inside modules that are not 'use server' modules. */
   inlineActions: InlineAction[];
   /** Number of functions found to reach a target. */
@@ -107,6 +129,13 @@ export interface CallGraph {
   clientModules: ReadonlySet<string>;
   /** Names a module exports that are functions (or classes), own and re-exported. */
   exportedFunctions(file: string): string[];
+  /**
+   * Every name a module exports at run time, own and re-exported, whether or
+   * not this reading can resolve it to a function: types and interfaces are
+   * left out, nothing else is. A `'use server'` module turns each one into an
+   * endpoint.
+   */
+  runtimeExports(file: string): string[];
   /** Does the module export `name` at all (a function, a class, or a value)? */
   hasExport(file: string, name: string): boolean;
   /** What reaches any of `targets` (each `<absolute file>#<name>`, a top-level function). */
@@ -135,7 +164,13 @@ interface ModuleInfo {
   classes: Set<string>;
   /** Every top-level name the module declares (functions, classes, values). */
   declared: Set<string>;
+  /** Every named import, resolved or not: local name -> `<module specifier>#<imported name>`. */
+  importSpecs: Map<string, string>;
   exportsLocal: Map<string, string>;
+  /** Runtime exports that are no top-level name of this module: exported name -> what it is. */
+  exportsUnread: Map<string, string>;
+  /** Names declared only as a type (an interface or a type alias). */
+  typeNames: Set<string>;
   reexports: Array<{ module: string; names: Map<string, string> | null }>;
   imports: Map<string, Binding>;
 }
@@ -234,6 +269,58 @@ function handlerRethrows(handler: ts.Expression | undefined): boolean {
   return ts.isBlock(fn.body) && rethrows(fn.parameters[0]?.name, fn.body.statements);
 }
 
+/** Every name a binding pattern declares: `{ a, b: [c] }` gives a and c. */
+function boundNames(pattern: ts.BindingName): string[] {
+  if (ts.isIdentifier(pattern)) return [pattern.text];
+  return pattern.elements.flatMap((el) => (ts.isOmittedExpression(el) ? [] : boundNames(el.name)));
+}
+
+/** `Promise.all([...])`, awaited or not: its entries, else null. */
+function promiseAllEntries(node: ts.Node): readonly ts.Expression[] | null {
+  const e = ts.isExpression(node) ? unwrap(node) : node;
+  if (!ts.isCallExpression(e) || !ts.isPropertyAccessExpression(e.expression)) return null;
+  const { expression: owner, name } = e.expression;
+  if (!ts.isIdentifier(owner) || owner.text !== 'Promise' || name.text !== 'all') return null;
+  const list = e.arguments[0] && unwrap(e.arguments[0]);
+  return list && ts.isArrayLiteralExpression(list) ? list.elements : null;
+}
+
+/**
+ * Calls that read no data, as `<module specifier>#<name>`: the request's own
+ * cookie jar and headers, and making the cookie client. Beside the target in
+ * a Promise.all they start nothing a session could be turned away from.
+ */
+const INERT_ENTRIES: ReadonlySet<string> = new Set([
+  'next/headers#cookies',
+  'next/headers#headers',
+  'next/headers#draftMode',
+  '@/lib/supabase/server#createClient',
+]);
+
+/**
+ * What a Promise.all entry begins with: the callee of `a()`, or of the `a()`
+ * under `a().then(...)`, however long the chain. Null when the entry is not a
+ * call.
+ */
+function headCallee(entry: ts.Expression): ts.Expression | null {
+  const start = unwrap(entry);
+  if (!ts.isCallExpression(start)) return null;
+  let call: ts.CallExpression = start;
+  for (;;) {
+    const callee: ts.Expression = call.expression;
+    const owner = ts.isPropertyAccessExpression(callee) ? unwrap(callee.expression) : null;
+    if (!owner || !ts.isCallExpression(owner)) return callee;
+    call = owner;
+  }
+}
+
+/** Does `node` call anything itself (nested functions left out)? */
+function startsACall(node: ts.Node): boolean {
+  if (isFunctionNode(node)) return false;
+  if (ts.isCallExpression(node)) return true;
+  return ts.forEachChild(node, (c) => startsACall(c) || undefined) ?? false;
+}
+
 /** Parse `files` once; `reach()` then answers for any set of targets. */
 export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
   const byPath = new Map(files.map((f) => [f.path, f]));
@@ -275,7 +362,10 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       locals: new Map(),
       classes: new Set(),
       declared: new Set(),
+      importSpecs: new Map(),
       exportsLocal: new Map(),
+      exportsUnread: new Map(),
+      typeNames: new Set(),
       reexports: [],
       imports: new Map(),
     };
@@ -290,6 +380,15 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier)) {
         const clause = st.importClause;
         if (!clause || clause.isTypeOnly) continue;
+        if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+          for (const el of clause.namedBindings.elements) {
+            if (el.isTypeOnly) continue;
+            info.importSpecs.set(
+              el.name.text,
+              `${st.moduleSpecifier.text}#${(el.propertyName ?? el.name).text}`,
+            );
+          }
+        }
         const resolved = resolveSpec(file.path, st.moduleSpecifier.text);
         if (!resolved) continue;
         if (clause.name) {
@@ -317,7 +416,16 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
         if (exported) info.exportsLocal.set(isDefault ? 'default' : name, name);
       } else if (ts.isVariableStatement(st)) {
         for (const decl of st.declarationList.declarations) {
-          if (!ts.isIdentifier(decl.name)) continue;
+          if (!ts.isIdentifier(decl.name)) {
+            // `export const { a, b } = obj`: each name is exported, and none
+            // is a function this reading can follow.
+            if (exported) {
+              for (const bound of boundNames(decl.name)) {
+                info.exportsUnread.set(bound, 'a destructured export');
+              }
+            }
+            continue;
+          }
           info.declared.add(decl.name.text);
           if (exported) info.exportsLocal.set(decl.name.text, decl.name.text);
           if (!decl.initializer) continue;
@@ -334,6 +442,17 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
             );
           }
         }
+      } else if (ts.isClassDeclaration(st) && !st.name) {
+        if (exported && isDefault) info.exportsUnread.set('default', 'a class');
+      } else if (ts.isInterfaceDeclaration(st) || ts.isTypeAliasDeclaration(st)) {
+        info.typeNames.add(st.name.text);
+      } else if (
+        (ts.isEnumDeclaration(st) || ts.isModuleDeclaration(st)) &&
+        exported &&
+        !hasModifier(st, ts.SyntaxKind.DeclareKeyword) &&
+        ts.isIdentifier(st.name)
+      ) {
+        info.exportsUnread.set(st.name.text, ts.isEnumDeclaration(st) ? 'an enum' : 'a namespace');
       } else if (ts.isClassDeclaration(st) && st.name) {
         const cls = st.name.text;
         info.classes.add(cls);
@@ -355,9 +474,24 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
           st.moduleSpecifier && ts.isStringLiteral(st.moduleSpecifier)
             ? resolveSpec(file.path, st.moduleSpecifier.text)
             : null;
-        if (st.moduleSpecifier && !resolved) continue;
+        if (st.moduleSpecifier && !resolved) {
+          // A re-export from a module this reading does not hold (a package):
+          // still exported, by a name where it has one.
+          const from = `a re-export from '${(st.moduleSpecifier as ts.StringLiteral).text}'`;
+          if (!st.exportClause) info.exportsUnread.set(`* (${from})`, from);
+          else if (ts.isNamedExports(st.exportClause)) {
+            for (const el of st.exportClause.elements) {
+              if (!el.isTypeOnly) info.exportsUnread.set(el.name.text, from);
+            }
+          } else info.exportsUnread.set(st.exportClause.name.text, from);
+          continue;
+        }
         if (!st.exportClause) {
           if (resolved) info.reexports.push({ module: resolved, names: null });
+          continue;
+        }
+        if (ts.isNamespaceExport(st.exportClause)) {
+          info.exportsUnread.set(st.exportClause.name.text, 'a namespace of another module');
           continue;
         }
         if (ts.isNamedExports(st.exportClause)) {
@@ -378,7 +512,14 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
           info.declared.add('default');
           addLocal('default', [value]);
           info.exportsLocal.set('default', 'default');
-        }
+        } else info.exportsUnread.set('default', 'a default export that is an expression');
+      }
+    }
+    // `interface Row {}` then `export { Row }`: a type, exported by a plain
+    // export list. Not a runtime export.
+    for (const [exportedName, local] of [...info.exportsLocal]) {
+      if (info.typeNames.has(local) && !info.declared.has(local) && !info.imports.has(local)) {
+        info.exportsLocal.delete(exportedName);
       }
     }
     // `const { withContext } = await import('@/server/services/context')`.
@@ -546,6 +687,9 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
     for (const [exportedName, local] of info.exportsLocal) {
       out.set(exportedName, resolveLocal(info, local));
     }
+    for (const exportedName of info.exportsUnread.keys()) {
+      if (!out.has(exportedName)) out.set(exportedName, null);
+    }
     for (const re of info.reexports) {
       if (re.names) {
         for (const [exportedName, original] of re.names) {
@@ -591,6 +735,14 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       }
     }
     return false;
+  }
+
+  /** A bare call of one of INERT_ENTRIES, by the module it was imported from. */
+  function isInertEntry(info: ModuleInfo, entry: ts.Expression): boolean {
+    const e = unwrap(entry);
+    if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression)) return false;
+    if (info.declared.has(e.expression.text)) return false;
+    return INERT_ENTRIES.has(info.importSpecs.get(e.expression.text) ?? '');
   }
 
   /** The first `await` of a call under `statements`, in source order, nested functions left out. */
@@ -665,19 +817,43 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
 
     // Which functions ASK FIRST: what each one's first step refers to, then
     // the same fixed point, over those first steps only.
-    const firstRefs = new Map<string, string[]>();
+    // For a first step that is `await Promise.all([...])`, `beside` holds
+    // what each entry that starts a call refers to: every one of them must ask
+    // first, because they all start together.
+    interface FirstStep {
+      refs: string[];
+      /** Each entry that starts a call, with the function it begins with (null: not one this reading resolves). */
+      beside: Array<{ node: ts.Expression; head: string | null }>;
+      info: ModuleInfo;
+    }
+    const firstSteps = new Map<string, FirstStep>();
     for (const key of fnRefs.keys()) {
       if (!reaching.has(key)) continue;
       const step = firstStepOf(key);
       if (!step || redirectIsKept(step.info, step.node, step.body)) continue;
-      firstRefs.set(key, references(step.info, step.node, false));
+      const entries = ts.isAwaitExpression(step.node) ? promiseAllEntries(step.node) : null;
+      firstSteps.set(key, {
+        refs: references(step.info, step.node, false),
+        beside: (entries ?? [])
+          .filter((entry) => startsACall(entry) && !isInertEntry(step.info, entry))
+          .map((entry) => {
+            const callee = headCallee(entry);
+            const head = callee ? resolveExpression(step.info, callee) : null;
+            return { node: entry, head: head?.kind === 'fn' ? head.key : null };
+          }),
+        info: step.info,
+      });
     }
     const asksFirst = new Set<string>();
+    const asks = (k: string) => isTarget(k) || asksFirst.has(k);
     for (let changed = true; changed;) {
       changed = false;
-      for (const [key, refs] of firstRefs) {
+      for (const [key, step] of firstSteps) {
         if (asksFirst.has(key)) continue;
-        if (refs.some((k) => isTarget(k) || asksFirst.has(k))) {
+        if (
+          step.refs.some(asks) &&
+          step.beside.every((entry) => entry.head !== null && asks(entry.head))
+        ) {
           asksFirst.add(key);
           changed = true;
         }
@@ -750,6 +926,17 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
           text: squash(first.getText(info.sf)),
         };
       },
+      startedBesideFirst(file, name) {
+        const t = exportedNames(file).get(name);
+        const step = t?.kind === 'fn' ? firstSteps.get(t.key) : undefined;
+        const entry = step?.beside.find((b) => b.head === null || !asks(b.head));
+        if (!step || !entry) return null;
+        const sf = step.info.sf;
+        return {
+          line: sf.getLineAndCharacterOfPosition(entry.node.getStart(sf)).line + 1,
+          text: squash(entry.node.getText(sf)),
+        };
+      },
       inlineActions,
       reachingCount: reaching.size,
     };
@@ -768,6 +955,9 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
         .filter(([, t]) => t?.kind === 'fn' || t?.kind === 'class')
         .map(([name]) => name)
         .sort();
+    },
+    runtimeExports(file) {
+      return [...exportedNames(file).keys()].sort();
     },
     hasExport(file, name) {
       return exportedNames(file).has(name);
