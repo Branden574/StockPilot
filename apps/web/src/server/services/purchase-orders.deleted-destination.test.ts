@@ -266,7 +266,6 @@ describe('PurchaseOrdersService.updateStatus: a draft to a deleted destination i
       'purchase_order_items.select': { data: [], error: null },
       'purchase_orders.update': { data: { id: 'po-1' }, error: null },
       'organization_modules.select': { data: { settings: {} }, error: null },
-      'rpc:publish_outbox': { data: null, error: null },
       'inventory_items.select': { data: [], error: null },
     });
   }
@@ -295,5 +294,7 @@ describe('PurchaseOrdersService.updateStatus: a draft to a deleted destination i
     const svc = new PurchaseOrdersService(makeServiceContext(s.client) as never);
     await svc.updateStatus('po-1', 'ordered');
     expect(s.chainsAll.get('purchase_orders.update')).toHaveLength(1);
+    // Its export event goes through the service client, not this one.
+    expect(s.rpcCalls.some((c) => c.name === 'publish_outbox')).toBe(false);
   });
 });

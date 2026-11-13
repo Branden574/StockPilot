@@ -245,10 +245,6 @@ const REGISTRY: Record<string, Entry> = {
     "The header carries the link's organization.",
   ],
   'app/api/v1/public/order-requests/route.ts::public_link_eligible_items': RO(),
-  'app/api/v1/public/order-requests/route.ts::publish_outbox': [
-    'takes_org',
-    "The link's organization.",
-  ],
   'app/api/v1/push/register/route.ts::register_push_token': [
     'not_org_data',
     "The caller's own device push token.",
@@ -467,6 +463,10 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/order-requests.ts::claim_picking': RWA,
   'server/services/order-requests.ts::close_partial': RWA,
   'server/services/order-requests.ts::complete_picking': RWA,
+  'server/lib/outbox-events.ts::publish_outbox': [
+    'takes_org',
+    "The one export-event writer: the checked service context's organization, or the one the server resolved for a requester's return or a public request (outbox-publish-sites.guard.test.ts pins both).",
+  ],
   'server/services/order-requests.ts::confirm_physical_signature': S39('2 (paper signature)'),
   'server/services/order-requests.ts::generate_order_packing_slips': RWA,
   'server/services/order-requests.ts::hold_order_stock': RWA,
@@ -476,10 +476,6 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/order-requests.ts::place_order_request': [
     'takes_org',
     'The request carries the active organization.',
-  ],
-  'server/services/order-requests.ts::publish_outbox': [
-    'takes_org',
-    'Passes the active organization.',
   ],
   'server/services/order-requests.ts::release_picking': RWA,
   'server/services/order-requests.ts::reopen_picking': RWA,
@@ -517,10 +513,6 @@ const REGISTRY: Record<string, Entry> = {
     'takes_org',
     'Passes the active organization.',
   ],
-  'server/services/purchase-orders.ts::publish_outbox': [
-    'takes_org',
-    'Passes the active organization.',
-  ],
   'server/services/purchase-orders.ts::purchase_orders_page': RO(),
   'server/services/purchase-orders.ts::purchase_orders_stats': RO(),
   'server/services/purchase-orders.ts::save_purchase_order_draft': [
@@ -528,7 +520,6 @@ const REGISTRY: Record<string, Entry> = {
     'Passes the active organization.',
   ],
   'server/services/receiving.ts::post_receipt_v2': S39('5 (receipt post)'),
-  'server/services/receiving.ts::publish_outbox': ['takes_org', 'Passes the active organization.'],
   'server/services/receiving.ts::reverse_receipt': S39('6 (receipt reverse)'),
   'server/services/recurring-pos.ts::po_line_items_not_orderable': RO(),
   'server/services/releases.ts::record_release_state': [
@@ -569,7 +560,6 @@ const REGISTRY: Record<string, Entry> = {
   'server/services/returns.ts::decline_return_replacement': RMA,
   'server/services/returns.ts::deny_return': RMA,
   'server/services/returns.ts::plan_return_dispositions': RMA,
-  'server/services/returns.ts::publish_outbox': ['takes_org', "Passes the RMA's organization."],
   'server/services/returns.ts::receive_return': RMA,
   'server/services/returns.ts::release_return_replacement_early': RMA,
   'server/services/returns.ts::return_exchange_candidates': RO(),
