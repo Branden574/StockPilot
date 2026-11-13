@@ -4,7 +4,7 @@
 -- Fixture = the exact L4L shape of 2026-08-17: one item, on_hand 3, held as
 -- 2 on a rack + 1 in the warehouse's Staging bucket. Manager caller.
 --
--- Asserts (13, numbered by claim):
+-- Asserts (14, numbered by claim):
 --   1. 'placed' (the default) still REFUSES a -3 (insufficient_placed_stock):
 --      picks/ships never reach Staging. Unchanged contract.
 --   2. after that refused call the rack still holds 2 (the failed draw rolled
@@ -17,18 +17,23 @@
 --   7. 'any' still raises when the holdings do not cover the delta at all
 --      (item3: on_hand 5 but only 2 held anywhere) — drift is surfaced, not
 --      papered over
---   8. publish_outbox as a MANAGER succeeds and returns an id (0016 invoker +
---      0140 admin-only policy used to raise 42501 here)
---   9. publish_outbox as a member of ANOTHER org for this org raises 42501
---      (self-authorization, not the old table policy)
---  10. publish_outbox is idempotent on dedupe_key (second call returns null,
---      still exactly one row)
+--   8. publish_outbox refuses a MANAGER (42501). 0341 made it SECURITY
+--      DEFINER so that a member's event was no longer dropped by the
+--      admin-only table rule; since the migration
+--      publish_outbox_service_role_only (docket S67) only the service role
+--      executes it and its body refuses a signed-in subject: the web app
+--      records every export event through its service client.
+--   9. publish_outbox refuses a member of ANOTHER org (42501; EXECUTE is
+--      checked before the body runs, so the code is asserted, not the
+--      message)
+--  10. publish_outbox as the service role returns an id, and is idempotent on
+--      dedupe_key (second call returns null, still exactly one row)
 --
 -- Wrapped in begin/rollback -- nothing leaks.
 
 begin;
 
-select plan(13);
+select plan(14);
 
 \set org      '\'ff341000-0000-0000-0000-000000000001\''
 \set usr      '\'ff341000-0000-0000-0000-000000000002\''
@@ -167,16 +172,11 @@ select throws_ok(
   '7. any mode raises when the holdings do not cover the delta at all (drift surfaced)'
 );
 
--- 8. publish_outbox as a MANAGER now succeeds
-select ok(
-  public.publish_outbox(:org, 'return.created', 'return', :item, '{"pgtap":true}'::jsonb, 'pgtap:0341:1') is not null,
-  '8. manager can publish to the outbox (returns an id)'
-);
-
--- 10. idempotent on dedupe_key: second call returns null, still one row
-select ok(
-  public.publish_outbox(:org, 'return.created', 'return', :item, '{"pgtap":true}'::jsonb, 'pgtap:0341:1') is null,
-  '10a. duplicate dedupe_key returns null'
+-- 8. publish_outbox refuses a MANAGER: only the service role records events
+select throws_ok(
+  $$ select public.publish_outbox('ff341000-0000-0000-0000-000000000001'::uuid, 'return.created', 'return', 'ff341000-0000-0000-0000-000000000004'::uuid, '{"pgtap":true}'::jsonb, 'pgtap:0341:1') $$,
+  '42501', null,
+  '8. a manager is refused: only the service role records export events'
 );
 
 -- ── Become a member of ANOTHER org ────────────────────────────────────────────
@@ -188,15 +188,31 @@ set local role to 'authenticated';
 -- 9. outsider cannot publish into :org
 select throws_ok(
   $$ select public.publish_outbox('ff341000-0000-0000-0000-000000000001'::uuid, 'return.created', 'return', null, '{}'::jsonb, 'pgtap:0341:2') $$,
-  '42501', 'forbidden',
-  '9. a member of another org cannot publish into this org'
+  '42501', null,
+  '9. a member of another org is refused'
+);
+
+-- -- Become the service role (no signed-in subject) ----------------------------
+reset role;
+set local "request.jwt.claim.sub" to '';
+set local "request.jwt.claim.role" to 'service_role';
+set local role to 'service_role';
+
+-- 10. the service role records the event; idempotent on dedupe_key
+select ok(
+  public.publish_outbox(:org, 'return.created', 'return', :item, '{"pgtap":true}'::jsonb, 'pgtap:0341:1') is not null,
+  '10b. the service role records the event (returns an id)'
+);
+select ok(
+  public.publish_outbox(:org, 'return.created', 'return', :item, '{"pgtap":true}'::jsonb, 'pgtap:0341:1') is null,
+  '10a. duplicate dedupe_key returns null'
 );
 
 reset role;
 select is(
   (select count(*)::int from public.outbox_events where organization_id = :org and dedupe_key like 'pgtap:0341:%'),
   1,
-  '10. exactly one outbox row for the deduped publish; the outsider wrote none'
+  '10. exactly one outbox row for the deduped publish; the manager and the outsider wrote none'
 );
 
 select * from finish();
