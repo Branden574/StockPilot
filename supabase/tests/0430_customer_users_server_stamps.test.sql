@@ -3,8 +3,9 @@
 -- pgTAP proof that a portal user's invitation and acceptance times, and the
 -- customer and account a customer_users row joins, are set by the server.
 --
--- Personas: mgr, a manager of organization A; acct, acct2 and acct3, portal
--- accounts (made-up). Customers c1 and c2 belong to organization A.
+-- Personas: mgr, a manager of organization A; mgrB, a manager of
+-- organization B; acct, acct2 and acct3, portal accounts (made-up).
+-- Customers c1, c2, c3 and c4 belong to organization A.
 --
 -- I.  Insert by a manager: accepted_at is null and invited_at is now(),
 --     whatever the statement names (I1-I4); the app's invite insert writes
@@ -15,43 +16,60 @@
 --     that is not accepted leaves it not accepted (U10).
 -- K.  What stays the manager's: the app's re-invite upsert (K1, K2), an
 --     email change (K3) and removing the row (K4).
+-- R.  More shapes of the same writes: an update that names the four columns
+--     with their own values goes through (R1, R2, pins); an upsert whose
+--     update half names accepted_at or invited_at is refused (R3, R4) and the
+--     row keeps its times (R5); a row deleted and inserted again comes back
+--     invited now and not accepted (R6-R8); a multi-row insert leaves every
+--     row invited now and not accepted (R9, R10); a manager of another
+--     organization changes, removes and adds nothing on organization A's
+--     rows (R11-R14, pins: the policy).
 -- S.  The service role (the portal's own stamp and the platform) writes the
 --     two times as before (S1a, S1, S2a, S2b, S2).
 -- P.  Posture: one BEFORE INSERT OR UPDATE row trigger, SECURITY INVOKER,
 --     EXECUTE for no API role (P1-P3).
 -- Written to fail before the migration in I1-I4, U1-U10, K2 (the earlier
--- updates went through there) and P1, after which the file stops (the
--- function does not exist); U6 fails there on the primary key instead. The
--- I5, I6, K1, K3, K4 and S lines pass before and after: they hold the paths
--- that must keep working.
+-- updates went through there), R3-R5, R8, R10 and P1, after which the file
+-- stops (the function does not exist). The I5, I6, K1, K3, K4, R1, R2,
+-- R11-R14 and S lines pass before and after: they hold the paths that must
+-- keep working.
 
 begin;
 
-select plan(33);
+select plan(47);
 
 \set orga  '\'ab043000-0000-4000-8000-000000000001\''
+\set orgb  '\'ab043000-0000-4000-8000-000000000002\''
 \set mgr   '\'ab043000-0000-4000-8000-000000000011\''
+\set mgrb  '\'ab043000-0000-4000-8000-000000000012\''
 \set acct  '\'ab043000-0000-4000-8000-000000000021\''
 \set acct2 '\'ab043000-0000-4000-8000-000000000022\''
 \set acct3 '\'ab043000-0000-4000-8000-000000000023\''
 \set c1    '\'ab043000-0000-4000-8000-0000000000c1\''
 \set c2    '\'ab043000-0000-4000-8000-0000000000c2\''
+\set c3    '\'ab043000-0000-4000-8000-0000000000c3\''
+\set c4    '\'ab043000-0000-4000-8000-0000000000c4\''
 
 insert into auth.users (id, email, raw_user_meta_data) values
   (:mgr,   'stamps-mgr@test.local',   '{}'::jsonb),
+  (:mgrb,  'stamps-mgr-b@test.local', '{}'::jsonb),
   (:acct,  'stamps-buyer@test.local', '{}'::jsonb),
   (:acct2, 'stamps-buyer2@test.local', '{}'::jsonb),
   (:acct3, 'stamps-buyer3@test.local', '{}'::jsonb)
   on conflict (id) do nothing;
 insert into public.organizations (id, name, slug) values
-  (:orga, 'Stamps Org A', 'stamps-a-test')
+  (:orga, 'Stamps Org A', 'stamps-a-test'),
+  (:orgb, 'Stamps Org B', 'stamps-b-test')
   on conflict (id) do nothing;
 insert into public.organization_members (organization_id, user_id, role, accepted_at) values
-  (:orga, :mgr, 'manager', now())
+  (:orga, :mgr, 'manager', now()),
+  (:orgb, :mgrb, 'manager', now())
   on conflict do nothing;
 insert into public.customers (id, organization_id, name) values
   (:c1, :orga, 'Harbor Elementary'),
-  (:c2, :orga, 'Ridge Middle')
+  (:c2, :orga, 'Ridge Middle'),
+  (:c3, :orga, 'Lakeside High'),
+  (:c4, :orga, 'Valley Primary')
   on conflict (id) do nothing;
 
 -- A row accepted long ago, written as the platform would (postgres here).
@@ -155,7 +173,7 @@ select throws_ok(
   '42501', null,
   'U5: a manager cannot move a row to another account');
 select throws_ok(
-  $$ update public.customer_users set customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+  $$ update public.customer_users set customer_id = 'ab043000-0000-4000-8000-0000000000c3'
       where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
         and user_id = 'ab043000-0000-4000-8000-000000000022' $$,
   '42501', null,
@@ -224,6 +242,113 @@ reset role;
 select is(
   (select count(*)::int from public.customer_users where customer_id = :c1 and user_id = :acct3),
   0, 'K4: ... and the row is gone');
+
+-- ═══ R. More shapes of the same writes ════════════════════════════════════
+-- The rows as they stand now; the pins compare against this, not against
+-- values an earlier line could have moved.
+create temp table r_before on commit drop as
+  select customer_id, user_id, email, invited_by, invited_at, accepted_at
+    from public.customer_users;
+set local role to 'authenticated';
+select lives_ok(
+  $$ update public.customer_users
+        set accepted_at = accepted_at, invited_at = invited_at,
+            user_id = user_id, customer_id = customer_id
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  'R1: an update naming the four columns with their own values goes through');
+reset role;
+select ok(
+  (select (r.customer_id, r.user_id, r.email, r.invited_by, r.invited_at, r.accepted_at)
+          is not distinct from
+          (b.customer_id, b.user_id, b.email, b.invited_by, b.invited_at, b.accepted_at)
+     from public.customer_users r
+     join r_before b using (customer_id, user_id)
+    where r.customer_id = :c2 and r.user_id = :acct),
+  'R2: ... and changes nothing');
+
+set local role to 'authenticated';
+select throws_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, accepted_at)
+       values ('ab043000-0000-4000-8000-0000000000c2', 'ab043000-0000-4000-8000-000000000021',
+               'stamps-buyer@test.local', now())
+     on conflict (customer_id, user_id) do update set accepted_at = excluded.accepted_at $$,
+  '42501', null,
+  'R3: an upsert whose update half names accepted_at on an accepted row is refused');
+select throws_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_at)
+       values ('ab043000-0000-4000-8000-0000000000c2', 'ab043000-0000-4000-8000-000000000021',
+               'stamps-buyer@test.local', '2099-01-01T00:00:00Z')
+     on conflict (customer_id, user_id) do update set invited_at = excluded.invited_at $$,
+  '42501', null,
+  'R4: an upsert whose update half names invited_at is refused');
+reset role;
+select ok(
+  (select accepted_at = '2026-01-02T00:00:00Z'::timestamptz
+      and invited_at = '2026-01-01T00:00:00Z'::timestamptz
+     from public.customer_users where customer_id = :c2 and user_id = :acct),
+  'R5: the refused upserts left the accepted row''s times as they were');
+
+set local role to 'authenticated';
+select lives_ok(
+  $$ delete from public.customer_users
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000022' $$,
+  'R6: a manager removes a portal user');
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_at, accepted_at)
+       values ('ab043000-0000-4000-8000-0000000000c2', 'ab043000-0000-4000-8000-000000000022',
+               'stamps-buyer2@test.local', '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z') $$,
+  'R7: ... and inserts the same mapping again, naming past times');
+reset role;
+select ok(
+  (select accepted_at is null and invited_at = now() from public.customer_users
+    where customer_id = :c2 and user_id = :acct2),
+  'R8: ... and it comes back invited now and not accepted');
+
+set local role to 'authenticated';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_at, accepted_at) values
+       ('ab043000-0000-4000-8000-0000000000c4', 'ab043000-0000-4000-8000-000000000021',
+        'stamps-buyer@test.local', '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z'),
+       ('ab043000-0000-4000-8000-0000000000c4', 'ab043000-0000-4000-8000-000000000022',
+        'stamps-buyer2@test.local', '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z'),
+       ('ab043000-0000-4000-8000-0000000000c4', 'ab043000-0000-4000-8000-000000000023',
+        'stamps-buyer3@test.local', '2020-01-01T00:00:00Z', '2020-01-02T00:00:00Z') $$,
+  'R9: a multi-row insert naming both times goes through');
+reset role;
+select is(
+  (select count(*)::int from public.customer_users
+    where customer_id = :c4 and accepted_at is null and invited_at = now()),
+  3, 'R10: ... and every row is invited now and not accepted');
+
+-- A manager of organization B, on organization A's rows (the policy).
+set local "request.jwt.claim.sub" to 'ab043000-0000-4000-8000-000000000012';
+set local role to 'authenticated';
+select lives_ok(
+  $$ update public.customer_users set email = 'stamps-elsewhere@test.local'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  'R11: another organization''s manager''s update reaches no row');
+select lives_ok(
+  $$ delete from public.customer_users
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  'R12: another organization''s manager''s delete reaches no row');
+select throws_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email)
+       values ('ab043000-0000-4000-8000-0000000000c3', 'ab043000-0000-4000-8000-000000000023',
+               'stamps-buyer3@test.local') $$,
+  '42501', null,
+  'R13: another organization''s manager cannot add a portal user to organization A''s customer');
+reset role;
+select ok(
+  (select count(*) = 1 and bool_and(email = 'stamps-buyer@test.local')
+     from public.customer_users where customer_id = :c2 and user_id = :acct)
+  and not exists (select 1 from public.customer_users
+                   where customer_id = :c3 and user_id = :acct3),
+  'R14: ... organization A''s row is still there with its email, and nothing was added');
+set local "request.jwt.claim.sub" to 'ab043000-0000-4000-8000-000000000011';
 
 -- ═══ S. The service role ══════════════════════════════════════════════════
 set local role to 'service_role';

@@ -344,9 +344,9 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   //     An invitation is never opened in their place: an org does not gain a
   //     customer because another org switched its portal off;
   //   - an account with none: the newest invitation alone, as it always was.
-  // Any org can add a mapping by inviting the person, so the mappings asked
-  // are capped (the earliest acceptances, which the sort puts first, are
-  // always inside the cap), and the gate is read once for all their orgs.
+  // An account may have many mappings, so the number tried is bounded (the
+  // earliest acceptances, which the sort puts first, are always inside the
+  // bound), and the gate is read once for all their orgs.
   const accepted = candidates.filter((c) => c.accepted_at);
   const tried = (accepted.length > 0 ? accepted : candidates.slice(0, 1)).slice(
     0,

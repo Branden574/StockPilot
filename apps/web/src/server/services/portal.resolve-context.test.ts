@@ -96,7 +96,12 @@ interface OrgSetup {
   billing?: Row;
 }
 
-function makeAdmin(db: Record<string, Row[]>) {
+/**
+ * `failTables`: reads of these tables come back the way PostgREST reports a
+ * failure, `{ data: null, error: { message } }`.
+ */
+function makeAdmin(db: Record<string, Row[]>, failTables: readonly string[] = []) {
+  const failed = { data: null, error: { message: 'read failed' } };
   const updates: Array<{ table: string; patch: Row; rows: Row[] }> = [];
   /** One entry per request the service sends, by table. */
   const requests: string[] = [];
@@ -125,10 +130,12 @@ function makeAdmin(db: Record<string, Row[]>) {
       },
       maybeSingle: async () => {
         requests.push(table);
+        if (failTables.includes(table)) return failed;
         return { data: rows()[0] ?? null, error: null };
       },
-      then: (resolve: (v: { data: Row[] | null; error: null }) => unknown) => {
+      then: (resolve: (v: unknown) => unknown) => {
         requests.push(table);
+        if (!patch && failTables.includes(table)) return Promise.resolve(failed).then(resolve);
         if (patch) {
           const hit = rows();
           for (const r of hit) Object.assign(r, patch);
@@ -146,24 +153,27 @@ function makeAdmin(db: Record<string, Row[]>) {
 
 let admin: ReturnType<typeof makeAdmin>;
 
-function seed(mappings: Mapping[], orgs: OrgSetup[]) {
-  admin = makeAdmin({
-    customer_users: mappings.map(mappingRow),
-    organization_modules: orgs
-      .filter((o) => o.portal !== null)
-      .map((o) => ({
-        organization_id: o.id,
-        module_id: 'b2b_portal',
-        enabled: o.portal,
-        settings: null,
+function seed(mappings: Mapping[], orgs: OrgSetup[], failTables: readonly string[] = []) {
+  admin = makeAdmin(
+    {
+      customer_users: mappings.map(mappingRow),
+      organization_modules: orgs
+        .filter((o) => o.portal !== null)
+        .map((o) => ({
+          organization_id: o.id,
+          module_id: 'b2b_portal',
+          enabled: o.portal,
+          settings: null,
+        })),
+      organizations: orgs.map((o) => ({
+        id: o.id,
+        name: o.name,
+        logo_url: null,
+        ...(o.billing ?? BUSINESS),
       })),
-    organizations: orgs.map((o) => ({
-      id: o.id,
-      name: o.name,
-      logo_url: null,
-      ...(o.billing ?? BUSINESS),
-    })),
-  });
+    },
+    failTables,
+  );
   adminRef.current = admin.client;
 }
 
@@ -412,21 +422,29 @@ describe('resolvePortalContext: the reads are bounded', () => {
   const CUST_BASE = '0e000000-0000-4000-8000-0000000000';
   const pad = (i: number) => String(i).padStart(2, '0');
 
-  /** n accepted mappings, each in its own organization, accepted in order 1..n. */
-  function manyAccepted(n: number, portalOn: (i: number) => boolean | null) {
+  const DAY_MS = 86_400_000;
+  const START = Date.UTC(2026, 0, 1);
+  /** Mapping i's customer. Ids fall as i rises, so the id tie-break alone
+   *  would pick the LAST acceptance: only the time order picks the first. */
+  const cust = (i: number) => `${CUST_BASE}${pad(100 - i)}`;
+
+  /** n accepted mappings, each in its own organization, accepted in order 1..n
+   *  (one a day from 2026-01-01, every one a real date). */
+  function manyAccepted(n: number, portalOn: (i: number) => boolean | null): Mapping[] {
     const mappings: Mapping[] = [];
     const orgs: OrgSetup[] = [];
     for (let i = 1; i <= n; i += 1) {
       mappings.push({
-        customerId: `${CUST_BASE}${pad(i)}`,
+        customerId: cust(i),
         orgId: `${ORG_BASE}${pad(i)}`,
         name: `Academy ${i}`,
-        invitedAt: `2026-01-${pad(i)}T00:00:00+00:00`,
-        acceptedAt: `2026-02-${pad(i)}T00:00:00+00:00`,
+        invitedAt: new Date(START + (i - 1) * DAY_MS).toISOString(),
+        acceptedAt: new Date(START + (i - 1) * DAY_MS + 3_600_000).toISOString(),
       });
       orgs.push({ id: `${ORG_BASE}${pad(i)}`, name: `Supply ${i}`, portal: portalOn(i) });
     }
     seed(mappings, orgs);
+    return mappings;
   }
 
   it('reads each gate table once, however many mappings the account has', async () => {
@@ -441,14 +459,14 @@ describe('resolvePortalContext: the reads are bounded', () => {
 
   it('opens a later mapping in the order with the same two gate reads', async () => {
     manyAccepted(6, (i) => (i === 5 ? true : i % 2 === 0 ? null : false));
-    expect((await resolvePortalContext())?.customerId).toBe(`${CUST_BASE}05`);
+    expect((await resolvePortalContext())?.customerId).toBe(cust(5));
     expect(requestsTo('organization_modules')).toBe(1);
     expect(requestsTo('organizations')).toBe(1);
   });
 
   it('a single mapping makes the same reads as before: one of each table, nothing else', async () => {
     manyAccepted(1, () => true);
-    expect((await resolvePortalContext())?.customerId).toBe(`${CUST_BASE}01`);
+    expect((await resolvePortalContext())?.customerId).toBe(cust(1));
     expect(admin.requests.slice().sort()).toEqual([
       'customer_users',
       'organization_modules',
@@ -456,17 +474,87 @@ describe('resolvePortalContext: the reads are bounded', () => {
     ]);
   });
 
+  it('every fixture time is a real date, and acceptances rise with i', () => {
+    const accepted = manyAccepted(40, () => true).map((m) => Date.parse(m.acceptedAt ?? ''));
+    expect(accepted.every(Number.isFinite)).toBe(true);
+    expect(accepted.every((t, k) => k === 0 || t > accepted[k - 1]!)).toBe(true);
+  });
+
   it('the earliest acceptance is always considered, however many mappings there are', async () => {
     manyAccepted(40, (i) => i === 1);
-    expect((await resolvePortalContext())?.customerId).toBe(`${CUST_BASE}01`);
+    expect((await resolvePortalContext())?.customerId).toBe(cust(1));
   });
 
   it(`considers only the first ${PORTAL_MAPPINGS_TRIED_MAX} accepted mappings in the order`, async () => {
     const last = PORTAL_MAPPINGS_TRIED_MAX;
     manyAccepted(last + 1, (i) => i === last || i === last + 1);
-    expect((await resolvePortalContext())?.customerId).toBe(`${CUST_BASE}${pad(last)}`);
+    expect((await resolvePortalContext())?.customerId).toBe(cust(last));
     manyAccepted(last + 1, (i) => i === last + 1);
     expect(await resolvePortalContext()).toBeNull();
+  });
+});
+
+describe('resolvePortalContext: equal times and failed reads', () => {
+  const tied = (first: 'north' | 'south'): Mapping[] => {
+    const north: Mapping = {
+      customerId: CUST_NORTH,
+      orgId: ORG_NORTH,
+      name: 'North Academy',
+      invitedAt: '2026-03-01T00:00:00+00:00',
+      acceptedAt: '2026-05-01T12:00:00+00:00',
+    };
+    // The same instant, written with another offset.
+    const south: Mapping = {
+      customerId: CUST_SOUTH,
+      orgId: ORG_SOUTH,
+      name: 'South Academy',
+      invitedAt: '2026-04-01T00:00:00+00:00',
+      acceptedAt: '2026-05-01T04:00:00-08:00',
+    };
+    return first === 'north' ? [north, south] : [south, north];
+  };
+  const bothOn: OrgSetup[] = [
+    { id: ORG_NORTH, name: 'North Supply', portal: true },
+    { id: ORG_SOUTH, name: 'South Supply', portal: true },
+  ];
+
+  it('two equal acceptances: the lower customer id opens, whatever order the rows are read in', async () => {
+    for (const first of ['north', 'south'] as const) {
+      for (let run = 0; run < 3; run += 1) {
+        seed(tied(first), bothOn);
+        expect((await resolvePortalContext())?.customerId).toBe(CUST_NORTH);
+      }
+    }
+  });
+
+  it('a failed module read opens nothing and stamps nothing, for several organizations', async () => {
+    seed(tied('north'), bothOn, ['organization_modules']);
+    expect(await resolvePortalContext()).toBeNull();
+    expect(admin.updates).toEqual([]);
+  });
+
+  it('a failed organization read opens nothing and stamps nothing, for several organizations', async () => {
+    seed(tied('south'), bothOn, ['organizations']);
+    expect(await resolvePortalContext()).toBeNull();
+    expect(admin.updates).toEqual([]);
+  });
+
+  it('a failed gate read for a single invitation neither opens nor stamps it', async () => {
+    seed(
+      [
+        {
+          customerId: CUST_EAST,
+          orgId: ORG_EAST,
+          name: 'East Academy',
+          invitedAt: '2026-10-01T00:00:00+00:00',
+          acceptedAt: null,
+        },
+      ],
+      [{ id: ORG_EAST, name: 'East Supply', portal: true }],
+      ['organization_modules'],
+    );
+    expect(await resolvePortalContext()).toBeNull();
+    expect(admin.updates).toEqual([]);
   });
 });
 
