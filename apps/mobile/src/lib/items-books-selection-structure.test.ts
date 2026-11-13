@@ -14,6 +14,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm, printClassic } from './__fixtures__/classic-projection';
 import { palette, type Palette } from './theme';
 
 /**
@@ -664,7 +665,9 @@ describe('the look on both tabs, measured in both modes', () => {
   it('quantities are mono with tabular numerals, on rows and headers alike', () => {
     for (const file of [ITEMS, BOOKS]) {
       const src = sourceOf(file);
-      const code = codeOnly(src);
+      // Classic's shape, read from the Classic projection (every Liquid Glass
+      // branch folded to Classic: lib/__fixtures__/classic-projection.ts).
+      const code = codeOnly(printClassic(src, file));
       const style = file === ITEMS ? 'rowStyles.quantity' : 'styles.quantity';
       expect(
         code.match(
@@ -681,11 +684,14 @@ describe('the look on both tabs, measured in both modes', () => {
 
   it('the search box takes the shared input look: the stronger border, muted icon and placeholder', () => {
     for (const file of [ITEMS, BOOKS]) {
-      const code = codeOnly(sourceOf(file));
+      // Classic's shape, read from the Classic projection (as above).
+      const code = codeOnly(printClassic(sourceOf(file), file));
       expect(code, file).toMatch(
-        /\[styles\.searchBox, \{ backgroundColor: c\.card, borderColor: c\.hair2 \}\]/,
+        /\[\s*styles\.searchBox,\s*\{ backgroundColor: c\.card, borderColor: c\.hair2 \},?\s*\]/,
       );
-      expect(code, file).toContain('<Search size={16} color={c.ink3} strokeWidth={1.4} />');
+      expect(code, file).toMatch(
+        /<Search size=\{16\} color=\{c\.ink3\} strokeWidth=\{1\.4\}\s*\/>/,
+      );
       expect(code, file).toContain('placeholderTextColor={c.ink3}');
     }
   });
@@ -762,11 +768,16 @@ describe.each(REVIEWS)('$name review', (r) => {
   });
 
   it('reserves what its pinned footer really takes, and marks the footer with a hairline', () => {
-    expect(code).toContain('paddingBottom: footerReservation(footerHeight, 170),');
+    // Classic, read through the classic projection: unchanged.
+    const classic = classicFlat(sourceOf(r.file), r.file);
+    expect(classic).toContain(flatNorm('paddingBottom: footerReservation(footerHeight, 170),'));
     expect(code).toContain('onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}');
-    expect(code).toContain(
-      'style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}',
+    expect(classic).toContain(
+      flatNorm('style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}'),
     );
+    // Liquid Glass: the floating bar, its material first, the scroll clear of its lift.
+    expect(code).toMatch(/lg && GLASS_FOOT_BAR,\s*\]\}\s*>\s*\{lg \? <GlassFootBackdrop \/> : null\}/);
+    expect(code).toMatch(/\? footerReservation\(footerHeight, 170\) \+ 8\s*:/);
     expect(styleBlock(sourceOf(r.file), 'footer')).toMatch(/borderTopWidth: 1,/);
   });
 

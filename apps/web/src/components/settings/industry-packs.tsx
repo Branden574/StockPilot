@@ -102,7 +102,7 @@ export function IndustryPacks({ presets, activePack }: IndustryPacksProps) {
         }}
       >
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Set up as {confirm?.label}?</DialogTitle>
             <DialogDescription asChild>
               <div className="text-muted-foreground space-y-2 text-[13px]">
@@ -121,7 +121,7 @@ export function IndustryPacks({ presets, activePack }: IndustryPacksProps) {
               </div>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"

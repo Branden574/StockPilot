@@ -9,6 +9,7 @@ import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory
 import { ServiceError, withContext } from '@/server/services/context';
 import { linkFamily, unlinkItems } from '@/server/services/product-group-linking';
 import { ProductGroupsService } from '@/server/services/product-groups';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 /**
  * Server actions behind the group-linking review screen.
@@ -22,8 +23,7 @@ import { ProductGroupsService } from '@/server/services/product-groups';
 
 function toResult<T>(error: unknown): ActionResult<T> {
   rethrowControlFlow(error);
-  if (error instanceof ServiceError) return err(error.code, error.message);
-  return err('internal_error', error instanceof Error ? error.message : 'Unknown error');
+  return actionErrorResult(error, 'actions.product_group_linking');
 }
 
 /**

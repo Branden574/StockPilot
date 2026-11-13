@@ -3,10 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
 import { InventoryService } from '@/server/services/inventory';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -118,8 +117,6 @@ export async function bulkCreateBooksAction(
       errors: result.errors.map((e) => ({ isbn: e.barcode, reason: e.reason })),
     });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.books_bulk_import.bulk_create_books');
   }
 }

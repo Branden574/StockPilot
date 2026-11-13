@@ -28,6 +28,19 @@ import { ReleaseDrawer } from './release-drawer';
 import { UpdateCard, updateAnnouncement, type UpdateCardModel } from './update-card';
 
 /**
+ * Where focus goes when What's New closes: the top bar's What's New button.
+ * Where that button is not drawn (the Liquid Glass phone bar, 760 px and
+ * under, leaves it out and the account menu carries What's New instead;
+ * styles/liquid-glass/shell.css), the account menu's button, which opened
+ * it. In Classic the bar's button is always drawn, so this is that button.
+ */
+function whatsNewReturnTarget(): HTMLElement | null {
+  const entry = document.getElementById(WHATS_NEW_ENTRY_ID);
+  if (!entry || entry.getClientRects().length > 0) return entry;
+  return document.getElementById('user-menu-trigger') ?? entry;
+}
+
+/**
  * True while a product tour is on screen. Tours and the What's New notice share
  * a corner and a rule: one interruption at a time. The old modal checked this
  * ONCE, 1.2s after load, and never again, so it could stack on a tour that
@@ -206,7 +219,7 @@ export function UpdateCenter({
           capture('release_feature_link_clicked', { entryId: entry.id, entryPoint: 'drawer' });
           closeWhatsNew();
         }}
-        returnFocusTo={() => document.getElementById(WHATS_NEW_ENTRY_ID)}
+        returnFocusTo={whatsNewReturnTarget}
       />
     </>
   );

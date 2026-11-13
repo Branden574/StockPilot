@@ -45,6 +45,7 @@ describe('the returns modules', () => {
       'restock-view.ts',
       'return-actions.ts',
       'return-error-map.ts',
+      'return-request-email.ts',
       'return-schemas.ts',
       'returns-copy.ts',
     ]);

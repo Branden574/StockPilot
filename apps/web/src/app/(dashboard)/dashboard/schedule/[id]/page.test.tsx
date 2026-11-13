@@ -14,6 +14,10 @@ const h = vi.hoisted(() => ({
   event: {} as Record<string, unknown>,
 }));
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('next/navigation', () => ({
   notFound: vi.fn(() => {
     throw new Error('notFound');

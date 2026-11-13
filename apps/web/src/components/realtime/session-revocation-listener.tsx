@@ -6,6 +6,7 @@ import * as React from 'react';
 import { toast } from 'sonner';
 
 import { purgeInterruptedRuns } from '@/lib/interrupted-run';
+import { forgetAppearanceAccount } from '@/components/theme/appearance-cookie';
 import { forgetTourState } from '@/lib/onboarding/tour-state-cache';
 import { createClient } from '@/lib/supabase/client';
 
@@ -59,14 +60,17 @@ export function SessionRevocationListener({ userId }: { userId: string }) {
         // a session it still accepts means the message is forged or stale, and
         // nothing happens; a request that could not be made proves nothing
         // either way, and token expiry still ends a revoked session. Only an
-        // answer that the session is gone signs this tab out. (Mobile keeps the
-        // same rule: use-session-revocation.ts.)
+        // answer that the session is gone signs this tab out. (The phone's
+        // listener is use-session-revocation.ts, which states its own rule.)
         void (async () => {
           const { error } = await supabase!.auth.getUser();
           if (!error) return;
           if (isAuthRetryableFetchError(error)) return;
           // Per-person state kept for the browser session goes with the session.
           forgetTourState();
+          // And the appearance's account sync record (Liquid Glass plan 3.3);
+          // the device keeps its appearance.
+          forgetAppearanceAccount();
           // So does what an interrupted run kept in this tab
           // (lib/interrupted-run): a revoke ends the session on purpose (the
           // account did it, on another device or tab, or an admin did), so

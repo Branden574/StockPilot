@@ -12,6 +12,7 @@ import {
   SETTINGS_NAV_GROUPS,
   SettingsPage,
 } from '@/components/settings/settings-nav';
+import { AppearanceRecovery } from '@/components/theme/appearance-recovery';
 import { Button } from '@/components/ui/button';
 // The isomorphic reporter: this module is in a browser bundle, and
 // @/lib/error-reporter is server-only (see error-reporter-core.ts).
@@ -56,7 +57,8 @@ export default function SettingsError({
   }, [error, digest, pathname]);
 
   return (
-    <SettingsPage>
+    // The hub draws no settings frame, so its error carries the page root itself.
+    <SettingsPage data-glass-page={onHub ? 'settings' : undefined}>
       <PageHeader
         title={entry?.title ?? 'Settings'}
         back={
@@ -80,9 +82,13 @@ export default function SettingsError({
           </>
         }
         action={
-          <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
-            <RefreshCw aria-hidden /> Try again
-          </Button>
+          <>
+            <Button type="button" variant="outline" size="sm" onClick={() => (retry ?? reset)?.()}>
+              <RefreshCw aria-hidden /> Try again
+            </Button>
+            {/* "Use classic design", only while Liquid Glass is shown; nothing in classic. */}
+            <AppearanceRecovery error={error} size="sm" />
+          </>
         }
       />
     </SettingsPage>

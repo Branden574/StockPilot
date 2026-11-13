@@ -61,8 +61,10 @@ interface FeatureCopy {
 const FEATURES: Record<OrgEmailRoutingFeature, FeatureCopy> = {
   delivery_request: {
     title: 'Delivery requests',
+    // F14: the return request draft ("Send return request" on a return) is
+    // addressed to this pair too, so the card says so; the title stays.
     description:
-      'Where the "Email delivery request" action on delivery orders addresses its draft.',
+      'Where the "Email delivery request" action on delivery orders addresses its draft. The "Send return request" action on returns uses the same addresses.',
     icon: Mail,
     notice: deliveryRequestCcNotice,
   },

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { reportError } from '@/lib/error-reporter';
+import { nonErrorText } from '@/lib/error-text';
 import {
   chunkInFilterValues,
   IN_FILTER_DEFAULT_CONCURRENCY,
@@ -161,11 +162,13 @@ export async function writeInIdBatches<V extends string | number, Row = never>(
 
 /** The raw text behind an error, for server logs: a ServiceError's
  *  `internalDetail` (the PostgREST text its public message hides), else the
- *  Error's message, else the value itself. */
+ *  Error's message, else the reporter's text for any other value
+ *  (lib/error-text.ts: a supabase-js error object's message and code, never
+ *  its details; String() of it was "[object Object]"). */
 export function rawErrorText(err: unknown): string {
   if (err instanceof ServiceError && err.internalDetail) return err.internalDetail;
   if (err instanceof Error) return err.message;
-  return String(err);
+  return nonErrorText(err);
 }
 
 /**

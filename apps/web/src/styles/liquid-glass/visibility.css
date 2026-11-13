@@ -1,0 +1,19 @@
+/* The two show/hide rules (plan 4.4). Glass-only elements (a stateless
+   element the glass composition draws and classic does not) carry
+   [data-glass-only]; a stateless classic part that glass replaces carries
+   [data-classic-only]. Never the HTML `hidden` attribute: Tailwind's preflight
+   hides [hidden] with !important in @layer base, which no later layer can undo.
+   display:none also takes the element out of the accessibility tree and the
+   tab order. These are the only glass selectors that do not start with
+   :root[data-appearance="liquid-glass"]; the scope guard allows them by text.
+   (Printing hides glass-only elements too: print.css.) */
+@layer lg {
+  :root:not([data-appearance='liquid-glass']) [data-glass-only] {
+    display: none;
+  }
+  @media screen {
+    :root[data-appearance='liquid-glass'] [data-classic-only] {
+      display: none;
+    }
+  }
+}

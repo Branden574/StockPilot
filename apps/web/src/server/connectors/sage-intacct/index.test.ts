@@ -11,6 +11,7 @@ vi.mock('@/lib/env', () => ({
 
 import type { ConnectionRef, ConnectorDeps, OutboxEvent } from '@stockpilot/core';
 
+import { INTACCT_CREATE_NOT_STARTED, INTACCT_REQUEST_TIMEOUT_MS } from './client';
 import { sageIntacctConnector } from './index';
 
 /** Chainable supabase-table mock: every chain method returns itself; terminal
@@ -257,6 +258,33 @@ describe('sageIntacctConnector — purchase_order.ordered', () => {
     expect(r400.ok).toBe(false);
     expect(r400.retryable).toBe(false);
   });
+
+  // docket B81: a hung Intacct call held the whole drain-outbox cron, and a
+  // run the platform ended mid-create left the row pending for a blind
+  // re-send. The connector's calls now stop after 15 s.
+  it('sends the create with a 15 s timeout signal', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const admin = makeAdmin({
+      purchase_orders: tableMock({
+        data: { id: 'po-1', po_number: 'PO-1', supplier_id: null, total: 250 },
+        error: null,
+      }),
+    });
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ 'ia::result': { key: '321' } }), { status: 201 }),
+    );
+    const res = await sageIntacctConnector.handleOutboxEvent(
+      poEvent(),
+      conn(GOOD_SETTINGS),
+      SECRETS,
+      makeDeps(admin),
+    );
+    expect(res.ok).toBe(true);
+    expect(INTACCT_REQUEST_TIMEOUT_MS).toBe(15_000);
+    expect(timeoutSpy.mock.calls).toEqual([[15_000]]);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(timeoutSpy.mock.results[0]?.value);
+  });
 });
 
 describe('sageIntacctConnector — return.closed', () => {
@@ -339,6 +367,26 @@ describe('sageIntacctConnector — return.closed', () => {
     expect(body.journal).toEqual({ id: 'GJ' });
   });
 
+  it('sends the journal entry with a 15 s timeout signal (docket B81)', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const admin = makeAdmin(
+      returnTables([{ quantity: 2, order_request_line: { unit_cost_at_request: 10 } }]),
+    );
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ 'ia::result': { key: '555' } }), { status: 201 }),
+    );
+    const res = await sageIntacctConnector.handleOutboxEvent(
+      returnEvent(),
+      conn(GOOD_SETTINGS),
+      SECRETS,
+      makeDeps(admin),
+    );
+    expect(res.ok).toBe(true);
+    expect(timeoutSpy.mock.calls).toEqual([[INTACCT_REQUEST_TIMEOUT_MS]]);
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBe(timeoutSpy.mock.results[0]?.value);
+  });
+
   it('acks a zero-value return without POSTing', async () => {
     const admin = makeAdmin(
       returnTables([{ quantity: 1, order_request_line: { unit_cost_at_request: 0 } }]),
@@ -372,5 +420,84 @@ describe('sageIntacctConnector — refreshAuth', () => {
     expect(out.accessToken).toBe('at2');
     expect(out.refreshToken).toBe('rt2');
     expect(out.extra).toBe('keep');
+  });
+});
+
+/**
+ * docket B81: a run the platform ends mid-create leaves the export 'pending',
+ * and the next tick posts it again: for Intacct, which cannot dedupe, a second
+ * document. A create is now sent only when the cron run's deadline leaves room
+ * for the 15 s timeout plus 5 s for the writes that record it; otherwise
+ * nothing is sent and the export is offered at a later sync.
+ */
+describe('sageIntacctConnector — the cron run deadline', () => {
+  const fetchSpy = vi.fn();
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-01T12:00:00Z'));
+    fetchSpy.mockReset();
+    vi.stubGlobal('fetch', fetchSpy);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const poAdmin = () =>
+    makeAdmin({
+      purchase_orders: tableMock({
+        data: { id: 'po-1', po_number: 'PO-1', supplier_id: null, total: 250 },
+        error: null,
+      }),
+    });
+  const returnAdmin = () => {
+    const linesChain: Record<string, unknown> = {};
+    linesChain.select = vi.fn().mockReturnValue(linesChain);
+    linesChain.eq = vi.fn().mockResolvedValue({
+      data: [{ quantity: 2, order_request_line: { unit_cost_at_request: 10 } }],
+      error: null,
+    });
+    return makeAdmin({
+      returns: tableMock({ data: { id: 'ret-1', return_number: 'RET-1' }, error: null }),
+      return_lines: linesChain,
+    });
+  };
+  const EXPORTS: Array<[string, () => OutboxEvent, () => unknown]> = [
+    ['purchase_order.ordered', poEvent, poAdmin],
+    ['return.closed', returnEvent, returnAdmin],
+  ];
+
+  it.each(EXPORTS)(
+    '%s: with 19 s left nothing is sent, and the export says it was not started',
+    async (_topic, event, admin) => {
+      const res = await sageIntacctConnector.handleOutboxEvent(
+        event(),
+        conn(GOOD_SETTINGS),
+        SECRETS,
+        makeDeps(admin(), { deadlineAt: Date.now() + 19_000 }),
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+      // Not an attempt: the drainer puts the event's ledger row back (integrator R1).
+      expect(res).toEqual({
+        ok: false,
+        retryable: true,
+        notStarted: true,
+        error: INTACCT_CREATE_NOT_STARTED,
+      });
+    },
+  );
+
+  it.each(EXPORTS)('%s: with 21 s left the create is sent once', async (_topic, event, admin) => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({ 'ia::result': { key: '777' } }), { status: 201 }),
+    );
+    const res = await sageIntacctConnector.handleOutboxEvent(
+      event(),
+      conn(GOOD_SETTINGS),
+      SECRETS,
+      makeDeps(admin(), { deadlineAt: Date.now() + 21_000 }),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(res).toEqual({ ok: true, externalId: '777' });
   });
 });

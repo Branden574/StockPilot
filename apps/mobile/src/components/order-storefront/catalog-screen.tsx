@@ -45,6 +45,9 @@ import {
   STOREFRONT_SORT_AND_FILTER_COPY,
   STOREFRONT_TITLE_COPY,
   STOREFRONT_TRUNCATED_COPY,
+  addAllButtonCopy,
+  addAllState,
+  addAllTarget,
   availableOf,
   buildQtyMap,
   kitAvailability,
@@ -60,10 +63,16 @@ import {
   type StorefrontItem,
 } from '@stockpilot/core';
 
+import { GlassSurface } from '@/components/ui/glass/glass-surface';
+import { GLASS_CIRCLE, glassSearchBox, glassSearchInput } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
 import {
   MISSING_VALUE,
+  addAllLabel,
   addBlockedHint,
   addItemLabel,
   addedAnnouncement,
@@ -144,6 +153,13 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   const offline = useOffline();
   const router = useRouter();
   const { c } = useTheme();
+  // Liquid Glass (inferred from Order-New-Mobile and, on the iPad split,
+  // Order-New): the scene behind the catalog, Back and Manage items in the
+  // glass nav, the large title, the iOS search with Sort and filter as a
+  // 44 pt glass circle, the rows' cards on the grouped glass surface, the
+  // cart bar on the floating glass and the iPad cart column on the pane; every
+  // filter, row, quantity control, sheet and the cart stay.
+  const lg = useGlass();
   const { width, fontScale } = useWindowDimensions();
   const layout = storefrontLayout({ width, fontScale });
   const [filter, setFilter] = React.useState<StorefrontFilter>(EMPTY_FILTER);
@@ -419,7 +435,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   const canManageItems =
     target === null && snap?.setup.status === 'ready' && snap.setup.answer.viewer.canManageOrderItems === true;
   const topBar = (
-    <View style={styles.topbar}>
+    <View style={lg ? GLASS_LIST.nav : styles.topbar}>
       <IconChip icon={ArrowLeft} onPress={leave} accessibilityLabel={STOREFRONT_BACK_COPY} minTap />
       {canManageItems ? (
         <View style={styles.topbarEnd}>
@@ -436,7 +452,7 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   // the keyboard leave room for results (F8.4, PO-4 review).
   const titleInList = catalogTitleInList(fontScale);
   const titleNode = (
-    <Display size={30} accessibilityRole="header">
+    <Display size={lg ? 34 : 30} accessibilityRole="header" style={lg ? GLASS_LIST.title : undefined}>
       {title}
     </Display>
   );
@@ -553,7 +569,12 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           accessibilityLabel={STOREFRONT_SEARCH_LABEL_COPY}
           maxFontSizeMultiplier={INPUT_CAP}
           // The shared text box's recipe: the card fill in the stronger border.
-          style={[styles.search, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}
+          style={[
+            styles.search,
+            { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+            lg && glassSearchBox(lg),
+            lg && glassSearchInput(lg),
+          ]}
         />
         <Pressable
           onPress={() => setSheet({ kind: 'sort' })}
@@ -563,8 +584,18 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
               ? `${STOREFRONT_SORT_AND_FILTER_COPY}, ${activeFilterCount(filter)} on`
               : STOREFRONT_SORT_AND_FILTER_COPY
           }
-          style={[styles.filterButton, { borderColor: c.hair2, backgroundColor: c.card }]}
+          style={[
+            styles.filterButton,
+            { borderColor: c.hair2, backgroundColor: c.card },
+            lg && GLASS_CIRCLE,
+            lg && { borderWidth: 0, backgroundColor: 'transparent' },
+          ]}
         >
+          {lg ? (
+            <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+              <GlassSurface variant="overlay" radius={22} style={StyleSheet.absoluteFill} />
+            </View>
+          ) : null}
           <SlidersHorizontal size={18} color={c.ink} strokeWidth={1.5} />
         </Pressable>
       </View>
@@ -648,10 +679,17 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
   const cartSheetPanel = cartPanelFor(false);
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.paper }}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
+    <View style={{ flex: 1, backgroundColor: lg ? 'transparent' : c.paper }}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
         {topBar}
-        <View style={{ paddingHorizontal: STOREFRONT_GUTTER, paddingBottom: 10, gap: 12 }}>
+        <View
+          style={
+            lg
+              ? { paddingHorizontal: 16, paddingBottom: 10, gap: 12 }
+              : { paddingHorizontal: STOREFRONT_GUTTER, paddingBottom: 10, gap: 12 }
+          }
+        >
           {titleInList ? null : titleNode}
           {searchBar}
         </View>
@@ -659,7 +697,13 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
       {layout.kind === 'split' ? (
         <View style={{ flex: 1, flexDirection: 'row' }}>
           <View style={{ flex: 1, minWidth: 0 }}>{list}</View>
-          <View style={[styles.cartColumn, { width: layout.cartColumnWidth, borderColor: c.hair, backgroundColor: c.card }]}>
+          <View
+            style={[
+              styles.cartColumn,
+              { width: layout.cartColumnWidth, borderColor: c.hair, backgroundColor: c.card },
+              lg && { backgroundColor: lg.g.pane, borderColor: lg.g.paneLine },
+            ]}
+          >
             <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>{cartPanel}</ScrollView>
             {cart && cart.lines.length > 0 ? (
               <SafeAreaView edges={['bottom']} style={{ padding: 16 }}>
@@ -672,7 +716,15 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         <>
           <View style={{ flex: 1 }}>{list}</View>
           {cart ? (
-            <SafeAreaView edges={['bottom']} style={{ backgroundColor: c.card }}>
+            <SafeAreaView
+              edges={['bottom']}
+              style={{ backgroundColor: lg ? 'transparent' : c.card }}
+            >
+              {lg ? (
+                <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+                  <GlassSurface variant="overlay" radius={0} style={StyleSheet.absoluteFill} />
+                </View>
+              ) : null}
               <CartBar cart={cart} onOpenCart={() => setSheet({ kind: 'cart' })} onCheckOut={checkOut} />
             </SafeAreaView>
           ) : null}
@@ -704,6 +756,8 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
         <QuantitySheet
           item={sheetItem}
           quantity={qtyMap.get(sheetItem.id) ?? 0}
+          locked={locked}
+          notOrderable={snap.notOrderable.has(sheetItem.id)}
           onClose={() => setSheet(null)}
           onSave={(value) => {
             const refused = session.setQuantity(sheetItem.id, value);
@@ -720,31 +774,48 @@ export function CatalogScreen({ target }: { target: BrowseTarget | null }) {
           onClose={() => setSheet(null)}
           onPhotoError={onPhotoError}
           control={
-            (qtyMap.get(sheetItem.id) ?? 0) > 0 ? (
-              <Stepper
-                quantity={qtyMap.get(sheetItem.id) ?? 0}
-                available={availableOf(sheetItem)}
-                atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem) || snap.notOrderable.has(sheetItem.id)}
-                disabled={locked}
-                decLabel={decreaseLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
-                incLabel={increaseLabel(sheetItem.name)}
-                countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
-                incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem), snap.notOrderable.has(sheetItem.id))}
-                lockHint={changeLockedHint(locked)}
-                onDec={() => onDec(sheetItem.id)}
-                onInc={() => onInc(sheetItem.id)}
-                onCount={() => setSheet({ kind: 'quantity', itemId: sheetItem.id })}
-              />
-            ) : (
-              <SmallAction
-                label={STOREFRONT_ADD_COPY}
-                accessibilityLabel={addItemLabel(sheetItem.name)}
-                variant="primary"
-                disabled={locked || availableOf(sheetItem) < 1 || snap.notOrderable.has(sheetItem.id)}
-                hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}
-                onPress={() => onAdd(sheetItem.id)}
-              />
-            )
+            <View style={{ gap: 8 }}>
+              {(qtyMap.get(sheetItem.id) ?? 0) > 0 ? (
+                <Stepper
+                  quantity={qtyMap.get(sheetItem.id) ?? 0}
+                  available={availableOf(sheetItem)}
+                  atMax={(qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem) || snap.notOrderable.has(sheetItem.id)}
+                  disabled={locked}
+                  decLabel={decreaseLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
+                  incLabel={increaseLabel(sheetItem.name)}
+                  countLabel={quantityButtonLabel(sheetItem.name, qtyMap.get(sheetItem.id) ?? 0)}
+                  incHint={increaseBlockedHint((qtyMap.get(sheetItem.id) ?? 0) >= availableOf(sheetItem), snap.notOrderable.has(sheetItem.id))}
+                  lockHint={changeLockedHint(locked)}
+                  onDec={() => onDec(sheetItem.id)}
+                  onInc={() => onInc(sheetItem.id)}
+                  onCount={() => setSheet({ kind: 'quantity', itemId: sheetItem.id })}
+                />
+              ) : (
+                <SmallAction
+                  label={STOREFRONT_ADD_COPY}
+                  accessibilityLabel={addItemLabel(sheetItem.name)}
+                  variant="primary"
+                  disabled={locked || availableOf(sheetItem) < 1 || snap.notOrderable.has(sheetItem.id)}
+                  hint={addBlockedHint({ locked, notOrderable: snap.notOrderable.has(sheetItem.id) })}
+                  onPress={() => onAdd(sheetItem.id)}
+                />
+              )}
+              {/* Add all: one press sets the line to everything available
+                  (core's rule, the website's too). Not for a marked line,
+                  and not once everything is in the cart. */}
+              {addAllState(availableOf(sheetItem), qtyMap.get(sheetItem.id) ?? 0) === 'offer' && !snap.notOrderable.has(sheetItem.id) ? (
+                <SmallAction
+                  label={addAllButtonCopy(availableOf(sheetItem))}
+                  accessibilityLabel={addAllLabel(sheetItem.name, availableOf(sheetItem), qtyMap.get(sheetItem.id) ?? 0)}
+                  disabled={locked}
+                  hint={changeLockedHint(locked)}
+                  onPress={() => {
+                    const target = addAllTarget(availableOf(sheetItem));
+                    if (!session.setQuantity(sheetItem.id, target)) say(quantityAnnouncement(sheetItem.name, target));
+                  }}
+                />
+              ) : null}
+            </View>
           }
         />
       ) : null}

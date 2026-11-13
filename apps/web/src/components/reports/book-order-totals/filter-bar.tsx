@@ -132,7 +132,11 @@ export function BookReportFilterBar(props: BookReportFilterBarProps) {
   const go = (next: BookReportQuery) => goTo(next);
 
   return (
-    <section aria-label={BOOK_REPORT_UI.filters} className="space-y-3">
+    <section
+      aria-label={BOOK_REPORT_UI.filters}
+      className="space-y-3"
+      data-glass-role="bot-filters"
+    >
       {props.viewNow && props.warehouseEcho ? (
         <ViewChangedNotice
           query={query}
@@ -276,7 +280,7 @@ function StatusControl({
             />
           </button>
         </PopoverTrigger>
-        <PopoverContent className="w-72 p-3">
+        <PopoverContent className="w-72 p-3" data-glass-role="bot-status-menu">
           <fieldset className="space-y-1">
             <legend className="text-foreground mb-1.5 text-[13.5px] font-medium">
               {BOOK_REPORT_UI.status}
@@ -325,7 +329,9 @@ function StatusControl({
               onClick={() => {
                 setOpen(false);
                 onChange(
-                  withBookReportFilter(query, { statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS] }),
+                  withBookReportFilter(query, {
+                    statusGroups: [...DEFAULT_BOOK_REPORT_STATUS_GROUPS],
+                  }),
                 );
               }}
             >

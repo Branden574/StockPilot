@@ -166,7 +166,7 @@ export function ModuleToggles({ modules, enabledIds, comped = false }: ModuleTog
         }}
       >
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>
               {confirm?.next ? 'Enable' : comped ? 'Switch off' : 'Disable'}{' '}
               {confirm ? MODULE_REGISTRY[confirm.moduleId].title : ''}?
@@ -190,7 +190,7 @@ export function ModuleToggles({ modules, enabledIds, comped = false }: ModuleTog
               </div>
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"

@@ -360,6 +360,14 @@ const REVIEWED_DYNAMIC_READS: Array<{ file: string; enclosing: string; why: stri
       "is 'email_digest_optin' (notification-preferences.ts): two columns of the profile, no " +
       'embedded support ticket.',
   },
+  {
+    file: 'apps/web/src/server/services/lib/in-active-org.ts',
+    enclosing: 'readInActiveOrg',
+    why:
+      "Its table is typed ActiveOrgTable ('order_requests' | 'cycle_counts' | 'purchase_orders' | " +
+      "'receipts' | 'warehouses' | 'bundles' | 'stock_movements'), and its callers select id, or " +
+      'status, requester_user_id, replacement_for_return_id and warehouse_id (S39): no kept address.',
+  },
 ];
 
 // ── The scan ────────────────────────────────────────────────────────────────
@@ -1027,9 +1035,16 @@ describe('kept-address senders (B23 guard)', () => {
             text: '// borrower_email in a comment is not a read\nexport {};\n',
           },
         ];
+        // The line of the service's checkout-email call, read from the file so
+        // an edit above it (S39 added a read to create()) does not move the pin.
+        const checkoutLine =
+          readFileSync(path.join(REPO, RENTAL_SERVICE), 'utf8')
+            .split('\n')
+            .findIndex((l) => l.includes('sendRentalCheckoutEmail(rentalId)')) + 1;
+        expect(checkoutLine).toBeGreaterThan(0);
         expect(withPlanted(planted)).toEqual([
           // The checkout email the rental service calls is gone with the file.
-          `${RENTAL_SERVICE}:306 RentalsService.create() hands rentals.borrower_email to sendRentalCheckoutEmail() (@/lib/email/rentals), which reaches no function the scan can follow in ${RENTAL_EMAILS}: make it a function, method or object function the scan reads`,
+          `${RENTAL_SERVICE}:${checkoutLine} RentalsService.create() hands rentals.borrower_email to sendRentalCheckoutEmail() (@/lib/email/rentals), which reaches no function the scan can follow in ${RENTAL_EMAILS}: make it a function, method or object function the scan reads`,
           `KEPT_ADDRESSES rentals alias borrowerEmail: ${RENTAL_EMAILS} loadRentalContext() no longer makes it`,
           `NO_ANSWER_YET ${RENTAL_EMAILS} sendRentalEmail(): it no longer sends or hands on a kept rentals address`,
           // With no checkout email, create() sends nothing, so the action and
@@ -1476,10 +1491,10 @@ function supportTicketSubmitterAccountDeleted(_row: unknown): boolean {
       '(9) an answer is the kept-address.ts function a call reaches: a function, an import or a member that only has its name is not one',
       () => {
         expect(withPlanted(PLANTS_ANSWER_LOOKALIKES())).toEqual([
-          'apps/web/src/server/services/support-tickets.ts:363 updateSupportTicket() reads support_tickets.email and sends email through sendResolvedNotice() without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
-          'apps/web/src/server/services/support-tickets.ts:362 updateSupportTicket() hands support_tickets.email to keepAlive() (@/server/services/lib/defer) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
-          'apps/web/src/server/services/support-tickets.ts:415 sendResolvedNotice() is handed support_tickets.email by updateSupportTicket() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
-          'apps/web/src/server/services/support-tickets.ts:392 sendResolvedNotice() hands support_tickets.email to renderSupportResolvedEmailHtml() (@/lib/email/es/families/support) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
+          'apps/web/src/server/services/support-tickets.ts:365 updateSupportTicket() reads support_tickets.email and sends email through sendResolvedNotice() without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/support-tickets.ts:364 updateSupportTicket() hands support_tickets.email to keepAlive() (@/server/services/lib/defer) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
+          'apps/web/src/server/services/support-tickets.ts:417 sendResolvedNotice() is handed support_tickets.email by updateSupportTicket() and sends email (sendEmail) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts',
+          'apps/web/src/server/services/support-tickets.ts:394 sendResolvedNotice() hands support_tickets.email to renderSupportResolvedEmailHtml() (@/lib/email/es/families/support) without asking supportTicketSubmitterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',
           'apps/web/src/server/email/plant-own-answer.ts:9 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/email/plant-lookalike-import.ts:10 remindRequester() reads maintenance_requests.requester_email_snapshot and sends email (sendEmail) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts',
           'apps/web/src/server/email/plant-lookalike-import.ts:9 remindRequester() hands maintenance_requests.requester_email_snapshot to maintenanceRequesterAccountDeleted() (@/server/lib/plant-lookalike) without asking maintenanceRequesterAccountDeleted() in server/lib/kept-address.ts: ask first, or check the hand-off by hand and list it in REVIEWED_HANDOFFS',

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { assertWarehouseAccess, ForbiddenError } from '@/lib/auth/warehouse';
+import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { kitRefusal } from './bundles';
@@ -14,6 +15,8 @@ import {
 import { dbGuardRefusal } from './lib/db-guard-refusal';
 import { fetchAllRowsByIds, reportDegradedRead } from './lib/fetch-by-ids';
 import { invalidateInventoryListAfterWrite } from './lib/inventory-list-cache';
+import { listRows } from './lib/list-rows';
+import { postgrestErrorText } from './lib/postgrest-error';
 
 import { DELETED_USER_LABEL, isDeletedPerson } from '@stockpilot/core';
 import type {
@@ -49,6 +52,23 @@ export interface ScheduleEventRow {
   createdByName: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** What an event's distribution handed out: its bundle_distributions row. */
+export interface ScheduleEventDistribution {
+  bundleId: string;
+  quantity: number;
+  warehouseId: string;
+}
+
+/** One event as its page shows it (get()). */
+export interface ScheduleEventDetail extends ScheduleEventRow {
+  /** The event's bundle_distributions row (0082 allows one per event): the
+   *  kit, quantity and warehouse it handed out, which a hand-out from a
+   *  bundle page that named the event may set apart from the event's own
+   *  bundle fields. null when it has none, or when the read failed
+   *  (reported); bundleDistributed is false then too. */
+  bundleDistribution: ScheduleEventDistribution | null;
 }
 
 // Embed only warehouse — that FK is unambiguous (warehouse_id →
@@ -167,10 +187,10 @@ async function readDistributedEventIds(
 }
 
 /**
- * The same set for DISPLAY (the "distributed" badge on a list or detail
- * view): a failed read leaves every event unflagged and is reported, so a
- * calendar still renders. Never use this for a decision; see
- * readDistributedEventIds.
+ * The same set for DISPLAY (the "distributed" badge on a list view, and the
+ * row update() returns; the event's page reads loadEventDistribution below):
+ * a failed read leaves every event unflagged and is reported, so a calendar
+ * still renders. Never use this for a decision; see readDistributedEventIds.
  */
 async function loadDistributedEventIds(
   ctx: ServiceContext,
@@ -181,6 +201,43 @@ async function loadDistributedEventIds(
   } catch (err) {
     reportDegradedRead('schedule.distributed_events', err, { events: eventIds.length });
     return new Set();
+  }
+}
+
+/**
+ * What one event's distribution handed out, for its page (B103): the kit,
+ * quantity and warehouse of its bundle_distributions row, or null when it has
+ * none. The page said the kit "will be distributed ... when this event is
+ * marked complete" after it had been, because only the flag above was read.
+ * For DISPLAY, like the flag: a failed read, or an answer that is not a list
+ * (postgrest-js resolves an empty body as no data and no error), is reported
+ * and reads as no distribution.
+ */
+async function loadEventDistribution(
+  ctx: ServiceContext,
+  eventId: string,
+): Promise<ScheduleEventDistribution | null> {
+  try {
+    const res = await ctx.supabase
+      .from('bundle_distributions')
+      .select('bundle_id, quantity, warehouse_id')
+      .eq('organization_id', ctx.organizationId)
+      .eq('schedule_event_id', eventId)
+      .limit(1);
+    if (res.error) throw new Error(postgrestErrorText(res.error, res));
+    const row = listRows<{ bundle_id: string; quantity: number | string; warehouse_id: string }>(
+      'bundle_distributions',
+      res,
+    )[0];
+    if (!row) return null;
+    return {
+      bundleId: row.bundle_id,
+      quantity: Number(row.quantity),
+      warehouseId: row.warehouse_id,
+    };
+  } catch (err) {
+    reportDegradedRead('schedule.event_distribution', err, { events: 1 });
+    return null;
   }
 }
 
@@ -293,7 +350,7 @@ export class ScheduleService {
     return rows.map((r) => mapRow(r, creators, distributed));
   }
 
-  async get(id: string): Promise<ScheduleEventRow> {
+  async get(id: string): Promise<ScheduleEventDetail> {
     assertModuleEnabled(this.ctx, 'schedule');
     const { data, error } = await this.ctx.supabase
       .from('schedule_events')
@@ -303,11 +360,17 @@ export class ScheduleService {
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
     if (!data) throw new ServiceError('not_found', 'Event not found');
-    const [creators, distributed] = await Promise.all([
+    // One read gives both the flag and what was handed out, so the page's
+    // badge and its kit line never disagree.
+    const [creators, distribution] = await Promise.all([
       loadCreatorNames(this.ctx, [data as { created_by?: string }]),
-      loadDistributedEventIds(this.ctx, [id]),
+      loadEventDistribution(this.ctx, id),
     ]);
-    return mapRow(data as Record<string, unknown>, creators, distributed);
+    return {
+      ...mapRow(data as Record<string, unknown>, creators),
+      bundleDistributed: distribution !== null,
+      bundleDistribution: distribution,
+    };
   }
 
   async create(input: CreateScheduleEventInput): Promise<ScheduleEventRow> {
@@ -524,7 +587,9 @@ export class ScheduleService {
     // cancelled event re-fire on completion. We tighten to require
     // the prior status to be exactly 'in_progress' — the normal
     // workflow path. Reopen → in_progress → complete still works.
-    let autoDistFailed: { message: string; bundleId: string } | null = null;
+    // `message` is a refusal distribute_bundle words (0365, 0415); null for
+    // any other failure, whose text is reported, never shown (S31).
+    let autoDistFailed: { message: string | null; bundleId: string } | null = null;
     // Whether the event has a distribution once this call is done, from what
     // the call itself saw. The completion audit records it; the re-read below
     // is for display and degrades to "not distributed" when it fails.
@@ -609,13 +674,16 @@ export class ScheduleService {
               // emitting audit events. distribute_bundle's refusals are
               // codes (0365, 0415) or the permission hint (0415); the
               // manager reads the sentence instead.
-              autoDistFailed = {
-                message:
-                  dbGuardRefusal(distErr, 'kit_distribute')?.message ??
-                  kitRefusal(msg)?.message ??
-                  distErr.message,
-                bundleId,
-              };
+              const refusal =
+                dbGuardRefusal(distErr, 'kit_distribute')?.message ?? kitRefusal(msg)?.message ?? null;
+              if (refusal === null) {
+                void reportError(new Error(msg || 'distribute_bundle failed'), {
+                  tag: 'schedule.auto_distribute',
+                  organizationId: this.ctx.organizationId,
+                  extra: { code: code ?? null, bundleId, scheduleEventId: id },
+                });
+              }
+              autoDistFailed = { message: refusal, bundleId };
             }
           }
         }
@@ -675,10 +743,13 @@ export class ScheduleService {
     }
 
     if (autoDistFailed) {
+      const retry = `Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`;
       throw new ServiceError(
         'conflict',
-        `Event marked complete, but bundle distribution failed: ` +
-          `${autoDistFailed.message.replace(/\.$/, '')}. Retry from /dashboard/bundles/${autoDistFailed.bundleId}.`,
+        autoDistFailed.message === null
+          ? `Event marked complete, but the bundle could not be distributed. ${retry}`
+          : `Event marked complete, but bundle distribution failed: ` +
+              `${autoDistFailed.message.replace(/\.$/, '')}. ${retry}`,
       );
     }
 

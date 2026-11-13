@@ -22,6 +22,12 @@ import { WarehousesService } from '@/server/services/warehouses';
 import { fetchRackHoldingsByItem } from '@/server/services/rack-holdings';
 import { can, resolvePlacement } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 /**
  * An external book cover kept on the item (bulk-imported books have no
  * item_images row). The same rule ItemImagesService.primaryMasterUrlsForItems
@@ -101,7 +107,12 @@ export default async function NewRentalPage({
 
   if (warehouses.length === 0) {
     return (
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <div
+        className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+        data-glass-page="ops"
+        data-glass-view="rental-new"
+        data-glass-width="form"
+      >
         <PageHeader
           back={
             <PageHeaderBackLink href="/dashboard/rentals">← Back to rentals</PageHeaderBackLink>
@@ -346,7 +357,11 @@ export default async function NewRentalPage({
   return (
     // The page box every redesigned dashboard page shares (max 1320, 16 px
     // gutters on a phone).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="ops"
+      data-glass-view="rental-new"
+    >
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/rentals">← Back to rentals</PageHeaderBackLink>}
         title="New rental"
@@ -360,6 +375,7 @@ export default async function NewRentalPage({
         aisles={aisles}
         members={members}
         viewerRole={ctx.role}
+        viewerUserId={ctx.userId}
       />
     </div>
   );

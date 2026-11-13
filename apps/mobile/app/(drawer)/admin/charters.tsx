@@ -4,6 +4,8 @@ import { View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
 import { useOrg } from '@/lib/use-org';
@@ -30,6 +32,9 @@ const NO_ROWS: CharterRow[] = [];
  * eyebrow quotes no count it did not read.
  */
 export default function CharterAdmin() {
+  // Liquid Glass (inferred: the iOS grouped list): the rows as one grouped
+  // surface of iOS rows; every row, state and message Classic has stays.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   // The rows on screen and the workspace they were read for: a failed read
@@ -83,7 +88,7 @@ export default function CharterAdmin() {
   if (!roleLoading && !isAdmin) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · CHARTERS"
+        eyebrow={lg ? 'Admin · Charters' : 'ADMIN · CHARTERS'}
         title="Restricted"
         italic="access."
         emptyIcon={Building2}
@@ -99,7 +104,15 @@ export default function CharterAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={failed && rows.length === 0 ? 'ADMIN · CHARTERS' : `ADMIN · ${rows.length} CHARTERS`}
+      eyebrow={
+        lg
+          ? failed && rows.length === 0
+            ? 'Admin · Charters'
+            : `Admin · ${rows.length} ${rows.length === 1 ? 'charter' : 'charters'}`
+          : failed && rows.length === 0
+            ? 'ADMIN · CHARTERS'
+            : `ADMIN · ${rows.length} CHARTERS`
+      }
       title="Charters"
       italic="."
       emptyTitle="No charters yet."
@@ -119,15 +132,24 @@ export default function CharterAdmin() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(c) => c.id}
-      renderItem={(c) => <CharterCard charter={c} />}
+      renderItem={
+        lg
+          ? (c, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <CharterCard charter={c} />
+              </GlassJoinedRow>
+            )
+          : (c) => <CharterCard charter={c} />
+      }
     />
   );
 }
 
 function CharterCard({ charter }: { charter: CharterRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
-    <Card padding={14}>
+    <Card padding={14} style={lg ? GLASS_BARE_CARD : undefined}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           {charter.code ? (

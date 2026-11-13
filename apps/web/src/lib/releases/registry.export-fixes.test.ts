@@ -68,6 +68,45 @@ const exporter: ReleaseViewer = {
   permissions: ['items:export'],
   enabledModules: [],
 };
+/**
+ * Added by docs/whats-new-s43a-2026-11 (2026-11-02): the authenticator code
+ * release reaches every member and the integration retries release reaches
+ * whoever manages integrations with the Integrations module on (the owner
+ * here); both are published later, above the lists-delivery-sites-and-fixes
+ * release. A test that expects this release in an old phone build's list of
+ * three, or as a notice, sees or reads them first (a read of a release a
+ * reader is not told changes nothing).
+ */
+// Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: the authenticator code and integration retries releases only): the web fixes and archived charters releases are published later, at the top, and reach an owner, so they are read or seen with the others.
+const NEWER_IDS = [
+  // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: without them): the Export items, phone update, clearer web messages and QW1 releases are published later, at the top.
+  // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: without it): the S2 release is published later, at the top, and reaches an owner, so it is read or seen with the newer releases.
+  // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: without it): the count sheet release is published later, at the top, and reaches an owner with every permission and module, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by feat/order-add-all (2026-11-10; was: without it): the Add all release is published later, at the top, and reaches whoever may place orders where Orders is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
+  'phone-appearance-returns-2026-11',
+  'returns-request-email-names-2026-11',
+  'order-add-all-2026-11',
+  'count-sheet-long-names-2026-11',
+  'approver-controls-own-warehouses-2026-11',
+  'export-items-permission-2026-11',
+  'mobile-app-fixes-2026-11-02',
+  'clearer-web-messages-2026-11',
+  'invites-calendar-record-pages-2026-11',
+  'web-fixes-2026-11-02',
+  'archived-charters-2026-11',
+  'authenticator-code-requests-2026-11',
+  'integration-retries-2026-11',
+];
+const newerReads = NEWER_IDS.map((id) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-02T15:50:00Z',
+  read_at: '2026-11-02T15:50:00Z',
+}));
+const newerSeen: Record<string, boolean> = Object.fromEntries(NEWER_IDS.map((id) => [id, true]));
 
 /** A file in the repository, as written. */
 const REPO = resolve(__dirname, '../../../../..');
@@ -118,7 +157,8 @@ describe('the export fixes release', () => {
     expect(release().revision).toBe(1);
     expect(visibleReleases(RELEASES, everyone).map((r) => r.id)).toContain(ID);
     expect(buildReleaseList(RELEASES, everyone, [], null).releases.map((r) => r.id)).toContain(ID);
-    expect(legacyAnnouncementsFor(RELEASES, everyone, {}).map((a) => a.id)).toContain(ID);
+    // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: nothing seen): an old phone build lists at most three unseen releases, and the authenticator code, integration retries and lists-delivery-sites-and-fixes releases, all published later, reach the owner first; once the two newest are seen, this one is in the list again.
+    expect(legacyAnnouncementsFor(RELEASES, everyone, newerSeen).map((a) => a.id)).toContain(ID);
     expect(ANNOUNCEMENTS.map((a) => a.id)).toContain(ID);
     expect(registryFingerprint(RELEASES)).toContain(`${ID}@1:published`);
     expect(registryFingerprint(RELEASES)).not.toBe(
@@ -127,12 +167,42 @@ describe('the export fixes release', () => {
   });
 
   // Renamed by fix/b44-update-restart-prompt (2026-10-31; was: "is the newest entry, at the top, directly above the small-fixes-8 release, and dated after every other release on a whole minute", with ID at RELEASES[0], the small-fixes-8 release at RELEASES[1] and every release from RELEASES[1] dated before it): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, directly above it, so it and the small-fixes-8 release move down by one. Claim kept: directly above the small-fixes-8 release, dated after every release below it, on a whole minute.
-  it('sits directly below the B44 phone update draft, directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
-    expect(RELEASES[0]?.id).toBe('mobile-app-asks-before-restarting');
-    expect(RELEASES[0]?.status).toBe('draft');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('small-fixes-8-2026-10');
-    for (const r of RELEASES.slice(2)) {
+  // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "sits directly below the B44 phone update draft, directly above the small-fixes-8 release, and is dated after every release below it on a whole minute", with ID at RELEASES[1], the small-fixes-8 release at RELEASES[2] and every release from RELEASES[2] dated before it): the lists-delivery-sites-and-fixes release is published later, directly below the B44 phone update draft and directly above this one, so it and the small-fixes-8 release move down by one. Claim kept: directly above the small-fixes-8 release, dated after every release below it, on a whole minute.
+  // Renamed by docs/whats-new-2026-11-02 (2026-11-02; was: "sits directly below the lists-delivery-sites-and-fixes release (published later, below the B44 phone update draft), ...", with that draft at RELEASES[0] and the lists-delivery-sites-and-fixes release at RELEASES[3]): the B44 draft is folded into the update-ready-and-fixes release, published later, directly below the lists-delivery-sites-and-fixes release and directly above this one. Claim kept: directly above the small-fixes-8 release, dated after every release below it on a whole minute.
+  it('sits directly below the update-ready-and-fixes release (published later, below the lists-delivery-sites-and-fixes release), directly above the small-fixes-8 release, and is dated after every release below it on a whole minute', () => {
+    // Re-pinned by docs/whats-new-s43a-2026-11 (2026-11-02; was: the lists-delivery-sites-and-fixes release at 1, ID at 2, the small-fixes-8 release at 3 and slice(3)): the authenticator code and integration retries releases are published later, directly below the B44 phone update draft, above the lists-delivery-sites-and-fixes release, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: the B44 phone update draft, mobile-app-asks-before-restarting, a draft at 0, and the three releases below it at 1 to 3): the release that folds the draft in, update-ready-and-fixes, is published at 3, directly below the lists-delivery-sites-and-fixes release and directly above this one, dated after it; the three releases above it move up one place, and this one stays at 4.
+    // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: every pinned position two places higher, the authenticator code release at 0, ID at 4 and slice(5)): the web fixes and archived charters releases are published later, at 0 and 1, so every position below them moves down by two.
+    // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: every pinned position four places higher): the Export items, phone update, clearer web messages and QW1 releases are published at the top, so every position below them moves down by four.
+    // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whats-new-count-sheet-long-names (2026-11-10; was: every pinned position one place higher): the count sheet release is published at the top, so every position below it moves down by one.
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[12]?.id).toBe('authenticator-code-requests-2026-11');
+    expect(RELEASES[12]?.status).toBe('published');
+    expect(RELEASES[13]?.id).toBe('integration-retries-2026-11');
+    expect(RELEASES[13]?.status).toBe('published');
+    expect(RELEASES[14]?.id).toBe('lists-delivery-sites-and-fixes-2026-11');
+    expect(RELEASES[14]?.status).toBe('published');
+    expect(Date.parse(RELEASES[14]!.publishedAt)).toBeGreaterThan(
+      Date.parse(release().publishedAt),
+    );
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[15]?.id).toBe('update-ready-and-fixes-2026-11');
+    expect(RELEASES[15]?.status).toBe('published');
+    expect(Date.parse(RELEASES[15]!.publishedAt)).toBeGreaterThan(
+      Date.parse(release().publishedAt),
+    );
+    // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
+    // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[16]?.id).toBe(ID);
+    expect(RELEASES[17]?.id).toBe('small-fixes-8-2026-10');
+    // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(17)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     expect(release().publishedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:00Z$/);
@@ -141,7 +211,8 @@ describe('the export fixes release', () => {
   // Published once #414 had merged (09:26Z), its web build answered on
   // production (09:27:52Z) and the Demo Co walk's check had closed
   // (10:10:32Z); the day it went live (UTC) is the ceiling.
-  it('is published as revision 1, not before its web build was live (09:27:52Z) and walked (to 10:10:32Z), on the day it went live, and no draft is left', () => {
+  // Renamed by lg/s5-flag-home (2026-11-09; was: "is published as revision 1, not before its web build was live (09:27:52Z) and walked (to 10:10:32Z), on the day it went live, and no draft is left"): the Liquid Glass release is held as a draft at the top until G5. Claim kept: no other draft is left.
+  it('is published as revision 1, not before its web build was live (09:27:52Z) and walked (to 10:10:32Z), on the day it went live, and no draft but the Liquid Glass release is left', () => {
     // Re-pinned by fix/b44-update-restart-prompt (2026-10-31; was: no draft): the B44 phone update draft (mobile-app-asks-before-restarting) is dated after every release, at the top, above the export fixes release, so every position below it moves down by one, and it is the one draft.
     const at = Date.parse(release().publishedAt);
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T09:26:00Z'));
@@ -149,8 +220,10 @@ describe('the export fixes release', () => {
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-10-31T10:10:32Z'));
     expect(at).toBeLessThanOrEqual(Date.parse('2026-11-01T00:00:00Z'));
     expect(release().revision).toBe(1);
+    // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ['mobile-app-asks-before-restarting']): the B44 phone update draft is folded into the update-ready-and-fixes release, published directly below the lists-delivery-sites-and-fixes release, so no draft is left.
+    // Re-pinned by lg/s5-flag-home (2026-11-09; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
-      'mobile-app-asks-before-restarting',
+      'liquid-glass-2026-11',
     ]);
   });
 
@@ -248,10 +321,43 @@ describe('the export fixes release', () => {
   // An old phone build shows the title, the summary and the first linked line
   // the reader can reach as its button; the phone draws the button only when
   // the link opens one of its own screens (whats-new.tsx).
-  it('is the first notice for whoever can export, and an old phone build shows its title and summary with Open Items', () => {
+  // Renamed by docs/whats-new-2026-11-02b (2026-11-02; was: "is the first notice for whoever can export, and an old phone build shows its title and summary with Open Items", with nothing read or seen): the lists-delivery-sites-and-fixes release is published later, directly above it, and reaches every member, so every reader here reads or sees it first. Claim kept: it is the first notice for whoever can export once that release is read, an old phone build shows its title and summary with Open Items once that release is seen, and a member who cannot export is not told it.
+  // Renamed by docs/whats-new-s43a-2026-11 (2026-11-02; was: "is the first notice for whoever can export once the lists-delivery-sites-and-fixes release is read, and an old phone build shows its title and summary with Open Items once that release is seen", with that release alone read or seen): the authenticator code release (every member) and the integration retries release (the owner here) are published later, above it, so every reader here reads or sees them with it. Claim kept: it is the first notice for whoever can export once the newer releases that reach them are read, an old phone build shows its title and summary with Open Items once those are seen, and a member who cannot export is not told it.
+  // Renamed by docs/whats-new-2026-11-02 (2026-11-02; was: "is the first notice for whoever can export once the lists-delivery-sites-and-fixes release and the newer releases are read, ... once those are seen", with those releases read or seen): the update-ready-and-fixes release, which folds in the B44 phone update draft, is published later, directly above this one, and reaches every member, so whoever can export is told it once the newer releases are read and this one once it is read too. Claim kept: the next notice for whoever can export, with Open Items on an old phone build.
+  it('is the next notice for whoever can export once the update-ready-and-fixes release and the newer releases are read, and an old phone build shows its title and summary with Open Items once those are seen', () => {
+    const listsRead = {
+      release_id: 'lists-delivery-sites-and-fixes-2026-11',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-02T06:10:00Z',
+      read_at: '2026-11-02T06:10:00Z',
+    };
+    const listsSeen = { ...newerSeen, 'lists-delivery-sites-and-fixes-2026-11': true };
+    // Added by docs/whats-new-2026-11-02 (2026-11-02): the update-ready-and-fixes release, read or seen with the
+    // newer releases.
+    const updateReadyRead = {
+      release_id: 'update-ready-and-fixes-2026-11',
+      revision: 1,
+      dismissed_at: null,
+      opened_at: '2026-11-02T17:40:00Z',
+      read_at: '2026-11-02T17:40:00Z',
+    };
+    const updateReadySeen = { ...listsSeen, 'update-ready-and-fixes-2026-11': true };
     for (const v of [everyone, exporter]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      // Re-pinned by docs/whats-new-2026-11-02 (2026-11-02; was: ID once the newer releases are read, and ID first on an old phone build once they are seen): the update-ready-and-fixes release comes first until it is read or seen too, then this one.
+      expect(
+        buildReleaseList(RELEASES, v, [...newerReads, listsRead], null).latestUnread?.id,
+        v.role,
+      ).toBe('update-ready-and-fixes-2026-11');
+      expect(
+        buildReleaseList(RELEASES, v, [...newerReads, listsRead, updateReadyRead], null)
+          .latestUnread?.id,
+        v.role,
+      ).toBe(ID);
+      expect(legacyAnnouncementsFor(RELEASES, v, listsSeen)[0]?.id, v.role).toBe(
+        'update-ready-and-fixes-2026-11',
+      );
+      expect(legacyAnnouncementsFor(RELEASES, v, updateReadySeen)[0], v.role).toEqual({
         id: ID,
         date: '2026-10-31',
         title: release().title,
@@ -260,8 +366,19 @@ describe('the export fixes release', () => {
       });
     }
     // Not told to a member who cannot export.
-    expect(buildReleaseList(RELEASES, member, [], null).latestUnread?.id).not.toBe(ID);
-    expect(legacyAnnouncementsFor(RELEASES, member, {}).map((a) => a.id)).not.toContain(ID);
+    expect(
+      buildReleaseList(RELEASES, member, [...newerReads, listsRead], null).latestUnread?.id,
+    ).not.toBe(ID);
+    // Added by docs/whats-new-2026-11-02 (2026-11-02): nor once the update-ready-and-fixes release is read or seen
+    // too.
+    expect(
+      buildReleaseList(RELEASES, member, [...newerReads, listsRead, updateReadyRead], null)
+        .latestUnread?.id,
+    ).not.toBe(ID);
+    expect(legacyAnnouncementsFor(RELEASES, member, listsSeen).map((a) => a.id)).not.toContain(ID);
+    expect(
+      legacyAnnouncementsFor(RELEASES, member, updateReadySeen).map((a) => a.id),
+    ).not.toContain(ID);
     // On the phone, Open Items opens its Inventory screen, so the phone shows
     // the button.
     expect(phone('src/components/onboarding/whats-new.tsx')).toContain(

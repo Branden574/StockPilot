@@ -20,7 +20,10 @@ const ITEMS = [
   { id: 'i-2', name: 'Keyboard', sku: 'SP-KEY-001', barcode: null },
 ];
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 
 function printCss(container: HTMLElement): string {
   return Array.from(container.ownerDocument.querySelectorAll('style'))
@@ -91,6 +94,27 @@ describe('LabelSheet', () => {
     const well = container.querySelector('[data-slot="label-sheet-preview"]')!;
     expect(well).toHaveClass('print:bg-transparent', 'print:border-0', 'print:p-0');
     expect(well).toContainElement(container.querySelector('.label-print-page') as HTMLElement);
+  });
+
+  it.each(['default', 'opt-in'])(
+    '%s: keeps its classic tokens inside Liquid Glass: the sheet preview is an exempt surface (R6)',
+    (rollout) => {
+      vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', rollout);
+      const { container } = render(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+      const well = container.querySelector('[data-slot="label-sheet-preview"]')!;
+      expect(well).toHaveAttribute('data-appearance-exempt');
+      // Only the sheet: the controls above it follow the page's look.
+      expect(container.querySelector('[data-slot="label-sheet-controls"]')).not.toHaveAttribute(
+        'data-appearance-exempt',
+      );
+    },
+  );
+
+  it('off: no exempt marker, so the sheet is origin/main’s markup (R5: the kill switch gives today’s DOM)', () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', '');
+    const { container } = render(<LabelSheet items={ITEMS} copies={1} template="medium" />);
+    expect(container.querySelector('[data-slot="label-sheet-preview"]')).not.toBeNull();
+    expect(container.innerHTML).not.toContain('data-appearance-exempt');
   });
 
   it('says how to pick items when there are none, in the shared state panel', () => {

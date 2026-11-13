@@ -17,6 +17,11 @@ import {
   dataListReloadNote,
   type DataListFailure,
 } from '@/components/ui/data-list-state';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { glassCardStyle } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST, GLASS_LIST_PANEL, glassListTitle } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow } from '@/components/ui/text';
 import { fontScaleKey } from '@/lib/dynamic-type-layout';
@@ -33,6 +38,15 @@ export type { DataListFailure } from '@/components/ui/data-list-state';
  * offline states are standardized (ui/data-list-state.ts has the table) so
  * each drawer screen only writes its own data-fetch + row renderer, and a
  * failed read is never shown as an empty list.
+ *
+ * Liquid Glass (components/ui/glass/screens/list.tsx, an inferred extension of
+ * the iOS list boards) draws the same controls and states in the boards'
+ * frame: the scene behind, Back, Menu and `trailing` as the 44pt glass nav,
+ * the title as the large title with the eyebrow's words as the line under it
+ * (a screen may pass glass words of its own: `eyebrow={lg ? ... : ...}`), the
+ * rows (the screen's Cards: the grouped glass surface) 16 from the sides, the
+ * empty, failed and offline panels on the grouped surface, and the note over
+ * rows a failed read left on the warning wash.
  */
 export function DataListScreen<T>({
   eyebrow,
@@ -81,6 +95,10 @@ export function DataListScreen<T>({
   ItemSeparator?: React.ComponentType<unknown>;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the scene behind the list, the iOS nav, the large title over
+  // its line, and every row on the grouped glass surface (the screens' own
+  // Cards); every control and state Classic has stays, in both looks.
+  const lg = useGlass();
   const navigation = useNavigation();
   const router = useRouter();
   // Some screens (Orders, Movements) are ALSO reachable as customizable
@@ -108,10 +126,11 @@ export function DataListScreen<T>({
   const scaleKey = fontScaleKey(fontScale);
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={styles.chips}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
+          <View style={lg ? GLASS_LIST.navGroup : styles.chips}>
             {/* Icon-only: without a label VoiceOver read each as an unnamed
                 element (re-walk 2026-09-26, on every list screen that uses
                 this header). A label also makes IconChip a button. */}
@@ -120,10 +139,17 @@ export function DataListScreen<T>({
           </View>
           {trailing}
         </View>
-        <View key={`head-${scaleKey}`} style={styles.head}>
-          <Eyebrow>{eyebrow}</Eyebrow>
-          <Display size={34} style={{ marginTop: 12 }}>
-            {italic ? (
+        <View key={`head-${scaleKey}`} style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : <Eyebrow>{eyebrow}</Eyebrow>}
+          <Display
+            size={34}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            {lg ? (
+              glassListTitle(title, italic)
+            ) : italic ? (
               <>
                 {title} <Em>{italic}</Em>
               </>
@@ -131,6 +157,7 @@ export function DataListScreen<T>({
               title
             )}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>{eyebrow}</GlassSubline> : null}
           {header ? <View style={{ marginTop: 14 }}>{header}</View> : null}
         </View>
       </SafeAreaView>
@@ -143,16 +170,21 @@ export function DataListScreen<T>({
           data={data}
           keyExtractor={keyExtractor}
           contentContainerStyle={[
-            styles.list,
+            lg ? GLASS_LIST.list : styles.list,
             tabBarInset > 0 && { paddingBottom: 24 + tabBarInset },
           ]}
           ItemSeparatorComponent={ItemSeparator}
           ListHeaderComponent={
             reloadNote ? (
-              <View style={styles.reloadNote}>
+              <View
+                style={
+                  lg ? [GLASS_LIST.reloadNote, { backgroundColor: c.warnWash }] : styles.reloadNote
+                }
+              >
                 {/* Rows from an earlier read stay on screen; say they may be
-                    out of date rather than dropping them. */}
-                <Body size={13} color={c.warnText} accessibilityRole="alert">
+                    out of date rather than dropping them. Liquid Glass says it
+                    on the boards' status line, on the warning wash. */}
+                <Body size={lg ? 14 : 13} color={c.warnText} accessibilityRole="alert">
                   {reloadNote}
                 </Body>
                 {failed?.action ? <View>{failed.action}</View> : null}
@@ -171,33 +203,60 @@ export function DataListScreen<T>({
           ListEmptyComponent={
             failed ? (
               // The read failed: its own words, never "No X yet." (D25).
-              <View style={styles.empty}>
-                <View style={{ marginBottom: 12 }}>
+              // Liquid Glass draws each panel on the grouped surface, as
+              // iOS-Lookup draws its empty line inside the group.
+              <View style={lg ? [glassCardStyle(lg), GLASS_LIST.empty] : styles.empty}>
+                <View style={{ marginBottom: lg ? GLASS_LIST_PANEL.gap : 12 }}>
                   {emptyKind === 'offline' ? (
-                    <WifiOff size={32} color={c.ink3} strokeWidth={1.3} />
+                    <WifiOff
+                      size={lg ? GLASS_LIST_PANEL.glyph : 32}
+                      color={c.ink3}
+                      strokeWidth={lg ? GLASS_LIST_PANEL.strokeWidth : 1.3}
+                    />
                   ) : (
-                    <TriangleAlert size={32} color={c.warnText} strokeWidth={1.3} />
+                    <TriangleAlert
+                      size={lg ? GLASS_LIST_PANEL.glyph : 32}
+                      color={c.warnText}
+                      strokeWidth={lg ? GLASS_LIST_PANEL.strokeWidth : 1.3}
+                    />
                   )}
                 </View>
                 <Display size={18} accessibilityRole="alert">
                   {failed.title}
                 </Display>
-                <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
+                <Body
+                  muted
+                  style={{
+                    marginTop: lg ? GLASS_LIST_PANEL.gap : 6,
+                    textAlign: 'center',
+                    maxWidth: 320,
+                  }}
+                >
                   {failed.body}
                 </Body>
                 {failed.action ? <View style={{ marginTop: 14 }}>{failed.action}</View> : null}
               </View>
             ) : (
-              <View style={styles.empty}>
+              <View style={lg ? [glassCardStyle(lg), GLASS_LIST.empty] : styles.empty}>
                 {EmptyIcon ? (
-                  <View style={{ marginBottom: 12 }}>
-                    <EmptyIcon size={32} color={c.ink4} strokeWidth={1.3} />
+                  <View style={{ marginBottom: lg ? GLASS_LIST_PANEL.gap : 12 }}>
+                    {/* The glyph in ink-3 on the glass panel (the board's --ios-l2 at AA). */}
+                    <EmptyIcon
+                      size={lg ? GLASS_LIST_PANEL.glyph : 32}
+                      color={lg ? c.ink3 : c.ink4}
+                      strokeWidth={lg ? GLASS_LIST_PANEL.strokeWidth : 1.3}
+                    />
                   </View>
                 ) : null}
-                <Display size={18}>
-                  {emptyTitle}
-                </Display>
-                <Body muted style={{ marginTop: 6, textAlign: 'center', maxWidth: 320 }}>
+                <Display size={18}>{emptyTitle}</Display>
+                <Body
+                  muted
+                  style={{
+                    marginTop: lg ? GLASS_LIST_PANEL.gap : 6,
+                    textAlign: 'center',
+                    maxWidth: 320,
+                  }}
+                >
                   {emptyBody}
                 </Body>
                 {emptyAction ? <View style={{ marginTop: 14 }}>{emptyAction}</View> : null}

@@ -600,6 +600,63 @@ describe('archive/cancel affordance gating', () => {
   });
 });
 
+// B104: the photo panel offers Remove only to whoever the server lets remove
+// (MaintenanceAttachmentsService.remove): the request's requester or a holder
+// of maintenance_requests:manage. A manager whose manage permission is
+// switched off still sees the photos of other members' requests (read_all).
+describe('photo Remove affordance (B104): the requester or a manage holder', () => {
+  async function openRequestPhotos(
+    viewer: { userId: string; permissions: string[] },
+    requesterUserId: string,
+  ) {
+    vi.mocked(withContext).mockResolvedValue(buildCtx(viewer) as never);
+    get.mockResolvedValueOnce(detailFixture({ requesterUserId }));
+    signedViewUrls.mockResolvedValueOnce([
+      {
+        id: 'p1',
+        originalFilename: 'leak.jpg',
+        url: 'https://signed/leak.jpg',
+        thumbUrl: null,
+        kind: 'requester',
+      },
+    ]);
+    getActiveLinkStatus.mockResolvedValueOnce(null);
+    render(await MaintenanceRequestDetailPage(args()));
+    return screen.getByText('Photos (1)').closest('section') as HTMLElement;
+  }
+
+  it("a manager whose manage permission is switched off sees another member's photo with no Remove", async () => {
+    const section = await openRequestPhotos(
+      {
+        userId: 'mgr-2',
+        permissions: ['maintenance_requests:submit', 'maintenance_requests:read_all'],
+      },
+      'someone-else',
+    );
+    expect(within(section).getByRole('button', { name: 'View leak.jpg' })).toBeInTheDocument();
+    expect(within(section).queryByRole('button', { name: 'Remove leak.jpg' })).toBeNull();
+  });
+
+  it.each([
+    ['the requester', { userId: 'u-1', permissions: ['maintenance_requests:submit'] }, 'u-1'],
+    [
+      'a manage holder who did not file the request',
+      {
+        userId: 'mgr-1',
+        permissions: [
+          'maintenance_requests:submit',
+          'maintenance_requests:read_all',
+          'maintenance_requests:manage',
+        ],
+      },
+      'someone-else',
+    ],
+  ])('%s keeps Remove', async (_who, viewer, requesterUserId) => {
+    const section = await openRequestPhotos(viewer, requesterUserId);
+    expect(within(section).getByRole('button', { name: 'Remove leak.jpg' })).toBeInTheDocument();
+  });
+});
+
 // Maintenance Resolved (Task 7 Step 1 test 9) — the full gating matrix from
 // the brief. `closed` on the page now widens to include `resolvedAt`;
 // `showArchive` narrows to `!detail.archivedAt` only (D1 re-bucket — Archive

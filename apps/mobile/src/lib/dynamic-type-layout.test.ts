@@ -11,6 +11,7 @@ import {
   itemTabLabelRoom,
   itemTabLabelSize,
   itemTabStackedLabelRoom,
+  liveFontScaleKey,
   pillWidth,
   shouldStackItemTabs,
   shouldStackRow,
@@ -287,6 +288,29 @@ describe('fontScaleKey', () => {
   it('treats a bad reading as the default size', () => {
     for (const bad of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY, null, undefined]) {
       expect(fontScaleKey(bad)).toBe('1.000');
+    }
+  });
+});
+
+describe('liveFontScaleKey', () => {
+  it('is nothing while the text size is the one the app started at', () => {
+    expect(liveFontScaleKey(1, 1)).toBeUndefined();
+    expect(liveFontScaleKey(1, 1.0004)).toBeUndefined();
+    expect(liveFontScaleKey(1.353, 1.353)).toBeUndefined();
+  });
+
+  it('is the new size once it changes, and nothing again back at the starting size', () => {
+    expect(liveFontScaleKey(1, 1.353)).toBe('1.353');
+    expect(liveFontScaleKey(1.353, 1)).toBe('1.000');
+    expect(liveFontScaleKey(1, 1.353)).not.toBe(liveFontScaleKey(1, 1.786));
+    expect(liveFontScaleKey(1.353, 1.353)).toBeUndefined();
+  });
+
+  it('treats a bad reading as the default size, as fontScaleKey does', () => {
+    for (const bad of [Number.NaN, 0, -1, Number.POSITIVE_INFINITY, null, undefined]) {
+      expect(liveFontScaleKey(bad, 1)).toBeUndefined();
+      expect(liveFontScaleKey(1, bad)).toBeUndefined();
+      expect(liveFontScaleKey(bad, 1.353)).toBe('1.353');
     }
   });
 });

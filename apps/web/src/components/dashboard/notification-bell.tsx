@@ -83,7 +83,11 @@ export function NotificationBell({ userId, organizationId }: Props) {
     const supabase = supabaseRef.current;
     if (!supabase) return;
     try {
-      const { data, error, count: unreadTotal } = await supabase
+      const {
+        data,
+        error,
+        count: unreadTotal,
+      } = await supabase
         .from('notifications')
         // `count: 'exact'` rides along on the SAME request (PostgREST puts the
         // total in the Content-Range header), so the badge gets the true
@@ -126,13 +130,15 @@ export function NotificationBell({ userId, organizationId }: Props) {
       // Toast newest-first so the most recent surfaces last (sonner
       // stacks bottom-up, so the latest event ends up on top of the
       // stack).
-      const fresh = (data as Array<{
-        id: string;
-        type: string | null;
-        title: string | null;
-        body: string | null;
-        link: string | null;
-      }>).filter((row) => !seenIdsRef.current.has(row.id) && row.title);
+      const fresh = (
+        data as Array<{
+          id: string;
+          type: string | null;
+          title: string | null;
+          body: string | null;
+          link: string | null;
+        }>
+      ).filter((row) => !seenIdsRef.current.has(row.id) && row.title);
       // newest in data[0], so iterate oldest→newest for stack order
       for (const row of fresh.slice().reverse()) {
         seenIdsRef.current.add(row.id);
@@ -317,6 +323,8 @@ export function NotificationBell({ userId, organizationId }: Props) {
     <Link
       href={NOTIFICATIONS_PAGE}
       prefetch={false}
+      data-glass="tb-btn"
+      data-glass-variant="bell"
       onFocus={() => warmRoute(NOTIFICATIONS_PAGE)}
       onPointerEnter={() => warmRoute(NOTIFICATIONS_PAGE)}
       onPointerDown={() => warmRoute(NOTIFICATIONS_PAGE)}
@@ -327,7 +335,8 @@ export function NotificationBell({ userId, organizationId }: Props) {
       {showBadge && (
         <span
           aria-hidden
-          className="bg-destructive text-destructive-foreground ring-background absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] font-medium leading-none tabular-nums ring-2"
+          data-glass="badge-dot"
+          className="bg-destructive text-destructive-foreground ring-background absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full px-1 font-mono text-[10px] font-medium tabular-nums leading-none ring-2"
         >
           {label}
         </span>

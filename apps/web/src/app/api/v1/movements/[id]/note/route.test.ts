@@ -5,7 +5,7 @@ import type { ModuleId, Permission, Role } from '@stockpilot/core';
 import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { audit } from '@/server/services/audit';
-import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest, type SupabaseStub } from '@/test/supabase-mock';
 
 import { PATCH } from './route';
 
@@ -25,6 +25,14 @@ vi.mock('@/server/services/audit', () => ({
 }));
 
 const MOVEMENT_ID = '11111111-1111-1111-1111-111111111111';
+
+/**
+ * The movement, read in the request's organization before the RPC (S39), is
+ * found: every case below that reaches the RPC starts from it.
+ */
+const IN_THIS_ORG = {
+  'stock_movements.select': servedLikePostgrest([{ id: MOVEMENT_ID, organization_id: 'org-1' }]),
+};
 
 function buildCtx(
   role: Role,
@@ -88,6 +96,7 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
 
   it('edits the note (manager), calls the RPC with the right args, and audits old→new', async () => {
     const stub = makeSupabaseStub({
+      ...IN_THIS_ORG,
       'rpc:edit_movement_note': {
         data: [{ item_id: 'item-1', old_note: 'previous note' }],
         error: null,
@@ -127,6 +136,7 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
 
   it('clears the note when passed null and audits after=null', async () => {
     const stub = makeSupabaseStub({
+      ...IN_THIS_ORG,
       'rpc:edit_movement_note': {
         data: [{ item_id: 'item-1', old_note: 'was here' }],
         error: null,
@@ -146,6 +156,7 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
 
   it('maps the RPC 42501 (additive-gate denial) to 403 without auditing', async () => {
     const stub = makeSupabaseStub({
+      ...IN_THIS_ORG,
       'rpc:edit_movement_note': {
         data: null,
         error: { code: '42501', message: 'insufficient privilege' },
@@ -166,6 +177,7 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
 
   it('maps the RPC 22023 (system-managed receipt_line note) to 422 without auditing', async () => {
     const stub = makeSupabaseStub({
+      ...IN_THIS_ORG,
       'rpc:edit_movement_note': {
         data: null,
         error: { code: '22023', message: 'movement note is system-managed and cannot be edited' },
@@ -183,6 +195,7 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
 
   it('maps the RPC "movement not found" to 404', async () => {
     const stub = makeSupabaseStub({
+      ...IN_THIS_ORG,
       'rpc:edit_movement_note': {
         data: null,
         error: { code: 'P0001', message: 'movement not found' },
@@ -193,6 +206,36 @@ describe('PATCH /api/v1/movements/[id]/note', () => {
     const res = await PATCH(buildRequest({ note: 'hi' }), buildParams());
 
     expect(res.status).toBe(404);
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('answers 404 for a movement of another organization, before the RPC, and records nothing (S39)', async () => {
+    // A phone screen left open after the person switched organization sends
+    // the other organization's movement with this one's context.
+    // edit_movement_note decides on the movement's own organization, so the
+    // note changed there while the audit row landed here.
+    const stub = makeSupabaseStub({
+      'stock_movements.select': servedLikePostgrest([
+        { id: MOVEMENT_ID, organization_id: 'org-2' },
+      ]),
+      'rpc:edit_movement_note': {
+        data: [{ item_id: 'item-1', old_note: 'previous note' }],
+        error: null,
+      },
+    });
+    vi.mocked(withApiContext).mockResolvedValueOnce(buildCtx('manager', stub));
+
+    const res = await PATCH(buildRequest({ note: 'hi' }), buildParams());
+
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'not_found', message: 'Movement not found.' });
+    expect(stub.chainArgsAll.get('stock_movements.select')?.[0]).toEqual(
+      expect.arrayContaining([
+        ['organization_id', 'org-1'],
+        ['id', MOVEMENT_ID],
+      ]),
+    );
+    expect(stub.rpcCalls).toHaveLength(0);
     expect(audit).not.toHaveBeenCalled();
   });
 

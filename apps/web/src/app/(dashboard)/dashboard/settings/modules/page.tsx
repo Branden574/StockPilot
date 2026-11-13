@@ -11,6 +11,11 @@ import { getOrgRowForRequest } from '@/lib/dashboard/request-cache';
 import { createClient } from '@/lib/supabase/server';
 import { can, MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 export const metadata: Metadata = { title: 'Modules — Settings' };
 
 export default async function ModulesSettingsPage() {

@@ -7,11 +7,14 @@ import {
   ORDER_STATUS_META,
   parseHoldOrderStockResult,
   resolveOrgTimezone,
+  RETURN_REQUEST_COPY,
+  returnRequestDraftedLine,
   SHORTFALL_PO_TIMELINE_LABEL,
   shortfallPoTimelineDetail,
   type HoldOrderStockResult,
 } from '@stockpilot/core';
 
+import { orderTimelineMarkerHooks } from '@/components/orders/order-timeline-marker';
 import { Timeline, TimelineEntry } from '@/components/patterns/timeline';
 import { LocalDateTime } from '@/components/ui/local-datetime';
 import { isPlatformAdmin } from '@/lib/auth/platform-admin';
@@ -74,6 +77,9 @@ const EVENT_LABELS: Record<string, string> = {
   'order.signature_collected': 'Signature collected',
   'order.completed': 'Completed',
   'order.delivery_request_drafted': 'Delivery request drafted',
+  // F14: a return request draft was opened for one of the order's returns
+  // (core's label; the detail line names the return).
+  'order.return_request_drafted': RETURN_REQUEST_COPY.timelineLabel,
   // F2-2: hold_order_stock held stock for the order. The label depends on
   // what started it (eventLabel below); this is the manual "Hold available
   // stock", and the fallback for an entry without a trigger.
@@ -272,6 +278,11 @@ function humanDetails(
     case 'order.delivery_request_drafted':
       lines.push('A prefilled draft was opened — StockPilot did not send it.');
       break;
+    case 'order.return_request_drafted':
+      // metadata.return_number: the return the draft was about (the record's
+      // allow-list, services/return-request-draft.ts).
+      lines.push(returnRequestDraftedLine(typeof md.return_number === 'string' ? md.return_number : null));
+      break;
     case 'order.stock_held': {
       // What was held and what is still short, in core's words (the same
       // sentence "Hold available stock" says). Holds move no stock. Items the
@@ -397,6 +408,9 @@ export async function OrderTimeline({ orderId, organizationId, timeZone, canRead
         return (
           <TimelineEntry
             key={row.id}
+            // Liquid Glass's toned marker and icon (inert hooks; Classic keeps
+            // its neutral dot): order-timeline-marker.ts.
+            {...orderTimelineMarkerHooks(row.event, row.metadata)}
             title={
               <>
                 <span className="font-medium">{label}</span>

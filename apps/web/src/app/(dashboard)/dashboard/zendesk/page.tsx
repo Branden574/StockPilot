@@ -12,6 +12,12 @@ import { withContext } from '@/server/services/context';
 
 import { can } from '@stockpilot/core';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export const dynamic = 'force-dynamic';
 
 export default async function ZendeskPage() {
@@ -31,7 +37,11 @@ export default async function ZendeskPage() {
   ]);
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="zendesk"
+    >
       {/* The subline promised "(soon) an in-app agent console"; the web has
           no console, and the redesign promises nothing that is not there
           (CONFLICTS D23). */}
@@ -66,14 +76,16 @@ export default async function ZendeskPage() {
             <ZendeskConnectCard status={conn?.status ?? null} subdomain={conn?.subdomain ?? null} />
           </div>
         ) : (
-          <p className="text-muted-foreground mt-3 text-[12.5px]">Ask an admin to connect Zendesk.</p>
+          <p className="text-muted-foreground mt-3 text-[12.5px]">
+            Ask an admin to connect Zendesk.
+          </p>
         )}
       </DetailSection>
 
       <DetailSection title="Open your Zendesk">
         <p className="text-muted-foreground mb-4 text-[13.5px]">
-          View and work your tickets in the full Zendesk agent interface, signed in with your
-          normal Zendesk login — no API key needed.
+          View and work your tickets in the full Zendesk agent interface, signed in with your normal
+          Zendesk login — no API key needed.
         </p>
         <ZendeskQuickAccess subdomain={conn?.subdomain ?? null} canManage={canManage} />
       </DetailSection>

@@ -66,6 +66,12 @@ describe('EmailRoutingPanel — status per read state', () => {
   it('unset: both cards say "Not configured" and that members do not see the action', () => {
     renderPanel();
     expect(screen.getByText('Delivery requests')).toBeInTheDocument();
+    // F14: the card says return requests go to the same addresses.
+    expect(
+      screen.getByText(
+        'Where the "Email delivery request" action on delivery orders addresses its draft. The "Send return request" action on returns uses the same addresses.',
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText('Maintenance requests')).toBeInTheDocument();
     expect(
       screen.getAllByText('Not configured — members do not see the email action.'),

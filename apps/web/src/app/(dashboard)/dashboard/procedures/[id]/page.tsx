@@ -19,6 +19,12 @@ import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { ProceduresService } from '@/server/services/procedures';
 import { ServiceError } from '@/server/services/context';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const dynamic = 'force-dynamic';
 
 export default async function ProcedureDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -52,7 +58,12 @@ export default async function ProcedureDetailPage({ params }: { params: Promise<
   const liveCommentCount = countLiveComments(procedure.comments);
 
   return (
-    <div className="mx-auto w-full max-w-[1040px] px-4 pb-16 sm:px-8">
+    <div
+      className="mx-auto w-full max-w-[1040px] px-4 pb-16 sm:px-8"
+      data-glass-page="ops"
+      data-glass-view="procedure"
+      data-glass-width="form"
+    >
       {/* The sticky header (CONFLICTS area 20): an opaque bar on the page
           surface, no blur, that stays at the top of the scrolling page with
           Back, the title and Edit / Archive. The title column asks for 18rem

@@ -22,14 +22,17 @@ import {
   type ChangeLineInput,
   type ExchangeReviewState,
 } from '@/components/returns/exchange-panel';
+import { ReportProblemButton } from '@/components/maintenance/report-problem-button';
 import { DetailSection } from '@/components/patterns/detail-section';
 import { KeyValueList, KeyValueRow } from '@/components/patterns/key-value-row';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { PatternPhoto } from '@/components/patterns/photo';
 import { Timeline } from '@/components/patterns/timeline';
+import { ReturnProgressRail } from '@/components/returns/return-progress-rail';
 import { ReturnStatusBadge } from '@/components/returns/return-status-badge';
 import { RestockDestinationPicker } from '@/components/returns/restock-destination-picker';
 import { cardClass, eyebrowClass } from '@/components/returns/returns-ui';
+import { SendReturnRequestButton } from '@/components/returns/send-return-request-button';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
@@ -73,6 +76,7 @@ import {
   approvalOutcomeLine,
   approvalPreviewLines,
   availableReturnActions,
+  canSendReturnRequest,
   choiceNeededSentence,
   choiceToDecision,
   defaultExchangeReviewState,
@@ -88,22 +92,47 @@ import {
   replacementCancelledLines,
   returnActionLabel,
   returnLineLabel,
+  returnRequestContentFromWorkbench,
   returnWaitingDays,
   replacementShortItems,
   replacementShortLine,
   RETURN_ACTION_LABELS,
   RETURN_ERROR_WORDS,
   RETURN_REASON_MAX,
+  RETURN_REQUEST_COPY,
   RETURNS_COPY,
   returnReasonLabel,
   sameChoice,
   stillWaitingPrompt,
   unreadDestinationChoice,
   whenProcessedSentence,
+  type OrgEmailRoutingRecipientsDto,
   type ReplacementFulfilment,
   type RestockChoice,
   type ReturnAction,
 } from '@stockpilot/core';
+
+/**
+ * F14, "Send return request" in the page header. The page (a server
+ * component) decides all of it for this viewer and passes plain values:
+ * the organization's resolved delivery-request mailboxes (null when they are
+ * not set or the saved value is invalid: the button is then not drawn), the
+ * link the draft carries back to this page, and whether to tell this viewer
+ * (a holder of organization:update) that the mailboxes are missing.
+ */
+export interface WorkbenchReturnRequest {
+  recipients: OrgEmailRoutingRecipientsDto | null;
+  link: string;
+  showRoutingHint: boolean;
+}
+
+/** F14, "Report a problem" in the page header: the order page's two gates. */
+export interface WorkbenchReportProblem {
+  /** checkModuleAccess('maintenance_requests') for this organization. */
+  moduleEnabled: boolean;
+  /** can(ctx, 'maintenance_requests:submit'). */
+  canSubmit: boolean;
+}
 
 /** The subset of the return label (carrier_shipments) the workbench renders. */
 export interface WorkbenchReturnLabel {
@@ -169,10 +198,16 @@ export function ReturnWorkbench({
   workbench,
   canManageShipping = false,
   returnLabel = null,
+  returnRequest = null,
+  reportProblem = null,
 }: {
   workbench: Workbench;
   canManageShipping?: boolean;
   returnLabel?: WorkbenchReturnLabel | null;
+  /** F14: absent, the header gets no "Send return request" and no hint. */
+  returnRequest?: WorkbenchReturnRequest | null;
+  /** F14: absent, the header gets no "Report a problem". */
+  reportProblem?: WorkbenchReportProblem | null;
 }) {
   const router = useRouter();
   const [wb, setWb] = React.useState(workbench);
@@ -896,10 +931,49 @@ export function ReturnWorkbench({
     exchangeProblems.length > 0 ||
     showShort;
 
+  // F14: the header's two launch points. Decided here, before the header is
+  // drawn, so a return with neither keeps a header with no actions row at all
+  // (PageHeader draws the row for any truthy `actions`), exactly as before.
+  //   - "Send return request": a draft about this return to the saved
+  //     delivery-request mailboxes, while the return is open and numbered.
+  //     It says what this page shows this viewer: the header and the lines,
+  //     never the notes or the denial reason (core's mapping reads neither).
+  //   - "Report a problem": the order page's button, with this return's
+  //     order attached and the return named in the subject.
+  const sendable = canSendReturnRequest(r.status, r.returnNumber);
+  const sendContent =
+    returnRequest?.recipients && sendable
+      ? returnRequestContentFromWorkbench(wb, { link: returnRequest.link })
+      : null;
+  const showReportProblem = Boolean(reportProblem?.moduleEnabled && reportProblem.canSubmit);
+  const showRoutingHint = Boolean(returnRequest?.showRoutingHint && !returnRequest.recipients && sendable);
+  const headerActions =
+    sendContent || showReportProblem ? (
+      <>
+        <SendReturnRequestButton
+          orderId={r.orderRequestId}
+          surface="return"
+          content={sendContent}
+          recipients={returnRequest?.recipients ?? null}
+        />
+        {showReportProblem ? (
+          <ReportProblemButton
+            moduleEnabled
+            canSubmit
+            prefill={{
+              orderRequestId: r.orderRequestId,
+              subject: r.returnNumber ? `Return ${r.returnNumber}: ` : undefined,
+            }}
+          />
+        ) : null}
+      </>
+    ) : undefined;
+
   return (
     <div className="flex flex-col gap-4">
       <PageHeader
         back={<PageHeaderBackLink href="/dashboard/returns">← Back to returns</PageHeaderBackLink>}
+        actions={headerActions}
         title={r.returnNumber ?? 'Return'}
         titleAside={
           <div className="flex flex-wrap items-center gap-1.5">
@@ -931,6 +1005,26 @@ export function ReturnWorkbench({
           </p>
         }
       />
+
+      {/* F14: only a member who can change the organization's settings is
+          told why "Send return request" is missing (the maintenance page's
+          hint, in the same words and with the same link). */}
+      {showRoutingHint ? (
+        <p className="text-muted-foreground text-[13.5px]" data-testid="return-request-routing-hint">
+          {RETURN_REQUEST_COPY.noRoutingAdminLead} Set it in{' '}
+          <Link
+            href="/dashboard/settings/email-routing"
+            className="text-accent hover:text-foreground underline underline-offset-2"
+          >
+            Settings &rarr; Email routing
+          </Link>
+          .
+        </p>
+      ) : null}
+
+      {/* Liquid Glass only: the board's progress rail under the head
+          (return-progress-rail.tsx), between two Classic blocks. */}
+      <ReturnProgressRail status={r.status} />
 
       {/* Next-step bar: the one card that commits the work in front of you
           (the Cycle counts "post" footer is its cue). Its controls on one

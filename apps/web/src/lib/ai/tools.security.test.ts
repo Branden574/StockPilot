@@ -18,6 +18,7 @@ const checkRateLimitMock = vi.fn();
 const safeFetchMock = vi.fn();
 const embedQueryMock = vi.fn();
 const embedItemsBatchMock = vi.fn();
+const reportErrorMock = vi.fn();
 
 vi.mock('@/server/services/inventory', () => ({
   InventoryService: class {
@@ -63,6 +64,9 @@ vi.mock('@/lib/ssrf-guard', () => ({
     }
   },
 }));
+vi.mock('@/lib/error-reporter', () => ({
+  reportError: (...args: unknown[]) => reportErrorMock(...args),
+}));
 vi.mock('@/lib/ai/embeddings', () => ({
   embedQuery: (...args: unknown[]) => embedQueryMock(...args),
   embedItemsBatch: (...args: unknown[]) => embedItemsBatchMock(...args),
@@ -85,7 +89,7 @@ vi.mock('@/lib/env', () => ({
 }));
 vi.mock('./provider', () => ({ resolveAiProvider: () => 'gemini' }));
 
-import { TOOL_CATALOG } from './tools';
+import { EMBEDDING_BACKFILL_FAILED, SEMANTIC_SEARCH_UNAVAILABLE, TOOL_CATALOG } from './tools';
 
 const ORG = 'org-aaaa';
 const OTHER_ORG = 'org-bbbb';
@@ -233,6 +237,108 @@ describe('HI-3: searchInventorySemantic organization scoping', () => {
     )) as { error?: string };
     // Unverified rows are NOT returned on a confirmation failure.
     expect(res.error).toBe('search_failed');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S31 review: a semantic search or embedding backfill failure reached the
+// model (and so the chat reply) as the database's or the AI vendor's own words.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("S31: the semantic search and backfill tools never hand the model an error's own text", () => {
+  const RAW = 'relation "public.item_embeddings" violates row-level security policy p_secret';
+
+  function ctxFor(stub: ReturnType<typeof makeSupabaseStub>, role: 'staff' | 'admin' = 'staff') {
+    return makeServiceContext(stub.client, {
+      organizationId: ORG,
+      role,
+    }) as unknown as ServiceContext;
+  }
+
+  it.each([
+    [
+      'the query embedding fails',
+      () => {
+        embedQueryMock.mockRejectedValueOnce(new Error(RAW));
+        return makeSupabaseStub({});
+      },
+      'embedding_failed',
+      'embed',
+    ],
+    [
+      'the search call fails',
+      () => {
+        embedQueryMock.mockResolvedValueOnce([0.1, 0.2]);
+        return makeSupabaseStub({
+          'rpc:match_inventory_items_by_embedding': { data: null, error: { message: RAW } },
+        });
+      },
+      'search_failed',
+      'search',
+    ],
+    [
+      'the ownership check fails',
+      () => {
+        embedQueryMock.mockResolvedValueOnce([0.1, 0.2]);
+        return makeSupabaseStub({
+          'rpc:match_inventory_items_by_embedding': {
+            data: [
+              {
+                id: 'item-x',
+                name: 'Thing',
+                sku: 'X',
+                warehouse_id: null,
+                quantity_on_hand: 1,
+                similarity: 0.8,
+              },
+            ],
+            error: null,
+          },
+          'inventory_items.select': { data: null, error: { message: RAW } },
+        });
+      },
+      'search_failed',
+      'confirm',
+    ],
+  ])(
+    'when %s: a fixed sentence to the model, the error to the report',
+    async (_case, arrange, code, step) => {
+      const stub = arrange();
+      const res = (await TOOL_CATALOG.searchInventorySemantic!.execute(
+        { query: 'mop' },
+        ctxFor(stub),
+      )) as Record<string, unknown>;
+      expect(res.error).toBe(code);
+      expect(res.message).toBe(SEMANTIC_SEARCH_UNAVAILABLE);
+      expect(JSON.stringify(res)).not.toContain('row-level security');
+      expect(JSON.stringify(res)).not.toContain('migration');
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      const [reported, context] = reportErrorMock.mock.calls[0]!;
+      expect(JSON.stringify(reported instanceof Error ? reported.message : reported)).toContain(
+        'row-level security',
+      );
+      expect(context).toMatchObject({
+        tag: 'ai.tool.semantic_search',
+        organizationId: ORG,
+        extra: { step },
+      });
+    },
+  );
+
+  it('when the backfill throws: a fixed sentence to the model, the error to the report', async () => {
+    embedItemsBatchMock.mockRejectedValueOnce(new Error(RAW));
+    const stub = makeSupabaseStub({});
+    const res = (await TOOL_CATALOG.backfillEmbeddings!.execute(
+      {},
+      ctxFor(stub, 'admin'),
+    )) as Record<string, unknown>;
+    expect(res).toEqual({ error: 'backfill_failed', message: EMBEDDING_BACKFILL_FAILED });
+    expect(reportErrorMock).toHaveBeenCalledTimes(1);
+    expect(reportErrorMock.mock.calls[0]![0]).toBeInstanceOf(Error);
+    expect(reportErrorMock.mock.calls[0]![1]).toMatchObject({
+      tag: 'ai.tool.backfill_embeddings',
+      organizationId: ORG,
+    });
   });
 });
 

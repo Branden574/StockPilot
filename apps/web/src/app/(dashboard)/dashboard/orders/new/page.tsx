@@ -11,11 +11,11 @@ import { getModulesForRequest, getWarehousesForRequest } from '@/lib/dashboard/r
 import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { loadFrequentlyOrdered } from '@/server/loaders/orders-frequently-ordered';
 import { loadOrderKits } from '@/server/loaders/orders-kits';
-import {
-  loadCatalogBundle,
-  loadChartersForWarehouse,
-} from '@/server/loaders/orders-new-catalog';
+import { loadCatalogBundle, loadChartersForWarehouse } from '@/server/loaders/orders-new-catalog';
 import { canManageOrderItems } from '@/server/services/order-catalog-visibility';
+// Liquid Glass page composition (layered half; the storefront's unlayered
+// half is imported by the storefront itself): scoped, inert in Classic.
+import '@/styles/liquid-glass/pages/order-new.css';
 
 // NOTE (perf plan P3): the cached data loaders deliberately live in
 // src/server/loaders/orders-new-catalog.ts, NOT here. unstable_cache's
@@ -126,7 +126,11 @@ export default async function NewOrderPage({
     // The redesign's page frame: the shared page header and the shared empty
     // state, with the words this state has always had.
     return (
-      <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+      <div
+        data-glass-page="order-new"
+        data-glass="order-new-frame"
+        className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      >
         <PageHeader
           back={<PageHeaderBackLink href="/dashboard/orders">← Back to orders</PageHeaderBackLink>}
           title={STOREFRONT_TITLE_COPY}
@@ -148,8 +152,7 @@ export default async function NewOrderPage({
     // above, but the type system doesn't know that.
     throw new Error('No warehouses available');
   }
-  const warehouseId =
-    warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
+  const warehouseId = warehouses.find((w) => w.id === requestedId)?.id ?? fallbackId;
 
   // STREAMING: the catalog bundle is deliberately NOT awaited. The
   // shell (head + setup bar) only needs warehouses/charters/viewer, so

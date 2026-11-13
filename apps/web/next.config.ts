@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 
 import type { NextConfig } from 'next';
 
+import {
+  glassSiteRedirects,
+  liquidGlassRollout,
+  marketingRewrites,
+} from './src/components/theme/appearance-flag';
+
 // ── Build identity (update detection) ────────────────────────────────────────
 // "Which build is THIS bundle?" has to be answered at BUILD time and baked into
 // the bundle, because every runtime source of it lies to an old tab:
@@ -220,9 +226,33 @@ const nextConfig: NextConfig = {
 
   transpilePackages: ['@stockpilot/core'],
 
-  // No rewrites. /ingest (PostHog) is proxied by a route handler that copies
-  // no cookie, never by a rewrite: see the skipTrailingSlashRedirect note
-  // above.
+  // The only rewrites are the Liquid Glass marketing twins' (components/theme/
+  // appearance-flag.ts, plans/REVISION-DEFAULT.md R8). /ingest (PostHog) is
+  // never rewritten: a route handler that copies no cookie proxies it (see
+  // the skipTrailingSlashRedirect note above; src/test/ingest-proxy.guard.
+  // test.ts fails on an /ingest rewrite).
+  //
+  // Each of the 7 marketing paths (/, /contact, /pricing, /privacy, /security,
+  // /support, /terms) is served from its twin under app/(site-glass)/
+  // glass-site when the rollout and the sp_style cookie select glass:
+  //   default  unless sp_style=classic (no cookie, a crawler included: glass);
+  //   opt-in   only with sp_style=liquid-glass;
+  //   off      no rewrite at all (MARKETING_TWINS_BUILT is true there).
+  // beforeFiles, so the rewrite resolves before the filesystem and the cache:
+  // both variants stay static, each cached under its own destination. The
+  // rollout is read when this file is evaluated, at build time.
+  async rewrites() {
+    return { beforeFiles: marketingRewrites(liquidGlassRollout()), afterFiles: [], fallback: [] };
+  },
+
+  // Liquid Glass (components/theme/appearance-flag.ts): a direct
+  // /glass-site/* URL redirects to its public path in every rollout, so a
+  // twin URL is never indexed and never forces glass. Redirects run before
+  // rewrites and only on the address asked for, so the rewrites above still
+  // reach the twins. No other redirect exists.
+  async redirects() {
+    return glassSiteRedirects();
+  },
 
   async headers() {
     // CSP — see SECURITY.md for the full rationale. Notable choices:
@@ -328,6 +358,17 @@ const nextConfig: NextConfig = {
         // and BOTH rules would then emit a CORP header for that one path.
         source: '/email/:path+',
         headers: [{ key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' }],
+      },
+      {
+        // The Liquid Glass scene illustrations (public/liquid-glass). The glass
+        // stylesheet (styles/liquid-glass/scene.css) names each one with
+        // ?v= and the start of the SHA-256 the scene manifest pins, and a test
+        // ties the two together, so a changed file is a new address. Without
+        // this rule a public file is served with `public, max-age=0`, and every
+        // hard load of a glass page waits a round trip to revalidate the scene
+        // before it can draw it.
+        source: '/liquid-glass/:path*',
+        headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }],
       },
     ];
   },

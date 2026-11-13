@@ -6,6 +6,9 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { isOfflineState } from '@/lib/exceptions-api';
 import { FONT, RADIUS } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
@@ -78,6 +81,7 @@ export function WorkspaceSwitcherSheet({
   onDismiss: () => void;
 }) {
   const { c, mode } = useTheme();
+  const lg = useGlass();
   const { orgs, activeOrgId, warehouses, activeWarehouseId } = useWorkspace();
   // A switch of organization clears this phone's offline copy of the old one
   // (items, purchase orders, counts) and pulls the new one in full. Offline
@@ -109,10 +113,20 @@ export function WorkspaceSwitcherSheet({
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.55)' : 'rgba(14,15,13,0.35)' },
+            // Liquid Glass: the --scrim tint (it never blurs the page).
+            lg && glassScrim(lg),
           ]}
         />
-        <View style={[styles.sheet, { backgroundColor: c.card, borderColor: c.hair }]}>
-          <View style={[styles.grabber, { backgroundColor: c.ink5 }]} />
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: c.card, borderColor: c.hair },
+            // Liquid Glass: the glass sheet (.ios-sheet.glass-strong), 8pt in.
+            lg && GLASS_SHEET_CARD,
+          ]}
+        >
+          {lg ? <GlassSheetBackdrop /> : null}
+          <View style={[styles.grabber, { backgroundColor: lg ? lg.ios.sep : c.ink5 }]} />
           <ScrollView
             showsVerticalScrollIndicator={false}
             contentContainerStyle={{ paddingBottom: 24 }}

@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { DigitalPick } from '@/components/orders/digital-pick';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
@@ -14,6 +15,11 @@ import { LotsService } from '@/server/services/lots';
 import type { FefoSuggestion } from '@/server/services/lots';
 import { OrderReadinessService } from '@/server/services/order-readiness';
 import { OrderRequestsService } from '@/server/services/order-requests';
+import { ServiceError } from '@/server/services/context';
+// Liquid Glass's composition of the order pages (the order and this pick),
+// scoped to the glass root and this page's data-glass-page root; inert in
+// Classic.
+import '@/styles/liquid-glass/pages/order-detail.css';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,6 +28,12 @@ export default async function DigitalPickPage({ params }: { params: Promise<{ id
   // A malformed id (a mistyped or cut-off link) is Page not found before
   // anything is read with it (B63).
   notFoundUnlessUuid(id);
+  // Orders off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
+  }
   const ctx = await requireOrgContext();
   // ORDER READINESS (F2-2): the completion confirm projects complete_picking
   // over it with what the picker enters (core digitalPickCompletionConfirm).
@@ -45,8 +57,13 @@ export default async function DigitalPickPage({ params }: { params: Promise<{ id
     });
   readinessRead.catch(() => {});
   const svc = await OrderRequestsService.forCurrentUser();
-  const detail = await svc.get(id).catch(() => null);
-  if (!detail) notFound();
+  const detail = await svc.get(id).catch((e: unknown) => {
+    // Only a missing order is Page not found. A failed read reaches the error
+    // page, which says the page could not be loaded, offers Try again and
+    // reports it; it used to tell the person the order did not exist (B66).
+    if (e instanceof ServiceError && e.code === 'not_found') notFound();
+    throw e;
+  });
 
   if (
     detail.request.status !== 'pick_slip_generated' &&
@@ -108,7 +125,10 @@ export default async function DigitalPickPage({ params }: { params: Promise<{ id
   // back link, then the pick card. The header is PageHeader's div, never a
   // <header> (the shell's top bar owns that element).
   return (
-    <div className="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="order-pick"
+      className="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/orders/${id}`}>← Back to order</PageHeaderBackLink>

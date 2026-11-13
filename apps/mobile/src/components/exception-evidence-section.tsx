@@ -24,6 +24,9 @@ import { PhotoViewer } from '@/components/photo-viewer';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Body, Eyebrow } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { meterColor, meterTrack, PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
 import {
@@ -96,6 +99,8 @@ export function ExceptionEvidenceSection({
   onChanged: () => void;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the section's words as the iOS heading, as the exception's other sections.
+  const lg = useGlass();
   const { fontScale } = useWindowDimensions();
   const stack = shouldStackRow(fontScale);
   const [queue, setQueue] = React.useState<EvidenceQueueEntry[]>([]);
@@ -222,7 +227,7 @@ export function ExceptionEvidenceSection({
 
   return (
     <View style={{ gap: 10 }}>
-      <Eyebrow>{heading}</Eyebrow>
+      {lg ? <GlassHeading>{sentenceCase(heading)}</GlassHeading> : <Eyebrow>{heading}</Eyebrow>}
 
       {parts.unavailable ? (
         <Card padding={14}>

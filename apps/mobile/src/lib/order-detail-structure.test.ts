@@ -16,6 +16,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { returnStatusTone } from './returns-view';
 import { createFieldRevealer } from './sheet-field-reveal';
 import { palette, type Palette } from './theme';
@@ -237,9 +238,24 @@ describe('order screen: the order actions keep their tones, and a refusal is nev
     expect(code).toContain(
       "const tones = buttonTone(tone === 'primary' ? 'primary' : 'outline', c);",
     );
-    expect(code).toContain("const fg = tone === 'danger' ? c.critText : tones.fg;");
+    // Classic's fill and words, read off the Classic projection.
+    const classic = classicFlat(src, FILES.order);
+    expect(classic).toContain(flatNorm('const bg = tones.bg;'));
+    expect(classic).toContain(flatNorm("const fg = tone === 'danger' ? c.critText : tones.fg;"));
     expect(code).toContain('borderColor: tones.border,');
-    expect(code).toContain('<Text style={[styles.actionLabel, { color: fg }]}>{label}</Text>');
+    expect(classic).toContain(
+      flatNorm('<Text style={[styles.actionLabel, { color: fg }]}>{label}</Text>'),
+    );
+    // Liquid Glass: the commit is the iOS primary button (the accent with
+    // its on-accent words), the rest the gray button in ink, and a refusal
+    // keeps the refusal words; no edge of their own.
+    expect(flat(code)).toContain(
+      "const bg = lg ? (tone === 'primary' ? lg.g.accent : lg.ios.fill) : tones.bg;",
+    );
+    expect(flat(code)).toContain(
+      "const fg = lg ? tone === 'primary' ? lg.g.onAccent : tone === 'danger' ? c.critText : c.ink : tone === 'danger' ? c.critText : tones.fg;",
+    );
+    expect(code).toContain('lg && glassOrderStyles(lg).actionEdge,');
     for (const [mode, c] of MODES) {
       const ink = buttonTone('primary', c);
       const outline = buttonTone('outline', c);
@@ -307,18 +323,31 @@ describe('order screen: the order actions keep their tones, and a refusal is nev
 
   it('Deny and Reopen picking confirm in the outline with refusal words, with the same gates', () => {
     const f = flat(code);
-    expect(f).toContain(
-      '<Pressable onPress={() => void submitDeny()} disabled={acting !== null} accessibilityRole="button" style={[ styles.addBtn, { ...outlineButton, paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1, }, ]} > <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>',
+    // Classic's buttons, read off the Classic projection (Liquid Glass lays
+    // the iOS button over the same entries in branches of its own).
+    const classic = classicFlat(src, FILES.order);
+    expect(classic).toContain(
+      flatNorm(
+        '<Pressable onPress={() => void submitDeny()} disabled={acting !== null} accessibilityRole="button" style={[ styles.addBtn, { ...outlineButton, paddingHorizontal: 18, opacity: acting !== null ? 0.5 : 1, }, ]} > <Text style={[styles.actionLabel, { color: c.critText }]}>Deny</Text>',
+      ),
     );
     expect(f).toContain(
       'onPress={() => void reopenPicking()} disabled={!reopenReason.trim() || acting !== null} accessibilityRole="button"',
     );
-    expect(f).toContain(
-      '<Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>',
+    expect(classic).toContain(
+      flatNorm('<Text style={[styles.actionLabel, { color: c.critText }]}>Reopen picking</Text>'),
     );
     expect(
-      code.match(/<Text style=\{\[styles\.actionLabel, \{ color: c\.ink \}\]\}>Cancel<\/Text>/g),
-    ).toHaveLength(2);
+      classic.split(flatNorm('<Text style={[styles.actionLabel, { color: c.ink }]}>Cancel</Text>'))
+        .length - 1,
+    ).toBe(2);
+    // Liquid Glass keeps the refusal words on both, over its own button look.
+    expect(f).toContain(
+      '<Text style={[ styles.actionLabel, lg && glassOrderStyles(lg).actionLabel, { color: c.critText }, ]} > Deny </Text>',
+    );
+    expect(f).toContain(
+      '<Text style={[ styles.actionLabel, lg && glassOrderStyles(lg).actionLabel, { color: c.critText }, ]} > Reopen picking </Text>',
+    );
     // The reasons are still required; the typed reason is in the body face.
     expect(code).toContain('placeholder="Reason"');
     expect(code).toContain('placeholder="Why is this being reopened? (e.g. miscount on line 3)"');
@@ -494,8 +523,15 @@ describe('order screen: words, roles and states survive the restyle', () => {
 
   it('Add proof is the outline (the order step keeps the one ink button), with the same gate', () => {
     const f = flat(codeOnly(sourceOf(FILES.order)));
+    // Classic's button, read off the Classic projection.
+    expect(classicFlat(sourceOf(FILES.order), FILES.order)).toContain(
+      flatNorm(
+        '<Pressable onPress={addProof} disabled={uploading || offline} accessibilityRole="button" accessibilityState={{ disabled: uploading || offline }} style={[ styles.addBtn, { ...outlineButton, opacity: uploading || offline ? 0.6 : 1 }, ]} >',
+      ),
+    );
+    // Liquid Glass: the same button, gate and words, as the iOS gray button.
     expect(f).toContain(
-      '<Pressable onPress={addProof} disabled={uploading || offline} accessibilityRole="button" accessibilityState={{ disabled: uploading || offline }} style={[ styles.addBtn, { ...outlineButton, opacity: uploading || offline ? 0.6 : 1 }, ]} >',
+      '<Pressable onPress={addProof} disabled={uploading || offline} accessibilityRole="button" accessibilityState={{ disabled: uploading || offline }} style={[ styles.addBtn, lg && glassOrderStyles(lg).addBtn, { ...outlineButton, opacity: uploading || offline ? 0.6 : 1 }, ]} >',
     );
     expect(f).toContain('<Camera size={16} color={c.ink} strokeWidth={1.8} />');
   });
@@ -1209,7 +1245,14 @@ describe("signature pad (M-OR-02b): the device's mode around a capture surface t
   // its light page (about 1.05:1). Now the page follows the mode and the
   // modal sets the bar to match, run here for both modes.
   it('the page and the status bar follow the mode, and the bar reads on the page', () => {
-    expect(code).toContain('style={[styles.container, { backgroundColor: c.paper }]}');
+    expect(classicFlat(src, FILES.signature)).toContain(
+      flatNorm('style={[styles.container, { backgroundColor: c.paper }]}'),
+    );
+    // Liquid Glass draws the scene behind the frame: Day is light and Night
+    // is dark, so the same bar reads on it.
+    expect(code).toContain(
+      "style={[styles.container, { backgroundColor: lg ? 'transparent' : c.paper }]}",
+    );
     const bars = all.filter((n) => tagOf(n.el, sf) === 'StatusBar');
     expect(bars).toHaveLength(1);
     const expr = attrText(bars[0]!.el, 'style', sf)!;

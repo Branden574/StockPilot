@@ -6,6 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ReturnWorkbenchView } from '@/components/return-workbench-view';
 import { IconChip } from '@/components/ui/row';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -17,6 +20,8 @@ import { useTheme } from '@/lib/use-theme';
  */
 export default function ReturnScreen() {
   const { c } = useTheme();
+  // Liquid Glass: the scene behind the workbench and Back in the glass nav.
+  const lg = useGlass();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const goBack = () => {
@@ -24,9 +29,10 @@ export default function ReturnScreen() {
     else router.replace('/returns');
   };
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>

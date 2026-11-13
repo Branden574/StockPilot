@@ -297,7 +297,7 @@ export class ProcedureVideosService {
     // recover from by re-reading the max and retrying. After
     // ORDER_IDX_MAX_ATTEMPTS we give up — the caller can re-submit.
     const explicitIdx = input.orderIdx;
-    let lastErrorMsg = '';
+    let lastRace: { message: string } | null = null;
     for (let attempt = 0; attempt < ORDER_IDX_MAX_ATTEMPTS; attempt += 1) {
       let orderIdx = explicitIdx;
       if (orderIdx === undefined) {
@@ -348,14 +348,17 @@ export class ProcedureVideosService {
       if (error.code !== '23505' || explicitIdx !== undefined) {
         throw new ServiceError('internal_error', error.message);
       }
-      lastErrorMsg = error.message;
+      lastRace = error;
     }
-    throw new ServiceError(
-      'conflict',
-      lastErrorMsg
-        ? `Couldn't slot the video into the procedure (raced too many times): ${lastErrorMsg}`
-        : 'Couldn\'t slot the video into the procedure.',
-    );
+    // S31: the procedures action answers a conflict's words as they are, so
+    // the last Postgres text is reported, never put in the message.
+    void reportError(new Error(lastRace?.message ?? 'order_idx slot race'), {
+      tag: 'procedure_videos.slot_race',
+      organizationId: this.ctx.organizationId,
+      level: 'warning',
+      extra: { attempts: ORDER_IDX_MAX_ATTEMPTS },
+    });
+    throw new ServiceError('conflict', "Couldn't slot the video into the procedure. Try again.");
   }
 
   /**

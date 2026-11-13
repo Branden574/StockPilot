@@ -45,6 +45,13 @@ import {
   type PoImportUploaderProfile,
 } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/po.css';
+
 export const metadata = { title: 'PO imports' };
 
 /** Rows per page — matches the purchase-orders page's server-pagination convention. */
@@ -328,7 +335,7 @@ export default async function PoImportsPage({
   }
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="po-imports">
       <PageHeader
         title={heading}
         titleId="po-imports-title"

@@ -40,6 +40,8 @@ const RETURNS_FILES = [
   'src/components/release-replacement-sheet.tsx',
   'src/components/return-action-sheet.tsx',
   'src/components/requester-return-sheet.tsx',
+  // F14: the RETURN REQUEST section's two buttons carry copy labels.
+  'src/components/return-request-section.tsx',
 ];
 
 function treeOf(file: string): ts.SourceFile {

@@ -291,6 +291,16 @@ export type AuditEvent =
    * OrderTimeline on the order detail page for free.
    */
   | 'order.delivery_request_drafted'
+  /**
+   * A member opened a prefilled return-request DRAFT in their mail client
+   * (F14), from their own request on the order or from the return page. Same
+   * meaning and the same limits as the event above: a draft was OPENED;
+   * StockPilot cannot see Send, delivery or a ticket. Keyed to the order
+   * (entityId) so the order timeline shows it; extra carries the return
+   * number, is_condensed and the surface, nothing else
+   * (services/return-request-draft.ts). No migration, for the reason above.
+   */
+  | 'order.return_request_drafted'
   | 'pdf.exported'
   | 'tag.created'
   | 'tag.updated'
@@ -406,6 +416,17 @@ export type AuditEvent =
   | 'mfa.enrolled'
   | 'mfa.unenrolled'
   | 'mfa.policy.changed'
+  // An authenticator code GoTrue judged wrong, on the web's sign-in code, the
+  // step-up or the reset's code step (lib/auth/mfa-code-attempts.ts). No
+  // organization: not shown to the organization's admins, and never counted
+  // as the person's own last action. metadata: path ('challenge' or
+  // 'password_reset'), session_aal on the challenge path, gotrue_code. Never
+  // the code, GoTrue's message or the factor id.
+  | 'mfa.code_refused'
+  // Recovery codes (server/actions/mfa-recovery.ts), never the codes:
+  // generated (metadata.count; default organization), consumed (a used code
+  // removed the authenticators, metadata.unenrolled; default organization),
+  // failed (a refused code; no organization, like mfa.code_refused).
   | 'mfa.recovery.generated'
   | 'mfa.recovery.consumed'
   | 'mfa.recovery.failed'

@@ -27,8 +27,10 @@ export interface PanelPhoto {
   originalFilename: string;
   url: string;
   thumbUrl: string | null;
-  /** Whether Remove is offered on this photo. Omitted = offered (maintenance:
-   *  its DELETE route decides). A display hint only; the server re-checks. */
+  /** Whether Remove is offered on this photo. Omitted = offered. A display
+   *  hint only; the server re-checks (maintenance: the request page offers
+   *  it to the requester and manage-holders, the rule its DELETE route
+   *  applies, B104). */
   canRemove?: boolean;
   /** Shown under the photo in the `card` variant: its note, then short lines
    *  (who added it, when). */

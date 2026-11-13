@@ -23,6 +23,7 @@ import {
   describeTimelineEvent,
   exceptionActDisabledReason,
   isRecountableRule,
+  isUuid,
   occurrenceStateLabel,
   recountDisabledReason,
   recurrenceBadge,
@@ -42,6 +43,12 @@ import { Card, Hair } from '@/components/ui/card';
 import { Pill } from '@/components/ui/pill';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassHeading } from '@/components/ui/glass/parts';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { sentenceCase } from '@/components/ui/glass/screens/item';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_RECORD_BODY } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useAuth } from '@/lib/auth-context';
 import { showWriteCta } from '@/lib/cta-gating';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -154,8 +161,17 @@ type Loaded =
     }
   | { kind: 'error'; message: string };
 
+/** A 404, and a link whose id is not a uuid (B65): the same words. */
+const EXCEPTION_NOT_AVAILABLE_COPY =
+  'This exception is not available to you, or it no longer exists.';
+
 export default function ExceptionDetailScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of iOS-Item.dc.html's cards with
+  // Order-Detail.dc.html's timeline): the scene, Back in the glass nav, the
+  // cards on the grouped glass surface under iOS headings; the note, recount
+  // and evidence sheets take the glass sheet. Every action, gate and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { orgId, loading: workspaceLoading } = useOrg();
@@ -192,8 +208,11 @@ export default function ExceptionDetailScreen() {
   const seqRef = React.useRef(0);
 
   const load = React.useCallback(async () => {
-    // Offline there is nothing to ask; the view below is derived instead.
-    if (!id || !orgId || offline) return;
+    // Offline there is nothing to ask; the view below is derived instead. A
+    // link id that is not a uuid (B65) is never asked about either:
+    // getException refuses it as "The server sent an unexpected answer.",
+    // and the view below says the exception is not available.
+    if (!id || !isUuid(id) || !orgId || offline) return;
     const seq = ++seqRef.current;
     const readTick = evidenceTick();
     try {
@@ -214,7 +233,7 @@ export default function ExceptionDetailScreen() {
       const status = (e as { status?: unknown }).status;
       const kept = recalledDetail(userId, orgId, id);
       if (status === 404) {
-        setState({ kind: 'error', message: 'This exception is not available to you, or it no longer exists.' });
+        setState({ kind: 'error', message: EXCEPTION_NOT_AVAILABLE_COPY });
         return;
       }
       // Worded by status for a 429 or 5xx, so a bare code never shows.
@@ -259,7 +278,12 @@ export default function ExceptionDetailScreen() {
   // shown under this one's heading).
   const mine = stored.kind === 'ready' && stored.detail.occurrence.id !== id ? null : stored;
   let state: Loaded;
-  if (offline) {
+  if (!isUuid(id)) {
+    // A link id that is not a uuid (mistyped or cut off; B65) names no
+    // exception, online or offline (no connection could open it), and no
+    // read is sent, so it is said here and not by load.
+    state = { kind: 'error', message: EXCEPTION_NOT_AVAILABLE_COPY };
+  } else if (offline) {
     const kept =
       mine?.kind === 'ready'
         ? { detail: mine.detail, receivedAt: mine.receivedAt, readTick: mine.readTick }
@@ -311,15 +335,16 @@ export default function ExceptionDetailScreen() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
         </View>
       </SafeAreaView>
 
       {!orgId && !workspaceLoading ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 9 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {EXCEPTION_WORKSPACE_UNAVAILABLE}
@@ -338,16 +363,19 @@ export default function ExceptionDetailScreen() {
       ) : state.kind === 'loading' ? (
         <ActivityIndicator color={c.ink3} style={{ marginTop: 29 }} />
       ) : state.kind === 'error' ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 9 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 9 }}>
           <Card padding={16}>
             <Body size={14.5} accessibilityRole="alert">
               {state.message}
             </Body>
-            <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
-              <Button variant="outline" size="sm" onPress={() => void refresh()}>
-                Try again
-              </Button>
-            </View>
+            {/* No Try again for a link id that is not a uuid: no read is sent. */}
+            {isUuid(id) ? (
+              <View style={{ marginTop: 14, alignSelf: 'flex-start' }}>
+                <Button variant="outline" size="sm" onPress={() => void refresh()}>
+                  Try again
+                </Button>
+              </View>
+            ) : null}
           </Card>
         </View>
       ) : (
@@ -473,6 +501,7 @@ function Detail({
   verificationRefreshKey: number;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const o = detail.occurrence;
   // The item's last physical count (F1-3), read for the workspace this
   // exception belongs to. Not read for an item this reader cannot see (the
@@ -522,7 +551,7 @@ function Detail({
 
   return (
     <ScrollView
-      contentContainerStyle={styles.body}
+      contentContainerStyle={lg ? [styles.body, GLASS_RECORD_BODY] : styles.body}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={c.ink} />}
     >
       {banner ? (
@@ -1113,9 +1142,11 @@ function RuledRows({ children }: { children: React.ReactNode }) {
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  // Liquid Glass: an iOS section heading (.ios-h) over its group.
+  const lg = useGlass();
   return (
     <View style={{ gap: 8 }}>
-      <Eyebrow>{title}</Eyebrow>
+      {lg ? <GlassHeading>{sentenceCase(title)}</GlassHeading> : <Eyebrow>{title}</Eyebrow>}
       {children}
     </View>
   );

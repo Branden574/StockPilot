@@ -6,6 +6,9 @@ import { Check, Minus } from 'lucide-react-native';
 // file in the node test runner, which does not resolve the `@/` alias.
 import type { Palette } from '../../lib/theme';
 import { useTheme } from '../../lib/use-theme';
+
+import { glassCheckboxTone } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { Body } from './text';
 
 /**
@@ -167,13 +170,19 @@ export function CheckboxMark({
   disabled?: boolean;
 }) {
   const { c } = useTheme();
-  const tone = checkboxTone(checked, disabled, c);
+  const lg = useGlass();
+  // Liquid Glass: the boards' checkbox (.cb), accent when ticked.
+  const tone = lg ? glassCheckboxTone(lg, checked, disabled) : checkboxTone(checked, disabled, c);
   return (
     <View
       pointerEvents="none"
       accessibilityElementsHidden
       importantForAccessibility="no-hide-descendants"
-      style={[styles.box, { backgroundColor: tone.fill, borderColor: tone.border }]}
+      style={[
+        styles.box,
+        { backgroundColor: tone.fill, borderColor: tone.border },
+        lg && { borderRadius: 5 },
+      ]}
     >
       {tone.glyph === null ? null : checked === 'mixed' ? (
         <Minus size={GLYPH_SIZE} color={tone.glyph} strokeWidth={GLYPH_STROKE} />

@@ -431,7 +431,7 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
         data-testid="draft-shortfall-po-dialog"
         onCloseAutoFocus={returnFocus}
       >
-        <DialogHeader>
+        <DialogHeader data-glass="dialog-header">
           <DialogTitle>{SHORTFALL_PO_TITLE}</DialogTitle>
           {view && (
             <DialogDescription data-testid="draft-shortfall-po-checked-at">
@@ -556,7 +556,7 @@ export function DraftShortfallPoDialog({ offer }: { offer: ShortfallPoOffer | nu
           </p>
         )}
 
-        <DialogFooter>
+        <DialogFooter data-glass="dialog-footer">
           {done ? (
             <Button
               type="button"

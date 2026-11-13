@@ -3,9 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { ServiceError, withContext } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   DEFAULT_TERMINOLOGY,
@@ -238,9 +238,6 @@ export async function applyIndustryPackAction(
 
     return ok({ pack, enabled: [...afterEnabled] });
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    console.error(e);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.industry_pack.apply_industry_pack');
   }
 }

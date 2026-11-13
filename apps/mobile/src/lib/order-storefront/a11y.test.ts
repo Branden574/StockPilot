@@ -11,6 +11,7 @@ import {
   ORDER_UNCONFIRMED_TITLE_COPY,
   STOREFRONT_CART_LOCKED_COPY,
   STOREFRONT_LINE_NOT_ORDERABLE_COPY,
+  addAllLabelCopy,
   initialCartState,
   type KitOffer,
   type StorefrontItem,
@@ -18,6 +19,7 @@ import {
 
 import * as a11y from './a11y';
 import {
+  addAllLabel,
   addBlockedHint,
   addItemLabel,
   addKitLabel,
@@ -102,6 +104,20 @@ describe('what VoiceOver says', () => {
   });
 });
 
+// "Add all": the phone says core's words, the website's too.
+describe('Add all is named for what it adds', () => {
+  it('everything available, by its number and the item’s name', () => {
+    expect(addAllLabel('Graph Paper Pad', 67, 0)).toBe('Add all 67 available: Graph Paper Pad');
+    expect(addAllLabel('Graph Paper Pad', 67, 5)).toBe('Add all 67 available: Graph Paper Pad');
+    expect(addAllLabel('Graph Paper Pad', 67, 5)).toBe(addAllLabelCopy('Graph Paper Pad', 67, 5));
+  });
+
+  it('above the most one order can hold it names the limit and never says all', () => {
+    expect(addAllLabel('Paper Clip', 25_000, 0)).toBe('Add 10,000, the most one order can hold: Paper Clip');
+    expect(addAllLabel('Paper Clip', 25_000, 0)).not.toMatch(/\ball\b|25/i);
+  });
+});
+
 describe('a dimmed control says why (desk check F7.1)', () => {
   it('Add and Add kit: the lock first (core’s add-while-locked words), then a line that can’t be ordered', () => {
     expect(addBlockedHint({ locked: true, notOrderable: false })).toBe(ORDER_ADD_WHILE_LOCKED_COPY);
@@ -179,6 +195,8 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
       a11y.ITEM_ROW_HINT,
       itemRowLabel(PLANNER, 2, 'NC', { rank: { place: 1, orders: 3 }, notOrderable: true }),
       addItemLabel('Planner'),
+      addAllLabel('Planner', 134, 0),
+      addAllLabel('Planner', 25_000, 2),
       increaseLabel('Planner'),
       decreaseLabel('Planner', 1),
       decreaseLabel('Planner', 2),
@@ -215,7 +233,7 @@ describe('the words rules, on what VoiceOver hears and on the storefront’s lit
     const exported = Object.keys(a11y).sort();
     expect(exported).toEqual(
       [
-        'ITEM_ROW_HINT', 'addBlockedHint', 'addItemLabel', 'addKitLabel', 'addedAnnouncement', 'cartBarLabel',
+        'ITEM_ROW_HINT', 'addAllLabel', 'addBlockedHint', 'addItemLabel', 'addKitLabel', 'addedAnnouncement', 'cartBarLabel',
         'changeLockedHint', 'decreaseKitLabel', 'decreaseLabel', 'increaseBlockedHint', 'increaseKitLabel', 'kitAddBlockedHint',
         'increaseLabel', 'itemRowLabel', 'kitAnnouncement', 'kitRowLabel', 'lineChangeAnnouncement',
         'quantityAnnouncement', 'quantityButtonLabel', 'submittedAnnouncement',

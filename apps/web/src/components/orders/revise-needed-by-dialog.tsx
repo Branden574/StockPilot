@@ -46,7 +46,10 @@ import {
   readNeededByDraft,
   type NeededByChangeView,
 } from '@/lib/orders/needed-by-change';
-import { openNeededByChange, registerNeededByChangeOpener } from '@/lib/orders/needed-by-change-opener';
+import {
+  openNeededByChange,
+  registerNeededByChangeOpener,
+} from '@/lib/orders/needed-by-change-opener';
 import { isControlFlow } from '@/lib/control-flow';
 import { cn } from '@/lib/utils';
 import { reviseOrderNeededByAction } from '@/server/actions/order-requests';
@@ -70,7 +73,13 @@ function sameInstant(a: string | null, b: string | null): boolean {
  * (ReviseNeededByDialog with `trigger={false}`), so the button can move or go
  * without taking the open dialog with it.
  */
-export function NeededByChangeButton({ orderId, className }: { orderId: string; className?: string }) {
+export function NeededByChangeButton({
+  orderId,
+  className,
+}: {
+  orderId: string;
+  className?: string;
+}) {
   return (
     <Button
       type="button"
@@ -312,9 +321,13 @@ export function ReviseNeededByDialog({
           </Button>
         </DialogTrigger>
       )}
-      <DialogContent className="max-w-md" data-testid="revise-needed-by-dialog" onCloseAutoFocus={returnFocus}>
+      <DialogContent
+        className="max-w-md"
+        data-testid="revise-needed-by-dialog"
+        onCloseAutoFocus={returnFocus}
+      >
         <form onSubmit={(e) => void save(e)} noValidate className="grid gap-4">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>{NEEDED_BY_REVISE_TITLE}</DialogTitle>
             <DialogDescription data-testid="revise-needed-by-current">
               {neededByCurrentCopy(seen, zone)}
@@ -335,7 +348,11 @@ export function ReviseNeededByDialog({
               disabled={saving}
               data-testid="revise-needed-by-input"
             />
-            <p id={zoneId} className="text-muted-foreground text-xs" data-testid="revise-needed-by-zone">
+            <p
+              id={zoneId}
+              className="text-muted-foreground text-xs"
+              data-testid="revise-needed-by-zone"
+            >
               {neededByZoneNote(zone)}
             </p>
             {/* What the field reads as, in the org's zone, as it is typed.
@@ -376,13 +393,22 @@ export function ReviseNeededByDialog({
           </p>
 
           {error && (
-            <p role="alert" className="text-destructive text-sm" data-testid="revise-needed-by-error">
+            <p
+              role="alert"
+              className="text-destructive text-sm"
+              data-testid="revise-needed-by-error"
+            >
               {error}
             </p>
           )}
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+          <DialogFooter data-glass="dialog-footer">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
               Cancel
             </Button>
             <Button type="submit" disabled={saving} data-testid="revise-needed-by-save">

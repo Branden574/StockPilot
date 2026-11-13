@@ -11,6 +11,7 @@ import {
   readRouteFile,
   REBUILD_MAY_SET,
   resolveModule,
+  sessionReadersIn,
   withApiContextCalls,
   WRITE_METHODS,
   type WriteHandler,
@@ -68,13 +69,32 @@ type HowItAuthenticates =
 interface Exemption {
   methods: WriteMethod[];
   auth: HowItAuthenticates;
-  /** 'none': reads no cookie session (checked). 'creates': sets one, judged by Sec-Fetch-Site (checked). */
-  session: 'none' | 'creates';
+  /**
+   * 'none': reads no cookie session (checked). 'creates': sets one, judged by
+   * Sec-Fetch-Site (checked). 'own': reads the caller's own session and judges
+   * the request itself, by isSameOriginBrowserRequest, before it builds the
+   * cookie client (checked).
+   */
+  session: 'none' | 'creates' | 'own';
   reason: string;
 }
 
 /** Paths relative to src/app. Reviewed 2026-10-24 (docket S14). */
 const EXEMPT: Record<string, Exemption> = {
+  'api/appearance/account/route.ts': {
+    methods: ['POST'],
+    auth: 'none',
+    session: 'own',
+    reason:
+      "Liquid Glass: reads the signed-in person's own Design and Theme row and writes nothing (a POST only so the id travels in the body, never in the URL). It builds no organization context (a portal customer has none), so it applies this rule itself, and more: it refuses, before the cookie client exists, a request the browser does not place on this origin (isSameOriginBrowserRequest, the same judgment as refusesCrossSiteCookieWrite without the Bearer way in) or that lacks x-sp-appearance: 1. Reviewed 2026-11-11.",
+  },
+  'api/appearance/style/route.ts': {
+    methods: ['POST'],
+    auth: 'none',
+    session: 'none',
+    reason:
+      "Liquid Glass (REVISION-DEFAULT R6): sets only the caller's own sp_style cookie to a validated Design. It reads no session and writes no data, and it refuses a request the browser does not place on this origin (isSameOriginBrowserRequest) or that lacks x-sp-appearance: 1, so another site cannot flip it.",
+  },
   'api/admin/backfill-item-thumbs/route.ts': {
     methods: ['POST'],
     auth: 'admin secret',
@@ -173,22 +193,6 @@ const EXEMPT: Record<string, Exemption> = {
   },
 };
 
-/**
- * What reads a cookie session, by the module it comes from: the cookie-bound
- * client, the request cookies, and the page-session helpers (INV-E4's list).
- * '*' is any import from that module.
- */
-const SESSION_READERS: Record<string, readonly string[]> = {
-  '@/lib/supabase/server': ['*'],
-  'next/headers': ['cookies'],
-  '@/lib/auth/session': ['*'],
-  '@/lib/dashboard/request-cache': ['*'],
-  '@/lib/auth/api-context': ['*'],
-  '@/server/services/context': ['withContext'],
-  '@/server/services/portal': ['resolvePortalContext'],
-  '@/server/lib/sign-page-session': ['*'],
-};
-
 function routeFiles(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
@@ -282,15 +286,36 @@ describe('the reviewed exemptions are current', () => {
       expect(isCovered(h), `${h.method} reaches a gate`).toBe(false);
 
     const source = SOURCES.get(file)!;
-    const readers = importsOf(file, source).flatMap(({ specifier, names }) => {
-      const banned = SESSION_READERS[specifier];
-      if (!banned) return [];
-      return names
-        .filter((n) => banned.includes('*') || banned.includes(n))
-        .map((n) => `${n} from ${specifier}`);
-    });
+    // SESSION_READERS (route-write-handlers.ts): the cookie client, cookies()
+    // and the page-session helpers, shared with the step-up guard.
+    const readers = sessionReadersIn(file, source);
     if (exemption.session === 'none') {
       expect(readers, 'reads no cookie session').toEqual([]);
+    } else if (exemption.session === 'own') {
+      // It reads the caller's own cookie session (the cookie client, and the
+      // step-up question api-context exports for such a route), and it judges
+      // the request first: the same-origin rule is imported from the rule's
+      // own module and called in POST before the cookie client is built.
+      expect(readers).toEqual([
+        'cookieSessionOwesStepUp from @/lib/auth/api-context',
+        'createClient from @/lib/supabase/server',
+      ]);
+      expect(
+        importsOf(file, source).some(
+          (i) =>
+            i.specifier === '@/lib/auth/cross-site-request' &&
+            i.names.includes('isSameOriginBrowserRequest'),
+        ),
+      ).toBe(true);
+      const post = source.slice(source.indexOf('export async function POST'));
+      const judged = post.indexOf('if (!isSameOriginBrowserRequest(request)) return refuse();');
+      const client = post.indexOf('createClient(');
+      expect(judged).toBeGreaterThan(-1);
+      expect(client).toBeGreaterThan(judged);
+      // Nothing reads the session above POST either.
+      expect(source.slice(0, source.indexOf('export async function POST'))).not.toMatch(
+        /createClient\(|cookies\(/u,
+      );
     } else {
       // It builds the cookie client to SET the session, after judging the post
       // by Sec-Fetch-Site (its Origin is null by its own page's policy), and on

@@ -4,7 +4,7 @@ import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
 import { rethrowControlFlow } from '@/lib/control-flow';
-import { ServiceError } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 import {
   IntegrationEndpointsService,
   INTEGRATION_EVENT_TYPES,
@@ -16,10 +16,7 @@ const REVALIDATE = '/dashboard/settings/integrations';
 
 function fail(e: unknown): ActionResult<never> {
   rethrowControlFlow(e);
-  if (e instanceof ServiceError) {
-    return err(e.code as Parameters<typeof err>[0], e.message);
-  }
-  return err('internal_error', e instanceof Error ? e.message : 'Something went wrong.');
+  return actionErrorResult(e, 'actions.integration_endpoints');
 }
 
 const createSchema = z.object({

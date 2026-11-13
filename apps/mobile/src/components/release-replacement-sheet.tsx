@@ -22,6 +22,10 @@ import { MIN_TAP } from '@/components/item-verification-card';
 import { Button } from '@/components/ui/button';
 import { Modal } from '@/components/ui/modal';
 import { Body, FieldLabel, Mono } from '@/components/ui/text';
+import { GlassSheetBackdrop, GlassSheetGrabber } from '@/components/ui/glass/parts';
+import { GLASS_SHEET_CARD, glassScrim } from '@/components/ui/glass/primitive-styles';
+import { glassOptionRow, glassTypedBox } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { exceptionSheetLayout } from '@/lib/exception-sheet-layout';
 import { capTo, FONT, TYPE_CEILING } from '@/lib/theme';
 import { useSheetKeyboard } from '@/lib/use-sheet-keyboard';
@@ -76,6 +80,9 @@ export function ReleaseReplacementSheet({
 
 function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: ReleaseSheetProps) {
   const { c, mode } = useTheme();
+  // Liquid Glass: the glass sheet (.ios-sheet.glass-strong, 8pt in) over
+  // the --scrim tint, with the --ios-sep grabber Classic does not draw.
+  const lg = useGlass();
   const [reason, setReason] = React.useState('');
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -118,13 +125,20 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
           style={[
             StyleSheet.absoluteFill,
             { backgroundColor: mode === 'dark' ? 'rgba(0,0,0,0.6)' : 'rgba(14,15,13,0.4)' },
+            lg && glassScrim(lg),
           ]}
         />
         <View
           onStartShouldSetResponder={kb.claimTapOutside}
           onResponderRelease={kb.onTapOutside}
-          style={[styles.sheet, { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight }]}
+          style={[
+            styles.sheet,
+            { backgroundColor: c.card, maxHeight: layout.sheetMaxHeight },
+            lg && GLASS_SHEET_CARD,
+          ]}
         >
+          {lg ? <GlassSheetBackdrop /> : null}
+          {lg ? <GlassSheetGrabber /> : null}
           <View style={styles.header}>
             <Body
               size={16}
@@ -182,6 +196,7 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
                       backgroundColor: reason === preset ? c.sunk : 'transparent',
                       minHeight: MIN_TAP,
                     },
+                    lg && glassOptionRow(lg, reason === preset),
                   ]}
                 >
                   <Body size={14} color={c.ink}>
@@ -207,6 +222,7 @@ function ReleaseSheetContent({ online, submitting, error, onClose, onConfirm }: 
                 style={[
                   styles.input,
                   { borderColor: c.hair2, backgroundColor: c.card, color: c.ink },
+                  lg && glassTypedBox(lg),
                 ]}
               />
               <Mono size={11} color={count > RETURN_RELEASE_REASON_MAX ? c.critText : c.ink3}>

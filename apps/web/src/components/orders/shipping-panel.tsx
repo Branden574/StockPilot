@@ -314,7 +314,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
         }}
       >
         <DialogContent className="max-w-lg">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Buy shipping label</DialogTitle>
             <DialogDescription>
               Enter the parcel size, fetch carrier rates, then confirm a rate to buy a label. Buying
@@ -322,7 +322,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4">
+          <div className="space-y-4" data-glass="dialog-body">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
               <div className="space-y-1.5">
                 <Label htmlFor="ship-weight">Weight (oz)</Label>
@@ -454,7 +454,7 @@ export function ShippingPanel({ orderId, canBuyLabel, charterSettingsHref }: Pro
             )}
           </div>
 
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               variant="outline"
               onClick={() => {

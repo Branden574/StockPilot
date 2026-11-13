@@ -4,6 +4,9 @@ import { View } from 'react-native';
 
 import { Card } from '@/components/ui/card';
 import { DataListScreen } from '@/components/data-list-screen';
+import { glassRowSub } from '@/components/ui/glass/primitive-styles';
+import { GLASS_BARE_CARD, GlassJoinedRow } from '@/components/ui/glass/screens/admin';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Mono } from '@/components/ui/text';
 import { actorText, isRowPersonDeleted } from '@/lib/deleted-user-labels';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
@@ -29,6 +32,9 @@ interface AuditRow {
 const NO_ROWS: AuditRow[] = [];
 
 export default function AuditLogAdmin() {
+  // Liquid Glass (inferred: the iOS grouped list): the rows as one grouped
+  // surface of iOS rows; every row, state and message Classic has stays.
+  const lg = useGlass();
   const { orgId } = useOrg();
   const { isAdmin, loading: roleLoading } = useRole();
   // The drawer item gates on effective activity_logs:read (managers hold it
@@ -114,7 +120,7 @@ export default function AuditLogAdmin() {
   if (!roleLoading && !canView) {
     return (
       <DataListScreen
-        eyebrow="ADMIN · AUDIT LOG"
+        eyebrow={lg ? 'Admin · Audit log' : 'ADMIN · AUDIT LOG'}
         title="Restricted"
         italic="access."
         emptyIcon={FileLock}
@@ -130,7 +136,15 @@ export default function AuditLogAdmin() {
 
   return (
     <DataListScreen
-      eyebrow={failed && rows.length === 0 ? 'ADMIN · AUDIT LOG' : `ADMIN · ${rows.length} EVENTS`}
+      eyebrow={
+        lg
+          ? failed && rows.length === 0
+            ? 'Admin · Audit log'
+            : `Admin · ${rows.length} ${rows.length === 1 ? 'event' : 'events'}`
+          : failed && rows.length === 0
+            ? 'ADMIN · AUDIT LOG'
+            : `ADMIN · ${rows.length} EVENTS`
+      }
       title="Audit"
       italic="log."
       emptyTitle="No audit events yet."
@@ -150,17 +164,26 @@ export default function AuditLogAdmin() {
       refreshing={refreshing}
       onRefresh={refresh}
       keyExtractor={(a) => a.id}
-      renderItem={(a) => <AuditCard row={a} />}
+      renderItem={
+        lg
+          ? (a, i) => (
+              <GlassJoinedRow lg={lg} index={i} count={rows.length}>
+                <AuditCard row={a} />
+              </GlassJoinedRow>
+            )
+          : (a) => <AuditCard row={a} />
+      }
     />
   );
 }
 
 function AuditCard({ row }: { row: AuditRow }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const actor = actorText(row.actor, row.actor_deleted);
   const when = new Date(row.created_at);
   return (
-    <Card padding={12}>
+    <Card padding={12} style={lg ? GLASS_BARE_CARD : undefined}>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.mono }}>
@@ -171,7 +194,7 @@ function AuditCard({ row }: { row: AuditRow }) {
             {row.ip ? ` · ${row.ip}` : ''}
           </Body>
         </View>
-        <Mono size={10} tracking={0.04} color={c.ink3}>
+        <Mono size={10} tracking={0.04} color={c.ink3} style={lg ? glassRowSub(lg) : undefined}>
           {when.toLocaleString(undefined, {
             month: 'short',
             day: 'numeric',

@@ -11,7 +11,9 @@ import {
 } from '@/lib/email/es/families/digest';
 import { memberUnsubscribeDelivery } from '@/lib/email/member-unsubscribe';
 import { sendEmail } from '@/lib/email/resend';
+import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
+import { EMAIL_NOT_SENT_MESSAGE } from '@/server/lib/action-error-result';
 import { applySectionOptIns, getDigestData } from '@/server/services/digest';
 import {
   digestPrefsUpdate,
@@ -38,9 +40,17 @@ export async function setDigestPrefsAction(prefs: DigestPrefs) {
   }
   const { error } = await writeDigestPrefs(supabase, ctx.userId, update);
   if (error) {
+    // The database's text goes to the report, never to the browser (S31).
+    void reportError(new Error(error.message), {
+      tag: 'actions.digest.prefs',
+      organizationId: ctx.organizationId,
+    });
     return {
       ok: false as const,
-      error: { code: 'internal_error', message: error.message },
+      error: {
+        code: 'internal_error',
+        message: 'Could not save your digest settings. Try again.',
+      },
     };
   }
   return { ok: true as const, data: { changed: Object.keys(update).length } };
@@ -145,9 +155,17 @@ export async function sendDigestPreviewAction() {
     headers: unsubscribe.headers,
   });
   if (!res.ok) {
+    // sendEmail's `error` is the provider's own response body (or a failed
+    // request's text): it can name the vendor, the sending domain's state, a
+    // rate limit or a refused key. The report keeps it; the person reads one
+    // sentence (S31).
+    void reportError(new Error(res.error ?? 'send failed'), {
+      tag: 'actions.digest.preview',
+      organizationId: ctx.organizationId,
+    });
     return {
       ok: false as const,
-      error: { code: 'internal_error', message: res.error ?? 'Send failed' },
+      error: { code: 'internal_error', message: EMAIL_NOT_SENT_MESSAGE },
     };
   }
   return { ok: true as const, data: { sentTo: ctx.email } };

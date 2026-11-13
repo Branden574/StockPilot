@@ -1,0 +1,93 @@
+<div class="mx-auto max-w-3xl px-4 py-16 text-[15px] leading-7 text-foreground sm:px-8">
+<h1 class="font-display text-[34px] font-medium leading-[1.15] tracking-[-0.025em] sm:text-[40px]">Security &amp; Compliance</h1>
+<p class="mt-2 text-sm text-muted-foreground">Last updated <!-- -->June 18, 2026</p>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Summary</h2>
+<div class="mt-3 text-muted-foreground">StockPilot is a multi-tenant SaaS built so that every organization’s data is isolated at the database level, encrypted in transit and at rest, backed up and recoverable, and reachable only by the people that organization authorizes. The sections below describe the controls we actually run today. We do not currently hold a formal SOC 2 or ISO 27001 certification — this page describes our practices, not a certificate, and we’ll say so plainly until that changes.</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Tenant isolation</h2>
+<div class="mt-3 text-muted-foreground">
+<p>Every record in the database carries an <code>organization_id</code>, and access is enforced by Postgres <strong>row-level security (RLS)</strong> — not by application code that could be bypassed. A signed-in user can only read or write rows for organizations they are an accepted member of; the database itself refuses everything else. This is the load-bearing control, and it is verified by adversarial security review (see “Secure development”).</p>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Authentication &amp; access control</h2>
+<div class="mt-3 text-muted-foreground">
+<ul class="mt-2 list-disc space-y-2 pl-5">
+<li>
+<strong>Passwords</strong> are handled by our authentication provider (Supabase Auth) and are never stored by the application.</li>
+<li>
+<strong>Multi-factor authentication (TOTP/2FA)</strong> is supported, and an organization can require it for its admins or all members. Sensitive actions require a fresh second-factor step-up.</li>
+<li>
+<strong>Role-based access</strong> — Owner, Admin, Manager, Warehouse User, and read-only Viewer roles gate every action, with warehouse-level scoping for front-line staff.</li>
+<li>
+<strong>New-device sign-in alerts</strong> notify users when their account is accessed from an unrecognized device.</li>
+</ul>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Encryption</h2>
+<div class="mt-3 text-muted-foreground">
+<ul class="mt-2 list-disc space-y-2 pl-5">
+<li>All traffic is served over <strong>TLS (HTTPS)</strong> end to end.</li>
+<li>Data is <strong>encrypted at rest</strong> by our managed Postgres and storage providers.</li>
+<li>Third-party credentials (e.g. accounting/shipping integration tokens) are kept in an encrypted secrets vault and accessed only by privileged server-side processes — never exposed to the browser or written to logs.</li>
+</ul>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Backups &amp; recovery</h2>
+<div class="mt-3 text-muted-foreground">
+<ul class="mt-2 list-disc space-y-2 pl-5">
+<li>The production database has <strong>point-in-time recovery</strong> through our managed database provider.</li>
+<li>Organizations can additionally capture their own <strong>restore points</strong> <!-- -->(inventory snapshots), taken on demand and on a daily schedule, and roll back to one — every restore first takes a fresh “before” snapshot, so a restore is itself undoable.</li>
+<li>Account and data deletion is self-service and honored at the database level.</li>
+</ul>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Audit logging</h2>
+<div class="mt-3 text-muted-foreground">
+<p>Significant actions — creating or deleting records, role changes, billing changes, integration connects, and administrative access — are written to an append-only audit log scoped to each organization, so owners can review who did what and when.</p>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Abuse &amp; availability protection</h2>
+<div class="mt-3 text-muted-foreground">
+<ul class="mt-2 list-disc space-y-2 pl-5">
+<li>A <strong>web application firewall and bot protection</strong> sit in front of the application at the edge.</li>
+<li>Sensitive and public endpoints are <strong>rate-limited</strong> (fail-closed) to prevent brute-force, scraping, and cost-amplification abuse.</li>
+<li>Security-relevant events (new-device logins, MFA changes, API-key changes, role changes) can be streamed to an organization’s alerting channel in real time.</li>
+</ul>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Secure development</h2>
+<div class="mt-3 text-muted-foreground">
+<ul class="mt-2 list-disc space-y-2 pl-5">
+<li>Every change runs through <strong>continuous integration</strong> — type checking, an automated test suite (1,000+ tests), database tests, and a full build — before it can ship.</li>
+<li>Dependencies are monitored for known vulnerabilities with automated security updates.</li>
+<li>Major features and the whole codebase undergo <strong>adversarial security review</strong> focused on cross-tenant access, authentication, and data integrity before release.</li>
+</ul>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Data ownership</h2>
+<div class="mt-3 text-muted-foreground">
+<p>Your organization’s data is yours. You can export inventory and operational records to CSV/Excel/PDF at any time, and deleting your account removes your data. We do not sell data or run third-party advertising. See our<!-- --> <a class="underline" href="/privacy">Privacy Policy</a> <!-- -->for the full detail on what we collect and why.</p>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Sub-processors</h2>
+<div class="mt-3 text-muted-foreground">
+<p>We rely on a small set of reputable infrastructure providers to run the service — hosting/CDN, managed Postgres &amp; authentication, transactional email, and payment processing. Each processes only the data needed for its function. A current list is available to customers on request.</p>
+</div>
+</section>
+<section class="mt-10">
+<h2 class="font-display text-[20px] font-medium leading-[1.5] tracking-[-0.02em]">Reporting a vulnerability</h2>
+<div class="mt-3 text-muted-foreground">
+<p>If you believe you’ve found a security issue, please email<!-- --> <a class="underline" href="mailto:hello@stockpilotusa.com">hello@stockpilotusa.com</a> <!-- -->with the details. We investigate every report and will not pursue good-faith researchers who follow responsible-disclosure practices.</p>
+</div>
+</section>
+</div>

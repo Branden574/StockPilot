@@ -22,9 +22,29 @@ import { useTheme } from '@/lib/use-theme';
  * drawerHideStatusBarOnOpen is left off on purpose: it hides the bar as a
  * swipe starts and shows it again only when the drawer's state changes, so a
  * swipe that never opened the drawer would leave it hidden.
+ *
+ * Liquid Glass: the panel is the artifact's sidebar sheet, so the navigator's
+ * own panel turns transparent and the drawer content draws the glass surface
+ * itself (GlassView, BlurView or the opaque --chrome, by material), over the
+ * glass scrim. Classic keeps every option below exactly as it was.
  */
 export default function DrawerLayout() {
-  const { c, mode } = useTheme();
+  const { c, mode, g, material } = useTheme();
+  const glassOptions = React.useMemo(
+    () =>
+      g === null
+        ? null
+        : {
+            drawerStyle: {
+              backgroundColor: material === 'opaque' ? g.chrome : 'transparent',
+              borderRightWidth: StyleSheet.hairlineWidth,
+              borderRightColor: g.glassRing,
+              width: 320,
+            },
+            overlayColor: g.scrim,
+          },
+    [g, material],
+  );
   return (
     <Drawer
       drawerContent={(props) => <DrawerContent {...props} />}
@@ -41,6 +61,7 @@ export default function DrawerLayout() {
         sceneStyle: { backgroundColor: c.paper },
         overlayColor:
           mode === 'dark' ? 'rgba(0, 0, 0, 0.65)' : 'rgba(14, 15, 13, 0.4)',
+        ...glassOptions,
       }}
     >
       <Drawer.Screen name="(tabs)" options={{ drawerLabel: 'Home' }} />
@@ -81,6 +102,11 @@ export default function DrawerLayout() {
       <Drawer.Screen
         name="settings/customize-tabs"
         options={{ drawerLabel: 'Customize tab bar', drawerItemStyle: { display: 'none' } }}
+      />
+      {/* Settings > Appearance (Dark, Light, Liquid Glass, System). */}
+      <Drawer.Screen
+        name="settings/appearance"
+        options={{ drawerLabel: 'Appearance', drawerItemStyle: { display: 'none' } }}
       />
       {/* Reached from Settings only — an unregistered route would otherwise be
           auto-added to the drawer under its raw file path. */}

@@ -423,7 +423,7 @@ describe('8. accessibility', () => {
       if (tagOf(el, sf) === 'TextInput' && attrText(el, 'accessibilityLabel', sf) === 'Search books') input = el;
     });
     expect(input).toBeTruthy();
-    expect(attrText(input!, 'style', sf)).toMatch(/^\[styles\.searchInput,/);
+    expect(attrText(input!, 'style', sf)).toMatch(/^\[\s*styles\.searchInput,/);
     expect(styleNumber(sf, 'searchInput', 'minHeight')).toBeGreaterThanOrEqual(44);
   });
 

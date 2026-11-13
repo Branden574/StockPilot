@@ -138,6 +138,7 @@ export function Tabs({
       role="tablist"
       aria-label={ariaLabel}
       data-slot="tabs"
+      data-glass="tabs"
       className={cn('border-border border-b', className)}
     >
       <div className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">

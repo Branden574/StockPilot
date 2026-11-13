@@ -5,6 +5,7 @@ import { err, ok, type ActionResult } from '@stockpilot/core';
 
 import { embedItemsBatch } from '@/lib/ai/embeddings';
 import { withContext } from '@/server/services/context';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 /**
  * Embeds the oldest un-embedded items in the org. Admin-only. Returns
@@ -30,7 +31,7 @@ export async function backfillItemEmbeddingsAction(
     // summary) can carry the database's own words, never sent to a browser.
     return ok({ embedded: result.embedded, failed: result.failed, remaining: result.remaining });
   } catch (e) {
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.embeddings.backfill_item_embeddings');
   }
 }
 

@@ -1,6 +1,10 @@
 import 'server-only';
 
+import type { SupabaseClient } from '@supabase/supabase-js';
+
 import { parseUserAgent } from '@/lib/auth/user-agent';
+import { reportError } from '@/lib/error-reporter';
+import { broadcastToChannel } from '@/lib/realtime/broadcast';
 
 import { ServiceError, withContext, type ServiceContext } from './context';
 
@@ -107,4 +111,72 @@ export class SessionsService {
     });
     if (error) throw new ServiceError('internal_error', error.message);
   }
+}
+
+/*
+ * NAMING THE SESSIONS A SIGN-OUT ENDED (S5, integrator decision 2026-11-01).
+ *
+ * `user:<id>:sessions` is a PUBLIC Realtime channel (lib/realtime/broadcast.ts
+ * sends `private: false`): anyone holding the anon key and a user's id can
+ * read it. "Sign out all other devices" and Change password used to broadcast
+ * `{ keepId: <the session that stays> }`, so the one LIVE session id of the
+ * account went out on it. They now name the sessions they ended,
+ * `{ sessionIds }`, as "sign out this device" always has, and so does the
+ * phone's sign-out (POST /api/v1/auth/signed-out). Both listeners already read
+ * that payload: a device whose session is named signs out, the session that
+ * stays is never named (session-revocation-listener.tsx,
+ * apps/mobile/src/lib/use-session-revocation.ts). `{ keepId: null }` (sign out
+ * EVERY session) names no session and stays.
+ *
+ * The ended sessions are listed BEFORE they end: afterwards they are gone and
+ * cannot be named. src/test/session-revoked-payload.guard.test.ts fails any
+ * server `keepId` that is not the literal `keepId: null`.
+ */
+
+/**
+ * The ids of the caller's own sessions (list_my_sessions, scoped to
+ * auth.uid()), read before a sign-out ends some of them.
+ *
+ * Never throws. A list that cannot be read is null, reported once, and the
+ * caller then names nothing: the sign-out still happens, and the other devices
+ * end at their next token refresh, as before the broadcast existed.
+ */
+export async function listMySessionIds(
+  supabase: Pick<SupabaseClient, 'rpc'>,
+): Promise<string[] | null> {
+  try {
+    const res = (await supabase.rpc('list_my_sessions')) as
+      { data: unknown; error: { code?: string; message?: string } | null } | null | undefined;
+    if (!res || res.error || !Array.isArray(res.data)) {
+      void reportError(
+        new Error(`list_my_sessions could not be read (${res?.error?.code ?? 'no rows'})`),
+        { tag: 'sessions.list_for_broadcast_failed', level: 'warning' },
+      );
+      return null;
+    }
+    return (res.data as Array<{ id?: unknown }>)
+      .map((r) => r?.id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  } catch (e) {
+    void reportError(e, { tag: 'sessions.list_for_broadcast_failed', level: 'warning' });
+    return null;
+  }
+}
+
+/**
+ * Tell the account's devices which sessions ended: `{ sessionIds }`, the
+ * listed ids other than the session that stays, which is never named. Sends
+ * nothing when the list could not be read or names no other session. Call it
+ * only once the revoke has answered without error: the web listener asks the
+ * Auth server before it signs a tab out, so a message ahead of the revoke is
+ * ignored. Never rejects (broadcastToChannel never does).
+ */
+export async function broadcastEndedSessions(
+  userId: string,
+  listed: readonly string[] | null,
+  stays: string,
+): Promise<void> {
+  const ended = (listed ?? []).filter((id) => id !== stays);
+  if (ended.length === 0) return;
+  await broadcastToChannel(`user:${userId}:sessions`, 'revoked', { sessionIds: ended });
 }

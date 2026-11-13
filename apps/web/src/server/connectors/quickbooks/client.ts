@@ -13,6 +13,15 @@ const BASE_URLS = {
 export type QboEnv = keyof typeof BASE_URLS;
 
 /**
+ * How long one QuickBooks call may take before it is stopped (docket B81). A
+ * call that got no answer used to hold the drain-outbox cron until the
+ * platform ended it. A stopped call is no Intuit answer, so the connector
+ * tries it again at a later sync; every create carries a fixed requestid, so
+ * that cannot create a second entity.
+ */
+export const QBO_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
  * Error thrown by QboClient on a non-OK response. Carries `status` so the
  * connector can decide retryability (401/429/5xx) and `intuitTid` for support
  * correlation. The message includes the status + intuit_tid but NEVER the
@@ -99,6 +108,7 @@ export class QboClient {
       method: 'POST',
       headers: this.authHeaders(),
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(QBO_REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) {
       const tid = res.headers.get('intuit_tid');
@@ -118,6 +128,7 @@ export class QboClient {
     const res = await fetch(url, {
       method: 'GET',
       headers: this.authHeaders(),
+      signal: AbortSignal.timeout(QBO_REQUEST_TIMEOUT_MS),
     });
     if (!res.ok) {
       const tid = res.headers.get('intuit_tid');

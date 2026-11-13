@@ -11,5 +11,9 @@ const MAP: Record<string, { variant: 'default' | 'secondary' | 'success' | 'warn
 
 export function PoStatusBadge({ status }: { status: string }) {
   const cfg = MAP[status] ?? MAP.draft!;
-  return <Badge variant={cfg.variant}>{cfg.label}</Badge>;
+  return (
+    <Badge variant={cfg.variant} data-glass-role="status" data-glass-state={status}>
+      {cfg.label}
+    </Badge>
+  );
 }

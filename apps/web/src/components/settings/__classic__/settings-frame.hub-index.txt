@@ -1,0 +1,225 @@
+<div>
+  <div>
+    <div class="gap-4 lg:columns-2" data-slot="settings-index">
+      <section aria-labelledby="settings-group-account" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-account">
+          "Account"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/profile">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Profile"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Your name, avatar, and sign-in email."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/security">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Security"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Two-factor authentication and org MFA policy."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/notifications">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Notifications"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Weekly digest email and preferences."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+      <section aria-labelledby="settings-group-workspace" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-workspace">
+          "Workspace"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/organization">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Organization"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Name, labels for charters and warehouses."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/industry">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Industry template"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Set up StockPilot for your industry in one click — Books, Distribution, Apparel, Food & Ag, or 3PL."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/modules">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Modules"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Turn features on or off for your whole organization."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/navigation">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Navigation"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Customize the sidebar — hide, rename, and reorder items or add custom links."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/dashboard">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Dashboard"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Choose which cards appear on the dashboard and in what order."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/custom-fields">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Custom fields"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Define extra item fields — warranty, voltage, color, and more."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/order-statuses">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Order statuses"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Rename and recolor the status badges shown on order requests."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+      <section aria-labelledby="settings-group-access" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-access">
+          "Access"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/roles">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Roles & permissions"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Reference for what each role can see and do across StockPilot."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/audit">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Audit log"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Every privileged action across the org."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+      <section aria-labelledby="settings-group-requests" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-requests">
+          "Requests and email"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/public-requests">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Public requests"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Shareable link external partners use to submit order requests — no account required."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/email-routing">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Email routing"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Where delivery and maintenance request emails are addressed for your organization."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <div class="flex min-h-11 items-center gap-3 px-[18px] py-3" data-slot="settings-entry-unchecked">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-muted-foreground block text-[13.5px] font-medium leading-5" id="«id1»-title">
+                  "Maintenance requests"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]" id="«id1»-note">
+                  "We couldn't check whether this module is on."
+              <button aria-describedby="«id1»-title «id1»-note" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] shrink-0" type="button">
+                <svg aria-hidden="true" class="lucide lucide-refresh-cw" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8">
+                  <path d="M21 3v5h-5">
+                  <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16">
+                  <path d="M8 16H3v5">
+                "Try again"
+      <section aria-labelledby="settings-group-data-safety" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-data-safety">
+          "Data safety"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/recovery">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Recovery"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Restore soft-deleted items, categories, suppliers, and locations."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/restore-points">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Backups & restore"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Point-in-time snapshots of your inventory you can roll back to. Business plan."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/inventory-cleanup">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Archived item cleanup"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Automatically delete items that have stayed archived past a set time. Recoverable."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+      <section aria-labelledby="settings-group-connections" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-connections">
+          "Connections"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/integrations">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Integrations"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Connect QuickBooks Online and other tools to export your data."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/ai">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "AI"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Semantic-search embeddings and AI assistant configuration."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">
+      <section aria-labelledby="settings-group-plan" class="bg-card mb-4 break-inside-avoid overflow-hidden rounded-lg border">
+        <h2 class="border-border text-foreground border-b px-[18px] py-3.5 text-[13.5px] font-medium leading-5" id="settings-group-plan">
+          "Plan"
+        <ul class="divide-border divide-y">
+          <li>
+            <a class="hover:bg-muted group flex min-h-11 items-center gap-3 px-[18px] py-3 transition-colors focus-visible:ring-inset focus-visible:ring-offset-0" href="/dashboard/settings/billing">
+              <span class="min-w-0 flex-1">
+                <h3 class="text-foreground block text-[13.5px] font-medium leading-5">
+                  "Billing"
+                <span class="text-muted-foreground mt-0.5 block text-[12.5px] leading-[18px]">
+                  "Plan, invoices, payment method."
+              <svg aria-hidden="true" class="lucide lucide-chevron-right text-ink-4 group-hover:text-foreground size-3.5 shrink-0 transition-colors" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m9 18 6-6-6-6">

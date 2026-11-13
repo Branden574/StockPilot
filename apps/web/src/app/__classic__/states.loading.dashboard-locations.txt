@@ -1,0 +1,72 @@
+<div aria-busy="true" class="flex flex-col gap-4 max-w-[1320px] mx-auto pb-16 pt-6 px-4 sm:pt-7 sm:px-8 w-full" data-testid="locations-page-skeleton">
+  <span class="sr-only">
+    "Loading locations"
+  <div class="flex flex-wrap gap-4 items-end justify-between">
+    <div class="min-w-0">
+      <div class="flex h-[42px] items-center">
+        <div class="animate-pulse bg-[var(--ed-line)] h-[26px] rounded-md w-36">
+      <div class="flex h-5 items-center mt-0.5">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-[70vw] rounded-md w-[400px]">
+    <div class="flex flex-wrap gap-2 items-center">
+      <div class="animate-pulse bg-[var(--ed-line)] h-9 rounded-lg w-32">
+      <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-32">
+  <div class="bg-sunk border border-border flex gap-0.5 h-9 items-center max-w-full p-[3px] rounded-lg w-fit" data-testid="locations-skeleton-groups">
+    <div class="animate-pulse bg-[var(--ed-line)] h-7 rounded-[5px] w-16">
+    <div class="animate-pulse bg-[var(--ed-line)] h-7 rounded-[5px] w-32">
+    <div class="animate-pulse bg-[var(--ed-line)] h-7 rounded-[5px] w-20">
+  <div class="bg-card border border-border overflow-hidden rounded-lg">
+    <div class="min-w-[640px]">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] h-[37px] items-center px-4">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2 rounded-md w-12">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2 rounded-md w-10">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2 rounded-md w-12">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2 justify-self-end rounded-md w-14">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] items-center last:border-0 min-h-[55px] px-4" data-testid="locations-skeleton-row">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3.5 max-w-full rounded-md w-36">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2.5 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-20">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-full rounded-md w-40">
+        <div class="flex gap-2 items-center justify-end">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-11">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] items-center last:border-0 min-h-[55px] px-4" data-testid="locations-skeleton-row">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3.5 max-w-full rounded-md w-36">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2.5 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-20">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-full rounded-md w-40">
+        <div class="flex gap-2 items-center justify-end">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-11">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] items-center last:border-0 min-h-[55px] px-4" data-testid="locations-skeleton-row">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3.5 max-w-full rounded-md w-36">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2.5 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-20">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-full rounded-md w-40">
+        <div class="flex gap-2 items-center justify-end">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-11">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] items-center last:border-0 min-h-[55px] px-4" data-testid="locations-skeleton-row">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3.5 max-w-full rounded-md w-36">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2.5 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-20">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-full rounded-md w-40">
+        <div class="flex gap-2 items-center justify-end">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-11">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] items-center last:border-0 min-h-[55px] px-4" data-testid="locations-skeleton-row">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3.5 max-w-full rounded-md w-36">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2.5 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-20">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-full rounded-md w-40">
+        <div class="flex gap-2 items-center justify-end">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-11">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">
+      <div class="border-b border-border gap-3 grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,1fr)_minmax(0,1.4fr)_88px] items-center last:border-0 min-h-[55px] px-4" data-testid="locations-skeleton-row">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3.5 max-w-full rounded-md w-36">
+        <div class="animate-pulse bg-[var(--ed-line)] h-2.5 rounded-md w-16">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 rounded-md w-20">
+        <div class="animate-pulse bg-[var(--ed-line)] h-3 max-w-full rounded-md w-40">
+        <div class="flex gap-2 items-center justify-end">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-11">
+          <div class="animate-pulse bg-[var(--ed-line)] h-8 rounded-md w-8">

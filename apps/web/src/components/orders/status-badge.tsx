@@ -27,7 +27,12 @@ export function OrderStatusBadge({
   fulfillmentType?: string | null;
 }) {
   const meta = useOrderStatusMeta(status);
-  return <Badge variant={meta.color}>{orderStatusLabelForFulfillment(status, meta.label, fulfillmentType)}</Badge>;
+  // data-glass-role: an inert hook (Liquid Glass draws the status dot from it).
+  return (
+    <Badge variant={meta.color} data-glass-role="order-status">
+      {orderStatusLabelForFulfillment(status, meta.label, fulfillmentType)}
+    </Badge>
+  );
 }
 
 // NOTE: `summaryRequesterLabel` moved to ./requester-label (a server-safe,

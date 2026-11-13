@@ -1,6 +1,6 @@
 'use client';
 
-import { ChevronRight } from 'lucide-react';
+import { ChevronRight, ShoppingBag } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import * as React from 'react';
@@ -9,6 +9,7 @@ import { navForRole, type NavItem, type NavSection } from '@/components/dashboar
 import { NavLinkPending } from '@/components/dashboard/nav-link-pending';
 import { OrgSwitcher } from '@/components/dashboard/org-switcher';
 import { defaultCollapsedSections } from '@/components/dashboard/sidebar-pref';
+import { liquidGlassRollout } from '@/components/theme/appearance-flag';
 import { IconMark } from '@/components/ui/icon-mark';
 import { useWarmRoute } from '@/lib/hooks/use-warm-route';
 import { cn } from '@/lib/utils';
@@ -96,6 +97,13 @@ const TOP_ROUTES = [
   '/dashboard/movements',
 ];
 
+/** The Orders entry (registry: module orders, `orders:request`) and its Place an order page. */
+const ORDERS_HREF = '/dashboard/orders';
+const PLACE_ORDER_HREF = '/dashboard/orders/new';
+
+const showsOrders = (list: readonly NavSection[]) =>
+  list.some((s) => s.items.some((i) => i.href === ORDERS_HREF));
+
 export function Sidebar({
   className,
   id,
@@ -128,6 +136,23 @@ export function Sidebar({
   const sections: NavSection[] = React.useMemo(
     () => navForRole(role, moduleSet, (navOverrides as NavOverrides | null) ?? null, permissionSet),
     [role, moduleSet, navOverrides, permissionSet],
+  );
+  // Liquid Glass's tinted "Place an order" (AppSidebar.dc.html .sb-cta): a
+  // glass-only shortcut to the page the Orders list's own "+ Place order"
+  // opens, behind the same gate as the Orders entry: the Orders module and
+  // `orders:request` (the registry's entry, which /dashboard/orders/new checks
+  // too), read from the nav without the org's overrides so a custom link to
+  // the list cannot stand in for the permission, and still shown in this nav
+  // so an org that hid Orders does not get it back here. Not rendered at all
+  // under the `off` rollout (R5: today's exact markup); under opt-in and
+  // default it is hidden in classic by styles/liquid-glass/visibility.css.
+  // Listed in tests/e2e/appearance/glass-only-allowlist.json.
+  const canPlaceOrder = React.useMemo(
+    () =>
+      liquidGlassRollout() !== 'off' &&
+      showsOrders(sections) &&
+      showsOrders(navForRole(role, moduleSet, null, permissionSet)),
+    [sections, role, moduleSet, permissionSet],
   );
   const pathname = usePathname();
   const initials = (userName || 'U')
@@ -245,19 +270,23 @@ export function Sidebar({
   return (
     <aside
       id={id}
+      data-glass="sidebar"
       className={cn(
         'border-border bg-background flex h-full w-[228px] shrink-0 flex-col border-r',
         className,
       )}
     >
       {/* Brand row: the same 56px as the top bar, so their hairlines meet. */}
-      <div className="border-border flex h-14 shrink-0 items-center border-b px-[18px]">
+      <div
+        className="border-border flex h-14 shrink-0 items-center border-b px-[18px]"
+        data-glass="sidebar-brand"
+      >
         <Link href="/dashboard" onClick={onNavigate} className="text-foreground rounded-md">
           <IconMark size={22} />
         </Link>
       </div>
 
-      <div className="shrink-0 px-3 pb-1 pt-3">
+      <div className="shrink-0 px-3 pb-1 pt-3" data-glass="sb-ws">
         <OrgSwitcher
           orgs={
             memberships && memberships.length > 0
@@ -275,9 +304,26 @@ export function Sidebar({
         />
       </div>
 
+      {canPlaceOrder ? (
+        <Link
+          href={PLACE_ORDER_HREF}
+          prefetch={false}
+          onFocus={() => warmRoute(PLACE_ORDER_HREF)}
+          onPointerEnter={() => warmRoute(PLACE_ORDER_HREF)}
+          onPointerDown={() => warmRoute(PLACE_ORDER_HREF)}
+          onClick={onNavigate}
+          data-glass-only=""
+          data-glass="sb-cta"
+        >
+          <ShoppingBag aria-hidden strokeWidth={1.6} />
+          <span data-glass="nav-label">Place an order</span>
+        </Link>
+      ) : null}
+
       {/* Nav: the registry's sections, each under its own label. */}
       <nav
         ref={navRef}
+        data-glass="sidebar-nav"
         className="scrollbar-thin flex flex-1 flex-col gap-3.5 overflow-y-auto px-3 pb-3 pt-1"
       >
         {sections.map((section) => {
@@ -302,15 +348,18 @@ export function Sidebar({
           const open = isStoredCollapsed ? holdsActive && !heldClosed : true;
           const listId = `${sectionIdPrefix}-${section.key}`;
           return (
-            <div key={section.key} className="flex flex-col gap-px">
+            <div key={section.key} className="flex flex-col gap-px" data-glass="sb-sec">
               <button
                 type="button"
                 aria-expanded={open}
                 aria-controls={listId}
                 onClick={() => toggleSection(section.key, open, holdsActive)}
+                data-glass="sb-sec-h"
                 className="text-muted-foreground hover:text-foreground group flex w-full items-center gap-1.5 rounded-md px-2.5 pb-1 pt-2 text-left text-[10.5px] font-medium uppercase leading-4 tracking-[0.1em] transition-colors [@media(pointer:coarse)]:min-h-11 [@media(pointer:coarse)]:py-0"
               >
-                <span className="min-w-0 flex-1">{section.label}</span>
+                <span className="min-w-0 flex-1" data-glass="sb-sec-label">
+                  {section.label}
+                </span>
                 {/* The chevron is what says a folded heading opens, so it
                     keeps 3:1 against the page (WCAG 1.4.11): ink 4, the
                     faintest ink DESIGN-SPEC 2.4 allows for an arrow (3.19:1
@@ -341,14 +390,18 @@ export function Sidebar({
 
       {/* Identity foot: who is signed in, and as what. Not interactive (the
           account menu in the top bar holds the actions). */}
-      <div className="border-border flex shrink-0 items-center gap-2.5 border-t px-4 py-3">
+      <div
+        className="border-border flex shrink-0 items-center gap-2.5 border-t px-4 py-3"
+        data-glass="sb-foot"
+      >
         <span
           aria-hidden
+          data-glass="avatar"
           className="bg-sunk text-foreground grid size-8 shrink-0 place-items-center rounded-full border border-[var(--ed-line-strong)] text-[11px] font-semibold"
         >
           {initials}
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1" data-glass="sb-foot-text">
           <div className="text-foreground truncate text-[13px] font-medium leading-[1.3]">
             {userName ?? '—'}
           </div>
@@ -359,6 +412,13 @@ export function Sidebar({
       </div>
     </aside>
   );
+}
+
+/** A badge that is a word (the registry's "Beta", "New"), not a count. Read
+ *  only by the inert data-glass-tone hook, which Liquid Glass draws as the
+ *  board's .nav-pill; classic draws every badge the same. */
+function isWordBadge(badge: string | number): boolean {
+  return typeof badge === 'string' && !/^\s*\d[\d,]*\+?\s*$/u.test(badge);
 }
 
 function NavList({
@@ -393,6 +453,7 @@ function NavList({
               onPointerDown={() => warmRoute(item.href)}
               onClick={onNavigate}
               aria-current={active ? 'page' : undefined}
+              data-glass="nav-item"
               className={cn(
                 // 32px rows (min-h-8), 44px wherever a finger is the
                 // pointer (the phone drawer, a tablet). A renamed label that
@@ -413,7 +474,9 @@ function NavList({
                     : 'text-muted-foreground group-hover/item:text-foreground',
                 )}
               />
-              <span className="min-w-0 flex-1">{item.label}</span>
+              <span className="min-w-0 flex-1" data-glass="nav-label">
+                {item.label}
+              </span>
               {/* Pending indicator — turns on at click time via
                   useLinkStatus(), turns off when the new route
                   finishes rendering. Without this, a cold-cache
@@ -422,6 +485,10 @@ function NavList({
               <NavLinkPending />
               {item.badge != null && (
                 <span
+                  data-glass="nav-ct"
+                  data-glass-tone={
+                    item.alert ? 'alert' : isWordBadge(item.badge) ? 'pill' : undefined
+                  }
                   className={cn(
                     'shrink-0 rounded-full px-1.5 font-mono text-[11px] font-normal leading-4',
                     item.alert

@@ -6,6 +6,9 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 
 import { Button } from '@/components/ui/button';
+import { GLASS_PAGE, GlassNavTitle } from '@/components/ui/glass/screens/admin';
+import { GlassNavSpacer } from '@/components/ui/glass/screens/po';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { IconChip } from '@/components/ui/row';
 import { Body, Eyebrow } from '@/components/ui/text';
 import { useTheme } from '@/lib/use-theme';
@@ -44,6 +47,10 @@ class WebViewBoundary extends React.Component<
 
 export default function ZendeskWebScreen() {
   const { c } = useTheme();
+  // Liquid Glass draws the native header only (the iOS nav on the opaque
+  // chrome: Back as a 44pt glass circle, Zendesk as the centred title); the
+  // third-party Zendesk page under it is unchanged in every appearance.
+  const lg = useGlass();
   const router = useRouter();
   const { subdomain } = useLocalSearchParams<{ subdomain: string }>();
 
@@ -68,12 +75,16 @@ export default function ZendeskWebScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? lg.g.chrome : c.paper }}>
+        <View style={lg ? GLASS_PAGE.navTitled : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={() => router.back()} accessibilityLabel="Back" minTap />
-          <Eyebrow style={styles.title}>Zendesk</Eyebrow>
+          {lg ? (
+            <GlassNavTitle lg={lg} title="Zendesk" />
+          ) : (
+            <Eyebrow style={styles.title}>Zendesk</Eyebrow>
+          )}
           {/* Spacer to balance the back button */}
-          <View style={styles.topbarRight} />
+          {lg ? <GlassNavSpacer /> : <View style={styles.topbarRight} />}
         </View>
       </SafeAreaView>
 

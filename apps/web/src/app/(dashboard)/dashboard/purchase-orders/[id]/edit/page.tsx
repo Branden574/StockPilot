@@ -1,9 +1,11 @@
 import { redirect } from 'next/navigation';
 import { notFound } from 'next/navigation';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { PoForm, type InitialPoValues } from '@/components/po/po-form';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { requireOrgContext } from '@/lib/auth/session';
+import { checkModuleAccess } from '@/lib/modules/module-gate';
 import { purchaseOrderItemTypes } from '@/lib/purchase-orders/item-types';
 import { createClient } from '@/lib/supabase/server';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
@@ -21,6 +23,13 @@ import { SuppliersService } from '@/server/services/suppliers';
 
 import { can } from '@stockpilot/core';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/po.css';
+
 /** The page area (DESIGN-SPEC 4 and 5.3), the same box the PO list and the
  *  shell's loading skeleton draw. */
 const PAGE = 'mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7';
@@ -33,6 +42,12 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   // A malformed id (a mistyped or cut-off link) is Page not found before
   // anything is read with it (B63).
   notFoundUnlessUuid(id);
+  // Purchase orders off (a stale link) is the module-off panel, before anything is read:
+  // the read below would refuse with module_disabled and reach the error page (B66).
+  const moduleAccess = await checkModuleAccess('purchase_orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="purchase_orders" access={moduleAccess} />;
+  }
 
   const ctx = await requireOrgContext();
   if (!can(ctx, 'purchase_orders:manage')) {
@@ -197,7 +212,7 @@ export default async function EditPoPage({ params }: { params: Promise<{ id: str
   ]);
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="po-edit">
       <PageHeader
         back={
           <PageHeaderBackLink href={`/dashboard/purchase-orders/${id}`}>

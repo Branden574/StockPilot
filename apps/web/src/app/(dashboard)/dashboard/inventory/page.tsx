@@ -44,7 +44,9 @@ import {
   type InventoryPlacementLine,
 } from '@/server/loaders/inventory-list';
 import { CategoriesService } from '@/server/services/categories';
+import { charterCellLookup } from '@/lib/charter-display';
 import { ChartersService } from '@/server/services/charters';
+import { readCharterCellLabels } from '@/server/services/lib/unoffered-choices';
 import { InventoryService } from '@/server/services/inventory';
 import { ItemImagesService } from '@/server/services/item-images';
 import {
@@ -79,6 +81,11 @@ import { countMatchesInOtherWarehouses } from '@/server/services/lib/other-wareh
 import { PageTour } from '@/components/onboarding/page-tour';
 import { TourSampleItem } from '@/components/onboarding/tour-sample-item';
 import { ITEMS_PAGE_TOUR } from '@/lib/onboarding/tours';
+
+// The Liquid Glass list composition (Items.dc.html, Books.dc.html): every rule
+// is scoped to this page's [data-glass-page] root and to glass, so classic
+// never matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/items.css';
 
 // Dropped from 50 → 30 after the Playwright speed sweep showed the
 // inventory list pulling ~3 MB and 6.2s to load on a warm cache. The
@@ -218,7 +225,10 @@ export default async function InventoryPage({
   return (
     // The page box every redesigned dashboard page shares (max 1320, 28 / 32
     // / 64 padding, 16 px gutters on a phone; the route skeleton draws it too).
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="items"
+    >
       <PageHeader
         title={heading}
         subline={
@@ -311,6 +321,7 @@ type SectionData = {
   suppliers: Array<{ id: string; name: string }>;
   tags: Array<{ id: string; name: string; color: string | null }>;
   charters: Array<{ id: string; name: string; code: string | null }>;
+  unlistedCharters: InventoryListLookups['unlistedCharters'];
   trends: Map<string, { qtySeries: number[]; moveSeries: number[] }>;
   placementMap: Map<string, InventoryPlacementLine[]>;
   /** ACTIVE items awaiting first receipt (mig 0277) — the "Expected"
@@ -492,6 +503,8 @@ async function inventoryTableSection({
   const canStartOrder =
     can(sessionCtx, 'orders:request') &&
     (await getModulesForRequest(sessionCtx.organizationId)).has('orders');
+  // Export (B68): only with items:export, which the export, its sample and export.csv check.
+  const canExport = can(sessionCtx, 'items:export');
   // The bulk "Cycle count" shortcut (B42): only for someone who can start a
   // count, by the server's floors (core countStartAllowed: a manager with
   // cycle_counts:assign and stock:adjust, the module on). It had no gate, so
@@ -658,7 +671,7 @@ async function inventoryTableSection({
             lookups.categories.map((c) => [c.id, { name: c.name, color: c.color }]),
           ),
           locations: new Map(lookups.locations.map((l) => [l.id, { name: l.name }])),
-          charters: new Map(lookups.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+          charters: charterCellLookup(lookups.charters, lookups.unlistedCharters),
         }}
         canCreate={canCreate}
         canSetPublicVisibility={canSetPublicVisibility}
@@ -666,6 +679,7 @@ async function inventoryTableSection({
         canUnlinkFamilies={canUnlinkFamilies}
         canRenameGroups={canRenameGroups}
         canStartOrder={canStartOrder}
+        canExport={canExport}
         canStartCount={canStartCount}
         categories={lookups.categories.map((c) => ({ id: c.id, name: c.name }))}
         locations={lookups.locations}
@@ -717,6 +731,7 @@ async function inventoryTableSection({
         suppliers: payload.suppliers,
         tags: payload.tags,
         charters: payload.charters,
+        unlistedCharters: payload.unlistedCharters,
         trends: new Map(Object.entries(payload.trends)),
         placementMap: new Map(Object.entries(payload.placement)),
         expectedCount: payload.expectedCount,
@@ -761,13 +776,19 @@ async function inventoryTableSection({
         TagsService.forCurrentUser(),
         ChartersService.forCurrentUser(),
       ]);
-      const [categories, locations, suppliers, tags, charters] = await Promise.all([
-        tagged('categoriesSvc.list', categoriesSvc.list()),
-        tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
-        tagged('suppliersSvc.list', suppliersSvc.listForLookups()),
-        tagged('tagsSvc.list', tagsSvc.list()),
-        tagged('chartersSvc.list', chartersSvc.list()),
-      ]);
+      const [categories, locations, suppliers, tags, charters, unlistedCharters] =
+        await Promise.all([
+          tagged('categoriesSvc.list', categoriesSvc.list()),
+          tagged('locationsSvc.list', locationsSvc.list({ sitesOnly: true })),
+          tagged('suppliersSvc.list', suppliersSvc.listForLookups()),
+          tagged('tagsSvc.list', tagsSvc.list()),
+          tagged('chartersSvc.list', chartersSvc.list()),
+          // Names only, for the Charter cell: an archived charter's records (B97).
+          readCharterCellLabels(
+            () => chartersSvc.listLabels({ exceptActive: true }),
+            'inventory.charter_cell_labels',
+          ),
+        ]);
       return {
         categories: categories.map((c) => ({
           id: c.id as string,
@@ -778,6 +799,9 @@ async function inventoryTableSection({
         suppliers: suppliers.map((s) => ({ id: s.id as string, name: s.name as string })),
         tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
         charters: charters.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+        unlistedCharters: unlistedCharters.flatMap((c) =>
+          c.status === 'active' ? [] : [{ ...c, status: c.status }],
+        ),
       };
     };
 
@@ -964,7 +988,7 @@ async function inventoryTableSection({
   const lookups = {
     categories: new Map(data.categories.map((c) => [c.id, { name: c.name, color: c.color }])),
     locations: new Map(data.locations.map((l) => [l.id, { name: l.name }])),
-    charters: new Map(data.charters.map((c) => [c.id, { name: c.name, code: c.code }])),
+    charters: charterCellLookup(data.charters, data.unlistedCharters),
   };
 
   const emptyState = inventoryEmptyState({
@@ -1024,6 +1048,7 @@ async function inventoryTableSection({
       canUnlinkFamilies={canUnlinkFamilies}
       canRenameGroups={canRenameGroups}
       canStartOrder={canStartOrder}
+      canExport={canExport}
       canStartCount={canStartCount}
       categories={data.categories.map((c) => ({ id: c.id, name: c.name }))}
       locations={data.locations}

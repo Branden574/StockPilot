@@ -170,7 +170,11 @@ async function notifyAdmins(
     .not('accepted_at', 'is', null)
     .is('impersonation_expires_at', null);
 
-  const sentPart = summary.sent > 0 ? `, ${summary.sent} sent` : '';
+  // What the run did to them: marked as ordered (runAutoReorder's
+  // updateStatus 'ordered', the change the draft page's Mark as ordered
+  // makes). Nothing is sent to the supplier, so it no longer says "sent"
+  // (B105).
+  const sentPart = summary.sent > 0 ? `, ${summary.sent} marked as ordered` : '';
   const heldPart = summary.heldForReview > 0 ? `, ${summary.heldForReview} held for review` : '';
   const body = `Auto-reorder created ${summary.created} purchase order${
     summary.created === 1 ? '' : 's'

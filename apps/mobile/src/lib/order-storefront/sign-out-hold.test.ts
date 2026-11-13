@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   SIGN_IN_HELD_DROPPED_COPY,
@@ -56,6 +56,18 @@ const PENDING: PendingOrderSubmission = {
     ],
   },
 };
+
+// Every hold in this file was sent at PENDING.firstSentAt, and a hold still
+// unknown 30 days after its send is dropped (ORDER_HOLD_MAX_AGE_MS). Read on
+// the real clock, the cases that keep or offer a hold expired with the
+// calendar on 2026-11-03 at 12:00 UTC, so the file runs a minute after the
+// send; the 30-day case passes its own clock (`now`).
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.parse('2026-10-04T12:01:00.000Z') });
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('the hold marker (plan 3.6)', () => {
   it('holds ids, a time and two counts only: no name, email, note or item id', () => {
