@@ -53,6 +53,8 @@ const PHONE_APPEARANCE_ID = 'phone-appearance-returns-2026-11';
 // and module or nobody here, so a test that expects an older notice reads or sees them first, and
 // the notice it checks is the one it checked before.
 const NEWER_IDS_1113 = [
+  // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'emailed-links-name-their-account-2026-11',
   'cycle-count-already-released-2026-11',
   'ai-assistant-plain-words-2026-11',
   'changes-that-did-not-happen-2026-11',
@@ -137,19 +139,22 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[7]?.id).toBe(ID);
-    expect(RELEASES[8]?.id).toBe(S2_ID);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[8]?.id).toBe(ID);
+    expect(RELEASES[9]?.id).toBe(S2_ID);
     // Re-pinned by feat/order-add-all (2026-11-10; was: this release at 0, the newest published): the Add all release is published later, at the top.
     // Re-pinned when main was merged into feat/liquid-glass after #493 and #494 (2026-11-10; was: every pinned position one place higher, and no draft): the Liquid Glass release is held as a draft at the top until G5, so every position below it moves down by one and it is the one draft.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[6]?.id).toBe(ADD_ALL_ID);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[7]?.id).toBe(ADD_ALL_ID);
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: ADD_ALL_ID, the newest published): the returns request and names release is published later, at the top, directly above the Add all release.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[5]?.id).toBe(RETURNS_REQUEST_ID);
+    expect(RELEASES[6]?.id).toBe(RETURNS_REQUEST_ID);
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
       // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: the phone appearance and returns release): the Release count release is published after it, at the top, the newest published release.
-      'cycle-count-already-released-2026-11',
+      // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the Release count release): the emailed links release is published after it, at the top, the newest published release.
+      'emailed-links-name-their-account-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -171,7 +176,8 @@ describe('the count sheet release: order, status and date', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    for (const r of RELEASES.slice(8)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(9)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -296,6 +302,8 @@ describe('the count sheet release: who is told', () => {
       expect(
         legacyAnnouncementsFor(RELEASES, v, {
           // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+          'emailed-links-name-their-account-2026-11': true,
           'cycle-count-already-released-2026-11': true,
           'ai-assistant-plain-words-2026-11': true,
           'changes-that-did-not-happen-2026-11': true,

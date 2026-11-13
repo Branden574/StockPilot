@@ -102,6 +102,8 @@ const S2_IDS = [
   // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
   // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
   // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'emailed-links-name-their-account-2026-11',
   'cycle-count-already-released-2026-11',
   'ai-assistant-plain-words-2026-11',
   'changes-that-did-not-happen-2026-11',
@@ -243,9 +245,10 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[18]?.id).toBe(ID);
-    expect(RELEASES.slice(15, 18).map((r) => r.id)).toEqual(NEWER_IDS);
-    expect(RELEASES[19]?.id).toBe('export-fixes-2026-10');
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[19]?.id).toBe(ID);
+    expect(RELEASES.slice(16, 19).map((r) => r.id)).toEqual(NEWER_IDS);
+    expect(RELEASES[20]?.id).toBe('export-fixes-2026-10');
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
@@ -275,14 +278,16 @@ describe('the update-ready-and-fixes release', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    for (const r of RELEASES.slice(19)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(20)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: every pinned position one place higher): the S2 release is published at the top, so every position below it moves down by one.
     // Re-pinned by feat/order-add-all (2026-11-10; was: every pinned position one place higher): the Add all release is published at the top, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    for (const r of RELEASES.slice(15, 18)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(16, 19)) {
       expect(Date.parse(r.publishedAt), r.id).toBeGreaterThan(at);
     }
   });
@@ -424,7 +429,8 @@ describe('the update-ready-and-fixes release', () => {
         // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: slice(9, 13)): the returns request and names release is published later, at the top, and reaches this member.
         // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: slice(10, 14)): the phone appearance and returns release is published later, at the top, and reaches every member.
         // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: .slice(11, 15)): the AI Assistant and not found releases are published later, at the top, and reach an owner (the Release count release reaches staff and viewers only), so these move down by two.
-        .slice(13, 17),
+        // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: .slice(13, 17)): the emailed links release is published later, at the top, and reaches every member, so these move down by one.
+        .slice(14, 18),
     ).toEqual([...NEWER_IDS, ID]);
     // Re-pinned in the review round of docs/whats-new-2026-11-02c (2026-11-02; was: NEWER_IDS before #461, [authenticator, retries, ID] before #471, [ID] after #471): the two releases in LATER_IDS, published later and unseen on each of these phones, reach this member and come first.
     const [webFixes, charters] = LATER_IDS as [string, string];

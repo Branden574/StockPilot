@@ -62,12 +62,14 @@ describe('the not found release', () => {
     expect(RELEASES.filter((r) => r.id === ID)).toHaveLength(1);
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
-    expect(RELEASES[2]?.id).toBe('ai-assistant-plain-words-2026-11');
-    expect(RELEASES[3]?.id).toBe(ID);
-    expect(RELEASES[4]?.id).toBe('phone-appearance-returns-2026-11');
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[3]?.id).toBe('ai-assistant-plain-words-2026-11');
+    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES[5]?.id).toBe('phone-appearance-returns-2026-11');
     // #507 went live at 04:08:17Z.
     expect(release().publishedAt).toBe('2026-11-13T04:09:00Z');
-    for (const r of RELEASES.slice(4)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(5)) {
       expect(Date.parse(release().publishedAt), r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
