@@ -24,6 +24,7 @@ import { endAccountEpoch } from './account-epoch';
 import { holdDeviceOrderSends } from './order-storefront/services';
 import { wipeForEviction } from './db';
 import { ACCOUNT_DISABLED_REJECTION } from './drain-failure';
+import { handOverLiveUser } from './mfa-reconcile';
 import { wipeWithPhotoCaches } from './photo-cache-wipe';
 import { rejectAllPending } from './queue';
 import { getRememberedIdentity } from './remembered-identity';
@@ -129,9 +130,14 @@ export function useAccountGate(options: { onEvicted: () => void }): AccountGate 
     // with the same uniform 401 an anonymous caller gets, on purpose. A
     // rejected call (offline, DNS, timeout) classifies as 'unknown' and
     // changes nothing.
+    //
+    // The user it reads is handed to the code gate's reconcile on the way
+    // through (mfa-reconcile.ts handOverLiveUser): a request refused because
+    // an authenticator was turned on elsewhere ends in this probe, and its
+    // answer is what brings the code screen up.
     const { result, gate } = await probeAndSettle(
       getAccountGateState(),
-      () => withTimeout(supabase.auth.getUser(), PROBE_TIMEOUT_MS, null),
+      () => withTimeout(supabase.auth.getUser().then(handOverLiveUser), PROBE_TIMEOUT_MS, null),
       async () => {
         await supabase.auth.signOut({ scope: 'local' });
       },

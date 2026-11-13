@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   RENTAL_NO_EMAIL_NOTE,
   RENTAL_NON_MEMBER_EMAIL_NOTE,
+  contextUnavailableBody,
   overdueReminderListMark,
   overdueReminderState,
 } from '@stockpilot/core';
@@ -311,6 +312,51 @@ describe('rentalCheckoutFailure: the Check out alert', () => {
     expect(rentalCheckoutFailure(busy, true)).toEqual({
       title: 'Could not check out',
       message: 'Could not check this rental out.',
+    });
+  });
+});
+
+// Docket S26. The server could not check the caller's access and refused the
+// checkout before doing anything: a 503 marked as written-nothing (core
+// contextUnavailableBody, sent only by the API context gate). It used to be a
+// bare 500, "Checkout not confirmed ... look for it on the Rentals list".
+describe('rentalCheckoutFailure: a refusal marked as before any write', () => {
+  const body = contextUnavailableBody();
+  const marker = (o: { status?: number; code?: unknown; details?: unknown } = {}) =>
+    Object.assign(new Error(body.message), {
+      status: 503,
+      code: body.error,
+      details: { ...body.details },
+      ...o,
+    });
+
+  it('sent and refused before any write: could not check out, nothing was checked out, try again', () => {
+    expect(rentalCheckoutFailure(marker(), true)).toEqual({
+      title: 'Could not check out',
+      message:
+        'Your access could not be checked just now, so nothing was checked out. Try again in a moment.',
+    });
+  });
+
+  it('a bare 5xx, and every near miss, stays "Checkout not confirmed"', () => {
+    for (const o of [
+      { status: 500 },
+      { status: 504 },
+      { details: undefined },
+      { details: { reason: 'context_unavailable', retryable: true, nothingWritten: false } },
+      { code: 'internal_error' },
+    ]) {
+      expect(rentalCheckoutFailure(marker(o), true)).toEqual({
+        title: 'Checkout not confirmed',
+        message: RENTAL_CHECKOUT_UNCONFIRMED,
+      });
+    }
+  });
+
+  it('never sent keeps its own words, marker or not', () => {
+    expect(rentalCheckoutFailure(marker(), false)).toEqual({
+      title: 'Could not check out',
+      message: `${body.message} Nothing was sent, so nothing was checked out.`,
     });
   });
 });

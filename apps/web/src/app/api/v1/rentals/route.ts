@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { ServiceError } from '@/server/services/context';
 import { RentalsService } from '@/server/services/rentals';
 
@@ -49,9 +49,16 @@ const INTERNAL_ERROR_BODY = {
  * FAIL (insufficient availability, non-rental item, wrong warehouse) where the
  * direct insert always succeeded — those come back as 400 with the service's
  * own operator-readable sentence, which the app shows verbatim.
+ *
+ * A checkout carries no idempotency key, so the phone reads any 5xx as "may or
+ * may not have been checked out", except the 503 the API context gate marks as
+ * refused before any write (docket S26): the caller's access could not be
+ * checked, so nothing below ran, and the phone says to try again.
  */
 export async function POST(req: NextRequest) {
-  const ctx = await withApiContext(req);
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   try {

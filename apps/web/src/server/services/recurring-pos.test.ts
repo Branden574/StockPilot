@@ -30,6 +30,10 @@ vi.mock('./audit', () => ({ audit: vi.fn(async () => {}), insertAuditRowReported
 const { reportError } = vi.hoisted(() => ({ reportError: vi.fn(async () => {}) }));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
+// Export events are recorded through the service client (server/lib/outbox-events.ts).
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.client }));
+
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => {}) }));
 
 vi.mock('./item-images', () => ({
@@ -71,8 +75,12 @@ const TEMPLATE_BASE = {
 /** The orderable-items read answering that item-1 may still be ordered. */
 const ORDERABLE_ITEM_1 = { data: [{ id: 'item-1' }], error: null };
 
+let admin: ReturnType<typeof makeSupabaseStub>;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  admin = makeSupabaseStub({ 'rpc:publish_outbox': { data: 'evt-1', error: null } });
+  adminHolder.client = admin.client;
 });
 
 // ─────────────────────────────────────────────────────────────────
@@ -136,7 +144,6 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
       },
       'recurring_po_templates.update': { data: { id: 'tpl-1' }, error: null },
       'rpc:next_po_number': { data: 'PO-100', error: null },
-      'rpc:publish_outbox': { data: null, error: null },
       // supplier_id 'sup-1' is in-org — assertSupplierInOrg must find it
       'suppliers.select': { data: { id: 'sup-1' }, error: null },
     });
@@ -148,6 +155,21 @@ describe('RecurringPoTemplatesService.runDueTemplates', () => {
     expect(result.sent).toBe(1);
     expect(result.heldForReview).toBe(0);
     expect(result.failures).toBe(0);
+    // The auto-sent PO's export event, through the service client.
+    expect(stub.rpcCalls.filter((c) => c.name === 'publish_outbox')).toHaveLength(0);
+    expect(admin.rpcCalls.filter((c) => c.name === 'publish_outbox')).toEqual([
+      {
+        name: 'publish_outbox',
+        args: {
+          p_org_id: 'org-test',
+          p_topic: 'purchase_order.ordered',
+          p_aggregate_type: 'purchase_order',
+          p_aggregate_id: 'po-new',
+          p_payload: { poId: 'po-new' },
+          p_dedupe_key: 'purchase_order.ordered:po-new',
+        },
+      },
+    ]);
   });
 
   it('send mode over cap: holds as draft', async () => {

@@ -62,9 +62,14 @@ describe('the Release count release', () => {
     expect(release().status).toBe('published');
     expect(release().revision).toBe(1);
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe('ai-assistant-plain-words-2026-11');
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[2]?.id).toBe(ID);
+    expect(RELEASES[3]?.id).toBe('ai-assistant-plain-words-2026-11');
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: this release, the newest published): the emailed links release is published later, directly above it.
+    expect(RELEASES[1]?.id).toBe('emailed-links-name-their-account-2026-11');
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      'emailed-links-name-their-account-2026-11',
+    );
     // Migration 0419 reached production at 08:17:32Z; #444's web build went live at 07:54Z.
     expect(release().publishedAt).toBe('2026-11-13T08:18:00Z');
     expect(Date.parse(release().publishedAt)).toBeLessThanOrEqual(Date.now());

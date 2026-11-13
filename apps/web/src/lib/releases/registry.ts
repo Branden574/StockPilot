@@ -104,7 +104,9 @@ export const RELEASES: Release[] = [
     // integrator moves that release's minute, move this one with it.
     // Moved again by docs/whats-new-2026-11-13 (2026-11-13; was: '2026-11-12T19:30:00Z'): the Release count
     // release below is dated 2026-11-13T08:18:00Z, so the placeholder is that same minute.
-    publishedAt: '2026-11-13T08:18:00Z',
+    // Moved again by docs/whatsnew-emailed-links-1113 (2026-11-13; was: '2026-11-13T08:18:00Z'): the emailed
+    // links release below is dated 2026-11-13T17:39:00Z, so the placeholder is that same minute.
+    publishedAt: '2026-11-13T17:39:00Z',
     entries: [
       {
         id: 'liquid-glass-web',
@@ -189,6 +191,68 @@ export const RELEASES: Release[] = [
         howItAffectsYou:
           'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
         whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'emailed-links-name-their-account-2026-11',
+    revision: 1,
+    // S25, first of two releases: #429 (squash ae9768972), web only, live on
+    // production 2026-11-13 17:38:06Z (build 40fed138abc4), so dated 17:39Z,
+    // the whole minute after (the integrator's record, not readable from the
+    // code). Its own release, not an entry added to an earlier release of the
+    // same day: each change published on 2026-11-13 has its own release.
+    // The words are the plan's draft to publish (S25 section 7, amended
+    // 2026-11-12, fix round 2), word for word.
+    // Claims checked against the code at ae9768972 (paths under apps/web/src):
+    // - "shows the email address of the account the link is for, before you
+    //   press the button": the line above the form names the full address for
+    //   a password reset and an invite (app/auth/confirm/route.ts:328-338,
+    //   :421, :517); the links come from the one link writer
+    //   (lib/auth/confirm-link.ts:53), used by the password reset email
+    //   (lib/auth/password-reset-email.ts:62), the email change
+    //   (server/services/email-change.ts:268-269) and the invites that open
+    //   this page (server/services/customers.ts:524, server/actions/
+    //   platform-admin.ts:257).
+    // - "An email change link shows the current address and the new one":
+    //   route.ts:345-347, :501.
+    // - "If this browser is signed in to a different account, the page names
+    //   both": route.ts:355-360 and :371-379, chosen at :506-511, by user id;
+    //   a browser signed in as the link's own account gets no notice (:507),
+    //   which is the howItAffectsYou sentence on it.
+    // - "The button becomes active a moment after the page opens": the
+    //   button is disabled in the markup (route.ts:431) and enabled by the
+    //   page's script after one quiet second (app/auth/confirm/press-gate.ts:
+    //   75, PRESS_GATE_QUIET_MS 1000).
+    // - "The page now needs JavaScript": the noscript line (route.ts:382-383,
+    //   :425); the button stays disabled without the script.
+    // Not said: a link emailed before this release shows the earlier page
+    // until it expires, within the hour.
+    // It supersedes the howItAffectsYou sentence of the published entry
+    // reset-and-email-change-pages-name-your-account ("the notice names your
+    // own address"): a link emailed from this release on names its account,
+    // and a browser signed in as that account is shown no notice. That
+    // entry's published text is left as it is.
+    // Who is told: every member (no audience): every member can reset a
+    // password or change their email. No link: the page opens from an email.
+    status: 'published',
+    title: 'Emailed links show which account they are for',
+    summary:
+      'When you open a password reset, email change or invite link from StockPilot, the page now shows the email address of the account the link is for, before you press the button. The button becomes active a moment after the page opens. The page now needs JavaScript: if it is turned off in your browser, the page says so and the button stays inactive.',
+    publishedAt: '2026-11-13T17:39:00Z',
+    entries: [
+      {
+        id: 'emailed-links-name-their-account',
+        category: 'improved',
+        area: 'Account',
+        title: 'Emailed links show which account they are for',
+        whatChanged:
+          'When you open a password reset, email change or invite link from StockPilot, the page now shows the email address of the account the link is for, before you press the button. An email change link shows the current address and the new one. If this browser is signed in to a different account, the page names both. The button becomes active a moment after the page opens. The page now needs JavaScript: if it is turned off in your browser, the page says so and the button stays inactive.',
+        whyItMatters: 'You can check that a link is for your own account before you use it.',
+        howItAffectsYou:
+          'When you open your own link, the page shows your own address: press the button as before, once it is active. If this browser is already signed in as you, the page no longer warns you about your own link.',
+        whatToDo:
+          'If the page shows an address that is not yours, close it without pressing the button. If the page says it needs JavaScript, turn JavaScript on for StockPilot or open the link from your email in another browser.',
       },
     ],
   },

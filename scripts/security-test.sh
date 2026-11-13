@@ -1771,6 +1771,17 @@ WEB_TESTS=(
   src/server/services/platform/permission-exceptions.test.ts
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
+
+  # Connector export events (outbox_events) are recorded only by
+  # server/lib/outbox-events.ts, through the service client, after the action
+  # that causes them: a member action in the organization of its checked
+  # context, once that context holds the action's permission; a requester's
+  # return or a public request in the organization the server resolved. The
+  # guard pins the one publish_outbox call to createAdminClient(), every site
+  # to its topic and its permission check, and refuses the function's name
+  # anywhere else on the web, the phone and core.
+  src/test/outbox-publish-sites.guard.test.ts
+  src/server/lib/outbox-events.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1876,6 +1887,21 @@ MOBILE_TESTS=(
   src/lib/session-check.test.ts
   src/lib/supabase.fetch-auth-user.test.ts
   src/lib/install-id.test.ts
+
+  # S43b: the phone asks for the authenticator code before anything of the
+  # account renders or syncs. Whether a session still owes its code is worked
+  # out from the session itself (the token's level and the user's factors), so
+  # the code screen shows with no connection and in the same render the
+  # session arrives in; the sync, the held order requests, the "last seen"
+  # beacon and both outbox drains wait for the code (the drains' own hold is
+  # executed in sync.drain.test.ts and cycle-count-sync.drain.test.ts, listed
+  # under S4); the gate follows the server's own factor list in both
+  # directions and comes down only through a session the server issued. The
+  # wiring test lists every file of the phone that reads the level, the factors
+  # or the gate. All three files carry the "Security invariant" marker.
+  src/lib/mfa-level.test.ts
+  src/lib/mfa-reconcile.test.ts
+  src/lib/code-gate-wiring.test.ts
 
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another

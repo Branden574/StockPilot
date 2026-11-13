@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 const auditRow = vi.hoisted(() => vi.fn(async (..._a: unknown[]) => true));
 vi.mock('./audit', () => ({ audit: vi.fn(async () => undefined), insertAuditRowReported: auditRow }));
@@ -11,6 +11,10 @@ vi.mock('./returns-notify', () => ({
   notifyRequesterReturnEvent: notifyRequester,
 }));
 vi.mock('./integration-events', () => ({ dispatchEvent: vi.fn(async () => undefined) }));
+// Export events are recorded through the service client the helper creates
+// (server/lib/outbox-events.ts), not through the client handed in.
+const outboxAdminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => outboxAdminHolder.client }));
 
 import {
   createMemberReturn,
@@ -89,8 +93,28 @@ const VALID_INPUT = {
   lines: [{ orderRequestLineId: OLINE_ID, quantity: 3 }],
 };
 
-beforeEach(() => vi.clearAllMocks());
+let outboxAdmin: SupabaseStub;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  outboxAdmin = makeSupabaseStub({ 'rpc:publish_outbox': { data: 'evt-1', error: null } });
+  outboxAdminHolder.client = outboxAdmin.client;
+});
 afterEach(() => vi.restoreAllMocks());
+
+/** The requester return.created event exactly as it has always been sent. */
+const REQUESTER_RETURN_CREATED = {
+  p_org_id: ORG_ID,
+  p_topic: 'return.created',
+  p_aggregate_type: 'return',
+  p_aggregate_id: 'ret-1',
+  p_payload: { returnId: 'ret-1', returnNumber: 'RMA-20260531-ABCDEF', orderRequestId: ORDER_ID },
+  p_dedupe_key: 'return.created:ret-1',
+};
+
+function outboxCalls(stub: SupabaseStub) {
+  return stub.rpcCalls.filter((c) => c.name === 'publish_outbox');
+}
 
 describe('loadRequesterReturnContext (token validation)', () => {
   it('resolves a valid token to ONLY that order + its returnable lines', async () => {
@@ -240,6 +264,35 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     expect(auditRow).toHaveBeenCalledWith(expect.objectContaining({ user_id: null, event: 'return.created' }));
     expect(notifyStaff).toHaveBeenCalledTimes(1);
     expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ event: 'request_received', channel: 'token' }));
+    // The export event: through the helper's service client, in the
+    // organization the database answered with, as always sent.
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(outboxCalls(outboxAdmin)).toEqual([
+      { name: 'publish_outbox', args: REQUESTER_RETURN_CREATED },
+    ]);
+    expect(JSON.stringify(outboxCalls(outboxAdmin)[0]!.args)).toBe(
+      JSON.stringify(REQUESTER_RETURN_CREATED),
+    );
+  });
+
+  it('records the export event in the organization the database answered with', async () => {
+    const stub = makeStub({
+      'rpc:create_requester_return_request': {
+        data: {
+          changed: true,
+          replay: false,
+          organizationId: 'org-answered',
+          returnId: 'ret-1',
+          returnNumber: 'RMA-20260531-ABCDEF',
+          status: 'requested',
+        },
+        error: null,
+      },
+    });
+    await createRequesterReturn(stub.client, TOKEN, VALID_INPUT);
+    expect(outboxCalls(outboxAdmin)).toEqual([
+      { name: 'publish_outbox', args: { ...REQUESTER_RETURN_CREATED, p_org_id: 'org-answered' } },
+    ]);
   });
 
   it('rejects an unknown token with not_found (never calls the create function)', async () => {
@@ -263,6 +316,7 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     await expect(createRequesterReturn(stub.client, TOKEN, VALID_INPUT)).rejects.toMatchObject({ code, details: { reason: hint } });
     expect(auditRow).not.toHaveBeenCalled();
     expect(notifyStaff).not.toHaveBeenCalled();
+    expect(outboxCalls(outboxAdmin)).toHaveLength(0);
   });
 
   it('rejects a fractional quantity or a repeated line before the database (whole units only)', async () => {
@@ -303,6 +357,7 @@ describe('createRequesterReturn (create_requester_return_request, 0394)', () => 
     expect((stub.rpcCalls.find((c) => c.name === 'create_requester_return_request')!.args as { p_key: string }).p_key).toBe(key);
     expect(auditRow).not.toHaveBeenCalled();
     expect(notifyRequester).not.toHaveBeenCalled();
+    expect(outboxCalls(outboxAdmin)).toHaveLength(0);
   });
 });
 
@@ -402,6 +457,10 @@ describe('RX-3: a member asks on their own order (channel member)', () => {
     expect(call.args).toMatchObject({ p_actor: { channel: 'member', userId: 'member-1' }, p_key: '44444444-4444-4444-8444-444444444444' });
     expect(notifyRequester).toHaveBeenCalledWith(expect.objectContaining({ channel: 'member', event: 'request_received' }));
     expect(notifyStaff).toHaveBeenCalledWith(expect.objectContaining({ actorUserId: 'member-1' }));
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(outboxCalls(outboxAdmin)).toEqual([
+      { name: 'publish_outbox', args: REQUESTER_RETURN_CREATED },
+    ]);
   });
 
   it("another member's order, or a portal order, is the closed door in the member's words; nothing is created", async () => {
@@ -411,6 +470,7 @@ describe('RX-3: a member asks on their own order (channel member)', () => {
       message: "This order isn't available.",
     });
     expect(none.rpcCalls).toHaveLength(0);
+    expect(outboxCalls(outboxAdmin)).toHaveLength(0);
     const portal = makeStub({ 'order_requests.select': { data: [{ ...COMPLETED_ORDER, source: 'portal' }], error: null } });
     await expect(createMemberReturn(portal.client, MEMBER, VALID_INPUT)).rejects.toMatchObject({ code: 'not_found' });
     expect(portal.rpcCalls).toHaveLength(0);

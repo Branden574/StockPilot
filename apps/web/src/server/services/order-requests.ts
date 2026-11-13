@@ -83,6 +83,7 @@ import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
 } from '@/server/lib/order-handover-notify';
+import { publishOutboxEvent } from '@/server/lib/outbox-events';
 import { requesterEmailOptedOut, resolveRequesterContact } from '@/server/lib/requester-contact';
 
 import { audit } from './audit';
@@ -5043,20 +5044,20 @@ export class OrderRequestsService {
     // The connector makes requesterEmail the ticket's requester, and Zendesk
     // emails a ticket's requester, so a requester who deleted their account
     // (A3: never emailed again) is left off the ticket.
+    // Recorded through the service client by the one export-event helper
+    // (server/lib/outbox-events.ts); it never throws and reports a failed
+    // write.
     try {
       const requesterGone = await this.requesterAccountDeleted(row);
-      await this.ctx.supabase.rpc('publish_outbox', {
-        p_org_id: this.ctx.organizationId,
-        p_topic: 'order.problem',
-        p_aggregate_type: 'order_request',
-        p_aggregate_id: id,
-        p_payload: {
+      await publishOutboxEvent(this.ctx, {
+        topic: 'order.problem',
+        aggregateId: id,
+        payload: {
           orderRequestId: id,
           requesterEmail: requesterGone ? null : row.requester_email,
           requesterName: requesterGone ? null : row.requester_name,
           reason,
         },
-        p_dedupe_key: `order.problem:${id}`,
       });
     } catch {
       /* best-effort */

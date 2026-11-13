@@ -90,9 +90,12 @@ describe('wiring', () => {
   const layout = readFileSync(resolve(__dirname, '../../app/_layout.tsx'), 'utf8');
   const hook = readFileSync(resolve(__dirname, './use-activity-beacon.ts'), 'utf8');
 
-  it('the root layout drives the beacon from the session user and the route', () => {
+  it('the root layout drives the beacon from the signed-in user and the route', () => {
     expect(layout).toContain("import { useActivityBeacon } from '@/lib/use-activity-beacon';");
-    expect(layout).toMatch(/useActivityBeacon\(\s*session\?\.user\?\.id \?\? null,\s*segments\.join\('\/'\)\s*\)/);
+    // The signed-in user once the session has entered its authenticator code,
+    // nobody before (docket S43b: dataUser, code-gate-wiring.test.ts).
+    expect(layout).toContain('const dataUser = session && !mfaRequired ? session.user : null;');
+    expect(layout).toMatch(/useActivityBeacon\(\s*dataUser\?\.id \?\? null,\s*segments\.join\('\/'\)\s*\)/);
   });
 
   it('the hook listens for the foreground and has NO interval', () => {

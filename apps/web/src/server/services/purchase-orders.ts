@@ -8,6 +8,7 @@ import { OVERDUE_PO_STATUSES } from '@/lib/purchase-orders/tabs';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { mapWithConcurrency } from '@/lib/supabase/in-filter';
 import { RowFailures } from '@/server/lib/action-error-result';
+import { publishOutboxEvent } from '@/server/lib/outbox-events';
 import { createNotification } from './notifications';
 
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
@@ -1573,21 +1574,14 @@ export class PurchaseOrdersService {
       // draft↔ordered toggle idempotent). Best-effort: never fails the status
       // change. Only fires when the org has an active QBO connection + the
       // api/integrations module enabled (the drainer gates on that).
-      // Await so the request actually fires — a bare `void`ed PostgREST builder
-      // is a lazy thenable that never sends, so the QBO/Intacct outbox event
-      // was silently never published. Swallow failures to keep it best-effort.
-      try {
-        await this.ctx.supabase.rpc('publish_outbox', {
-          p_org_id: this.ctx.organizationId,
-          p_topic: 'purchase_order.ordered',
-          p_aggregate_type: 'purchase_order',
-          p_aggregate_id: id,
-          p_payload: { poId: id },
-          p_dedupe_key: `purchase_order.ordered:${id}`,
-        });
-      } catch {
-        /* best-effort: never fail the status change on an outbox hiccup */
-      }
+      // Recorded through the service client by the one export-event helper
+      // (server/lib/outbox-events.ts), after the status change landed; it
+      // never throws and reports a failed write.
+      await publishOutboxEvent(this.ctx, {
+        topic: 'purchase_order.ordered',
+        aggregateId: id,
+        payload: { poId: id },
+      });
     }
     if (status === 'cancelled') {
       const poNumber = (po as { po_number?: string | null }).po_number ?? null;
