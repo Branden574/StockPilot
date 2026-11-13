@@ -132,13 +132,10 @@ export async function startActingAs(input: StartActingAsInput): Promise<StartAct
   const now = input.now ?? Date.now();
   const admin = createAdminClient();
 
-  // Defensive: tear down any stale grants for this admin first.
-  await sweepExpiredImpersonations(now, input.adminUserId);
-  // Also end any *active* prior impersonation (one at a time) so we never
-  // leave two grants outstanding.
-  await stopActingAs({ adminUserId: input.adminUserId, adminEmail: input.adminEmail, now, silent: true });
-
-  // A read that answers an error is reported and says so; it is never "not found".
+  // The organization is read FIRST, before anything is written: an unknown
+  // organization, or a read that answers an error, changes nothing at all (no
+  // sweep, no earlier session ended). A read that answers an error is reported
+  // and says so; it is never "not found".
   const { data: org, error: orgErr } = await admin
     .from('organizations')
     .select('id, name')
@@ -152,6 +149,12 @@ export async function startActingAs(input: StartActingAsInput): Promise<StartAct
     return { ok: false, reason: 'org_unreadable' };
   }
   if (!org) return { ok: false, reason: 'org_not_found' };
+
+  // Defensive: tear down any stale grants for this admin first.
+  await sweepExpiredImpersonations(now, input.adminUserId);
+  // Also end any *active* prior impersonation (one at a time) so we never
+  // leave two grants outstanding.
+  await stopActingAs({ adminUserId: input.adminUserId, adminEmail: input.adminEmail, now, silent: true });
 
   // Already a REAL member? Then they don't need a grant — just switch. Fail
   // closed: a read that answers an error is not "not a member"; the grant

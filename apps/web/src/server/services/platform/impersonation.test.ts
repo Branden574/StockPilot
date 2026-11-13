@@ -42,6 +42,9 @@ const answers: {
   grantDeleteFailsFor: [],
 };
 
+/** Every read and write the stub answered, as "table.op", in the order they ran. */
+let ran: string[] = [];
+
 let stub = makeStub();
 
 /** The value of the chain's `.eq(column, value)` filter. */
@@ -50,8 +53,24 @@ function eqValue(call: MockCall, column: string): unknown {
   return i === -1 ? undefined : call.args[i]?.[1];
 }
 
+/** Logs each answered call in `ran`, then answers it as given. */
+function logged(
+  results: Record<string, QueryResult | ((call: MockCall) => QueryResult)>,
+): Record<string, (call: MockCall) => QueryResult> {
+  return Object.fromEntries(
+    Object.entries(results).map(([key, result]) => [
+      key,
+      (call: MockCall) => {
+        ran.push(`${call.table}.${call.op}`);
+        return typeof result === 'function' ? result(call) : result;
+      },
+    ]),
+  );
+}
+
 function makeStub() {
-  return makeSupabaseStub({
+  ran = [];
+  return makeSupabaseStub(logged({
     'platform_impersonation_sessions.select': (call: MockCall) =>
       // The sweep's expired sessions (`.lt('expires_at', now)`), else the active one.
       call.methods.includes('lt') ? answers.expired : answers.activeSession,
@@ -66,7 +85,7 @@ function makeStub() {
         : { data: null, error: null },
     'user_profiles.select': () => answers.profile,
     'user_profiles.update': { data: null, error: null },
-  });
+  }));
 }
 
 vi.mock('@/lib/supabase/admin', () => ({
@@ -104,6 +123,65 @@ const ACTIVE = {
   data: { id: 's-1', target_organization_id: ORG_ID, previous_organization_id: PREVIOUS_ORG_ID },
   error: null,
 };
+
+const EXPIRED = {
+  data: [
+    {
+      id: 's-0',
+      admin_user_id: ADMIN_ID,
+      target_organization_id: OTHER_ORG_ID,
+      previous_organization_id: PREVIOUS_ORG_ID,
+    },
+  ],
+  error: null,
+};
+const EARLIER = {
+  data: { id: 's-1', target_organization_id: OTHER_ORG_ID, previous_organization_id: PREVIOUS_ORG_ID },
+  error: null,
+};
+
+describe('startActingAs reads the organization before anything else', () => {
+  it('with an earlier session open, an organization read that fails writes nothing at all', async () => {
+    answers.expired = EXPIRED;
+    answers.activeSession = EARLIER;
+    answers.org = { data: null, error: READ_FAILED };
+    await expect(startActingAs(START)).resolves.toEqual({ ok: false, reason: 'org_unreadable' });
+    expect(writes()).toEqual([]);
+    expect(endedSessions()).toEqual([]);
+    expect(ran).toEqual(['organizations.select']);
+  });
+
+  it('with an earlier session open, an unknown organization ends nobody\'s session', async () => {
+    answers.expired = EXPIRED;
+    answers.activeSession = EARLIER;
+    answers.org = { data: null, error: null };
+    await expect(startActingAs(START)).resolves.toEqual({ ok: false, reason: 'org_not_found' });
+    expect(writes()).toEqual([]);
+    expect(ran).toEqual(['organizations.select']);
+  });
+
+  it('the healthy path writes the same things in the same order, after the organization read', async () => {
+    answers.expired = EXPIRED;
+    answers.activeSession = EARLIER;
+    await expect(startActingAs(START)).resolves.toEqual({ ok: true, alreadyMember: false });
+    expect(ran[0]).toBe('organizations.select');
+    expect(ran.filter((r) => !r.endsWith('.select'))).toEqual([
+      // The sweep of the expired session: restore, grant delete, session end.
+      'user_profiles.update',
+      'organization_members.delete',
+      'platform_impersonation_sessions.update',
+      // The silent stop of the earlier session: grant delete, restore, session end.
+      'organization_members.delete',
+      'user_profiles.update',
+      'platform_impersonation_sessions.update',
+      // The new grant (an upsert), the session, the switch.
+      'organization_members.insert',
+      'platform_impersonation_sessions.insert',
+      'user_profiles.update',
+    ]);
+    expect(endedSessions()).toEqual(['s-0', 's-1']);
+  });
+});
 
 describe('startActingAs', () => {
   it('writes nothing when the earlier session could not be read', async () => {
