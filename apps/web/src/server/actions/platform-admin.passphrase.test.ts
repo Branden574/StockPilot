@@ -9,7 +9,15 @@ import { makeSupabaseStub, type QueryResult } from '@/test/supabase-mock';
  * as "no passphrase yet", which is the only case that needs no current one.
  */
 
-const { reportError, recordPlatformAudit, verifyPassphrase } = vi.hoisted(() => ({
+/** Made-up values: what the operator types, and what the stored row holds. */
+const TYPED_VALUE = 'a-long-enough-phrase';
+const OTHER_VALUE = 'not-the-current-one';
+const STORED_DIGEST = 'h';
+const STORED_SALT_VALUE = 's';
+
+const { reportError, recordPlatformAudit, verifyPassphrase, NEW_DIGEST, NEW_SALT_VALUE } = vi.hoisted(() => ({
+  NEW_DIGEST: 'new-digest',
+  NEW_SALT_VALUE: 'new-salt-value',
   reportError: vi.fn(async () => {}),
   recordPlatformAudit: vi.fn(async (_row: unknown) => {}),
   verifyPassphrase: vi.fn((_typed: string, _hash: string, _salt: string) => false),
@@ -27,7 +35,7 @@ vi.mock('@/lib/auth/platform-admin', () => ({
   isPlatformAdmin: () => false,
 }));
 vi.mock('@/lib/auth/platform-passphrase', () => ({
-  hashPassphrase: vi.fn(() => ({ hash: 'new-hash', salt: 'new-salt' })),
+  hashPassphrase: vi.fn(() => ({ hash: NEW_DIGEST, salt: NEW_SALT_VALUE })),
   verifyPassphrase,
 }));
 vi.mock('@/lib/email/resend', () => ({ sendEmail: vi.fn() }));
@@ -61,7 +69,7 @@ describe('setOrgDeletionPassphraseAction', () => {
       error: { message: 'canceling statement due to statement timeout', code: '57014' },
     };
     const before = saves();
-    const res = await setOrgDeletionPassphraseAction({ passphrase: 'a-long-enough-phrase' });
+    const res = await setOrgDeletionPassphraseAction({ passphrase: TYPED_VALUE });
     expect(res).toEqual({
       ok: false,
       error: {
@@ -79,13 +87,13 @@ describe('setOrgDeletionPassphraseAction', () => {
 
   it('refuses the change when a passphrase is stored and the current one does not match', async () => {
     settingsRead = {
-      data: { org_deletion_passphrase_hash: 'h', org_deletion_passphrase_salt: 's' },
+      data: { org_deletion_passphrase_hash: STORED_DIGEST, org_deletion_passphrase_salt: STORED_SALT_VALUE },
       error: null,
     };
     const before = saves();
     const res = await setOrgDeletionPassphraseAction({
-      passphrase: 'a-long-enough-phrase',
-      currentPassphrase: 'not-the-current-one',
+      passphrase: TYPED_VALUE,
+      currentPassphrase: OTHER_VALUE,
     });
     expect(res).toEqual({
       ok: false,
@@ -96,7 +104,7 @@ describe('setOrgDeletionPassphraseAction', () => {
 
   it('saves the first passphrase when none is stored yet', async () => {
     const before = saves();
-    const res = await setOrgDeletionPassphraseAction({ passphrase: 'a-long-enough-phrase' });
+    const res = await setOrgDeletionPassphraseAction({ passphrase: TYPED_VALUE });
     expect(res).toEqual({ ok: true, data: undefined });
     expect(saves()).toBe(before + 1);
     expect(recordPlatformAudit).toHaveBeenCalledWith(

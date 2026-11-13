@@ -86,11 +86,19 @@ const memberReads: {
 
 const READ_FAILED = { message: 'canceling statement due to statement timeout', code: '57014' };
 
+/** Made-up values: the stored row, and what the operator types. */
+const STORED_DIGEST = 'h';
+const STORED_SALT_VALUE = 's';
+const TYPED_VALUE = 'pp';
+
 const adminStub = makeSupabaseStub({
   'platform_settings.select': () =>
     memberReads.settingsFail
       ? { data: null, error: READ_FAILED }
-      : { data: { org_deletion_passphrase_hash: 'h', org_deletion_passphrase_salt: 's' }, error: null },
+      : {
+          data: { org_deletion_passphrase_hash: STORED_DIGEST, org_deletion_passphrase_salt: STORED_SALT_VALUE },
+          error: null,
+        },
   'organizations.select': () =>
     memberReads.orgFail
       ? { data: null, error: READ_FAILED }
@@ -279,7 +287,7 @@ describe('removeOrgAction orphan cleanup', () => {
 
 describe('removeOrgAction when a read fails', () => {
   const orgDeletes = () => adminStub.chainsAll.get('organizations.delete')?.length ?? 0;
-  const REMOVE = { orgId: ORG_ID, passphrase: 'pp', confirmName: 'Throwaway', alsoDeleteOrphanedUsers: true };
+  const REMOVE = { orgId: ORG_ID, passphrase: TYPED_VALUE, confirmName: 'Throwaway', alsoDeleteOrphanedUsers: true };
 
   /** Nothing removed: the organization, every account and the audit are untouched. */
   async function expectNothingRemoved(message: string, tag: string) {
