@@ -55,7 +55,17 @@ import ts from 'typescript';
  * expression) is read as not asking. An entry
  * that calls nothing (`searchParams`, `params`) starts nothing, and neither
  * does a bare call of one of INERT_ENTRIES: the request's own cookie jar or
- * headers, or making the cookie client, none of which reads any data.
+ * headers, or making the cookie client, none of which reads any data. A bare
+ * call is the call alone: nothing chained on it and no call in its arguments
+ * (`cookies()`, not `createClient().then(...)` or `cookies(read())`).
+ *
+ * EXCUSED BESIDE THE TARGET. reach()'s `besideAllowed` names functions whose
+ * bare call may stand beside the target in that Promise.all although it does
+ * not ask first itself. Only the bare call is excused, only as an entry beside
+ * an entry that asks, and nothing else in the same Promise.all or anywhere
+ * else in the function. The caller vouches for each one and checks it with
+ * asksFirstAfterInert(): before it asks, it awaits only bare INERT_ENTRIES
+ * calls and calls nothing but methods of its own local values.
  *
  * EVERY RUNTIME EXPORT IS LISTED, READABLE OR NOT. runtimeExports() names all
  * a module exports at run time; an export this reading cannot resolve to a
@@ -77,6 +87,12 @@ export interface ReachFile {
 export interface ReachOptions {
   /** Also follow the components a function renders as JSX elements. */
   jsx?: boolean;
+  /**
+   * Functions (each `<absolute file>#<name>`) whose bare call is excused as a
+   * Promise.all entry beside the target (see "EXCUSED BESIDE THE TARGET" at
+   * the top of this file).
+   */
+  besideAllowed?: readonly string[];
 }
 
 /** A Server Action written inside another module: a function whose body starts with 'use server'. */
@@ -116,6 +132,15 @@ export interface Reach {
    * beside the target. Null when there is none (or no such function).
    */
   startedBesideFirst(file: string, name: string): { line: number; text: string } | null;
+  /**
+   * Does the function exported from `file` as `name` ask a target before it
+   * does anything else, apart from awaiting bare INERT_ENTRIES calls (the
+   * request's own cookie jar and headers) and calling methods of values it
+   * holds in its own local variables? Its first other awaited call must ask
+   * first, by the same rule as a first step, and nothing else may be called
+   * before that one. Null when there is no such function.
+   */
+  asksFirstAfterInert(file: string, name: string): boolean | null;
   /** Server Actions declared inside modules that are not 'use server' modules. */
   inlineActions: InlineAction[];
   /** Number of functions found to reach a target. */
@@ -312,6 +337,18 @@ function headCallee(entry: ts.Expression): ts.Expression | null {
     if (!owner || !ts.isCallExpression(owner)) return callee;
     call = owner;
   }
+}
+
+/**
+ * The callee of `entry` when it is a bare call: one call, nothing chained on
+ * it (a `.then(...)` or `.catch(...)` makes the outer call's callee a
+ * property of a call), and no argument that starts a call. Else null.
+ */
+function bareCallee(entry: ts.Expression): ts.Expression | null {
+  const e = unwrap(entry);
+  if (!ts.isCallExpression(e)) return null;
+  if (e.arguments.some((arg) => startsACall(arg))) return null;
+  return e.expression;
 }
 
 /** Does `node` call anything itself (nested functions left out)? */
@@ -739,10 +776,59 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
 
   /** A bare call of one of INERT_ENTRIES, by the module it was imported from. */
   function isInertEntry(info: ModuleInfo, entry: ts.Expression): boolean {
-    const e = unwrap(entry);
-    if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression)) return false;
-    if (info.declared.has(e.expression.text)) return false;
-    return INERT_ENTRIES.has(info.importSpecs.get(e.expression.text) ?? '');
+    const callee = bareCallee(entry);
+    if (!callee || !ts.isIdentifier(callee)) return false;
+    if (info.declared.has(callee.text)) return false;
+    return INERT_ENTRIES.has(info.importSpecs.get(callee.text) ?? '');
+  }
+
+  /** A bare call of one of `allowed` (function keys), resolved by import. */
+  function isAllowedBeside(
+    info: ModuleInfo,
+    entry: ts.Expression,
+    allowed: ReadonlySet<string>,
+  ): boolean {
+    if (allowed.size === 0) return false;
+    const callee = bareCallee(entry);
+    const t = callee ? resolveExpression(info, callee) : null;
+    return t?.kind === 'fn' && allowed.has(t.key);
+  }
+
+  /** Every `await` of a call under `statements`, in the order they complete, nested functions left out. */
+  function awaitsOfCall(statements: readonly ts.Node[]): ts.AwaitExpression[] {
+    const out: ts.AwaitExpression[] = [];
+    const visit = (n: ts.Node) => {
+      if (isFunctionNode(n)) return;
+      // An await inside this one's operand completes before this one does.
+      ts.forEachChild(n, visit);
+      if (ts.isAwaitExpression(n) && startsACall(n.expression)) out.push(n);
+    };
+    statements.forEach(visit);
+    return out;
+  }
+
+  /** Names the function body binds in its own variable declarations (nested functions left out). */
+  function localNames(body: ts.Node): Set<string> {
+    const out = new Set<string>();
+    const visit = (n: ts.Node) => {
+      if (isFunctionNode(n)) return;
+      if (ts.isVariableDeclaration(n)) boundNames(n.name).forEach((name) => out.add(name));
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(body, visit);
+    return out;
+  }
+
+  /** The calls under `body` that start before `before` does, outside it and outside nested functions. */
+  function callsBefore(body: ts.Node, before: ts.Node): ts.CallExpression[] {
+    const out: ts.CallExpression[] = [];
+    const visit = (n: ts.Node) => {
+      if (n === before || isFunctionNode(n)) return;
+      if (ts.isCallExpression(n) && n.getStart() < before.getStart()) out.push(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(body, visit);
+    return out;
   }
 
   /** The first `await` of a call under `statements`, in source order, nested functions left out. */
@@ -789,16 +875,21 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
   const reached = new Map<string, Reach>();
   function reach(targets: readonly string[], options: ReachOptions = {}): Reach {
     const jsx = options.jsx === true;
-    const memoKey = `${jsx ? 'jsx' : 'calls'}:${[...targets].sort().join('|')}`;
+    const allowed = [...new Set(options.besideAllowed ?? [])].sort();
+    const memoKey = `${jsx ? 'jsx' : 'calls'}:${[...targets].sort().join('|')}:${allowed.join('|')}`;
     let answer = reached.get(memoKey);
     if (!answer) {
-      answer = computeReach(targets, jsx);
+      answer = computeReach(targets, jsx, new Set(allowed));
       reached.set(memoKey, answer);
     }
     return answer;
   }
 
-  function computeReach(targets: readonly string[], jsx: boolean): Reach {
+  function computeReach(
+    targets: readonly string[],
+    jsx: boolean,
+    allowed: ReadonlySet<string>,
+  ): Reach {
     const isTarget = (key: string) => targets.includes(key);
     const fnRefs = refsFor(jsx);
     const reaching = new Set<string>();
@@ -826,34 +917,41 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
       beside: Array<{ node: ts.Expression; head: string | null }>;
       info: ModuleInfo;
     }
+    const stepAt = (info: ModuleInfo, node: ts.Node): FirstStep => {
+      const entries = ts.isAwaitExpression(node) ? promiseAllEntries(node) : null;
+      return {
+        refs: references(info, node, false),
+        beside: (entries ?? [])
+          .filter(
+            (entry) =>
+              startsACall(entry) &&
+              !isInertEntry(info, entry) &&
+              !isAllowedBeside(info, entry, allowed),
+          )
+          .map((entry) => {
+            const callee = headCallee(entry);
+            const head = callee ? resolveExpression(info, callee) : null;
+            return { node: entry, head: head?.kind === 'fn' ? head.key : null };
+          }),
+        info,
+      };
+    };
     const firstSteps = new Map<string, FirstStep>();
     for (const key of fnRefs.keys()) {
       if (!reaching.has(key)) continue;
       const step = firstStepOf(key);
       if (!step || redirectIsKept(step.info, step.node, step.body)) continue;
-      const entries = ts.isAwaitExpression(step.node) ? promiseAllEntries(step.node) : null;
-      firstSteps.set(key, {
-        refs: references(step.info, step.node, false),
-        beside: (entries ?? [])
-          .filter((entry) => startsACall(entry) && !isInertEntry(step.info, entry))
-          .map((entry) => {
-            const callee = headCallee(entry);
-            const head = callee ? resolveExpression(step.info, callee) : null;
-            return { node: entry, head: head?.kind === 'fn' ? head.key : null };
-          }),
-        info: step.info,
-      });
+      firstSteps.set(key, stepAt(step.info, step.node));
     }
     const asksFirst = new Set<string>();
     const asks = (k: string) => isTarget(k) || asksFirst.has(k);
+    const stepAsks = (step: FirstStep) =>
+      step.refs.some(asks) && step.beside.every((entry) => entry.head !== null && asks(entry.head));
     for (let changed = true; changed;) {
       changed = false;
       for (const [key, step] of firstSteps) {
         if (asksFirst.has(key)) continue;
-        if (
-          step.refs.some(asks) &&
-          step.beside.every((entry) => entry.head !== null && asks(entry.head))
-        ) {
+        if (stepAsks(step)) {
           asksFirst.add(key);
           changed = true;
         }
@@ -936,6 +1034,28 @@ export function buildCallGraph(files: ReachFile[], srcRoot: string): CallGraph {
           line: sf.getLineAndCharacterOfPosition(entry.node.getStart(sf)).line + 1,
           text: squash(entry.node.getText(sf)),
         };
+      },
+      asksFirstAfterInert(file, name) {
+        const t = exportedNames(file).get(name);
+        const found = t?.kind === 'fn' ? bodyOf(t.key) : null;
+        if (!found) return null;
+        const { info, body } = found;
+        const asking = awaitsOfCall(ts.isBlock(body) ? body.statements : [body]).find(
+          (a) => !isInertEntry(info, a.expression),
+        );
+        if (!asking || redirectIsKept(info, asking, body)) return false;
+        if (!stepAsks(stepAt(info, asking))) return false;
+        const own = localNames(body);
+        return callsBefore(body, asking).every((call) => {
+          if (isInertEntry(info, call)) return true;
+          // A method of a value the function holds itself: `jar.get(name)`.
+          const callee = call.expression;
+          return (
+            ts.isPropertyAccessExpression(callee) &&
+            ts.isIdentifier(callee.expression) &&
+            own.has(callee.expression.text)
+          );
+        });
       },
       inlineActions,
       reachingCount: reaching.size,
