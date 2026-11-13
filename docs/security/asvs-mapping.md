@@ -306,8 +306,16 @@ write to that rule or to a reviewed exemption.
 A `GET` that spends something of the person's is refused when another origin's
 page made the browser send it: `/auth/session-ended` then clears only a session
 that is already gone, and an export is answered 403 before the per-user export
-budget, its audit row and its alert. The emailed-link page names the account the
-browser is already signed in as, and each link type lands on a fixed page.
+budget, its audit row and its alert. Every emailed confirmation link names the
+account it is for under a server signature (`r`, docket S25): the page checks it
+on `GET` and `POST`, prints that account's full address before anyone presses
+(and both addresses when the browser is signed in as another account), counts a
+press only after a quiet second in front with every address it names on screen,
+keeps its button disabled until the page's script has run and refuses a post
+that script did not let through,
+shows neither address for an email-change link whose change is no longer
+pending, and each link type lands on a fixed page. A link without `r` is
+refused on `GET` and `POST` before anything is read or spent.
 
 _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/lib/auth/api-context.cross-site.test.ts`,
@@ -315,7 +323,13 @@ _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/app/auth/session-ended/route.test.ts`,
 `apps/web/src/lib/export-rate-limit.test.ts`,
 `apps/web/src/app/api/export-routes.limit-order.test.ts`,
-`apps/web/src/lib/auth/confirm-landing.test.ts`.
+`apps/web/src/lib/auth/confirm-landing.test.ts`,
+`apps/web/src/app/auth/confirm/route.test.ts`,
+`apps/web/src/app/auth/confirm/route.recipient-session.test.ts`,
+`apps/web/src/lib/auth/confirm-recipient.test.ts`,
+`apps/web/src/lib/auth/confirm-link.test.ts`,
+`apps/web/src/app/auth/confirm/press-gate.test.ts`,
+`apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts`.
 
 _Gap_: no generic sweep asserting that **every** route is gated — coverage is
 per-route (the INV-E5 sweep checks only that a write route reaches

@@ -644,7 +644,10 @@ export default function Scan() {
    * the item screen's sender: a 4xx is a refusal (nothing was written), and a
    * network failure, timeout or 5xx is UNCONFIRMED — said so, never retried,
    * and the on-hand is labelled until a read shows the write or the write can
-   * no longer land (src/lib/unconfirmed-stock.ts).
+   * no longer land (src/lib/unconfirmed-stock.ts). The one 5xx that is a
+   * refusal is the 503 the server marks as refused before any write, when it
+   * could not check the caller's access (docket S26): "Adjustment not saved",
+   * shown like any refusal, with no label.
    *
    * Reload cost per SAVED tap is still zero reads: the answer carries the
    * total. Only an unconfirmed outcome (or a saved one without a total) re-reads

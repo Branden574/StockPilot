@@ -108,10 +108,32 @@ export class ApiKeysService {
       .select('name')
       .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
-    if (data) {
-      void dispatchEvent(this.ctx.organizationId, 'security.api_key_revoked', {
-        name: (data as { name: string | null }).name ?? undefined,
-      });
+    if (!data) {
+      // The update is filtered to this organization and to keys still live, and
+      // a filtered update that matches no row is not an error. So the key is
+      // read here, in this organization, and the answer says which it was:
+      //   - no such key here: not found;
+      //   - already revoked: done, as a second press should be, and nothing is
+      //     announced a second time;
+      //   - still live: the write changed nothing, and that is never "revoked".
+      const { data: key, error: readError } = await this.ctx.supabase
+        .from('api_keys')
+        .select('id, revoked_at')
+        .eq('organization_id', this.ctx.organizationId)
+        .eq('id', id)
+        .maybeSingle();
+      if (readError) throw new ServiceError('internal_error', readError.message);
+      if (!key) throw new ServiceError('not_found', 'API key not found');
+      if ((key as { revoked_at: string | null }).revoked_at === null) {
+        throw new ServiceError(
+          'conflict',
+          'This API key was not revoked and is still active. Try again.',
+        );
+      }
+      return;
     }
+    void dispatchEvent(this.ctx.organizationId, 'security.api_key_revoked', {
+      name: (data as { name: string | null }).name ?? undefined,
+    });
   }
 }

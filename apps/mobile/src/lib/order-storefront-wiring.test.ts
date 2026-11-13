@@ -471,7 +471,9 @@ describe('signing out and signing back in', () => {
 
   it('the root checks this account’s held keys at sign-in (reads only)', () => {
     const layout = codeOnly(read('app/_layout.tsx'));
-    expect(layout).toContain('useHeldOrderSubmissions(session?.user?.id ?? null, seeOrders);');
+    // For the signed-in account once it has entered its authenticator code,
+    // nobody before (docket S43b: dataUser, code-gate-wiring.test.ts).
+    expect(layout).toContain('useHeldOrderSubmissions(dataUser?.id ?? null, seeOrders);');
   });
 
   it('at sign-in: a dropped marker is said once, Don’t send it always says what happened, and no answer is offered again (F5)', () => {

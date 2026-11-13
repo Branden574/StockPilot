@@ -17,6 +17,7 @@ import { recordCountBody } from './cycle-count-record-body';
 import { latestRowsPerLine } from './outbox-order';
 import { classifyDrainFailure } from './drain-failure';
 import {
+  canSettleOutbox,
   isOwnedBy,
   OutboxSessionChangedError,
   outboxSendDecision,
@@ -294,9 +295,11 @@ class CycleCountSyncEngine {
       // one) is acked; another account's is held work that must not be
       // deleted automatically, so it is parked as a record for its owner.
       // Signed out, nothing is settled at all: whose rows these are cannot be
-      // told apart from "somebody else's".
+      // told apart from "somebody else's". Nor while the session still owes
+      // its authenticator code (docket S43b): the outbox is left exactly as
+      // it is until the code is entered.
       const staleScope = await liveOutboxScope();
-      for (const stale of staleScope.userId ? superseded : []) {
+      for (const stale of canSettleOutbox(staleScope) ? superseded : []) {
         if (isOwnedBy(stale, staleScope.userId)) await outboxAck(stale.id);
         else await outboxReject(stale.id, REPLACED_BY_LATER_COUNT);
       }
@@ -312,7 +315,8 @@ class CycleCountSyncEngine {
         }
         // WHOSE row, decided now, for THIS row (outbox-scope.ts, the same
         // predicate engine 1 uses). Another account's queued count, any row
-        // with nobody signed in, and a row with no workspace of its own while
+        // with nobody signed in, any row while the session still owes its
+        // authenticator code, and a row with no workspace of its own while
         // this account's is not saved yet, is HELD: skipped, neither failed
         // nor rejected.
         const decision = outboxSendDecision(row, await liveOutboxScope());

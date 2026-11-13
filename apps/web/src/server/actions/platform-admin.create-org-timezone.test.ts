@@ -11,7 +11,22 @@ import { ORG_TIMEZONE_INVALID_MESSAGE } from '@stockpilot/core';
  * offers 8 listed zones, but the action is what decides). A zone it cannot use
  * is refused before the invite is minted or anything is written; a valid zone
  * outside Settings' list is stored as given.
+ *
+ * The invite link is signed for the new owner's account (docket S25), and an
+ * invite that cannot be signed is not sent, so the suite holds a signing value
+ * (a dull one under a neutral name, set before @/lib/env reads the
+ * environment) and GoTrue's shapes: a UUID for the new owner and a
+ * 56-character hash.
  */
+vi.hoisted(() => {
+  const SIGNING_INPUT = 'test-only-signing-input';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_INPUT;
+});
+
+/** The new owner's auth user, as GoTrue's generateLink returns it. */
+const NEW_OWNER_ID = '77777777-7777-4777-8777-777777777777';
+/** GoTrue's hashed token is a sha224 in hex: 56 characters. */
+const LINK_HASH = 'cd'.repeat(28);
 
 const generateLink = vi.fn();
 const sendEmail = vi.fn();
@@ -52,8 +67,8 @@ beforeEach(() => {
   sendEmail.mockResolvedValue({ ok: true, id: 'test' });
   generateLink.mockResolvedValue({
     data: {
-      user: { id: 'auth-user-1' },
-      properties: { hashed_token: 'hash-1', action_link: 'https://auth.example.test/verify' },
+      user: { id: NEW_OWNER_ID },
+      properties: { hashed_token: LINK_HASH, action_link: 'https://auth.example.test/verify' },
     },
     error: null,
   });

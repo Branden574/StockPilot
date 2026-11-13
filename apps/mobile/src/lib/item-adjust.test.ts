@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { CONTEXT_UNAVAILABLE_COPY, contextUnavailableBody } from '@stockpilot/core';
+
 import {
   buildItemAdjustBody,
   classifyAdjustFailure,
@@ -357,6 +359,75 @@ describe('classifyAdjustFailure — decided on the HTTP status alone', () => {
     }
     expect(classifyAdjustFailure(new Error('boom')).kind).toBe('unconfirmed');
     expect(classifyAdjustFailure(undefined).kind).toBe('unconfirmed');
+  });
+});
+
+// Docket S26. The server could not check the caller's access (its backup
+// reads could not read the account status or the permission overrides) and
+// refused the adjustment before doing anything. It answers a 503 marked as
+// written-nothing (core contextUnavailableBody, sent only by the API context
+// gate). Before, that refusal was a bare 500: "Adjustment not confirmed" and
+// the on-hand labelled "Not confirmed" for up to 90 seconds, for a change the
+// server never started.
+describe('a refusal before any write (the access check could not answer) is NOT SAVED, never unconfirmed', () => {
+  /** What api() throws for the marker: an ApiError's status, code and details. */
+  function marker(overrides: { status?: number; code?: unknown; details?: unknown } = {}) {
+    const body = contextUnavailableBody();
+    return Object.assign(new Error(body.message), {
+      name: 'ApiError',
+      status: 503,
+      code: body.error,
+      details: { ...body.details },
+      ...overrides,
+    });
+  }
+
+  it('classifies the marker as refused: "Adjustment not saved", with the core sentence', () => {
+    expect(classifyAdjustFailure(marker())).toEqual({
+      kind: 'refused',
+      alert: { title: 'Adjustment not saved', message: CONTEXT_UNAVAILABLE_COPY },
+    });
+    expect(CONTEXT_UNAVAILABLE_COPY).toMatch(/nothing was changed/i);
+    expect(CONTEXT_UNAVAILABLE_COPY).not.toMatch(/may or may not/);
+  });
+
+  it('submitItemAdjust returns refused and leaves nothing in flight or in doubt', async () => {
+    apiMock.api.mockRejectedValueOnce(marker());
+
+    const out = await submitItemAdjust('item-1', 1, SHOWN);
+
+    expect(out).toEqual({
+      kind: 'refused',
+      alert: { title: 'Adjustment not saved', message: CONTEXT_UNAVAILABLE_COPY },
+    });
+    expect(unconfirmedStock.writes('item-1').size).toBe(0);
+    expect(unconfirmedStock.get('item-1')).toBeNull();
+    // Online it is said, never sent again behind the operator's back.
+    expect(apiMock.api).toHaveBeenCalledTimes(1);
+  });
+
+  // Every near miss is a 5xx that proves nothing: it may follow a write.
+  it.each([
+    ['the same body with a 500', { status: 500 }],
+    ['the same body with a 502', { status: 502 }],
+    ['the same body with a 504', { status: 504 }],
+    [
+      'check_failed with no details (unreadable warehouse access, account delete)',
+      { details: undefined },
+    ],
+    [
+      'nothingWritten false',
+      { details: { reason: 'context_unavailable', retryable: true, nothingWritten: false } },
+    ],
+    [
+      'a reason the phone was not built to trust',
+      { details: { reason: 'other', retryable: true, nothingWritten: true } },
+    ],
+    ['another code', { code: 'internal_error' }],
+  ])('%s stays unconfirmed', async (_label, overrides) => {
+    expect(classifyAdjustFailure(marker(overrides)).kind).toBe('unconfirmed');
+    apiMock.api.mockRejectedValueOnce(marker(overrides));
+    expect((await submitItemAdjust('item-1', 1, SHOWN)).kind).toBe('unconfirmed');
   });
 });
 

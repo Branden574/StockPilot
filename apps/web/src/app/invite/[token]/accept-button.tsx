@@ -8,6 +8,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { acceptInviteAction } from '@/server/actions/team';
 
+import { INVITE_ALREADY_MEMBER_TOAST } from './invite-copy';
+
 export function AcceptInviteButton({ token }: { token: string }) {
   const router = useRouter();
   const [submitting, setSubmitting] = React.useState(false);
@@ -20,7 +22,9 @@ export function AcceptInviteButton({ token }: { token: string }) {
       toast.error(res.error.message);
       return;
     }
-    toast.success('Invite accepted. Welcome to the team.');
+    // Already a member: the membership was left as it was.
+    if (res.data.alreadyMember) toast.info(INVITE_ALREADY_MEMBER_TOAST);
+    else toast.success('Invite accepted. Welcome to the team.');
     router.replace('/dashboard');
     router.refresh();
   }

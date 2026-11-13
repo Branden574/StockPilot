@@ -490,14 +490,18 @@ export async function transferOwnershipAction(input: {
   }
 }
 
-export async function acceptInviteAction(input: AcceptInviteInput): Promise<ActionResult<{ organizationId: string }>> {
+export async function acceptInviteAction(
+  input: AcceptInviteInput,
+): Promise<ActionResult<{ organizationId: string; alreadyMember: boolean }>> {
   const parsed = acceptInviteSchema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid token');
   try {
     const session = await requireSession();
     const result = await acceptInviteWithToken(parsed.data.token, session.userId);
     revalidatePath('/dashboard');
-    return ok({ organizationId: result.organizationId });
+    // alreadyMember: the person was already a member, and their membership
+    // was left as it was (the button says so instead of "Welcome").
+    return ok({ organizationId: result.organizationId, alreadyMember: result.alreadyMember });
   } catch (e) {
     return toResult(e);
   }

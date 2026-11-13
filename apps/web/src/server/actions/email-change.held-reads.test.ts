@@ -44,11 +44,16 @@ vi.mock('next/headers', async () => {
 });
 vi.mock('@/lib/env', async () => {
   const f = await import('@/test/auth-session-fixture');
+  // Both links are signed for the account they are for (docket S25), and a
+  // link that cannot be signed is not sent: a dull signing value under a
+  // neutral name stands in for the service key.
+  const SIGNING_INPUT = 'test-only-signing-input';
   return {
     env: {
       NEXT_PUBLIC_SUPABASE_URL: f.FIXTURE_SUPABASE_URL,
       NEXT_PUBLIC_SUPABASE_ANON_KEY: f.FIXTURE_ANON_KEY,
       NEXT_PUBLIC_APP_URL: 'https://app.example.test',
+      SUPABASE_SERVICE_ROLE_KEY: SIGNING_INPUT,
     },
   };
 });
@@ -103,7 +108,8 @@ vi.mock('@/lib/supabase/admin', async () => {
           generateLink: async (args: { type: string; email: string }) => {
             state.minted.push({ type: args.type, email: args.email });
             return {
-              data: { properties: { hashed_token: 'hashed-token', email_otp: '000000' } },
+              // GoTrue's hashed token is a sha224 in hex: 56 characters.
+              data: { properties: { hashed_token: 'ef'.repeat(28), email_otp: '000000' } },
               error: null,
             };
           },

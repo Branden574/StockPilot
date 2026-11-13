@@ -4,6 +4,8 @@ import { GoogleGenerativeAI, GoogleGenerativeAIFetchError } from '@google/genera
 
 import { env } from '@/lib/env';
 
+import { geminiRefusedKey } from './errors';
+
 /**
  * Embedding model + dimension. We use Gemini's gemini-embedding-001 at
  * outputDimensionality=1536 to match the `inventory_items.embedding`
@@ -291,16 +293,6 @@ export const GEMINI_FAILURES_IN_A_ROW = 3;
  *  GEMINI_FAILURES_IN_A_ROW times in a row. */
 export type EmbedBatchStop = 'gemini_rate_limited' | 'gemini_key_invalid' | 'gemini_failing';
 
-/**
- * Gemini refused the API key, not the item. It answers a revoked, expired or
- * mistyped key with a 400 INVALID_ARGUMENT, as it answers a bad item, and
- * names the reason in an ErrorInfo detail (API_KEY_INVALID), which the SDK
- * hands on as errorDetails. Read from there, not from the message text.
- */
-function geminiRefusedKey(e: GoogleGenerativeAIFetchError): boolean {
-  return (e.errorDetails ?? []).some((d) => d?.reason === 'API_KEY_INVALID');
-}
-
 /** What one embedItemsBatch run did. */
 export interface EmbedBatchResult {
   embedded: number;
@@ -329,14 +321,15 @@ export interface EmbedBatchResult {
  * otherwise write a line per item every hour. Either way the first failure's
  * message is returned in `firstError`.
  *
- * `stopWhenGeminiFails` (the sweep) stops the batch, starting no other item,
- * at Gemini's first 429, at its first refusal of the key itself, or after
- * GEMINI_FAILURES_IN_A_ROW failed calls in a row, and says why in `stopped`:
- * calls that will fail anyway would only spend the key the AI assistant's
- * searches need. `geminiFailuresInARow` starts the count where the batch
- * before it left it, so a run that walks several organizations stops after
- * three failures in a row across them. Without it (the Settings > AI
- * backfill, the AI tool) every item is tried, as before.
+ * `stopWhenGeminiFails` (the sweep and the AI tool) stops the batch, starting
+ * no other item, at Gemini's first 429, at its first refusal of the key
+ * itself, or after GEMINI_FAILURES_IN_A_ROW failed calls in a row, and says
+ * why in `stopped`: calls that will fail anyway would only spend the key the
+ * AI assistant's searches need, and one chat request would wait out a timeout
+ * per item. `geminiFailuresInARow` starts the count where the batch before it
+ * left it, so a run that walks several organizations stops after three
+ * failures in a row across them (the sweep; the AI tool starts at zero).
+ * Without it (the Settings > AI backfill) every item is tried, as before.
  *
  * `deadline` (a Date.now() value) stops it STARTING another item once it
  * has passed; the item in flight finishes (at most EMBED_TIMEOUT_MS of

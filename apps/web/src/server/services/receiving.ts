@@ -3,6 +3,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 
 import { reportError } from '@/lib/error-reporter';
+import { publishOutboxEvent } from '@/server/lib/outbox-events';
 import { audit, auditMany } from './audit';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { dbGuardRefusal } from './lib/db-guard-refusal';
@@ -415,29 +416,22 @@ export class ReceivingService {
       this.ctx,
     );
 
-    // Publish to outbox for downstream consumers (notifications, analytics).
-    // Best-effort: a failure here doesn't undo the receipt.
-    // Await so the request actually fires — a bare `void`ed PostgREST builder
-    // is a lazy thenable that never sends. Best-effort: swallow failures.
-    try {
-      await this.ctx.supabase.rpc('publish_outbox', {
-        p_org_id: this.ctx.organizationId,
-        p_topic: 'receipt.posted',
-        p_aggregate_type: 'receipt',
-        p_aggregate_id: receipt.id,
-        p_payload: {
-          purchaseOrderId: input.purchaseOrderId,
-          warehouseId: receipt.warehouse_id,
-          receiptNumber: receipt.receipt_number,
-          lineCount: input.lines.length,
-          totalAccepted,
-          totalRejected,
-        },
-        p_dedupe_key: `receipt.posted:${receipt.id}`,
-      });
-    } catch {
-      /* best-effort: a failed outbox publish must not undo the receipt */
-    }
+    // Publish to outbox for downstream consumers (the QuickBooks Bill).
+    // Recorded through the service client by the one export-event helper
+    // (server/lib/outbox-events.ts), after the receipt posted; it never
+    // throws, so a failed write does not undo the receipt, and it reports one.
+    await publishOutboxEvent(this.ctx, {
+      topic: 'receipt.posted',
+      aggregateId: receipt.id,
+      payload: {
+        purchaseOrderId: input.purchaseOrderId,
+        warehouseId: receipt.warehouse_id,
+        receiptNumber: receipt.receipt_number,
+        lineCount: input.lines.length,
+        totalAccepted,
+        totalRejected,
+      },
+    });
 
     // Fan out to configured webhooks / Slack / Teams (best-effort, no-op when
     // the org has no endpoints).

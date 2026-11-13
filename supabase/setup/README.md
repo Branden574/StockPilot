@@ -1,63 +1,50 @@
-# StockPilot — 3-minute Supabase setup
+# StockPilot database setup
 
-Run this once. After this, signup, dashboard, and inventory work end-to-end.
+The database schema comes from one place: the migrations in
+[`supabase/migrations`](../migrations), applied in order. Every table, function,
+trigger, access rule and storage policy is created there, and every later change
+to one is a later migration.
 
-## 1. Create a Supabase project
+There is no single-file copy of the schema. This folder used to hold one
+(`full-schema.sql`); it was removed because it stopped at migration 0030 and so
+had none of the changes made since, including later changes to access rules. Do
+not build a database by pasting SQL from an old copy of it, and do not add a new
+bundle: apply the migrations.
 
-1. Go to <https://supabase.com> and click **New project**
-2. Pick any name (e.g. `stockpilot-dev`), a strong DB password, and a region near you
-3. Wait ~1 min for it to provision
+## A local database
 
-## 2. Apply the schema
-
-1. Open your new project → left sidebar → **SQL Editor**
-2. Click **+ New query**
-3. Open `supabase/setup/full-schema.sql` from this repo, copy the entire file, paste it in
-4. Click **Run** (bottom-right). Should take a few seconds. You'll see "Success. No rows returned."
-
-This creates 25+ tables, RLS policies, triggers, and 6 RPC helper functions.
-
-## 3. Configure storage buckets
-
-1. Sidebar → **Storage** → **Create a new bucket**
-2. Create four buckets with these names:
-   - `item-images` — **Private**
-   - `item-attachments` — **Private**
-   - `org-logos` — **Public**
-   - `po-imports` — **Private** (or skip — migration `0021_po_imports_bucket.sql`
-     creates it programmatically)
-
-(Storage RLS policies for these are set by `full-schema.sql` and migration
-`0021_po_imports_bucket.sql`.)
-
-## 4. Wire up your app
-
-1. Sidebar → **Project Settings** → **API**
-2. Copy:
-   - **Project URL** → paste into `NEXT_PUBLIC_SUPABASE_URL`
-   - **anon / public key** → paste into `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-   - **service_role secret key** → paste into `SUPABASE_SERVICE_ROLE_KEY` (server-only, never expose)
-
-Update `apps/web/.env.local` with those values.
-
-Restart your dev server:
+You need the [Supabase CLI](https://supabase.com/docs/guides/cli) and Docker.
 
 ```bash
-pnpm dev
+supabase start      # boots local Postgres, Auth, Storage and Studio, and applies every migration
+pnpm db:reset       # drops the local database and applies every migration again, then supabase/seed.sql
 ```
 
-## 5. Configure Auth redirect URLs (for email confirmations)
+The storage buckets declared in `supabase/config.toml` are created by the local
+stack. The rest of the local setup (the app's settings file, the dev server) is
+in the root [`README.md`](../../README.md), under "Getting started".
 
-Sidebar → **Authentication** → **URL Configuration**:
+## A new hosted project
 
-- **Site URL:** `http://localhost:3000`
-- **Redirect URLs:** add `http://localhost:3000/auth/callback`
+1. Create an empty project at <https://supabase.com>.
+2. Link this repository to it, then apply the migrations:
 
-## 6. Sign up
+   ```bash
+   supabase link --project-ref <project-ref>
+   supabase db push    # applies, in order, every migration the project does not have yet
+   ```
 
-Go to <http://localhost:3000/signup>. Real signup now works — confirmation email goes to the inbox you used (or check the **Auth → Users** tab to manually confirm if email isn't configured).
+3. In the dashboard, under Storage, check that every bucket declared in
+   `supabase/config.toml` exists, with the same visibility and limits. Create
+   any that is missing.
+4. Set the auth redirect URLs and the app's environment variables as
+   [`DEPLOY.md`](../../DEPLOY.md) describes.
 
-## What to do later
+`supabase db push` is also how an existing project gets a new migration.
+`supabase migration list` shows which migrations a linked project has.
 
-- For production: repeat steps 1–5 with a separate Supabase project (`stockpilot-prod`).
-- For local-only dev with no internet: install [Supabase CLI](https://supabase.com/docs/guides/cli) + Docker, then `supabase start`. The migrations in `supabase/migrations/` apply automatically.
+## Signing in
+
+Public sign-up is off: StockPilot is invite-only, and only a platform admin
+creates a workspace. See "Creating a workspace" in the root
+[`README.md`](../../README.md).

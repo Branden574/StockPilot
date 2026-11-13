@@ -5,6 +5,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // NEVER supabase.auth.resetPasswordForEmail, whose built-in mailer is
 // capped at ~2 emails/hour project-wide (observed live as a silent
 // 429 over_email_send_rate_limit while the UI reported success).
+//
+// Docket S25: the emailed link carries `r`, the account it is for, signed for
+// the user id GoTrue returned (checked with the app's own checker). The
+// signing value is a dull one under a neutral name, set before @/lib/env reads
+// the environment (src/test/secret-shaped-fixtures.guard.test.ts).
+vi.hoisted(() => {
+  const SIGNING_INPUT = 'test-only-signing-input';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_INPUT;
+});
 
 const generateLink = vi.fn();
 const sendEmail = vi.fn();
@@ -87,8 +96,13 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 import { reportError } from '@/lib/error-reporter';
+import { emailedConfirmLink } from '@/test/confirm-link-check';
 
 import { completePasswordResetAction, requestPasswordResetAction } from './auth';
+
+const ACCOUNT_ID = '11111111-1111-4111-8111-111111111111';
+/** GoTrue's hashed token is a sha224 in hex: 56 characters. */
+const LINK_HASH = 'ab'.repeat(28);
 
 describe('requestPasswordResetAction', () => {
   beforeEach(() => {
@@ -100,8 +114,8 @@ describe('requestPasswordResetAction', () => {
   it('mints a recovery link and emails OUR /auth/confirm URL via Resend', async () => {
     generateLink.mockResolvedValue({
       data: {
-        user: { id: 'u-1' },
-        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: 'hash123' },
+        user: { id: ACCOUNT_ID },
+        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: LINK_HASH },
       },
       error: null,
     });
@@ -124,13 +138,19 @@ describe('requestPasswordResetAction', () => {
     // the raw action_link returns the session in a URL fragment the server
     // callback can't read, bouncing users to /signin. (HTML entity-escapes
     // the query &; text carries it raw.)
-    expect(msg.html).toContain('/auth/confirm?token_hash=hash123&amp;type=recovery');
-    expect(msg.text).toContain('/auth/confirm?token_hash=hash123&type=recovery');
+    expect(msg.html).toContain(`/auth/confirm?token_hash=${LINK_HASH}&amp;type=recovery`);
+    expect(msg.text).toContain(`/auth/confirm?token_hash=${LINK_HASH}&type=recovery`);
     expect(msg.html).not.toContain('https://sb/verify');
     // es registry sender for the security family.
     expect(msg.from).toBe('StockPilot Security <security@stockpilotusa.com>');
     // the capped Supabase mailer must never be used
     expect(resetPasswordForEmail).not.toHaveBeenCalled();
+    // S25: the page will name the account GoTrue made the link for.
+    expect(emailedConfirmLink(msg.text)).toMatchObject({
+      type: 'recovery',
+      next: '/reset/complete',
+      recipient: ACCOUNT_ID,
+    });
   });
 
   it('still returns generic ok for an unknown email and sends nothing (anti-enumeration)', async () => {
@@ -155,8 +175,8 @@ describe('requestPasswordResetAction', () => {
   it('returns generic ok even when the email send fails', async () => {
     generateLink.mockResolvedValue({
       data: {
-        user: { id: 'u-1' },
-        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: 'hash123' },
+        user: { id: ACCOUNT_ID },
+        properties: { action_link: 'https://sb/verify?token=abc', hashed_token: LINK_HASH },
       },
       error: null,
     });
@@ -173,7 +193,10 @@ describe('requestPasswordResetAction', () => {
   // same generic ok (lib/auth/password-reset-email.test.ts pins the report).
   it('returns generic ok and sends nothing when GoTrue returns no hashed token', async () => {
     generateLink.mockResolvedValue({
-      data: { user: { id: 'u-1' }, properties: { action_link: 'https://sb/verify?token=abc' } },
+      data: {
+        user: { id: ACCOUNT_ID },
+        properties: { action_link: 'https://sb/verify?token=abc' },
+      },
       error: null,
     });
 

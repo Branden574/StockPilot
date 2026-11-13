@@ -83,6 +83,7 @@ import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
 } from '@/server/lib/order-handover-notify';
+import { publishOutboxEvent } from '@/server/lib/outbox-events';
 import { requesterEmailOptedOut, resolveRequesterContact } from '@/server/lib/requester-contact';
 
 import { audit } from './audit';
@@ -457,17 +458,23 @@ export interface OrderSubmissionScope {
  * event completed; cancelled/denied order → event cancelled. Only touches
  * events still open (scheduled/in_progress); manual terminal states win.
  * Admin client + fire-and-forget: never blocks or fails the order flow.
+ *
+ * `organizationId` is the order's organization, which every caller has from
+ * the order it read. The admin client is held by no row rule, so the update
+ * names the organization itself, as bringOrderEventInStep's reads of the same
+ * entry do: an entry is closed only in the organization its order is in.
  */
 export async function syncOrderScheduleEvent(
   orderId: string,
   outcome: 'completed' | 'cancelled',
-  organizationId?: string,
+  organizationId: string,
 ): Promise<void> {
   try {
     const admin = createAdminClient();
     const { error } = await admin
       .from('schedule_events')
       .update({ status: outcome })
+      .eq('organization_id', organizationId)
       .eq('order_request_id', orderId)
       .in('status', ['scheduled', 'in_progress']);
     // supabase-js answers a failed UPDATE with { error }; it does not throw.
@@ -477,7 +484,7 @@ export async function syncOrderScheduleEvent(
   } catch (e) {
     void reportSrvError(e, {
       tag: 'orders.auto-schedule.sync',
-      organizationId: organizationId ?? null,
+      organizationId,
       extra: { orderId, outcome },
     });
   }
@@ -5037,20 +5044,20 @@ export class OrderRequestsService {
     // The connector makes requesterEmail the ticket's requester, and Zendesk
     // emails a ticket's requester, so a requester who deleted their account
     // (A3: never emailed again) is left off the ticket.
+    // Recorded through the service client by the one export-event helper
+    // (server/lib/outbox-events.ts); it never throws and reports a failed
+    // write.
     try {
       const requesterGone = await this.requesterAccountDeleted(row);
-      await this.ctx.supabase.rpc('publish_outbox', {
-        p_org_id: this.ctx.organizationId,
-        p_topic: 'order.problem',
-        p_aggregate_type: 'order_request',
-        p_aggregate_id: id,
-        p_payload: {
+      await publishOutboxEvent(this.ctx, {
+        topic: 'order.problem',
+        aggregateId: id,
+        payload: {
           orderRequestId: id,
           requesterEmail: requesterGone ? null : row.requester_email,
           requesterName: requesterGone ? null : row.requester_name,
           reason,
         },
-        p_dedupe_key: `order.problem:${id}`,
       });
     } catch {
       /* best-effort */
@@ -5309,12 +5316,18 @@ export class OrderRequestsService {
     // let a manager-scoped session through the service gate and then trip
     // an RLS denial — confusing for the user.
     assertPermission(this.ctx, 'organization:update');
-    const { error } = await this.ctx.supabase
+    // The changed row is asked back (S41): a filtered update that matches no
+    // row is not an error, so only the returned row proves a warehouse of
+    // this organization changed.
+    const { data: row, error } = await this.ctx.supabase
       .from('warehouses')
       .update({ is_public_orderable: on })
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', warehouseId);
+      .eq('id', warehouseId)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Warehouse not found.');
   }
 
   async getPublicSettings(): Promise<{
