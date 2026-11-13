@@ -122,6 +122,16 @@ function mayReadKits(ctx: ReadGateContext): boolean {
   );
 }
 
+/**
+ * Whether the caller may read purchase orders: the gate of
+ * PurchaseOrdersService.get (purchase-orders.ts), which the web purchase
+ * order pages also apply. The module is on, and the caller holds
+ * purchase_orders:read. Costs on the lines go with the orders, as on the web.
+ */
+function mayReadPurchaseOrders(ctx: ReadGateContext): boolean {
+  return isModuleEnabled(ctx, 'purchase_orders') && can(ctx, 'purchase_orders:read');
+}
+
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -163,6 +173,11 @@ export const GET = handler;
  *
  * Scope:
  *   • Warehouses + items + POs are filtered to the user's warehouse access.
+ *   • POs (with their lines and costs) go to a caller the web would show
+ *     purchase orders to (mayReadPurchaseOrders); anyone else gets []. The
+ *     phone never removes cached POs on a pull, and no phone screen reads
+ *     them (its purchase order screens read live), so [] only stops
+ *     refreshing what it held.
  *   • Cycle counts include all in_progress counts in scope, for a caller
  *     the web would show counts to (mayReadCycleCounts); anyone else gets [].
  *   • A scoped (staff/viewer) user with NO readable warehouse gets none of
@@ -312,10 +327,11 @@ async function snapshotGET(req: NextRequest) {
   // read kits, and the two removal reads) run as usual, so a delta pull still
   // reports every item that changed since its cursor as removed.
   const seesNoWarehouse = scopeIds !== null && scopeIds.length === 0;
-  // The two reads the web gates on a module and a permission, decided from
+  // The three reads the web gates on a module and a permission, decided from
   // the caller's own effective permissions and enabled modules (ctx). A
   // caller who may not read one gets an empty list in the same shape, and
   // its read is never sent.
+  const skipPos = seesNoWarehouse || !mayReadPurchaseOrders(ctx);
   const skipCounts = seesNoWarehouse || !mayReadCycleCounts(ctx);
   const sendsKits = mayReadKits(ctx);
   // Taken before any read below is sent, so the next delta's cursor can only
@@ -429,7 +445,7 @@ async function snapshotGET(req: NextRequest) {
   // in-list-bound: the caller's readable warehouses (an org's handful of sites)
   if (scopeIds) poQ = poQ.in('destination.warehouse_id', scopeIds);
   if (since) poQ = poQ.gte('updated_at', since);
-  const posP = scopedRead(seesNoWarehouse, poQ);
+  const posP = scopedRead(skipPos, poQ);
 
   // ── Open cycle counts (and their lines) ─────────────────────────
   const selectCounts = () =>

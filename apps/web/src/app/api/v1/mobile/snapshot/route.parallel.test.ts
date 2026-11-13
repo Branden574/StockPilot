@@ -270,10 +270,16 @@ function mockContext(respond: Responder, role = 'staff') {
     organizationId: 'org-1',
     userId: 'u-1',
     role,
-    // A member the web shows counts and kits to (route.read-gates.test.ts
-    // covers everyone else).
-    permissions: new Set(['inventory.read', 'purchasing.read', 'cycle_counts:read', 'bundles:read']),
-    enabledModules: new Set(['inventory', 'purchasing', 'bundles', 'cycle_counts']),
+    // A member the web shows purchase orders, counts and kits to
+    // (route.read-gates.test.ts covers everyone else).
+    permissions: new Set([
+      'inventory.read',
+      'purchasing.read',
+      'cycle_counts:read',
+      'bundles:read',
+      'purchase_orders:read',
+    ]),
+    enabledModules: new Set(['inventory', 'purchasing', 'bundles', 'cycle_counts', 'purchase_orders']),
     mfaRequired: false,
     mfaSatisfied: true,
     mfaEnrolled: false,
@@ -724,8 +730,14 @@ describe('a scoped member with no readable warehouse gets no warehouse-scoped da
 const GOLDEN_DELTA_BODY = JSON.stringify({
   serverTime: NOW,
   since: SINCE,
-  enabledModules: ['inventory', 'purchasing', 'bundles', 'cycle_counts'],
-  permissions: ['inventory.read', 'purchasing.read', 'cycle_counts:read', 'bundles:read'],
+  enabledModules: ['inventory', 'purchasing', 'bundles', 'cycle_counts', 'purchase_orders'],
+  permissions: [
+    'inventory.read',
+    'purchasing.read',
+    'cycle_counts:read',
+    'bundles:read',
+    'purchase_orders:read',
+  ],
   warehouseScope: { hasAllAccess: false, warehouseNames: ['Main', 'Overflow'] },
   warehouses: [
     { id: 'wh1', name: 'Main' },
