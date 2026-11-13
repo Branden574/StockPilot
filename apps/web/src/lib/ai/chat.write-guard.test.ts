@@ -449,8 +449,12 @@ describe('classifyToolErrorMessage: a refusal from the app is told by its type a
     expect(classifyToolErrorMessage(unknown)).toBe(TOOL_FAILED_MESSAGE);
   });
 
-  it('the conflict sentence claims nothing about what was or was not saved', () => {
+  it('the conflict sentence fits a read as well as a write, and claims nothing about what was saved', () => {
     expect(TOOL_CONFLICT_MESSAGE).toMatch(/Look the record up again/);
+    // The order service raises one conflict for a read as well as a write
+    // (warehouse access that could not be checked just then).
+    expect(TOOL_CONFLICT_MESSAGE).not.toMatch(/\bchange could not\b|your change/i);
+    // One conflict is raised after the record itself was saved.
     expect(TOOL_CONFLICT_MESSAGE).not.toMatch(/nothing (was|is) (changed|saved)|unchanged/i);
   });
 

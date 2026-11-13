@@ -56,12 +56,15 @@ export const TOOL_PERMISSION_MESSAGE = 'You do not have permission to run that a
 export const TOOL_NOT_FOUND_MESSAGE = 'That record was not found.';
 
 /**
- * What the model reads when a change ran into what is already saved. It says
+ * What the model reads when a request ran into what is already saved, or into
+ * a record that was busy (being changed at the same time, or one whose access
+ * could not be checked just then). The order service raises the last one for
+ * a read as well as a write, so the sentence does not say "change". It says
  * nothing about what was or was not written: one conflict (a SKU that other
  * records could not follow) is raised after the record itself was saved.
  */
 export const TOOL_CONFLICT_MESSAGE =
-  'That change could not be completed: it conflicts with what is already saved, or the record was being changed at the same time. Look the record up again to see what it holds now.';
+  'That could not be completed: it conflicts with what is already saved, or the record was busy at that moment. Look the record up again to see what it holds now, then try again if it still applies.';
 
 /**
  * What the model reads when the multi-factor gate refused the call, chosen by
