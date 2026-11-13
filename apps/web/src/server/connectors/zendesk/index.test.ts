@@ -78,6 +78,29 @@ describe('zendeskConnector', () => {
     expect(createTicket).toHaveBeenCalledOnce();
   });
 
+  it('a return.created ticket names no requester, whatever the payload carries', async () => {
+    createTicket.mockResolvedValueOnce(100);
+    const r = await zendeskConnector.handleOutboxEvent(
+      evt('return.created', {
+        returnId: 'r1',
+        returnNumber: 'RMA-1',
+        orderRequestId: 'o1',
+        requesterEmail: 'someone@example.com',
+        requesterName: 'Some One',
+      }),
+      conn,
+      secrets,
+      deps,
+    );
+    expect(r.ok).toBe(true);
+    const ticket = createTicket.mock.calls[0]![0] as Record<string, unknown>;
+    expect(ticket.requesterEmail).toBeUndefined();
+    expect(ticket.requesterName).toBeUndefined();
+    expect(JSON.stringify(ticket)).not.toContain('someone@example.com');
+    expect(JSON.stringify(ticket)).not.toContain('Some One');
+    expect(ticket).toMatchObject({ subject: 'Return RMA-1', tags: ['stockpilot', 'return'] });
+  });
+
   it('treats a 4xx as non-retryable (dead-letter)', async () => {
     createTicket.mockRejectedValueOnce(new ZendeskApiError(422));
     const r = await zendeskConnector.handleOutboxEvent(evt('order.problem', { reason: 'x' }), conn, secrets, deps);

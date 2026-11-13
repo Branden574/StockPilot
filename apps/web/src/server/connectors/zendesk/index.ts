@@ -16,12 +16,13 @@ type TopicBuilder = (payload: Record<string, unknown>) => {
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v : undefined);
 
 const BUILDERS: Record<string, TopicBuilder> = {
+  // A return ticket names no requester: the app's return.created event
+  // carries only returnId, returnNumber and orderRequestId (returns.ts
+  // returnCreatedEvent), so requester fields in a payload are not used.
   'return.created': (p) => ({
     subject: `Return ${str(p.returnNumber) ?? str(p.returnId) ?? ''}`.trim() || 'New return',
     body: `A return was created in StockPilot.\nReturn: ${str(p.returnNumber) ?? ''}\nOrder: ${str(p.orderRequestId) ?? ''}\nReason: ${str(p.reason) ?? '—'}`,
     tags: ['stockpilot', 'return'],
-    requesterEmail: str(p.requesterEmail),
-    requesterName: str(p.requesterName),
   }),
   'public_request.created': (p) => ({
     subject: `New order request from ${str(p.requesterName) ?? str(p.requesterEmail) ?? 'a customer'}`,

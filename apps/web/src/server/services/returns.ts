@@ -30,6 +30,11 @@ import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
 import { orderIdForReturnToken } from '@/server/lib/order-secrets';
+import {
+  publishOutboxEvent,
+  publishOutboxEventForResolvedOrganization,
+  type OutboxEventInput,
+} from '@/server/lib/outbox-events';
 
 import { audit, insertAuditRowReported } from './audit';
 import {
@@ -829,7 +834,10 @@ export class RMAService {
         returnNumber: created.return_number,
         orderNumber: formatOrderNumber(created.order_number) ?? orderRequestId.slice(0, 8).toUpperCase(),
       });
-      await publishReturnCreated(this.ctx.supabase, this.ctx.organizationId, returnId, created.return_number, orderRequestId);
+      await publishOutboxEvent(
+        this.ctx,
+        returnCreatedEvent(returnId, created.return_number, orderRequestId),
+      );
     }
 
     return { ...created, replay, channel };
@@ -1996,18 +2004,18 @@ export class RMAService {
         const ol = Array.isArray(row.order_request_line) ? (row.order_request_line[0] ?? null) : (row.order_request_line ?? null);
         total += (Number(row.quantity) || 0) * (Number(ol?.unit_cost_at_request) || 0);
       }
-      await this.ctx.supabase.rpc('publish_outbox', {
-        p_org_id: this.ctx.organizationId,
-        p_topic: 'return.closed',
-        p_aggregate_type: 'return',
-        p_aggregate_id: id,
-        p_payload: {
+      // Recorded through the service client by the one export-event helper
+      // (server/lib/outbox-events.ts); it never throws and reports a failed
+      // write.
+      await publishOutboxEvent(this.ctx, {
+        topic: 'return.closed',
+        aggregateId: id,
+        payload: {
           orderRequestId: facts.orderRequestId,
           returnNumber: facts.returnNumber,
           lineCount: rows.length,
           total: Math.round((total + Number.EPSILON) * 100) / 100,
         },
-        p_dedupe_key: `return.closed:${id}`,
       });
     } catch {
       // Best-effort: a publish failure must not fail an already-committed close.
@@ -2015,26 +2023,20 @@ export class RMAService {
   }
 }
 
-/** Best-effort `return.created` outbox event (the Zendesk shell). */
-async function publishReturnCreated(
-  client: SupabaseClient,
-  organizationId: string,
+/**
+ * The `return.created` export event (the Zendesk shell), the same for a
+ * staff create and a requester create. It names no person.
+ */
+function returnCreatedEvent(
   returnId: string,
   returnNumber: string | null,
   orderRequestId: string,
-): Promise<void> {
-  try {
-    await client.rpc('publish_outbox', {
-      p_org_id: organizationId,
-      p_topic: 'return.created',
-      p_aggregate_type: 'return',
-      p_aggregate_id: returnId,
-      p_payload: { returnId, returnNumber, orderRequestId },
-      p_dedupe_key: `return.created:${returnId}`,
-    });
-  } catch {
-    /* best-effort */
-  }
+): OutboxEventInput<'return.created'> {
+  return {
+    topic: 'return.created',
+    aggregateId: returnId,
+    payload: { returnId, returnNumber, orderRequestId },
+  };
 }
 
 type RawOrderLine = {
@@ -2415,7 +2417,10 @@ async function createRequesterRpc(
         exchangeLines,
       },
     });
-    await publishReturnCreated(admin, result.organizationId, id, returnNumber, ctx.orderRequestId);
+    await publishOutboxEventForResolvedOrganization(
+      { organizationId: result.organizationId, resolvedBy: 'requester_return' },
+      returnCreatedEvent(id, returnNumber, ctx.orderRequestId),
+    );
     void dispatchEvent(result.organizationId, 'return.created', { id, returnNumber, source: 'requester' });
     await notifyStaffNewReturnRequest({
       organizationId: result.organizationId,

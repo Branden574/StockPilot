@@ -1756,6 +1756,17 @@ WEB_TESTS=(
   src/server/services/platform/permission-exceptions.test.ts
   src/server/actions/platform/permission-exceptions.test.ts
   src/lib/auth/effective-permissions.test.ts
+
+  # Connector export events (outbox_events) are recorded only by
+  # server/lib/outbox-events.ts, through the service client, after the action
+  # that causes them: a member action in the organization of its checked
+  # context, once that context holds the action's permission; a requester's
+  # return or a public request in the organization the server resolved. The
+  # guard pins the one publish_outbox call to createAdminClient(), every site
+  # to its topic and its permission check, and refuses the function's name
+  # anywhere else on the web, the phone and core.
+  src/test/outbox-publish-sites.guard.test.ts
+  src/server/lib/outbox-events.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

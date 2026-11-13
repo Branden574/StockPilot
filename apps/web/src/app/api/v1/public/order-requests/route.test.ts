@@ -303,3 +303,81 @@ describe('POST /api/v1/public/order-requests — the track token lives in order_
     );
   });
 });
+
+// The public_request.created export event: recorded through the service
+// client by the one export-event helper (server/lib/outbox-events.ts), in the
+// organization the token resolved to, after the request was written.
+describe('POST /api/v1/public/order-requests: the public_request.created export event', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    checkRateLimitMock.mockImplementation(async (_key, _limit, windowMs) => ({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + windowMs,
+    }));
+  });
+
+  const EVENT = {
+    p_org_id: 'org-1',
+    p_topic: 'public_request.created',
+    p_aggregate_type: 'order_request',
+    p_aggregate_id: 'req-1',
+    p_payload: {
+      orderRequestId: 'req-1',
+      requesterEmail: 'jane@school.edu',
+      requesterName: 'Jane Teacher',
+      status: 'pending_confirmation',
+    },
+    p_dedupe_key: 'public_request.created:req-1',
+  };
+
+  it('records the event once, after the request was written, as it has always been sent', async () => {
+    const stub = wireHappyAdmin();
+    const res = await POST(buildRequest(validBody({ requesterEmail: 'Jane@School.edu' })));
+    expect(res.status).toBe(200);
+    const names = stub.rpcCalls.map((c) => c.name);
+    expect(names.indexOf('publish_outbox')).toBeGreaterThan(
+      names.indexOf('insert_order_request_with_lines'),
+    );
+    const events = stub.rpcCalls.filter((c) => c.name === 'publish_outbox');
+    expect(events).toEqual([{ name: 'publish_outbox', args: EVENT }]);
+    expect(JSON.stringify(events[0]!.args)).toBe(JSON.stringify(EVENT));
+  });
+
+  it('a request that was not written records no event', async () => {
+    const stub = wireHappyAdmin();
+    stub.client.rpc.mockImplementation((name: string) =>
+      Promise.resolve(
+        name === 'insert_order_request_with_lines'
+          ? { data: null, error: { message: 'insert failed', code: 'XX000' } }
+          : { data: null, error: null },
+      ),
+    );
+    const res = await POST(buildRequest(validBody()));
+    expect(res.status).toBe(500);
+    expect(stub.client.rpc.mock.calls.map((c: unknown[]) => c[0])).not.toContain('publish_outbox');
+  });
+
+  it('a failed write is reported and the submission still succeeds', async () => {
+    const stub = wireHappyAdmin();
+    stub.client.rpc.mockImplementation((name: string) =>
+      Promise.resolve(
+        name === 'publish_outbox'
+          ? { data: null, error: { message: 'publish failed', code: 'XX000' } }
+          : name === 'insert_order_request_with_lines'
+            ? {
+                data: { id: 'req-1', organization_id: 'org-1', warehouse_id: WAREHOUSE_ID },
+                error: null,
+              }
+            : { data: null, error: null },
+      ),
+    );
+    const res = await POST(buildRequest(validBody()));
+    expect(res.status).toBe(200);
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      { message: 'publish failed', code: 'XX000' },
+      expect.objectContaining({ tag: 'outbox.publish', organizationId: 'org-1' }),
+    );
+    expect(sendOrderRequestEmailMock).toHaveBeenCalledTimes(1);
+  });
+});
