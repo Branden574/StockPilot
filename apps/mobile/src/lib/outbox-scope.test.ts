@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
+  canSettleOutbox,
   HELD_FOR_OTHER_SQL,
   isOwnedBy,
   outboxSendDecision,
@@ -21,7 +22,7 @@ import {
  */
 
 describe('outboxSendDecision', () => {
-  const live = { orgId: 'org-b', userId: 'u1' };
+  const live = { orgId: 'org-b', userId: 'u1', stepUpOwed: false };
 
   it('own row: sent under ITS organization, not the active one', () => {
     expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, live)).toEqual({
@@ -41,13 +42,13 @@ describe('outboxSendDecision', () => {
 
   it('nobody signed in: nothing is sent, not even a legacy row', () => {
     expect(
-      outboxSendDecision({ organizationId: null, userId: null }, { orgId: 'org-b', userId: null }),
+      outboxSendDecision({ organizationId: null, userId: null }, { orgId: 'org-b', userId: null, stepUpOwed: false }),
     ).toEqual({
       send: false,
       reason: 'signed-out',
     });
     expect(
-      outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, { orgId: null, userId: null }),
+      outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, { orgId: null, userId: null, stepUpOwed: false }),
     ).toEqual({
       send: false,
       reason: 'signed-out',
@@ -76,6 +77,92 @@ describe('outboxSendDecision', () => {
 });
 
 /**
+ * docket S43b. While the live session still owes its authenticator code,
+ * nothing is sent under it: every row is held, left as it is, and goes out
+ * once the code is entered.
+ */
+describe('a session that still owes its authenticator code sends nothing', () => {
+  const owing = { orgId: 'org-b', userId: 'u1', stepUpOwed: true };
+  const HELD = { send: false, reason: 'step-up-owed' };
+
+  it("the account's own row is held, with its own workspace or without", () => {
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, owing)).toEqual(HELD);
+    expect(outboxSendDecision({ organizationId: null, userId: 'u1' }, owing)).toEqual(HELD);
+  });
+
+  it('a legacy row is held too: it is not adopted by a session that has not entered its code', () => {
+    expect(outboxSendDecision({ organizationId: null, userId: null }, owing)).toEqual(HELD);
+    expect(outboxSendDecision({}, owing)).toEqual(HELD);
+  });
+
+  it("another account's row is held for the same reason: nothing about the queue is decided yet", () => {
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u2' }, owing)).toEqual(HELD);
+  });
+
+  it('while the workspace is not saved either, the code is still what holds the row', () => {
+    expect(
+      outboxSendDecision(
+        { organizationId: null, userId: 'u1' },
+        { orgId: null, userId: 'u1', stepUpOwed: true },
+      ),
+    ).toEqual(HELD);
+  });
+
+  it('nobody signed in is still "signed out", whatever the scope says about a code', () => {
+    expect(
+      outboxSendDecision(
+        { organizationId: 'org-a', userId: 'u1' },
+        { orgId: 'org-b', userId: null, stepUpOwed: true },
+      ),
+    ).toEqual({ send: false, reason: 'signed-out' });
+  });
+
+  it('once the code is entered the same rows go, exactly as before', () => {
+    const entered = { ...owing, stepUpOwed: false };
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, entered)).toEqual({
+      send: true,
+      orgId: 'org-a',
+      userId: 'u1',
+      adopt: false,
+    });
+    expect(outboxSendDecision({ organizationId: null, userId: null }, entered)).toEqual({
+      send: true,
+      orgId: 'org-b',
+      userId: 'u1',
+      adopt: true,
+    });
+  });
+
+  it('nothing queued is settled either: not signed out, and not before the code', () => {
+    expect(canSettleOutbox({ orgId: 'org-b', userId: 'u1', stepUpOwed: false })).toBe(true);
+    expect(canSettleOutbox({ orgId: null, userId: 'u1', stepUpOwed: false })).toBe(true);
+    expect(canSettleOutbox(owing)).toBe(false);
+    expect(canSettleOutbox({ orgId: 'org-b', userId: null, stepUpOwed: false })).toBe(false);
+    expect(canSettleOutbox({ orgId: 'org-b', userId: null, stepUpOwed: true })).toBe(false);
+  });
+
+  it('no row is ever sent under a scope that owes its code', () => {
+    const rows: OutboxRowOwner[] = [
+      {},
+      { organizationId: null, userId: null },
+      { organizationId: '', userId: null },
+      { organizationId: null, userId: 'u1' },
+      { organizationId: 'org-a', userId: 'u1' },
+      { organizationId: 'org-a', userId: null },
+      { organizationId: 'org-a', userId: 'u2' },
+    ];
+    for (const row of rows) {
+      for (const orgId of [null, '', 'org-b']) {
+        for (const userId of [null, 'u1']) {
+          const decision = outboxSendDecision(row, { orgId, userId, stepUpOwed: true });
+          expect(decision.send, JSON.stringify({ row, orgId, userId })).toBe(false);
+        }
+      }
+    }
+  });
+});
+
+/**
  * docket B10, integrator decision 3. A row with no workspace of its own (an
  * older build's legacy row, or one queued before any workspace was saved) is
  * sent under the live account's OWN saved workspace (session-scope.ts
@@ -87,7 +174,7 @@ describe('outboxSendDecision', () => {
  */
 describe("a row with no workspace of its own waits for its account's own", () => {
   /** Signed in, the account's own workspace not saved yet. */
-  const loading = { orgId: null, userId: 'u1' };
+  const loading = { orgId: null, userId: 'u1', stepUpOwed: false };
   const HELD = { send: false, reason: 'workspace-loading' };
 
   it('a legacy row (an older build: no account, no workspace) is held, never sent with no workspace', () => {
@@ -114,7 +201,7 @@ describe("a row with no workspace of its own waits for its account's own", () =>
       reason: 'other-account',
     });
     expect(
-      outboxSendDecision({ organizationId: null, userId: null }, { orgId: null, userId: null }),
+      outboxSendDecision({ organizationId: null, userId: null }, { orgId: null, userId: null, stepUpOwed: false }),
     ).toEqual({ send: false, reason: 'signed-out' });
   });
 
@@ -122,7 +209,7 @@ describe("a row with no workspace of its own waits for its account's own", () =>
     expect(
       outboxSendDecision(
         { organizationId: null, userId: null },
-        { orgId: 'org-own', userId: 'u1' },
+        { orgId: 'org-own', userId: 'u1', stepUpOwed: false },
       ),
     ).toEqual({ send: true, orgId: 'org-own', userId: 'u1', adopt: true });
   });
@@ -132,10 +219,10 @@ describe("a row with no workspace of its own waits for its account's own", () =>
     // falls back to the saved one, so '' must never reach it as a workspace.
     expect(outboxSendDecision({ organizationId: '', userId: 'u1' }, loading)).toEqual(HELD);
     expect(
-      outboxSendDecision({ organizationId: '', userId: 'u1' }, { orgId: 'org-b', userId: 'u1' }),
+      outboxSendDecision({ organizationId: '', userId: 'u1' }, { orgId: 'org-b', userId: 'u1', stepUpOwed: false }),
     ).toEqual({ send: true, orgId: 'org-b', userId: 'u1', adopt: true });
     expect(
-      outboxSendDecision({ organizationId: null, userId: 'u1' }, { orgId: '', userId: 'u1' }),
+      outboxSendDecision({ organizationId: null, userId: 'u1' }, { orgId: '', userId: 'u1', stepUpOwed: false }),
     ).toEqual(HELD);
   });
 
@@ -149,10 +236,10 @@ describe("a row with no workspace of its own waits for its account's own", () =>
       { organizationId: 'org-a', userId: null },
     ];
     const lives = [
-      { orgId: null, userId: 'u1' },
-      { orgId: '', userId: 'u1' },
-      { orgId: 'org-b', userId: 'u1' },
-      { orgId: null, userId: null },
+      { orgId: null, userId: 'u1', stepUpOwed: false },
+      { orgId: '', userId: 'u1', stepUpOwed: false },
+      { orgId: 'org-b', userId: 'u1', stepUpOwed: false },
+      { orgId: null, userId: null, stepUpOwed: false },
     ];
     let sends = 0;
     for (const row of rows) {

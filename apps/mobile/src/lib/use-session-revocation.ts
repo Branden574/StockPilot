@@ -6,6 +6,7 @@ import {
   deviceSignOutSteps,
   REVOKED_UNBIND_TIMEOUT_MS,
 } from './push-unbind';
+import { decodeJwtPayload } from './mfa-level';
 import { checkThisSession } from './session-check';
 import { supabase } from './supabase';
 
@@ -86,22 +87,10 @@ export function useSessionRevocation(
       const {
         data: { session },
       } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      if (token) {
-        try {
-          const seg = token.split('.')[1] ?? '';
-          // base64url -> JSON (RN-safe: no Node Buffer)
-          const json = decodeURIComponent(
-            atob(seg.replace(/-/g, '+').replace(/_/g, '/'))
-              .split('')
-              .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
-              .join(''),
-          );
-          mySessionId = (JSON.parse(json) as { session_id?: string }).session_id ?? null;
-        } catch {
-          mySessionId = null;
-        }
-      }
+      // The token's own claims, decoded on the device (mfa-level.ts: RN-safe,
+      // null for anything that is not a token).
+      const sessionId = decodeJwtPayload(session?.access_token)?.session_id;
+      mySessionId = typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : null;
       if (cancelled) return;
       channel = supabase.channel(`user:${userId}:sessions`);
       channel.on('broadcast', { event: 'revoked' }, ({ payload }) => {

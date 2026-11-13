@@ -294,9 +294,11 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
     const disabled = gate.indexOf(
       "if (!loading && accountGate.state === 'disabled') { return <AccountDisabledScreen />;",
     );
-    const mfa = gate.indexOf(
-      'if (!loading && session && mfaRequired) { return <MfaChallengeScreen />;',
-    );
+    // The code screen does not wait for `loading` (docket S43b,
+    // code-gate-wiring.test.ts): it replaces the navigator from the render a
+    // session that owes its code arrives in.
+    const mfa = gate.indexOf('if (session && mfaRequired) { return <MfaChallengeScreen />;');
+    expect(gate).not.toContain('!loading && session && mfaRequired');
     const lock = gate.indexOf(
       'if (!loading && session && locked) { return <BiometricLockScreen />;',
     );
@@ -316,11 +318,16 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
   });
 
   it('every shell hook is still mounted in RootGate, before the gates', () => {
+    // The three hooks that read or send the account's data take dataUser:
+    // nobody until the session has entered its authenticator code (docket
+    // S43b). Push registration, the account gate and the revocation listener
+    // keep the session.
+    expect(gate).toContain('const dataUser = session && !mfaRequired ? session.user : null;');
     for (const hook of [
       'usePushNotifications(session?.user ?? null);',
-      'useSync(session?.user ?? null);',
-      'useHeldOrderSubmissions(session?.user?.id ?? null, seeOrders);',
-      "useActivityBeacon(session?.user?.id ?? null, segments.join('/'));",
+      'useSync(dataUser);',
+      'useHeldOrderSubmissions(dataUser?.id ?? null, seeOrders);',
+      "useActivityBeacon(dataUser?.id ?? null, segments.join('/'));",
       'useAccountGate({ onEvicted: onForcedSignOut });',
       'useSessionRevocation(session?.user?.id ?? null, onForcedSignOut, revocationOptions);',
     ]) {
@@ -333,6 +340,11 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
 
   it('the signed-out redirect and the way back from the auth group are unchanged', () => {
     expect(gate).toContain("if (loading || accountGate.state === 'disabled') return;");
+    // While the code screen has replaced the navigator there is nothing to
+    // navigate (docket S43b): the effect returns right under its first line.
+    expect(gate).toContain(
+      "if (loading || accountGate.state === 'disabled') return; if (session && mfaRequired) return;",
+    );
     expect(gate).toContain("const inAuthGroup = segments[0] === '(auth)';");
     expect(gate).toContain(
       'if (!session && !inAuthGroup) { router.replace(signedOutRoute() as Href); }',

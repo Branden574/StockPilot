@@ -61,7 +61,12 @@ const queueMock = vi.hoisted(() => ({
 vi.mock('./queue', () => queueMock);
 
 /** The workspace and account live on the device, read by the drain per row. */
-const live = vi.hoisted(() => ({ orgId: 'org-live' as string | null, userId: 'u1' as string | null }));
+const live = vi.hoisted(() => ({
+  orgId: 'org-live' as string | null,
+  userId: 'u1' as string | null,
+  /** The session still owes its authenticator code (docket S43b). */
+  stepUpOwed: false,
+}));
 const scopeMock = vi.hoisted(() => ({ liveOutboxScope: vi.fn() }));
 vi.mock('./session-scope', () => scopeMock);
 
@@ -133,6 +138,7 @@ beforeEach(() => {
   });
   live.orgId = 'org-live';
   live.userId = 'u1';
+  live.stepUpOwed = false;
   scopeMock.liveOutboxScope.mockReset().mockImplementation(async () => ({ ...live }));
   for (const name of ['markSending', 'markOk', 'markFailed', 'markRejected', 'markHeld'] as const) {
     queueMock[name].mockReset().mockImplementation(async (id: number) => {
@@ -429,6 +435,72 @@ describe('drainQueue — every row is sent under its own org, and only as its ow
     pending([OWN_ROW_ORG_A]);
     expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
     expect(calls.log).toEqual(['markSending:1', 'api:/api/v1/po/po1/receive-line', 'markHeld:1']);
+  });
+});
+
+/**
+ * docket S43b. A session that still owes its authenticator code is a password
+ * and nothing more: the sync neither reads for it nor sends under it. Queued
+ * work is left exactly as it is (not failed, not rejected, not stamped) and
+ * goes out at the first sync after the code.
+ */
+describe('a session that still owes its authenticator code: no pull, no send, nothing marked', () => {
+  const ADJUST: Row = {
+    id: 31,
+    kind: 'adjust_stock',
+    idempotencyKey: 'k31',
+    payload: { itemId: 'i1', body: { delta: 1 } },
+    organizationId: 'org-a',
+    userId: 'u1',
+  };
+  const OWN: Row = { ...RECEIPT, organizationId: 'org-a', userId: 'u1' };
+  const LEGACY: Row = { ...BUNDLE, organizationId: null, userId: null };
+
+  it('drainQueue holds every row: own, legacy and an adjustment alike', async () => {
+    live.stepUpOwed = true;
+    pending([OWN, LEGACY, ADJUST]);
+    expect(await drainQueue()).toEqual({ ok: 0, failed: 0, rejected: 0 });
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+  });
+
+  it('through syncNow: the snapshot is not asked for and nothing is sent', async () => {
+    live.stepUpOwed = true;
+    pending([OWN]);
+    await syncNow();
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+  });
+
+  it('the code is entered between two rows of one drain: the first is held, the second goes', async () => {
+    const second: Row = { ...BUNDLE, organizationId: 'org-a', userId: 'u1' };
+    pending([OWN, second]);
+    scopeMock.liveOutboxScope
+      .mockImplementationOnce(async () => ({ ...live, stepUpOwed: true }))
+      .mockImplementation(async () => ({ ...live }));
+    expect(await drainQueue()).toEqual({ ok: 1, failed: 0, rejected: 0 });
+    expect(calls.log).toEqual(['markSending:3', 'api:/api/v1/bundles/b1/distribute', 'markOk:3']);
+  });
+
+  it('after the code, the same sync pulls and then sends what was held', async () => {
+    live.stepUpOwed = true;
+    pending([OWN]);
+    apiMock.api.mockImplementation(async (path: string) => {
+      calls.log.push(`api:${path}`);
+      // Any answer to the pull lets the drain go on (an error status too).
+      if (path.startsWith('/api/v1/mobile/snapshot')) throw httpError(500, 'internal_error');
+    });
+    await syncNow();
+    expect(calls.log).toEqual([]);
+
+    live.stepUpOwed = false;
+    await syncNow();
+    expect(calls.log).toEqual([
+      'api:/api/v1/mobile/snapshot',
+      'markSending:1',
+      'api:/api/v1/po/po1/receive-line',
+      'markOk:1',
+    ]);
   });
 });
 

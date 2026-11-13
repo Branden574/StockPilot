@@ -359,7 +359,12 @@ export async function pullSnapshot(
   // offline sign-in as another account must not show the last account's rows
   // either. Another account's cache is cleared and pulled again in full, never
   // delta-pulled from their cursor.
-  const { userId: liveUserId } = await liveOutboxScope();
+  const { userId: liveUserId, stepUpOwed } = await liveOutboxScope();
+  // The session still owes its authenticator code (docket S43b): nothing is
+  // read for it. Before the cache-owner check on purpose: the cache on the
+  // device is left exactly as it is until the code is entered, and the first
+  // sync after that resets or adopts it as usual.
+  if (stepUpOwed) return null;
   const ownerAction = liveUserId
     ? cacheOwnerAction(
         await getMeta(CACHE_USER_META_KEY),
@@ -829,9 +834,10 @@ export async function drainQueue(): Promise<{
     // WHOSE row, decided now, for THIS row (outbox-scope.ts): the session can
     // end or change between two rows of one drain (a sign-out, "Use password
     // instead", a revoked session, a workspace switch). A row queued by
-    // another account, any row with nobody signed in, and a row with no
-    // workspace of its own while this account's is not saved yet, is HELD:
-    // skipped and left exactly as it is, neither failed nor rejected.
+    // another account, any row with nobody signed in, any row while the
+    // session still owes its authenticator code, and a row with no workspace
+    // of its own while this account's is not saved yet, is HELD: skipped and
+    // left exactly as it is, neither failed nor rejected.
     const decision = outboxSendDecision(action, await liveOutboxScope());
     if (!decision.send) continue;
 

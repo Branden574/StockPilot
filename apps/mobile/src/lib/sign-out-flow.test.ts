@@ -503,10 +503,13 @@ describe('auth-context wiring', () => {
     const body = fn('signIn');
     const refused = body.indexOf('return { error: error.message };');
     const note = body.indexOf('void sendSignedInNote();');
-    const code = body.indexOf('await checkMfa();');
     expect(refused).toBeGreaterThan(-1);
     expect(note).toBeGreaterThan(refused);
-    expect(code).toBeGreaterThan(note);
+    // The note still goes on the password step, before the code. Sign-in no
+    // longer waits on a factor read after it: the code gate is worked out
+    // from the session the grant stored (docket S43b, code-gate-wiring.test.ts).
+    expect(body).not.toMatch(/checkMfa|listFactors|getAuthenticatorAssuranceLevel/);
+    expect(body.slice(note)).not.toMatch(/\bawait\b/);
     expect(body.split('sendSignedInNote').length - 1).toBe(1);
     expect(body).not.toMatch(/await sendSignedInNote/);
   });

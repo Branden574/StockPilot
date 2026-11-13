@@ -15,6 +15,8 @@ import {
   isInvoluntarySessionEnd,
   markSessionEnded,
   probeAndSettle,
+  PROBE_TIMEOUT_MS,
+  withTimeout,
 } from './account-eviction';
 import {
   enableBiometricForUser,
@@ -25,6 +27,15 @@ import {
 import { totalPendingCount } from './cycle-count-cache';
 import { cycleCountSync } from './cycle-count-sync';
 import { wipeForSignOut } from './db';
+import { codeGateUp, verifiedTotpFactorId } from './mfa-level';
+import {
+  createStepUpReconciler,
+  handOverLiveUser,
+  setLiveUserHandler,
+  setStepUpForcedFor,
+  stepUpForcedFor,
+  subscribeStepUpForced,
+} from './mfa-reconcile';
 import { wipeWithPhotoCaches } from './photo-cache-wipe';
 import { adoptLegacyRows, discardUnsyncedFor } from './queue';
 import {
@@ -72,11 +83,15 @@ interface AuthState {
   /** True iff the currently-signed-in user has previously opted in. */
   biometricEnabled: boolean;
   /**
-   * True when the user has authenticated with password (AAL1) but holds a
-   * verified TOTP factor and must still enter a 6-digit code to reach AAL2.
-   * RootGate renders the MFA challenge screen while this is true. Mirrors
-   * the web app's /signin/mfa step — without it the mobile app would let a
-   * 2FA-enrolled user in on password alone.
+   * True while the session still owes its authenticator code: the account
+   * has a verified factor and the session's token is not aal2. RootGate
+   * renders the code screen instead of the app while this is true, and hands
+   * nobody to the hooks that read or send the account's data. Mirrors the web
+   * app's /signin/mfa step.
+   *
+   * Worked out from the session in the same render the session arrives in
+   * (mfa-level.ts): no request decides it, so it holds offline, during the
+   * cold-launch hydrate and at every token refresh.
    */
   mfaRequired: boolean;
   /**
@@ -113,38 +128,102 @@ interface AuthState {
 
 const AuthContext = React.createContext<AuthState | null>(null);
 
+/** The code screen's sentence when the server cannot be asked which factor the code is for. */
+const MFA_CANNOT_CHECK_COPY =
+  'Could not reach StockPilot to check your authenticator. Check your connection and try again.';
+/** The code screen's sentence when the account lists no authenticator app to answer for. */
+const MFA_NO_AUTHENTICATOR_COPY =
+  'This account has no authenticator app code to enter on this phone. Try again in a moment, or sign in on the web.';
+
+/**
+ * The user as the server lists it now, or null when it cannot be read: an
+ * error, no answer within PROBE_TIMEOUT_MS (RN's fetch has no timeout of its
+ * own), or a rejection. A promise chain on purpose, like the probes below:
+ * nothing that owns `loading` ever waits on it.
+ */
+function readLiveUser(): Promise<User | null> {
+  return withTimeout(
+    supabase.auth.getUser().then(({ data, error }) => (error ? null : (data.user ?? null))),
+    PROBE_TIMEOUT_MS,
+    null,
+  );
+}
+
+/**
+ * Brings the code gate in step with the server's own factor list
+ * (mfa-reconcile.ts). The session it compares is the one auth-js holds; the
+ * refresh is bounded, and a refresh that fails or does not answer never
+ * lowers the gate.
+ */
+const reconcileCodeGate = createStepUpReconciler({
+  currentSession: () =>
+    supabase.auth.getSession().then(
+      ({ data }) => data.session,
+      () => null,
+    ),
+  refreshSession: () =>
+    withTimeout(
+      supabase.auth.refreshSession().then(({ data, error }) => (error ? null : data.session)),
+      PROBE_TIMEOUT_MS,
+      null,
+    ),
+});
+
+/** GoTrue's structured answer for a factor that no longer exists. */
+function isFactorGone(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'mfa_factor_not_found';
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = React.useState<Session | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [locked, setLocked] = React.useState(false);
   const [biometricEnabled, setBiometricEnabledState] = React.useState(false);
-  const [mfaRequired, setMfaRequired] = React.useState(false);
-  const mfaFactorId = React.useRef<string | null>(null);
 
-  // Resolves whether the current session is stuck at AAL1 with a verified
-  // TOTP factor (i.e. a 2FA challenge is owed). Supabase encodes AAL in the
-  // JWT, so a session that already reached AAL2 — including one restored
-  // from disk — reports currentLevel='aal2' and needs no challenge.
-  const checkMfa = React.useCallback(async () => {
-    try {
-      const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      if (aal?.currentLevel === 'aal1' && aal?.nextLevel === 'aal2') {
-        const { data: factors } = await supabase.auth.mfa.listFactors();
-        const verified = factors?.totp?.[0] ?? null;
-        if (verified) {
-          mfaFactorId.current = verified.id;
-          setMfaRequired(true);
-          return;
-        }
-      }
-      mfaFactorId.current = null;
-      setMfaRequired(false);
-    } catch (e) {
-      console.warn('[auth] MFA level check failed', e);
-      mfaFactorId.current = null;
-      setMfaRequired(false);
-    }
+  // THE CODE GATE, worked out in render from the session itself (docket
+  // S43b; mfa-level.ts). The token's own level and the factors the session's
+  // user carries decide it, so it is true in the very render a session that
+  // owes its code arrives in: at the cold-launch hydrate, at SIGNED_IN, at a
+  // token refresh, online or not. No request is waited on and none can lower
+  // it by failing. `stepUpForced` is the one addition: the account the
+  // server's own factor list said owes a code while the session's copy could
+  // not be brought up to date (mfa-reconcile.ts).
+  const stepUpForced = React.useSyncExternalStore(subscribeStepUpForced, stepUpForcedFor);
+  const mfaRequired = codeGateUp(session, stepUpForced);
+
+  // A user the account gate's probe reads from the server (use-account-gate.ts)
+  // is handed here, so an authenticator turned on or removed elsewhere reaches
+  // the gate at the next probe. Registered before the hydrate below starts its
+  // own probe.
+  React.useEffect(() => {
+    setLiveUserHandler((user) => {
+      void reconcileCodeGate(user);
+    });
+    return () => setLiveUserHandler(null);
   }, []);
+
+  // The two edges of the gate.
+  //   UP: ask the server for the account's factors once, detached and bounded.
+  //   A session whose copy lists a factor that was since removed (a reset, a
+  //   recovery code) would otherwise show a code screen nobody can answer
+  //   until its next token refresh.
+  //   DOWN, with a session: the code was entered (or the gate was reconciled
+  //   away), so the count outbox, held while the code was owed
+  //   (outbox-scope.ts), gets a pass now instead of at its next 60 s
+  //   heartbeat. The other outbox drains when RootGate hands useSync its user.
+  const gateUserId = session?.user?.id ?? null;
+  const gateWasUp = React.useRef(false);
+  React.useEffect(() => {
+    if (mfaRequired) {
+      if (gateWasUp.current) return;
+      gateWasUp.current = true;
+      void readLiveUser().then((user) => (user ? reconcileCodeGate(user) : null));
+      return;
+    }
+    if (!gateWasUp.current) return;
+    gateWasUp.current = false;
+    if (gateUserId) void cycleCountSync.forceSync().catch(() => undefined);
+  }, [mfaRequired, gateUserId]);
 
   // On first mount, hydrate the session from SecureStore (Supabase
   // does this internally) AND check whether the resulting user has
@@ -194,9 +273,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           // already picked a destination by the time any `.then()` of ours
           // runs. It stakes sign-in up front and withdraws it if the account
           // turns out to be fine.
+          //
+          // The user it reads is handed to the code gate's reconcile on the
+          // way through (handOverLiveUser, mfa-reconcile.ts).
           void probeAndSettle(
             getAccountGateState(),
-            () => supabase.auth.getUser(),
+            () => supabase.auth.getUser().then(handOverLiveUser),
             async () => {
               await supabase.auth.signOut({ scope: 'local' });
             },
@@ -225,11 +307,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (cancelled) return;
           setBiometricEnabledState(enabled);
           setLocked(enabled);
-          // A restored session may still owe an AAL2 challenge if it was
-          // only ever AAL1 on disk. Check before exposing the app.
-          // (checkMfa is already internally try/caught.)
-          await checkMfa();
-          if (cancelled) return;
+          // A restored session that still owes its code needs no check here:
+          // the gate is worked out from the session set above, and RootGate
+          // has shown the code screen since that render.
         }
       } catch (e) {
         console.warn('[auth] session hydrate failed — falling back to sign-in', e);
@@ -282,8 +362,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // prevent. Only AccountDisabledScreen's own "Sign out" clears it.
         setLocked(false);
         setBiometricEnabledState(false);
-        setMfaRequired(false);
-        mfaFactorId.current = null;
+        // No session owes a code: the gate reads the session, and the note
+        // about the account that just left goes with it.
+        setStepUpForcedFor(null);
         return;
       }
       // When the user signs IN (event = SIGNED_IN), check whether
@@ -298,12 +379,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // the session was restored from disk (handled in the mount
         // effect above).
       }
-      // MFA_CHALLENGE_VERIFIED fires after a successful verify() and
-      // upgrades the session to AAL2 — clear the gate. Any other
-      // auth event re-checks the level.
+      // MFA_CHALLENGE_VERIFIED fires after a successful verify() with the
+      // aal2 session, set above: the gate comes down in that same render. Every
+      // other event's session is read the same way, so none needs a re-check.
+      // The code was entered, so nothing noted about this account is owed.
       if (event === 'MFA_CHALLENGE_VERIFIED') {
-        setMfaRequired(false);
-        mfaFactorId.current = null;
+        setStepUpForcedFor(null);
       }
     });
     return () => {
@@ -319,6 +400,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // this client did not make. Ask GoTrue when the app comes to the foreground;
   // if the addresses differ, pull a fresh session (TOKEN_REFRESHED → setSession
   // above) and drop the cached profile. Offline or failed → change nothing.
+  //
+  // The same answer carries the account's factors, so it is handed to the
+  // code gate's reconcile (mfa-reconcile.ts): an authenticator turned on on
+  // the web while this phone is signed in brings the code screen up at the
+  // next return to the app, and one removed brings it down.
   React.useEffect(() => {
     const onChange = (state: AppStateStatus) => {
       if (state !== 'active') return;
@@ -328,15 +414,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       void supabase.auth
         .getSession()
         .then(({ data: sess }) => {
-          const current = sess.session?.user?.email;
-          if (!sess.session || !current) return null;
-          return supabase.auth.getUser().then(({ data, error }) => {
-            const live = data.user?.email;
-            if (error || !live) return null;
-            if (live.toLowerCase() === current.toLowerCase()) return null;
-            // The profile cache is keyed by id AND email (use-profile.ts), so
-            // the refreshed session user misses it and refetches on its own.
-            return supabase.auth.refreshSession();
+          if (!sess.session) return null;
+          const current = sess.session.user?.email;
+          return supabase.auth.getUser().then(async ({ data, error }) => {
+            const liveUser = data.user;
+            if (error || !liveUser) return null;
+            const live = liveUser.email;
+            if (current && live && live.toLowerCase() !== current.toLowerCase()) {
+              // The profile cache is keyed by id AND email (use-profile.ts), so
+              // the refreshed session user misses it and refetches on its own.
+              await supabase.auth.refreshSession();
+            }
+            // After the address refresh, which brings the factors too: the
+            // reconcile then finds nothing left to do, or tries again if that
+            // refresh failed.
+            return reconcileCodeGate(liveUser);
           });
         })
         .catch(() => {
@@ -420,21 +512,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // a stolen password used on a new phone still alerts the owner. Detached
     // and bounded (auth-notes.ts): it never holds the sign-in.
     void sendSignedInNote();
-    // Password got us to AAL1. If the account has a verified TOTP factor,
-    // raise the MFA gate so RootGate shows the code screen instead of the
-    // app. Without this a 2FA-enrolled user would be let in on password
-    // alone — the bug being fixed.
-    await checkMfa();
+    // Password got us to AAL1. For an account with a verified factor the
+    // session the grant just stored says so itself, and RootGate has shown
+    // the code screen since SIGNED_IN: nothing is read or waited on here.
     return {};
   };
 
   const verifyMfa: AuthState['verifyMfa'] = async (code) => {
-    const factorId = mfaFactorId.current;
-    if (!factorId) return { error: 'No pending two-factor challenge.' };
+    // Which factor the code is for: the session's own copy of the user first.
+    // When that lists none (the gate is up on the server's word,
+    // mfa-reconcile.ts), the server's list is asked, bounded.
+    let factorId = verifiedTotpFactorId(session?.user);
+    if (!factorId) {
+      const live = await readLiveUser();
+      if (!live) return { error: MFA_CANNOT_CHECK_COPY };
+      factorId = verifiedTotpFactorId(live);
+      if (!factorId) {
+        // Nothing to answer for. The reconcile settles the gate: it comes
+        // down only through a session the server issues.
+        void reconcileCodeGate(live);
+        return { error: MFA_NO_AUTHENTICATOR_COPY };
+      }
+    }
+    // A factor the server no longer has (removed on the web since this
+    // session was stored): the code can never be accepted, so the server's
+    // list is read again and the gate reconciled.
+    const reconcileIfFactorGone = (error: unknown) => {
+      if (!isFactorGone(error)) return;
+      void readLiveUser().then((user) => (user ? reconcileCodeGate(user) : null));
+    };
     const { data: challenge, error: challengeErr } = await supabase.auth.mfa.challenge({
       factorId,
     });
     if (challengeErr || !challenge) {
+      reconcileIfFactorGone(challengeErr);
       return { error: challengeErr?.message ?? 'Could not start the challenge. Try again.' };
     }
     const { error: verifyErr } = await supabase.auth.mfa.verify({
@@ -443,13 +554,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       code: code.trim(),
     });
     if (verifyErr) {
+      reconcileIfFactorGone(verifyErr);
       return { error: verifyErr.message };
     }
-    // verify() upgrades the session to AAL2 and emits
-    // MFA_CHALLENGE_VERIFIED (handled in onAuthStateChange), but clear the
-    // gate here too so the UI updates immediately.
-    mfaFactorId.current = null;
-    setMfaRequired(false);
+    // verify() stored the aal2 session and emitted MFA_CHALLENGE_VERIFIED
+    // before it returned (handled in onAuthStateChange): the gate reads that
+    // session and is already down.
     return {};
   };
 
@@ -590,9 +700,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         Alert.alert(STILL_SIGNED_IN_TITLE, STILL_SIGNED_IN_MESSAGE);
         return false;
       }
+      // The session is gone, and the code gate reads the session: it is down.
       setLocked(false);
-      setMfaRequired(false);
-      mfaFactorId.current = null;
       return true;
     } finally {
       deviceSteps.release();

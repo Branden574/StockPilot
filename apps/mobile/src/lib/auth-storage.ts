@@ -29,14 +29,27 @@
  *     mid-write;
  *   - the parsed session's user.id = whose it is. Mid-write (a chunk missing)
  *     or unparseable, the session is present but its owner is not known right
- *     now (userId null).
+ *     now (userId null);
+ *   - the same entry says whether the session still owes its authenticator
+ *     code (mfa-level.ts stepUpOwedFromStored: the access token's level and
+ *     the user's factors). The outbox reads it here, without the auth lock,
+ *     and sends nothing while it is owed (outbox-scope.ts). A session that is
+ *     present but cannot be read owes it.
  */
+
+import { stepUpOwedFromStored } from './mfa-level';
 
 export interface StoredAuthSession {
   /** A session is persisted on this device (it may be expired; it is not over). */
   present: boolean;
   /** Its account, or null when none is present or the entry cannot be read now. */
   userId: string | null;
+  /**
+   * The stored session still owes its authenticator code. False when no
+   * session is stored (nobody to owe it); true when one is stored but cannot
+   * be read right now.
+   */
+  stepUpOwed: boolean;
 }
 
 /** The two reads the chunked SecureStore adapter offers. */
@@ -89,6 +102,7 @@ export async function readStoredAuthSession(
   key: string,
 ): Promise<StoredAuthSession> {
   const head = await storage.head(key);
-  if (head === null) return { present: false, userId: null };
-  return { present: true, userId: storedSessionUserId(await storage.full(key)) };
+  if (head === null) return { present: false, userId: null, stepUpOwed: false };
+  const raw = await storage.full(key);
+  return { present: true, userId: storedSessionUserId(raw), stepUpOwed: stepUpOwedFromStored(raw) };
 }

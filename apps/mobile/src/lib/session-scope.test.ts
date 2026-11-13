@@ -21,9 +21,13 @@ import { endSession } from './sign-out-flow';
 
 const auth = vi.hoisted(() => ({
   /** What readDeviceAuthSession() answers, or throws. */
-  stored: { present: true, userId: 'u1' } as { present: boolean; userId: string | null } | Error,
+  stored: { present: true, userId: 'u1' } as
+    | { present: boolean; userId: string | null; stepUpOwed?: boolean }
+    | Error,
   /** Replaces `stored` for the end-to-end block (a real GoTrueClient's storage). */
-  read: null as null | (() => Promise<{ present: boolean; userId: string | null }>),
+  read: null as
+    | null
+    | (() => Promise<{ present: boolean; userId: string | null; stepUpOwed?: boolean }>),
   getSession: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 vi.mock('./supabase', async () => {
@@ -74,7 +78,11 @@ beforeEach(async () => {
 
 describe('liveOutboxScope reads the STORED session, never a refreshing getSession()', () => {
   it('an operator offline past token expiry is still themselves: no owner lost, no 25 s wait', async () => {
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: 'org-a',
+      userId: 'u1',
+      stepUpOwed: false,
+    });
     expect(auth.getSession).not.toHaveBeenCalled();
   });
 
@@ -82,12 +90,67 @@ describe('liveOutboxScope reads the STORED session, never a refreshing getSessio
     auth.stored = { present: false, userId: null };
     // Re-pinned by docket B10 (was `orgId: 'org-a'`, read from an older
     // build's record): u1's own workspace is nobody's with nobody signed in.
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: null });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: null,
+      userId: null,
+      stepUpOwed: false,
+    });
   });
 
   it('unreadable storage reads as nobody: every row is held, nothing is sent on a guess', async () => {
     auth.stored = new Error('keychain locked');
     expect((await scope.liveOutboxScope()).userId).toBeNull();
+  });
+});
+
+/**
+ * docket S43b: the live scope says whether the session still owes its
+ * authenticator code, from the stored session (auth-storage.ts), and the
+ * drains send nothing while it does (outbox-scope.ts 'step-up-owed').
+ */
+describe('liveOutboxScope says whether the session still owes its authenticator code', () => {
+  it('the stored session owes it: the scope says so, and no row is sent under it', async () => {
+    auth.stored = { present: true, userId: 'u1', stepUpOwed: true };
+    const live = await scope.liveOutboxScope();
+    expect(live).toEqual({ orgId: 'org-a', userId: 'u1', stepUpOwed: true });
+    const { outboxSendDecision } = await import('./outbox-scope');
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, live)).toEqual({
+      send: false,
+      reason: 'step-up-owed',
+    });
+    expect(auth.getSession).not.toHaveBeenCalled();
+  });
+
+  it('the code was entered: the same row goes', async () => {
+    auth.stored = { present: true, userId: 'u1', stepUpOwed: false };
+    const live = await scope.liveOutboxScope();
+    expect(live.stepUpOwed).toBe(false);
+    const { outboxSendDecision } = await import('./outbox-scope');
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, live).send).toBe(true);
+  });
+
+  it('unreadable storage owes it: held twice over (nobody, and a code not known to be entered)', async () => {
+    auth.stored = new Error('keychain locked');
+    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: null, stepUpOwed: true });
+  });
+
+  it("the server's word for this account holds the drains too, while the stored copy is behind", async () => {
+    // mfa-reconcile.ts: the server listed a verified factor for u1 and the
+    // session could not be refreshed, so the stored copy still shows none.
+    const reconcile = await import('./mfa-reconcile');
+    reconcile.setStepUpForcedFor('u1');
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(true);
+    // Settled (a refresh, the code, a sign-out): the hold goes with the note.
+    reconcile.setStepUpForcedFor(null);
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(false);
+  });
+
+  it('a note about another account says nothing about this session', async () => {
+    const reconcile = await import('./mfa-reconcile');
+    reconcile.setStepUpForcedFor('u9');
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(false);
+    auth.stored = { present: false, userId: null };
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(false);
   });
 });
 
@@ -138,13 +201,21 @@ describe('outboxWriteScope never names NULL as the owner', () => {
 describe("the outbox stamps only the stamped account's own saved workspace", () => {
   it('the stored account saved it: stamped with it', async () => {
     saved.ownerId = 'u1';
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: 'org-a',
+      userId: 'u1',
+      stepUpOwed: false,
+    });
     expect(await scope.outboxWriteScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
   });
 
   it('another account saved it: the readers see no workspace, and a new row is refused to try again', async () => {
     saved.ownerId = 'u0';
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: null,
+      userId: 'u1',
+      stepUpOwed: false,
+    });
     const refusal = await scope.outboxWriteScope().catch((e: unknown) => e);
     expect(refusal).toBeInstanceOf(WorkspaceLoading);
     expect((refusal as Error).message).toBe(
@@ -166,7 +237,11 @@ describe("the outbox stamps only the stamped account's own saved workspace", () 
     expect(await scope.outboxWriteScope()).toEqual({ orgId: null, userId: 'u1' });
     // ...and such a row waits for this account's own workspace before it is
     // sent (outbox-scope.ts 'workspace-loading'): the readers see none yet.
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: null,
+      userId: 'u1',
+      stepUpOwed: false,
+    });
   });
 
   /**
@@ -185,7 +260,11 @@ describe("the outbox stamps only the stamped account's own saved workspace", () 
     expect((refusal as Error).message).toBe(
       'Your workspace is still loading. Try again in a moment.',
     );
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: null, userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: null,
+      userId: 'u1',
+      stepUpOwed: false,
+    });
   });
 
   it('once the workspace load records this account as its owner, the same write is stamped with it', async () => {
@@ -193,7 +272,11 @@ describe("the outbox stamps only the stamped account's own saved workspace", () 
     await expect(scope.outboxWriteScope()).rejects.toBeInstanceOf(WorkspaceLoading);
     saved.ownerId = 'u1';
     expect(await scope.outboxWriteScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: 'org-a',
+      userId: 'u1',
+      stepUpOwed: false,
+    });
   });
 
   it('with no account at all, the owner refusal comes first', async () => {
@@ -320,7 +403,11 @@ describe('end to end with the real auth-js client (offline, access token expired
   });
 
   it('the outbox still knows whose work this is, at once', async () => {
-    expect(await scope.liveOutboxScope()).toEqual({ orgId: 'org-a', userId: 'u1' });
+    expect(await scope.liveOutboxScope()).toEqual({
+      orgId: 'org-a',
+      userId: 'u1',
+      stepUpOwed: false,
+    });
     expect((await scope.outboxWriteScope()).userId).toBe('u1');
   });
 });
