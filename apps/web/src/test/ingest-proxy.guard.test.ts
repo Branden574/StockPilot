@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { gzipSync } from 'node:zlib';
 
 import { tryToParsePath } from 'next/dist/lib/try-to-parse-path';
 import { NextRequest } from 'next/server';
@@ -21,8 +22,8 @@ import { config as proxyConfig } from '../proxy';
 
 /**
  * Security invariant (docket S34): /ingest reaches PostHog only through
- * app/ingest/[...path]/route.ts, which builds each request from a list of
- * headers and never copies a cookie.
+ * app/ingest/[...path]/route.ts, which builds each request from lists (of
+ * paths, query parameters and headers) and never copies a cookie.
  *
  * PostHog's browser SDK sends everything to /ingest on our own origin
  * (api_host in components/analytics/posthog-provider.tsx), so the browser
@@ -60,24 +61,39 @@ function analyticsRewrites(list: Rewrite[]): Rewrite[] {
 }
 
 /**
- * Requests posthog-js 1.438.15 makes under api_host '/ingest', by the method
- * it makes each with: events, flags, replay, logs, the surveys list, the
- * remote config and a bundle by both of its addresses. (The npm SDK never
+ * Requests posthog-js 1.438.15 makes under api_host '/ingest' with this app's
+ * init options, by the method it makes each with: events, the surveys list,
+ * the remote config and a bundle by both of its addresses. (The npm SDK never
  * asks for /static/array.js: that is the script-tag snippet's file.)
  */
 const INGEST_REQUESTS: Array<['GET' | 'POST', string]> = [
   ['POST', '/ingest/e/'],
   ['POST', '/ingest/i/v0/e/'],
-  ['POST', '/ingest/flags/?v=2'],
-  ['POST', '/ingest/s/'],
-  ['POST', `/ingest/i/v1/logs?token=${PROJECT_REF}`],
   ['GET', `/ingest/api/surveys/?token=${PROJECT_REF}`],
   ['GET', `/ingest/array/${PROJECT_REF}/config.js`],
   ['GET', '/ingest/static/1.438.15/surveys.js'],
   ['GET', '/ingest/static/surveys.js?v=1.438.15'],
 ];
-const INGEST_PATHS = INGEST_REQUESTS.map(
-  ([, at]) => new URL(at, 'https://app.example.com').pathname,
+/**
+ * Paths under /ingest the route refuses, as the provider's init switches
+ * them off (flags, replay, console logs): the proxy runs for none of them
+ * either.
+ */
+const INGEST_REFUSED_PATHS = ['/ingest/flags/', '/ingest/s/', '/ingest/i/v1/logs'];
+const INGEST_PATHS = [
+  ...INGEST_REQUESTS.map(([, at]) => new URL(at, 'https://app.example.com').pathname),
+  ...INGEST_REFUSED_PATHS,
+];
+
+/** An event batch for this app's project, gzip, as posthog-js sends one by default. */
+const EVENT_BATCH = new Uint8Array(
+  gzipSync(
+    JSON.stringify({
+      api_key: PROJECT_REF,
+      batch: [{ event: '$pageview', properties: { token: PROJECT_REF } }],
+      sent_at: '2026-01-01T00:00:00.000Z',
+    }),
+  ),
 );
 
 describe('/ingest reaches PostHog only through the route handler', () => {
@@ -144,7 +160,9 @@ describe('/ingest reaches PostHog only through the route handler', () => {
         upstream.mockClear();
         const request = new NextRequest(`https://app.example.com${at}`, {
           method,
-          body: method === 'POST' ? new Uint8Array([1]) : undefined,
+          ...(method === 'POST'
+            ? { headers: { 'content-type': 'text/plain' }, body: EVENT_BATCH }
+            : {}),
         });
         const res = await ingestRoute[method](request);
         expect(res.status, at).toBe(200);

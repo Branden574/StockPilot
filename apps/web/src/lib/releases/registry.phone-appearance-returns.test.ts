@@ -50,6 +50,25 @@ const APPEARANCE = 'app-appearance-design-theme';
 const ONE_DRAFT = 'web-return-request-one-draft';
 const TOASTS = 'web-glass-messages-bottom-right';
 const RETURNS_REQUEST_ID = 'returns-request-email-names-2026-11';
+// Added by docs/whats-new-2026-11-13 (2026-11-13): the Release count, AI Assistant and not found
+// releases, published later, at the top, read or seen. Each reaches an owner with every permission
+// and module or nobody here, so a test that expects an older notice reads or sees them first, and
+// the notice it checks is the one it checked before.
+const NEWER_IDS_1113 = [
+  'cycle-count-already-released-2026-11',
+  'ai-assistant-plain-words-2026-11',
+  'changes-that-did-not-happen-2026-11',
+];
+const NEWER_READS = NEWER_IDS_1113.map((id) => ({
+  release_id: id,
+  revision: 1,
+  dismissed_at: null,
+  opened_at: '2026-11-13T08:18:00Z',
+  read_at: '2026-11-13T08:18:00Z',
+}));
+const NEWER_SEEN: Record<string, boolean> = Object.fromEntries(
+  NEWER_IDS_1113.map((id) => [id, true]),
+);
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 
@@ -122,9 +141,18 @@ describe('the phone appearance and returns release: order, status and date', () 
     expect(release().revision).toBe(1);
     expect(release().withdrawnNote).toBeUndefined();
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
-    expect(RELEASES[1]?.id).toBe(ID);
-    expect(RELEASES[2]?.id).toBe(RETURNS_REQUEST_ID);
-    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(ID);
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    expect(RELEASES[4]?.id).toBe(ID);
+    expect(RELEASES[5]?.id).toBe(RETURNS_REQUEST_ID);
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: this release, the newest published): the Release count, AI Assistant and not found releases are published later, directly above it.
+    expect(RELEASES.slice(1, 4).map((r) => [r.id, r.status])).toEqual([
+      ['cycle-count-already-released-2026-11', 'published'],
+      ['ai-assistant-plain-words-2026-11', 'published'],
+      ['changes-that-did-not-happen-2026-11', 'published'],
+    ]);
+    expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
+      'cycle-count-already-released-2026-11',
+    );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
     ]);
@@ -155,7 +183,8 @@ describe('the phone appearance and returns release: order, status and date', () 
     // #502 and #504 went live at 19:18Z; the phone update was published about 19:22Z.
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-11-12T19:18:00Z'));
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-11-12T19:22:00Z'));
-    for (const r of RELEASES.slice(2)) {
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    for (const r of RELEASES.slice(5)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -289,12 +318,13 @@ describe('the phone appearance and returns release: who is told', () => {
   });
 
   it('is the first notice for every member, and an old phone build lists it first with its title and summary', () => {
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top; an owner with every permission and module reads or sees them first (NEWER_READS, NEWER_SEEN), and every notice this test checks is the one it checked before.
     for (const v of [everyone, member, requester, returnsReader, requesterReturnsOff]) {
-      expect(buildReleaseList(RELEASES, v, [], null).latestUnread?.id, v.role).toBe(ID);
+      expect(buildReleaseList(RELEASES, v, NEWER_READS, null).latestUnread?.id, v.role).toBe(ID);
     }
     // The first link the reader is told about, if any.
     for (const v of [everyone, returnsReader]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(legacyAnnouncementsFor(RELEASES, v, NEWER_SEEN)[0], v.role).toEqual({
         id: ID,
         date: '2026-11-12',
         title: release().title,
@@ -303,7 +333,7 @@ describe('the phone appearance and returns release: who is told', () => {
       });
     }
     for (const v of [member, requester]) {
-      expect(legacyAnnouncementsFor(RELEASES, v, {})[0], v.role).toEqual({
+      expect(legacyAnnouncementsFor(RELEASES, v, NEWER_SEEN)[0], v.role).toEqual({
         id: ID,
         date: '2026-11-12',
         title: release().title,
