@@ -30,6 +30,8 @@ const LINE_GONE = {
 };
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+/** The outbox entry a saved count is queued as (made up). */
+const QUEUED = { outboxId: 1, idempotencyKey: ['entry', '1'].join('-') };
 const sentry = vi.hoisted(() => ({ captureException: vi.fn() }));
 vi.mock('./sentry', () => ({ Sentry: sentry }));
 
@@ -122,9 +124,7 @@ describe('the count screen', () => {
   });
 
   it('a saved count is still marked saved, with nothing said', async () => {
-    const { saver, alert, setLines } = lineSaver(
-      vi.fn(async () => ({ outboxId: 1, idempotencyKey: 'k1' })),
-    );
+    const { saver, alert, setLines } = lineSaver(vi.fn(async () => QUEUED));
     saver.persist('l1', '7');
     await settle();
     expect(alert).not.toHaveBeenCalled();
@@ -255,9 +255,7 @@ describe('the count scanner', () => {
   });
 
   it('a saved scan is still tallied', async () => {
-    const { run, setScannedMap } = recordCount(
-      vi.fn(async () => ({ outboxId: 1, idempotencyKey: 'k1' })),
-    );
+    const { run, setScannedMap } = recordCount(vi.fn(async () => QUEUED));
     expect(await run({ id: 'l1' }, 3)).toBe(true);
     expect(setScannedMap).toHaveBeenCalledTimes(1);
   });
