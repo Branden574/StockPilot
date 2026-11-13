@@ -28,8 +28,10 @@ const MOBILE_ROOT = path.resolve(__dirname, '../../..');
 
 /** File (from apps/mobile) -> classic-projection SHA-256 of that file at b64bd37cc. */
 export const CLASSIC_PINS: Readonly<Record<string, string>> = {
+  // Re-pinned for S75 (Classic is meant to change: the Bundles card shows only for a member the
+  // side menu offers Bundles to). Before S75 the projection was c7144f5a...0f51, the pin it had.
   'app/(drawer)/(tabs)/index.tsx':
-    'c7144f5a0865d66f458dd685ecea28ac618b126f43cd2828a53e0e999e710f51',
+    '50b1e96fe08be09e95a00998ec1360a3e03bdcd93901dfca044e650e765d3cd7',
   'app/(drawer)/(tabs)/inventory.tsx':
     '42d3d7a1d8a26a6355eb062ae63537bd64e44208d7facb712190217ccd319750',
   'app/(drawer)/(tabs)/receive.tsx':
@@ -142,8 +144,14 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '9bf1602fce0e5569a335be53b7ac8d4933078975bc2d1fd02d54479376301557',
   'app/(drawer)/returns.tsx': '2e39381f23762d920821d12cf8479f364de946d901331fafd9cc012005f416ec',
   'app/(drawer)/staging.tsx': '52122f436736abaf6fe696759a1be6b32620d2361b8c3df5500c12eac86834d3',
-  'app/bundles/[id].tsx': '2cd32b5020886e99d1cee8a46797d998dd9cab20c1c96a931d1ec4024249e1c9',
-  'app/bundles/index.tsx': 'edbf916d7a856984cad1b751d6e399f89c0e653b333de65541892bcd31ea8aff',
+  // Re-pinned for S75 (Classic is meant to change: the bundle is read and shown only for a member
+  // the side menu offers Bundles to, with a not-available state otherwise). Before S75 the
+  // projection was 2cd32b50...e1c9, the pin it had.
+  'app/bundles/[id].tsx': 'f873779cfeff67b5c22a1d1a3da110fc236b8097c3a7dea5e183b84c8ea68646',
+  // Re-pinned for S75 (Classic is meant to change: the list is read and shown, and Refresh
+  // offered, only for a member the side menu offers Bundles to). Before S75 the projection was
+  // edbf916d...8aff, the pin it had.
+  'app/bundles/index.tsx': 'db3b960f5b2a01b19b88d5cc09d39609c629e7b03d4166fa055e832cfcef7979',
   'app/exceptions/[id].tsx': '7562d38c59ec2f655fabac8cf198bfabb9b367a436b0720a80c5916d62b0fa11',
   'app/group-selected.tsx': 'a3ad2b67aa7b4e857c16754a3634884672a50b47bb92e7ab819992be635d9832',
   'app/location/[id].tsx': '9d56b6be06f47593d91058575d22894a50a7f6a43e7147e684ac3ad67409f13a',

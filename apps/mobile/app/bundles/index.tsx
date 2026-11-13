@@ -27,8 +27,10 @@ import {
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display, Mono } from '@/components/ui/text';
 import { listBundles, type CachedBundle } from '@/lib/db-reads';
+import { BUNDLES_NOT_AVAILABLE } from '@/lib/screen-access';
 import { syncNow } from '@/lib/sync';
 import { FONT, space } from '@/lib/theme';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
 /** Where the read of the offline cache is: not answered yet, read, or failed. */
@@ -76,6 +78,11 @@ export default function BundlesList() {
   // grouped glass cards. Every control, state and word stays.
   const lg = useGlass();
   const router = useRouter();
+  // The kits saved on this phone are read and shown only for a member the
+  // side menu offers Bundles to (screen-access.ts): a deep link or the Home
+  // card opens nothing else. Nothing is read before it is known.
+  const access = useDrawerEntryAccess('/bundles');
+  const allowed = access === 'allowed';
   const [rows, setRows] = React.useState<CachedBundle[]>([]);
   const [read, setRead] = React.useState<CacheRead>('pending');
   const [refreshing, setRefreshing] = React.useState(false);
@@ -100,14 +107,15 @@ export default function BundlesList() {
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the server
-    void load();
-  }, [load]);
+    if (allowed) void load();
+  }, [load, allowed]);
 
   // The refreshing state ends when this refresh ends, whatever happened: a
   // cache read that threw used to leave Refresh busy for good. Neither step
   // rejects (syncNow and load catch their own failures), so neither does
   // this, from the button or from a pull.
   async function refresh() {
+    if (!allowed) return;
     setRefreshing(true);
     try {
       await syncNow();
@@ -128,7 +136,9 @@ export default function BundlesList() {
     }
   }
 
-  const body = bundlesListBody(read, rows.length, refreshing, pulling);
+  const body = allowed
+    ? bundlesListBody(read, rows.length, refreshing, pulling)
+    : { spinner: access === 'unknown', words: null, staleNote: false };
 
   return (
     <SafeAreaView
@@ -157,31 +167,33 @@ export default function BundlesList() {
         >
           Bundles
         </Display>
-        <Pressable
-          onPress={refresh}
-          style={[styles.refreshBtn, lg && GLASS_NAV_CAPSULE]}
-          accessibilityRole="button"
-          accessibilityLabel="Refresh"
-          accessibilityState={{ busy: refreshing }}
-        >
-          {lg ? <GlassCapsuleBackdrop /> : null}
-          {/* While it syncs, a spinner stands in for the arrow; the word
-              stays, so the button keeps its name on screen. */}
-          {refreshing ? (
-            <ActivityIndicator size="small" color={c.ink} />
-          ) : (
-            <RefreshCw size={14} color={c.ink} strokeWidth={1.75} />
-          )}
-          <Text
-            style={[
-              styles.refreshLabel,
-              { color: c.ink },
-              lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL],
-            ]}
+        {allowed ? (
+          <Pressable
+            onPress={refresh}
+            style={[styles.refreshBtn, lg && GLASS_NAV_CAPSULE]}
+            accessibilityRole="button"
+            accessibilityLabel="Refresh"
+            accessibilityState={{ busy: refreshing }}
           >
-            Refresh
-          </Text>
-        </Pressable>
+            {lg ? <GlassCapsuleBackdrop /> : null}
+            {/* While it syncs, a spinner stands in for the arrow; the word
+              stays, so the button keeps its name on screen. */}
+            {refreshing ? (
+              <ActivityIndicator size="small" color={c.ink} />
+            ) : (
+              <RefreshCw size={14} color={c.ink} strokeWidth={1.75} />
+            )}
+            <Text
+              style={[
+                styles.refreshLabel,
+                { color: c.ink },
+                lg && [lg.font.displaySemi, GLASS_NAV_CAPSULE_LABEL],
+              ]}
+            >
+              Refresh
+            </Text>
+          </Pressable>
+        ) : null}
       </View>
 
       <ScrollView
@@ -191,6 +203,11 @@ export default function BundlesList() {
         }
       >
         {body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}
+        {access === 'denied' ? (
+          <Body muted style={styles.empty}>
+            {BUNDLES_NOT_AVAILABLE}
+          </Body>
+        ) : null}
         {body.words === 'failed' ? (
           <Body color={c.warnText} accessibilityRole="alert" style={styles.empty}>
             Could not read the bundles saved on this phone. Tap Refresh to try again.
@@ -205,7 +222,7 @@ export default function BundlesList() {
             Could not refresh the bundles. Tap Refresh to try again.
           </Body>
         ) : null}
-        {rows.map((b) => (
+        {(allowed ? rows : []).map((b) => (
           <Pressable
             key={b.id}
             onPress={() => router.push(`/bundles/${b.id}`)}

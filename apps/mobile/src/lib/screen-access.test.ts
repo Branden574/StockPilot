@@ -75,3 +75,17 @@ describe('what a screen says to a member who may not open it', () => {
     expect(CYCLE_COUNTS_NOT_AVAILABLE).toBe('Cycle counts are not available to you in this workspace.');
   });
 });
+
+describe('bundles: the module on, and bundles:read or bundles:distribute', () => {
+  const access = (over: Parameters<typeof inputs>[0]) => drawerEntryAccess('/bundles', inputs(over));
+
+  it('follows the side menu entry', () => {
+    expect(access({ permissions: ['bundles:read'], role: 'viewer' })).toBe('allowed');
+    expect(access({ permissions: ['bundles:distribute'] })).toBe('allowed');
+    expect(access({ permissions: ['items:read'] })).toBe('denied');
+    expect(access({ permissions: ['bundles:read'], modules: withoutModule('bundles') })).toBe('denied');
+    expect(access({ permissions: undefined, role: 'viewer' })).toBe('denied');
+    expect(access({ permissions: undefined, role: 'staff' })).toBe('allowed');
+    expect(access({ permissions: ['bundles:read'], modulesRead: false })).toBe('unknown');
+  });
+});

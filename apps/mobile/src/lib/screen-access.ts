@@ -65,3 +65,6 @@ export function drawerEntryAccess(href: string, input: ScreenAccessInputs): Scre
 
 /** What the cycle-count screens say to a member who may not see cycle counts. */
 export const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
+
+/** What the bundle screens say to a member who may not see bundles. */
+export const BUNDLES_NOT_AVAILABLE = 'Bundles are not available to you in this workspace.';

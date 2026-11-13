@@ -41,6 +41,8 @@ import {
   type DistributionPreview,
 } from '@/lib/bundle-distribute-preview';
 import { showDistributeCta } from '@/lib/cta-gating';
+import { BUNDLES_NOT_AVAILABLE } from '@/lib/screen-access';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import {
@@ -110,6 +112,10 @@ export default function BundleDetail() {
   const { role } = useRole();
   const canDistribute = showDistributeCta(role, perms);
   const { id } = useLocalSearchParams<{ id: string }>();
+  // Read and shown only for a member the side menu offers Bundles to
+  // (screen-access.ts): a deep link opens nothing else, and nothing is read
+  // before it is known.
+  const access = useDrawerEntryAccess('/bundles');
   const [bundle, setBundle] = React.useState<CachedBundle | null>(null);
   // The cache has been read for this bundle (found or not).
   const [looked, setLooked] = React.useState(false);
@@ -132,7 +138,7 @@ export default function BundleDetail() {
 
   React.useEffect(() => {
     void (async () => {
-      if (!id) return;
+      if (!id || access !== 'allowed') return;
       // The read under way, so a throw says which one failed.
       let reading: FailedRead = 'bundle';
       try {
@@ -172,7 +178,7 @@ export default function BundleDetail() {
         setLooked(true);
       }
     })();
-  }, [id]);
+  }, [id, access]);
 
   // Local preview: the same rule as distribute_bundle() since 0365 (see
   // bundle-distribute-preview.ts). Only stock in the CHOSEN warehouse counts,
@@ -309,9 +315,12 @@ export default function BundleDetail() {
     }
   }
 
-  if (!bundle) {
+  if (!bundle || access !== 'allowed') {
     // No id at all is a bundle this phone cannot hold either.
-    const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');
+    const state =
+      access === 'denied'
+        ? 'denied'
+        : bundleScreenState(bundle, looked || !id, failedRead === 'bundle');
     return (
       <SafeAreaView
         style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}
@@ -322,7 +331,15 @@ export default function BundleDetail() {
         <View style={[styles.header, { borderBottomColor: c.hair }, lg && GLASS_RECORD_HEADER]}>
           <BackLink onPress={() => router.back()} />
         </View>
-        {state === 'failed' ? (
+        {state === 'denied' ? (
+          <View style={[styles.body, lg && GLASS_OPS.scroll]}>
+            <Card padding={16}>
+              <Body size={14.5} accessibilityRole="alert">
+                {BUNDLES_NOT_AVAILABLE}
+              </Body>
+            </Card>
+          </View>
+        ) : state === 'failed' ? (
           <View style={[styles.body, lg && GLASS_OPS.scroll]}>
             <Card padding={16}>
               <Body size={14.5} color={c.warnText} accessibilityRole="alert">

@@ -216,7 +216,9 @@ describe('Bundles', () => {
   // threw left Refresh busy for good).
   it('a refresh ends when it ends, whatever happened', () => {
     expect(code).toContain(
-      'async function refresh() { setRefreshing(true); try { await syncNow(); await load(); } finally { setRefreshing(false); } }',
+      // S75: nothing is synced or read for a member who may not see bundles
+      // (bundle-screens-access.test.ts runs it).
+      'async function refresh() { if (!allowed) return; setRefreshing(true); try { await syncNow(); await load(); } finally { setRefreshing(false); } }',
     );
   });
 
@@ -229,7 +231,11 @@ describe('Bundles', () => {
     expect(code).toContain(
       'async function pull() { setPulling(true); try { await refresh(); } finally { setPulling(false); } }',
     );
-    expect(code).toContain('const body = bundlesListBody(read, rows.length, refreshing, pulling);');
+    // S75: the rule decides for a member who may see bundles; otherwise the
+    // spinner only while that is not known (bundle-screens-access.test.ts).
+    expect(code).toContain(
+      "const body = allowed ? bundlesListBody(read, rows.length, refreshing, pulling) : { spinner: access === 'unknown', words: null, staleNote: false };",
+    );
     expect(code).toContain(
       '{body.spinner ? <ActivityIndicator color={c.ink} style={{ marginTop: space.xl }} /> : null}',
     );
@@ -326,7 +332,9 @@ describe('a bundle', () => {
       /\} catch \(e\) \{ console\.warn\('\[bundle\] cache read failed:', e instanceof Error \? e\.message : e\); setFailedRead\(reading\); \} finally \{ setLooked\(true\); \}/,
     );
     expect(code).toContain(
-      "const state = bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
+      // S75: a member who may not see bundles is told so first
+      // (bundle-screens-access.test.ts).
+      "const state = access === 'denied' ? 'denied' : bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
     );
     expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
       flatNorm(
@@ -343,11 +351,11 @@ describe('a bundle', () => {
   it('a read that threw is said as a failure, never as a bundle not on this phone', () => {
     expect(classicFlat(sourceOf(DETAIL), DETAIL)).toContain(
       flatNorm(
-        "{state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+        "state === 'failed' ? ( <View style={styles.body}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
       ),
     );
     expect(code).toContain(
-      "{state === 'failed' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
+      "state === 'failed' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} color={c.warnText} accessibilityRole=\"alert\"> Could not read this bundle on this phone. Go back and try again. </Body> </Card> </View> ) : state === 'missing' ? (",
     );
   });
 
