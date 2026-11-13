@@ -25,6 +25,8 @@ import { createAdminClient } from '@/lib/supabase/admin';
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: vi.fn(),
 }));
+const reportError = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 const ORG = 'org-1';
 const USER = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
@@ -60,14 +62,20 @@ type MembershipRead =
  * answered only when it asks for this organization and this person, so a
  * read that forgets either filter finds nothing.
  */
-function stubFor(invite: Record<string, unknown>, membership: MembershipRead): SupabaseStub {
+function stubFor(
+  invite: Record<string, unknown>,
+  membership: MembershipRead,
+  options: { markUsedFails?: boolean; signedInEmail?: string } = {},
+): SupabaseStub {
   const stub = makeSupabaseStub({
     'organization_invites.select': { data: [invite], error: null },
-    'organization_invites.update': { data: null, error: null },
+    'organization_invites.update': options.markUsedFails
+      ? { data: null, error: { message: 'connection reset' } }
+      : { data: null, error: null },
     // Serves the email match and the default-organization read. No default
     // organization yet, so the path that sets one is reachable.
     'user_profiles.select': {
-      data: [{ email: EMAIL, default_organization_id: null }],
+      data: [{ email: options.signedInEmail ?? EMAIL, default_organization_id: null }],
       error: null,
     },
     'user_profiles.update': { data: null, error: null },
@@ -156,6 +164,81 @@ describe('acceptInviteWithToken: the person is already an accepted member', () =
       expect((rows[0]?.metadata as Record<string, unknown>).role).toBeUndefined();
     },
   );
+});
+
+describe('acceptInviteWithToken: an owner row, and marking the invite used', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('leaves an owner row as it is even when it is not accepted', async () => {
+    const stub = stubFor(inviteRow({ role: 'viewer' }), {
+      row: { id: 'member-1', role: 'owner', accepted_at: null },
+    });
+
+    const result = await acceptInviteWithToken('tok', USER);
+
+    expect(writesTo(stub, 'organization_members')).toEqual([]);
+    expect(writesTo(stub, 'user_warehouse_assignments')).toEqual([]);
+    expect(writesTo(stub, 'user_profiles')).toEqual([]);
+    expect(inviteUpdates(stub)).toEqual([{ accepted_at: expect.any(String) }]);
+    expect(result).toEqual({ organizationId: ORG, alreadyMember: true });
+    expect(auditRows(stub)[0]).toMatchObject({
+      event: 'user.invite.accepted',
+      metadata: { already_member: true, invite_role: 'viewer', member_role: 'owner' },
+    });
+  });
+
+  it('reports an invite it could not mark used, and still answers already a member', async () => {
+    const stub = stubFor(
+      inviteRow(),
+      { row: { id: 'member-1', role: 'admin', accepted_at: '2026-01-02T03:04:05.000Z' } },
+      { markUsedFails: true },
+    );
+
+    const result = await acceptInviteWithToken('tok', USER);
+
+    expect(result).toEqual({ organizationId: ORG, alreadyMember: true });
+    expect(writesTo(stub, 'organization_members')).toEqual([]);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({
+        tag: 'team.invite.accept_mark_used',
+        organizationId: ORG,
+        extra: { inviteId: 'invite-1' },
+      }),
+    );
+  });
+
+  it('reports an invite it could not mark used after creating the membership', async () => {
+    stubFor(inviteRow(), { row: null }, { markUsedFails: true });
+
+    const result = await acceptInviteWithToken('tok', USER);
+
+    expect(result).toEqual({ organizationId: ORG, alreadyMember: false });
+    expect(reportError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ tag: 'team.invite.accept_mark_used' }),
+    );
+  });
+
+  it('marks nothing used for a signed-in person whose address is not the invite\'s', async () => {
+    const stub = stubFor(
+      inviteRow(),
+      { row: { id: 'member-1', role: 'admin', accepted_at: '2026-01-02T03:04:05.000Z' } },
+      { signedInEmail: 'someone.else@example.test' },
+    );
+
+    const outcome = await acceptInviteWithToken('tok', USER).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(outcome).toBeInstanceOf(ServiceError);
+    expect((outcome as ServiceError).code).toBe('forbidden');
+    expect(writesTo(stub, 'organization_invites')).toEqual([]);
+    expect(writesTo(stub, 'organization_members')).toEqual([]);
+    expect(writesTo(stub, 'audit_logs')).toEqual([]);
+  });
 });
 
 describe('acceptInviteWithToken: everyone else', () => {
