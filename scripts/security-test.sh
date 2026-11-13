@@ -1184,6 +1184,14 @@ WEB_TESTS=(
   # GRANT or REVOKE on public or an ALTER DEFAULT PRIVILEGES ... GRANT fails
   # the file on its own.
   src/test/migration-grants.guard.test.ts
+  # T24: a pgTAP pin that says a database function writes nothing, or only
+  # what the pin names, reads the write forms of the invariant suite
+  # (_sec_inv_writer_re in security_invariants.test.sql, proved form by form
+  # by INV-30b): the whole pattern or its UPDATE arm byte for byte, or the
+  # five bare verbs. A pin with a narrower list of its own fails. The five
+  # pins that carry the suite's forms keep, beside them, the public-qualified
+  # form they held before; taking that line out fails too.
+  src/test/pgtap-write-pins.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web
   # toast both show the message verbatim). The route and action pin the
@@ -1274,6 +1282,15 @@ WEB_TESTS=(
   src/server/services/rentals.other-organization.test.ts
   src/server/services/bundles.other-organization.test.ts
   src/server/actions/movements.other-organization.test.ts
+
+  # S41: the same rule for table writes. A write filtered to the active
+  # organization asks its row back and answers not_found, with no audit row,
+  # when none came back; a write to a child table reads its parent in the
+  # active organization first; a write keyed by an id alone carries the
+  # organization. The guard above reads every update, delete and upsert chain
+  # under apps/web/src, holds each to both rules, and takes the row proof,
+  # the read or the filter out of each changed site in turn.
+  src/server/services/row-writes.other-organization.test.ts
 
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified

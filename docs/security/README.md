@@ -41,8 +41,9 @@ executable test and why — read that section before assuming coverage.
 
 The machine-checkable subset is
 [`supabase/tests/security_invariants.test.sql`](../../supabase/tests/security_invariants.test.sql):
-23 allowlist-based assertions over whole classes of database object, so a **new**
-violation fails rather than passing silently.
+allowlist-based assertions over whole classes of database object (the count is
+the file's `select plan()`), so a **new** violation fails rather than passing
+silently.
 
 **[secrets-policy.md](secrets-policy.md)** — where secrets live (outside the
 repository, symlinked in), the rule against ever expanding one in a shell, the
