@@ -29,10 +29,16 @@
 --     when a later change drops or replaces one, this fails until the list
 --     follows.
 -- G5. Row security is on for all seven.
--- G6. No trigger function outside the system schemas writes outbox_events or
---     calls publish_outbox (G1 leaves trigger functions out, since they
---     cannot be called through /rpc; a trigger on a table members write
---     would still put rows in the queue on their behalf).
+-- G6. No trigger function outside the system schemas names outbox_events at
+--     all (a plain write, dynamic SQL built from the name, a quoted
+--     identifier), names publish_outbox, or names any other function whose
+--     body names outbox_events (one level of indirection). G1 leaves trigger
+--     functions out, since they cannot be called through /rpc; a trigger on
+--     a table members write would still put rows in the queue on their
+--     behalf.
+-- G7. The functions whose body writes outbox_events, whoever may execute
+--     them, are exactly publish_outbox, so a new writer (a definer helper
+--     among them) shows up here as a changed list.
 -- C1-C3. Controls: planted probes, always undone, that each detector must
 --     report (each control reads only its probes' lines, so it stays true on
 --     a day the guard itself is red): a definer function granted to authenticated that inserts into
@@ -43,12 +49,17 @@
 -- C5. Control: a trigger function that inserts into outbox_events and one
 --     that calls publish_outbox, planted and undone, are both reported by
 --     G6.
+-- C6. Control: trigger functions that write the queue through dynamic SQL
+--     built from the table's name, through a quoted identifier, and by
+--     calling a planted helper function that writes it, planted and undone,
+--     are each reported by G6.
+-- C7. Control: with that helper planted, G7's list changes.
 --
 -- Catalog only: no fixtures, no roles switched. begin/rollback.
 
 begin;
 
-select plan(12);
+select plan(15);
 
 -- == The tables, the allowlist, the detectors ===============================
 create temporary table s67_q (tbl text) on commit drop;
@@ -125,17 +136,42 @@ create function pg_temp.q_rules(p_allow boolean) returns setof text language sql
      and not (p_allow and exists (select 1 from s67_rule_allow a where a.tbl = c.relname and a.polname = pol.polname))
 $$;
 
--- G6's detector: '<schema>.<function>(<args>)' for every trigger function
--- outside the system schemas whose body writes outbox_events or calls
--- publish_outbox, whoever may execute it.
+-- Functions other than trigger functions, outside the system schemas, whose
+-- body names outbox_events: the queue's writers and readers.
+create function pg_temp.q_queue_fns() returns table (sig text, fname text) language sql stable as $$
+  select format('%I.%I(%s)', n.nspname, p.proname, oidvectortypes(p.proargtypes)), p.proname::text
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
+     and p.prorettype not in ('trigger'::regtype, 'event_trigger'::regtype)
+     and p.prosrc ~* 'outbox_events'
+$$;
+
+-- G6's detector: '<schema>.<function>(<args>)' for every trigger or event
+-- trigger function outside the system schemas whose body names
+-- outbox_events anywhere, names publish_outbox, or names a function of
+-- q_queue_fns(), whoever may execute it.
 create function pg_temp.q_trigger_writers() returns setof text language sql stable as $$
   select format('%I.%I(%s)', n.nspname, p.proname, oidvectortypes(p.proargtypes))
     from pg_proc p
     join pg_namespace n on n.oid = p.pronamespace
    where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
      and p.prorettype in ('trigger'::regtype, 'event_trigger'::regtype)
-     and (p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?(public\.)?outbox_events\M'
-          or p.prosrc ~* 'publish_outbox')
+     and (p.prosrc ~* 'outbox_events'
+          or p.prosrc ~* 'publish_outbox'
+          or exists (select 1 from pg_temp.q_queue_fns() q
+                      where position(lower(q.fname) in lower(p.prosrc)) > 0))
+$$;
+
+-- G7's detector: every function outside the system schemas, of any kind,
+-- whose body writes outbox_events (a plain or quoted name), whoever may
+-- execute it.
+create function pg_temp.q_queue_writers() returns setof text language sql stable as $$
+  select format('%I.%I(%s)', n.nspname, p.proname, oidvectortypes(p.proargtypes))
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname !~ '^pg_' and n.nspname <> 'information_schema'
+     and p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\.)?"?outbox_events\M'
 $$;
 
 -- p_sql (DDL as the superuser) then p_check, ALWAYS undone: p_check's value.
@@ -183,7 +219,10 @@ select is(
   'G5: row security is on for every connector table');
 
 select is(pg_temp.list('select pg_temp.q_trigger_writers()'), 'none',
-  'G6: no trigger function writes outbox_events or calls publish_outbox');
+  'G6: no trigger function names outbox_events, publish_outbox or another function that names the queue');
+
+select is(pg_temp.list('select pg_temp.q_queue_writers()'), 'public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
+  'G7: the functions that write outbox_events, whoever may execute them, are exactly publish_outbox');
 
 -- == Controls: each detector still reports a planted probe ==================
 select is(
@@ -234,6 +273,37 @@ create function public._s67_probe_trigger_publish() returns trigger
     $q$select pg_temp.list('select pg_temp.q_trigger_writers()', '_s67_probe')$q$),
   'public._s67_probe_trigger_insert(), public._s67_probe_trigger_publish()',
   'C5: G6 reports a trigger function that inserts into the queue and one that calls publish_outbox');
+
+select is(
+  pg_temp.planted($p$
+create function public._s67_probe_trg_format() returns trigger
+  language plpgsql security definer set search_path = public
+  as $f$ begin execute format('insert into %I.%I (organization_id, topic, aggregate_type, payload) values ($1, ''x'', ''x'', ''{}'')',
+                              'public', 'outbox_events') using new.organization_id; return new; end $f$;
+create function public._s67_probe_trg_quoted() returns trigger
+  language plpgsql security definer set search_path = public
+  as $f$ begin insert into public."outbox_events" (organization_id, topic, aggregate_type, payload)
+               values (new.organization_id, 'x', 'x', '{}'); return new; end $f$;
+create function public._s67_probe_helper_write(p_org uuid) returns void
+  language sql security definer set search_path = public
+  as $f$ insert into public.outbox_events (organization_id, topic, aggregate_type, payload) values (p_org, 'x', 'x', '{}') $f$;
+revoke all on function public._s67_probe_helper_write(uuid) from public, anon, authenticated;
+create function public._s67_probe_trg_helper() returns trigger
+  language plpgsql security definer set search_path = public
+  as $f$ begin perform public._s67_probe_helper_write(new.organization_id); return new; end $f$$p$,
+    $q$select pg_temp.list('select pg_temp.q_trigger_writers()', '_s67_probe')$q$),
+  'public._s67_probe_trg_format(), public._s67_probe_trg_helper(), public._s67_probe_trg_quoted()',
+  'C6: G6 reports a trigger function that writes the queue through dynamic SQL, one through a quoted identifier, and one through a helper function');
+
+select is(
+  pg_temp.planted($p$
+create function public._s67_probe_helper_write(p_org uuid) returns void
+  language sql security definer set search_path = public
+  as $f$ insert into public.outbox_events (organization_id, topic, aggregate_type, payload) values (p_org, 'x', 'x', '{}') $f$;
+revoke all on function public._s67_probe_helper_write(uuid) from public, anon, authenticated$p$,
+    $q$select pg_temp.list('select pg_temp.q_queue_writers()')$q$),
+  'public._s67_probe_helper_write(uuid), public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
+  'C7: a new function that writes the queue, even one no API role may execute, changes G7''s list');
 
 -- The controls left nothing behind.
 select is(
