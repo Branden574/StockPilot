@@ -2158,8 +2158,8 @@ checked.
   first P0 was declared closed.
 - **A high-assurance baseline is implemented and covered by executable
   invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 100 other pgTAP
-  files and the 341 vitest files on the manifests of
+  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
+  files and the 345 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.
 - **Two risks are accepted and tracked**, not closed (section 7), each with a
