@@ -38,20 +38,19 @@
  * The page gives no element an id, so no link can open it scrolled to the
  * button: the gate finds its form and the addresses by attribute.
  *
- * Fail-safe: the button stays enabled in the markup, so a browser where this
- * does not run posts as before, and the pointer can arm a page whose browser
- * never reports focus. The page must therefore not be shown where another
- * site has stopped this from running. It cannot be framed, and it is sent
- * with the app's opener policy header (next.config.ts;
- * security-headers.test.ts holds all three headers to this path, and
- * route.test.ts holds the page to setting none of them itself). With that
- * header, Chromium 156, Firefox 157 and WebKit 27.2 each refused to load the
- * page in a window opened from a sandboxed frame, or from a page under a CSP
- * sandbox, that may not run scripts (review of 2026-11-12: those two ways of
- * opening it and those three browser versions are what was tried). What it
- * does not stop: a person talked into stopping on the page and pressing again
- * later (every line of every address it names has then been on screen for at
- * least a second), INV-E5.
+ * Inert until this has run: the page's button is disabled in its markup, and
+ * the last thing this does before its first second starts, with every
+ * listener in place, is enable it. When it lets a press through it adds a
+ * hidden field (PRESS_GATE_PASSED_FIELD) to the form, and takes it away again
+ * whenever the page is not armed; POST refuses a press without that field
+ * before the link's token is spent. So where this does not run, or has not
+ * run yet, nothing can be pressed, and the page says in words that it needs
+ * JavaScript (route.test.ts holds the markup and the refusal; these tests
+ * hold the enabling and the field). The headers that keep the page out of a
+ * frame and the app's opener policy header reach it as a second line
+ * (security-headers.test.ts). What the gate does not stop: a person talked
+ * into stopping on the page and pressing again later (every line of every
+ * address it names has then been on screen for at least a second), INV-E5.
  *
  * Plain ES5 with no dependency: the CSP allows inline scripts
  * (next.config.ts), and nothing from the request is ever written into it.
@@ -64,6 +63,13 @@ export const PRESS_GATE_FORM_ATTR = 'data-press-gate';
 
 /** The attribute that marks each address the person must have seen before a press counts. */
 export const PRESS_GATE_SEE_ATTR = 'data-press-gate-see';
+
+/**
+ * The hidden field the gate adds to the form when it lets a press through,
+ * and its value. POST refuses a press that does not carry it.
+ */
+export const PRESS_GATE_PASSED_FIELD = 'press_gate';
+export const PRESS_GATE_PASSED_VALUE = 'armed';
 
 /** The quiet time before a press counts. */
 export const PRESS_GATE_QUIET_MS = 1000;
@@ -84,8 +90,10 @@ export const PRESS_GATE_SCRIPT = `(function () {
   var armed = false;
   var pointerOn = false;
   var timer = null;
+  var passed = null;
   function show() {
     button.setAttribute('aria-disabled', armed ? 'false' : 'true');
+    if (!armed && passed && passed.parentNode) passed.parentNode.removeChild(passed);
   }
   function present() {
     return document.visibilityState === 'visible' && (document.hasFocus() || pointerOn);
@@ -152,9 +160,18 @@ export const PRESS_GATE_SCRIPT = `(function () {
     interrupt();
   }
   form.addEventListener('submit', function (event) {
-    if (armed) return;
-    event.preventDefault();
-    restart();
+    if (!armed) {
+      event.preventDefault();
+      restart();
+      return;
+    }
+    if (!passed) {
+      passed = document.createElement('input');
+      passed.type = 'hidden';
+      passed.name = '${PRESS_GATE_PASSED_FIELD}';
+      passed.value = '${PRESS_GATE_PASSED_VALUE}';
+    }
+    if (passed.parentNode !== form) form.appendChild(passed);
   });
   document.addEventListener('pointerdown', touched, true);
   document.addEventListener('mousedown', touched, true);
@@ -180,5 +197,6 @@ export const PRESS_GATE_SCRIPT = `(function () {
   });
   window.addEventListener('pageshow', restart);
   window.addEventListener('pagehide', disarm);
+  button.disabled = false;
   restart();
 })();`;

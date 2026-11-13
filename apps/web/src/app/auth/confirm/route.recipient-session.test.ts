@@ -71,6 +71,7 @@ import {
   type SigningKey,
 } from '@/test/auth-session-fixture';
 
+import { PRESS_GATE_PASSED_FIELD, PRESS_GATE_PASSED_VALUE } from './press-gate';
 import { POST } from './route';
 
 const BASE = 'https://app.example.com';
@@ -144,6 +145,8 @@ function pressFor(type: 'recovery' | 'email_change'): NextRequest {
     type,
     next: '/reset/complete',
     r: r!,
+    // The press gate let the press through (press-gate.ts).
+    [PRESS_GATE_PASSED_FIELD]: PRESS_GATE_PASSED_VALUE,
   });
   return new NextRequest(`${BASE}/auth/confirm`, {
     method: 'POST',

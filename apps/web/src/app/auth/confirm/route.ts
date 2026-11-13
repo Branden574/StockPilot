@@ -12,7 +12,13 @@ import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import { completeEmailChange, EMAIL_CHANGE_RETURN_PATH } from '@/server/services/email-change';
 
-import { PRESS_GATE_FORM_ATTR, PRESS_GATE_SCRIPT, PRESS_GATE_SEE_ATTR } from './press-gate';
+import {
+  PRESS_GATE_FORM_ATTR,
+  PRESS_GATE_PASSED_FIELD,
+  PRESS_GATE_PASSED_VALUE,
+  PRESS_GATE_SCRIPT,
+  PRESS_GATE_SEE_ATTR,
+} from './press-gate';
 
 import type { EmailOtpType } from '@supabase/supabase-js';
 
@@ -72,6 +78,11 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     small, at the button or inside a long address, gets a press before the
  *     account was on screen. No element has an id, so no link can open the
  *     page scrolled to the button;
+ *   - the button is disabled in the markup until the gate's script has run,
+ *     and POST refuses a press that script did not let through, before
+ *     verifyOtp, so nothing can be pressed where the script does not run or
+ *     has not arrived yet; the page then says in words that it needs
+ *     JavaScript;
  *   - where a link lands is fixed by its type (lib/auth/confirm-landing.ts).
  * A link written by a build from before S25's first release carries no `r`:
  * it gets the page it got before, with the gate, and is logged with its type.
@@ -157,7 +168,8 @@ const PAGE_HEADERS = {
  * in the page itself: no app CSS, font or script file loads here (CSP allows
  * inline styles). The address of the account a link is for sits in its own
  * box, in a monospace face that wraps anywhere, and the button is dimmed while
- * the press gate has not armed it (S25).
+ * it is disabled (the gate's script has not run) and while the press gate has
+ * not armed it (S25).
  */
 const PAGE_STYLE = `
 :root{color-scheme:light dark}
@@ -166,31 +178,32 @@ main{max-width:400px;width:100%;margin:16px;box-sizing:border-box;background:#ff
 .brand{font-weight:600;font-size:15px;letter-spacing:-0.02em;margin-bottom:20px}
 h1{font-size:22px;font-weight:500;letter-spacing:-0.02em;line-height:1.25;margin:0 0 10px}
 p{color:#5a5d56;font-size:14px;line-height:1.6;margin:0 0 24px}
-p.note{background:#f9eedc;color:#975d11;border-radius:6px;padding:12px 14px;margin:0 0 20px;text-align:left}
+p.note,p.needs-script{background:#f9eedc;color:#975d11;border-radius:6px;padding:12px 14px;margin:0 0 20px;text-align:left}
 p.recipient{background:#f4f3ee;color:#0e0f0d;border-radius:6px;padding:12px 14px;margin:0 0 16px;text-align:left}
 .addr{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:13px;font-weight:600;overflow-wrap:anywhere}
 .btn{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:44px;box-sizing:border-box;padding:10px 20px;border:1px solid transparent;border-radius:6px;background:#2f7463;color:#ffffff;font:inherit;font-weight:500;font-size:15px;text-decoration:none;cursor:pointer}
 .btn:hover{background:#28695a}
 .btn:focus-visible{outline:2px solid #0e0f0d;outline-offset:2px}
-.btn[aria-disabled="true"]{opacity:.55;cursor:default}
-.btn[aria-disabled="true"]:hover{background:#2f7463}
+.btn:disabled,.btn[aria-disabled="true"]{opacity:.55;cursor:default}
+.btn:disabled:hover,.btn[aria-disabled="true"]:hover{background:#2f7463}
 @media (prefers-color-scheme:dark){
 body{background:#0c0d0a;color:#f0efe8}
 main{background:#131410;border-color:#1f201b}
 p{color:#9a9b91}
-p.note{background:#292114;color:#e2b05a}
+p.note,p.needs-script{background:#292114;color:#e2b05a}
 p.recipient{background:#1c1d18;color:#f0efe8}
 .btn{background:#7acdb8;color:#07120e}
 .btn:hover{background:#8dd5c2}
-.btn[aria-disabled="true"]:hover{background:#7acdb8}
+.btn:disabled:hover,.btn[aria-disabled="true"]:hover{background:#7acdb8}
 .btn:focus-visible{outline-color:#f0efe8}
 }`;
 
 function shell(title: string, inner: string): string {
-  // Plain server-rendered HTML on purpose: it works in every client, and the
+  // Plain server-rendered HTML on purpose: no app bundle loads here, and the
   // token is only ever consumed by the human pressing the button. The form
-  // page's one script is the press gate, which a client without scripts
-  // simply never runs (the button stays enabled in the markup).
+  // page's one script is the press gate: the button is disabled in the
+  // markup until that script has run, and a client without scripts reads the
+  // noscript line instead.
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -346,10 +359,17 @@ function otherAccountNotice(signedInEmail: string | null, recipientEmail: string
   return `<p class="note">${who} Continuing signs you in as ${addr(recipientEmail)} instead. If you didn't ask for this link, close this page.</p>`;
 }
 
+/** What a browser that runs no script shows above the disabled button. */
+const NO_SCRIPT_LINE =
+  'This page needs JavaScript to continue. Turn JavaScript on for this site, or open the link from your email in another browser.';
+
 /**
  * The click-through page: the lines above the form (the account a signed link
  * is for, and any notice), the form, which carries `r` back to POST when the
- * link had one, and the press gate after it. Every value from the request is
+ * link had one, and the press gate after it. The button is disabled here and
+ * enabled only by the gate's script, so it cannot be pressed where that script
+ * does not run, or before the end of it has arrived; a browser with scripts
+ * off shows NO_SCRIPT_LINE instead. Every value from the request is
  * escaped, and each was checked first (the type against ALLOWED_TYPES, next
  * against the type's landings, the token hash and `r` by their shapes when
  * `r` is present), so nothing from the URL can add markup or reach the script.
@@ -383,12 +403,13 @@ function confirmPage(args: {
     <p>
       This link works once. Press the button to continue.
     </p>
+    <noscript><p class="needs-script">${NO_SCRIPT_LINE}</p></noscript>
     <form method="post" action="/auth/confirm" ${PRESS_GATE_FORM_ATTR}>
       <input type="hidden" name="token_hash" value="${escapeHtml(args.tokenHash)}">
       <input type="hidden" name="type" value="${escapeHtml(type)}">
       <input type="hidden" name="next" value="${escapeHtml(args.next)}">
       ${args.r === null ? '' : `<input type="hidden" name="r" value="${escapeHtml(args.r)}">`}
-      <button type="submit" class="btn">
+      <button type="submit" class="btn" disabled>
         ${button}
       </button>
     </form>
@@ -496,17 +517,30 @@ export async function POST(request: NextRequest) {
     return type === 'email_change' ? emailChangeExpiredPage() : refusedRedirect(origin, type);
   }
 
+  // The press gate's field (S25): the page's script adds it to the form when
+  // it lets a press through, so a post without it did not come through the
+  // gate. Refused before r is read and before verifyOtp, so the token is not
+  // spent and the same link still works from a page whose script has run.
+  // Logged with the link type only.
+  if (form?.get(PRESS_GATE_PASSED_FIELD) !== PRESS_GATE_PASSED_VALUE) {
+    console.info('[auth/confirm] confirmation posted without the press gate field', {
+      type: loggedType(type),
+    });
+    return refusedAnswer(origin, type);
+  }
+
   // A post with NO Sec-Fetch-Site is verified, unlike an API write (decided
   // 2026-10-24, docket S14). Its Origin is `null` by this page's own policy, so
   // without Sec-Fetch-Site no header can tell this page's post from another
   // site's, and refusing it would refuse every browser that does not send
-  // Fetch Metadata (Safari before 16.4, Firefox before 90, Chrome before 76):
-  // this page loads no script and works in all of them, and an emailed link
-  // opens on whatever device holds the email. Every browser the app supports
-  // sends Sec-Fetch-Site over https, and so does Safari on every phone that
-  // runs the app (iOS 16.4 and later), so the refusal above covers them. Logged
-  // with the link type only, so the runtime logs show whether a real browser
-  // ever posts without it before anyone tightens this.
+  // Fetch Metadata (Safari before 16.4, Firefox before 90, Chrome before 76),
+  // and an emailed link opens on whatever device holds the email (the page's
+  // one script is plain ES5 with no dependency). Every browser the app
+  // supports sends Sec-Fetch-Site over https, and so does Safari on every
+  // phone that runs the app (iOS 16.4 and later), so the cross-site refusal
+  // above covers them. Logged with the link type only, so the runtime logs
+  // show whether a real browser ever posts without it before anyone tightens
+  // this.
   if (!request.headers.has('sec-fetch-site')) {
     console.info('[auth/confirm] confirmation posted without Sec-Fetch-Site', {
       type: loggedType(type),

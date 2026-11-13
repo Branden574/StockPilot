@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   PRESS_GATE_FORM_ATTR,
+  PRESS_GATE_PASSED_FIELD,
+  PRESS_GATE_PASSED_VALUE,
   PRESS_GATE_QUIET_MS,
   PRESS_GATE_SCRIPT,
   PRESS_GATE_SEE_ATTR,
@@ -45,8 +47,11 @@ import {
  *     edge, or lines seen before it wrapped again, do not count;
  *   - a page that never gets focus arms after pointer movement and a quiet
  *     second, so no browser is locked out;
- *   - the button stays enabled in the markup and is shown aria-disabled
- *     until armed.
+ *   - the button is disabled in the markup, so it takes no press where this
+ *     script has not run; the script enables it as its last step, with every
+ *     listener in place, and shows it aria-disabled until armed;
+ *   - the field POST asks for (route.test.ts) is on the form only for a press
+ *     the gate let through.
  */
 
 let focused = true;
@@ -62,15 +67,45 @@ function runGate(): { form: HTMLFormElement; button: HTMLButtonElement } {
   };
 }
 
-/** The form alone: a page that names no address (a link written before S25's first release). */
-function mount(): { form: HTMLFormElement; button: HTMLButtonElement } {
+/** The form alone, as the page sends it (its button disabled), before any script has run. */
+function mountMarkup(): void {
   document.body.innerHTML = `<main>
     <form method="post" action="/auth/confirm" ${PRESS_GATE_FORM_ATTR}>
       <input type="hidden" name="type" value="magiclink">
-      <button type="submit" class="btn">Continue to StockPilot</button>
+      <button type="submit" class="btn" disabled>Continue to StockPilot</button>
     </form>
   </main>`;
+}
+
+/** The form alone: a page that names no address (a link written before S25's first release). */
+function mount(): { form: HTMLFormElement; button: HTMLButtonElement } {
+  mountMarkup();
   return runGate();
+}
+
+/** The gate's field on the form, as POST would receive it. */
+function gateFields(form: HTMLFormElement): string[] {
+  return [
+    ...form.querySelectorAll<HTMLInputElement>(`input[name="${PRESS_GATE_PASSED_FIELD}"]`),
+  ].map((input) => `${input.type}:${input.value}`);
+}
+
+/**
+ * A real click on the button, as a pointer or the keyboard makes it: the
+ * browser fires submit only when the button is not disabled. Returns how many
+ * submits the form saw (each is then cancelled here, after the gate's own
+ * listener has run, since this document cannot navigate).
+ */
+function clickCounts(form: HTMLFormElement, button: HTMLButtonElement): number {
+  let submits = 0;
+  const count = (event: Event) => {
+    submits += 1;
+    event.preventDefault();
+  };
+  form.addEventListener('submit', count);
+  button.click();
+  form.removeEventListener('submit', count);
+  return submits;
 }
 
 /**
@@ -92,7 +127,7 @@ function mountPage(notice = false): {
     <p>This link works once. Press the button to continue.</p>
     <form method="post" action="/auth/confirm" ${PRESS_GATE_FORM_ATTR}>
       <input type="hidden" name="type" value="magiclink">
-      <button type="submit" class="btn">Continue to StockPilot</button>
+      <button type="submit" class="btn" disabled>Continue to StockPilot</button>
     </form>
   </main>`;
   const marks = [...document.querySelectorAll<HTMLElement>(`[${PRESS_GATE_SEE_ATTR}]`)];
@@ -199,13 +234,14 @@ describe('the press gate', () => {
     expect(press(form, button)).toBe(true);
   });
 
-  it('shows the button aria-disabled until armed, and never disables it in the markup', async () => {
+  it('enables the button the markup disabled, and shows it aria-disabled until armed', async () => {
     const { button } = mount();
+    expect(button.disabled).toBe(false);
     expect(button.hasAttribute('disabled')).toBe(false);
     expect(button.getAttribute('aria-disabled')).toBe('true');
     await wait(PRESS_GATE_QUIET_MS);
     expect(button.getAttribute('aria-disabled')).toBe('false');
-    expect(button.hasAttribute('disabled')).toBe(false);
+    expect(button.disabled).toBe(false);
   });
 
   it('a press while not armed restarts the second, so a rapid-click lure keeps the button off', async () => {
@@ -648,7 +684,116 @@ describe('every address the page names must have been on screen (S25 review)', (
   });
 });
 
-describe('fails open, never locks anyone out', () => {
+describe('nothing can be pressed where the script has not run', () => {
+  it('the page as sent, before its script has run (it is still arriving, or the browser runs none): a click on the button submits nothing, however long the page has been open', async () => {
+    mountMarkup();
+    const form = document.querySelector(`form[${PRESS_GATE_FORM_ATTR}]`) as HTMLFormElement;
+    const button = document.querySelector('button') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(clickCounts(form, button)).toBe(0);
+    await wait(PRESS_GATE_QUIET_MS * 5);
+    expect(clickCounts(form, button)).toBe(0);
+    expect(button.disabled).toBe(true);
+    expect(button.hasAttribute('aria-disabled')).toBe(false);
+    expect(gateFields(form)).toEqual([]);
+  });
+
+  it('once the script has run, a click reaches the gate: cancelled in the first second, let through after it', async () => {
+    const { form, button } = mount();
+    // The click now fires submit, and the gate cancels it (the counter's own
+    // listener runs after the gate's and sees every submit).
+    expect(clickCounts(form, button)).toBe(1);
+    expect(gateFields(form)).toEqual([]);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(button.getAttribute('aria-disabled')).toBe('false');
+    expect(clickCounts(form, button)).toBe(1);
+    expect(gateFields(form)).toEqual([`hidden:${PRESS_GATE_PASSED_VALUE}`]);
+  });
+
+  it('enabling the button is the last thing the script does before its first second starts, with every listener in place', () => {
+    expect(PRESS_GATE_SCRIPT).toMatch(/\n  button\.disabled = false;\n  restart\(\);\n\}\)\(\);$/);
+    expect(PRESS_GATE_SCRIPT.match(/\.disabled\b/g)).toHaveLength(1);
+    expect(PRESS_GATE_SCRIPT).not.toContain("removeAttribute('disabled')");
+    // A script that stops part-way (here: a browser without one of the calls
+    // it makes on the way) leaves the button as the markup sent it.
+    mountMarkup();
+    const button = document.querySelector('button') as HTMLButtonElement;
+    vi.spyOn(window, 'addEventListener').mockImplementation(() => {
+      throw new Error('not supported');
+    });
+    expect(() => new Function(PRESS_GATE_SCRIPT)()).toThrow('not supported');
+    expect(button.disabled).toBe(true);
+  });
+});
+
+describe('the field POST asks for is on the form only for a press the gate let through', () => {
+  it('no field in the markup, none after a cancelled press, exactly one after an armed press', async () => {
+    const { form, button } = mount();
+    expect(PRESS_GATE_PASSED_FIELD).toBe('press_gate');
+    expect(PRESS_GATE_PASSED_VALUE).toBe('armed');
+    expect(gateFields(form)).toEqual([]);
+    expect(press(form, button)).toBe(false);
+    expect(gateFields(form)).toEqual([]);
+    await wait(PRESS_GATE_QUIET_MS - 1);
+    expect(submit(form)).toBe(false);
+    expect(gateFields(form)).toEqual([]);
+    await wait(PRESS_GATE_QUIET_MS);
+    // Armed, and not pressed yet: still no field.
+    expect(button.getAttribute('aria-disabled')).toBe('false');
+    expect(gateFields(form)).toEqual([]);
+    expect(press(form, button)).toBe(true);
+    expect(gateFields(form)).toEqual([`hidden:${PRESS_GATE_PASSED_VALUE}`]);
+    // A second armed press does not add a second one.
+    expect(press(form, button)).toBe(true);
+    expect(gateFields(form)).toEqual([`hidden:${PRESS_GATE_PASSED_VALUE}`]);
+    // It is inside the gate's own form, where the post picks it up.
+    expect(form.querySelector(`input[name="${PRESS_GATE_PASSED_FIELD}"]`)!.parentElement).toBe(
+      form,
+    );
+  });
+
+  it('the field goes when the page is no longer armed, so a press cancelled later carries none', async () => {
+    const { form, button } = mount();
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(press(form, button)).toBe(true);
+    expect(gateFields(form)).toHaveLength(1);
+    // The window loses focus (the swap): disarmed, and the field is gone.
+    focused = false;
+    window.dispatchEvent(new Event('blur'));
+    expect(gateFields(form)).toEqual([]);
+    focused = true;
+    window.dispatchEvent(new Event('focus'));
+    expect(press(form, button)).toBe(false);
+    expect(gateFields(form)).toEqual([]);
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(press(form, button)).toBe(true);
+    expect(gateFields(form)).toEqual([`hidden:${PRESS_GATE_PASSED_VALUE}`]);
+  });
+
+  it('back-forward cache: a page left after its press comes back without the field', async () => {
+    const { form, button } = mount();
+    await wait(PRESS_GATE_QUIET_MS);
+    expect(press(form, button)).toBe(true);
+    expect(gateFields(form)).toHaveLength(1);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(gateFields(form)).toEqual([]);
+    window.dispatchEvent(new Event('pageshow'));
+    expect(gateFields(form)).toEqual([]);
+    expect(submit(form)).toBe(false);
+    expect(gateFields(form)).toEqual([]);
+  });
+
+  it('a page that names addresses: no field while one of them has not been seen', async () => {
+    windowSize(360, 150);
+    const { form, button, marks } = mountPage();
+    layOut(marks[0]!, { top: 400, height: 20 });
+    await wait(PRESS_GATE_QUIET_MS * 3);
+    expect(press(form, button)).toBe(false);
+    expect(gateFields(form)).toEqual([]);
+  });
+});
+
+describe('a page whose browser runs the script locks nobody out', () => {
   it('a page that never gets focus arms after pointer movement and a quiet second', async () => {
     focused = false;
     const { form, button } = mount();
