@@ -645,7 +645,9 @@ describe('count screen: offline capture and the Post rule', () => {
   // box clears the line's saved count first (pinned below).
   it('a typed count is saved on the phone first and queued, never posted from the box', () => {
     expect(codeOnly(src)).toMatch(
-      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) \{[\s\S]*?return;\s*\}\s*try \{\s*await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}\s*setLines\([\s\S]*?\);\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);/,
+      // S75: a line no longer on this phone (updateLocalLine answers null) is
+      // said and never marked saved (count-line-gone.test.ts runs it).
+      /createDraftDebouncer\(SAVE_DEBOUNCE_MS, \(lineId, raw\) => \{[\s\S]*?const num = countFromBox\(raw\);\s*if \(num === null\) \{[\s\S]*?return;\s*\}\s*let queued: Awaited<ReturnType<typeof updateLocalLine>>;\s*try \{\s*queued = await updateLocalLine\(lineId, num\);\s*\} catch \(e\) \{[\s\S]*?return;\s*\}\s*if \(queued === null\) \{[\s\S]*?return;\s*\}\s*setLines\([\s\S]*?\);\s*setDraft\(\(d\) => withoutSavedDraft\(d, lineId, raw\)\);\s*await cycleCountSync\.refreshPendingCount\(\);\s*void cycleCountSync\.forceSync\(\);/,
     );
     expect(codeOnly(src)).toContain('onChangeText={(v) => setDraftValue(l.id, v)}');
   });

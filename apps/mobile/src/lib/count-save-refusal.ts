@@ -42,3 +42,17 @@ export function countNotClearedAlert(e: unknown): { title: string; message: stri
     message: outboxRefusalSentence(e) ?? COUNT_NOT_CLEARED_ON_PHONE,
   };
 }
+
+/**
+ * The alert for a count updateLocalLine answered null for (S75): the line is
+ * no longer in the copy of the count on this phone (a pull removed it, the
+ * count was posted or cancelled, or it is no longer sent to this member), so
+ * nothing was saved or queued. The screens never mark such a line saved; on
+ * OK they load the count again, or close it when it is no longer on this
+ * phone or open to the member.
+ */
+export const COUNT_LINE_NOT_SAVED: { title: string; message: string } = {
+  title: 'Count not saved',
+  message:
+    'This line is no longer in the count saved on this phone, so this number was not saved. Tap OK to load the count again, or to close it if it is no longer open to you.',
+};

@@ -48,7 +48,11 @@ import {
   rememberedCloseGate,
   type CloseGateState,
 } from '@/lib/count-close-gate';
-import { countNotClearedAlert, countNotSavedAlert } from '@/lib/count-save-refusal';
+import {
+  COUNT_LINE_NOT_SAVED,
+  countNotClearedAlert,
+  countNotSavedAlert,
+} from '@/lib/count-save-refusal';
 import { showWriteCta } from '@/lib/cta-gating';
 import { notACountMessage } from '@/lib/count-box-words';
 import { footerReservation } from '@/lib/dynamic-type-layout';
@@ -321,6 +325,11 @@ export default function CycleCountDetail() {
     () => new Map(),
   );
 
+  // How many times OK was answered on "Count not saved" for a line no longer
+  // on this phone (lineSaver below is created once and can only set state;
+  // the effect after loadOnce reloads or leaves).
+  const [lineGoneAnswered, setLineGoneAnswered] = React.useState(0);
+
   // Debounced local saves (updateLocalLine + the outbox row), FLUSHED on
   // unmount: a count typed within SAVE_DEBOUNCE_MS of leaving the screen used
   // to be dropped (see draft-debouncer.ts). Created once; the save touches
@@ -369,8 +378,9 @@ export default function CycleCountDetail() {
           return;
         }
 
+        let queued: Awaited<ReturnType<typeof updateLocalLine>>;
         try {
-          await updateLocalLine(lineId, num);
+          queued = await updateLocalLine(lineId, num);
         } catch (e) {
           // Not saved and not queued: the outbox refused it (no account, or
           // the workspace still loading) or the phone's store failed. Said
@@ -383,6 +393,15 @@ export default function CycleCountDetail() {
           Alert.alert(title, message, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Try again', onPress: () => saver.schedule(lineId, raw) },
+          ]);
+          return;
+        }
+        if (queued === null) {
+          // The line is no longer in this phone's copy of the count: nothing
+          // was saved or queued, so nothing is marked saved. Said; OK loads
+          // the count again or leaves (reloadAfterLineGone).
+          Alert.alert(COUNT_LINE_NOT_SAVED.title, COUNT_LINE_NOT_SAVED.message, [
+            { text: 'OK', onPress: () => setLineGoneAnswered((n) => n + 1) },
           ]);
           return;
         }
@@ -651,6 +670,31 @@ export default function CycleCountDetail() {
     }
   }, [id, orgId, access]);
 
+  /**
+   * After a count the phone could not store because its line is no longer in
+   * this phone's copy (COUNT_LINE_NOT_SAVED): the count is read again from the
+   * server while it is still on this phone and open to this member; otherwise
+   * the screen is left.
+   */
+  async function reloadAfterLineGone() {
+    let onPhone: Awaited<ReturnType<typeof getCycleCount>> = null;
+    if (access === 'allowed' && id) {
+      try {
+        onPhone = await getCycleCount(id);
+      } catch {
+        onPhone = null;
+      }
+    }
+    if (!onPhone) {
+      leave();
+      return;
+    }
+    setLoading(true);
+    setReadError(null);
+    setEmptyState('none');
+    void load();
+  }
+
   /** The count's load: one pass, and a second, under a fresh note, when the
    *  cache discarded what the first fetched (see the store in loadOnce).
    *  Discarded twice running, the screen says so, with Retry, rather than
@@ -663,6 +707,15 @@ export default function CycleCountDetail() {
     setEmptyState('read-failed');
     setLoading(false);
   }, [loadOnce]);
+
+  // OK on "Count not saved" for a line no longer on this phone.
+  const onLineGoneAnswered = React.useEffectEvent(() => {
+    void reloadAfterLineGone();
+  });
+  React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- answers OK on a dialog: every set in reloadAfterLineGone is after its await
+    if (lineGoneAnswered > 0) onLineGoneAnswered();
+  }, [lineGoneAnswered]);
 
   React.useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
@@ -884,9 +937,7 @@ export default function CycleCountDetail() {
           <Text style={[styles.emptyBody, { color: c.ink3 }, lg && glassCountStyles(lg).emptyBody]}>
             {readError}
             {readError === CYCLE_COUNTS_NOT_AVAILABLE ? null : (
-              <>
-                {'\n\n'}If the app was just updated, the server may still be catching up.
-              </>
+              <>{'\n\n'}If the app was just updated, the server may still be catching up.</>
             )}
           </Text>
           <Button

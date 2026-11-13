@@ -80,9 +80,10 @@ describe('cycle-count/[id].tsx: a fetch the cache discarded is loaded again once
       /const load = React\.useCallback\(async \(\) => \{\s+if \(\(await loadOnce\(\)\) !== 'discarded'\) return;\s+if \(\(await loadOnce\(\)\) !== 'discarded'\) return;\s+setReadError\(COUNT_NOT_SAVED_AFTER_A_CHANGE\);\s+setEmptyState\('read-failed'\);\s+setLoading\(false\);\s+\}, \[loadOnce\]\);/,
     );
     // Two passes at most: the mount, the workspace change and both Retry
-    // buttons go through load().
+    // buttons go through load(); since S75 so does the reload after a count
+    // the phone could not store (reloadAfterLineGone).
     expect(screen.match(/loadOnce\(\)/g)).toHaveLength(2);
-    expect(screen.match(/void load\(\);/g)).toHaveLength(3);
+    expect(screen.match(/void load\(\);/g)).toHaveLength(4);
     expect(screen).toContain('const COUNT_NOT_SAVED_AFTER_A_CHANGE =');
   });
 });

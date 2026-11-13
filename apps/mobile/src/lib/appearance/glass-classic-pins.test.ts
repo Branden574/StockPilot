@@ -44,7 +44,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // Re-pinned for S75 (Classic is meant to change: the count is read only for a member who may
   // see cycle counts, and the not-available state leaves out the catching-up sentence). Before
   // S75 the projection was 225237c6...e731e, the pin it had.
-  'app/cycle-count/[id].tsx': 'e75dc5d0a99b4b703ab4af4beae1c90454209cd8a8105e7b6048d0945cd709a4',
+  // Re-pinned again for S75 (Classic is meant to change: a counted number the phone could not
+  // store is said with Count not saved and never marked saved; OK loads the count again or
+  // leaves). Before this the pin was e75dc5d0...09a4.
+  'app/cycle-count/[id].tsx': '594dacd1ca2d4b19b75575e130dd9dc7cb0bdb490a253b7bea4cf8731308d83d',
   // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
   // configured host; a production build opens the same address). Before B124 the projection was
   // 0e3f35aa...a3fa, the pin it had.
@@ -131,8 +134,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'app/cycle-count/ai-scan/[id].tsx':
     'ce429361709bc71da56ffdb387155e6b93aa2282d9d3d8dc08d000c569224a5e',
   'app/cycle-count/new.tsx': 'e0f0dcbd01c04afce172de9e1888ab6a482eb3ff1b9b7d332ad8c35000600072',
+  // Re-pinned for S75 (Classic is meant to change: a scanned count the phone could not store is
+  // said with Count not saved and never marked counted; OK reads the count again or leaves).
+  // Before S75 the projection was 7990871c...00c2, the pin it had.
   'app/cycle-count/scan/[id].tsx':
-    '7990871c2db18f31116e0358ce2ac197a5cd1446babf6f3acdd2f523ffb800c2',
+    '93e393b107f69f312675ffd8dc5dbb1601d9b8f4f8e3d96d37c65865e657d3b8',
   // Re-pinned for B124 (Classic is meant to change: a member without items:create is told so
   // beside Create and refused before anything is sent). Before B124 the projection was
   // 1869d65f...7806, the pin it had.

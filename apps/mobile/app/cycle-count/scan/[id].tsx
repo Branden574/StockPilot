@@ -24,7 +24,7 @@ import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
-import { countNotSavedAlert } from '@/lib/count-save-refusal';
+import { COUNT_LINE_NOT_SAVED, countNotSavedAlert } from '@/lib/count-save-refusal';
 import {
   getCycleCount,
   updateLocalLine,
@@ -143,8 +143,9 @@ function CycleCountScanScreenInner() {
   async function recordCount(line: CachedCycleCountLine, qty: number): Promise<boolean> {
     if (!Number.isFinite(qty) || qty < 0) return false;
     setBusy(true);
+    let queued: Awaited<ReturnType<typeof updateLocalLine>>;
     try {
-      await updateLocalLine(line.id, qty);
+      queued = await updateLocalLine(line.id, qty);
     } catch (e) {
       // Not saved and not queued: the outbox refused it (no account, or the
       // workspace still loading) or the phone's store failed. Said
@@ -162,6 +163,23 @@ function CycleCountScanScreenInner() {
       });
       return false;
     }
+    if (queued === null) {
+      // The line is no longer in this phone's copy of the count: nothing was
+      // saved or queued, so nothing is tallied or marked saved. Said; the
+      // scanner stays busy until it is answered, then reads the lines on this
+      // phone again, or closes when the count is gone (afterScanLineGone).
+      const after = () => {
+        setBusy(false);
+        void afterScanLineGone();
+      };
+      Alert.alert(
+        COUNT_LINE_NOT_SAVED.title,
+        COUNT_LINE_NOT_SAVED.message,
+        [{ text: 'OK', onPress: after }],
+        { cancelable: true, onDismiss: after },
+      );
+      return false;
+    }
     setScannedMap((m) => new Map(m).set(line.id, qty));
     setLines((curr) =>
       curr.map((l) =>
@@ -172,6 +190,25 @@ function CycleCountScanScreenInner() {
     void cycleCountSync.forceSync();
     setBusy(false);
     return true;
+  }
+
+  /** After a scan the phone could not store (COUNT_LINE_NOT_SAVED): read the
+   *  lines on this phone again, or close when the count is no longer here. */
+  async function afterScanLineGone() {
+    let snap: Awaited<ReturnType<typeof getCycleCount>> = null;
+    try {
+      snap = id ? await getCycleCount(id) : null;
+    } catch {
+      snap = null;
+    }
+    if (!snap) {
+      router.back();
+      return;
+    }
+    setLines(snap.lines);
+    const seed = new Map<string, number>();
+    for (const l of snap.lines) if (l.counted != null) seed.set(l.id, l.counted);
+    setScannedMap(seed);
   }
 
   function findLineByCode(code: string): CachedCycleCountLine | null {
