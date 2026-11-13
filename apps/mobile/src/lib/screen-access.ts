@@ -13,11 +13,18 @@ import { drawerOffers } from './drawer-nav';
  *
  * Unlike the menu, which draws from the role's defaults while the saved
  * values load, a screen deciding what it reads or shows waits for them:
- * 'unknown' until the saved permissions and the saved modules have been read
- * (use-effective-permissions.ts, enabled-modules.ts), and, with no
- * permissions saved (before the first sync, or just after a workspace
- * switch), until the role is known. Reading a device store takes
- * milliseconds and always ends, so nothing waits on it for long.
+ * 'unknown' until the device store has ANSWERED for the saved permissions and
+ * the saved modules, however long that takes (`answered` in
+ * use-effective-permissions.ts and enabled-modules.ts; never `read`, which the
+ * menu's wait sets with defaults), and, with no permissions saved (before the
+ * first sync, or just after a workspace switch), until the role is known.
+ *
+ * With NO MODULE SET SAVED a module's screen is denied until one is: the menu's
+ * default set is not this workspace's. Counts and kits can be on the phone
+ * with no set saved: an adopted cache keeps its rows and loses the set
+ * (db.ts markCacheUnconfirmed) until its first pull lands, a pull stopped by
+ * a change of account commits the rows it wrote before the set (sync.ts), and
+ * a build older than the saved set kept counts and kits without one.
  *
  * Display only, like every gate on the phone: the server decides every read
  * and write it is asked for.
@@ -26,10 +33,10 @@ import { drawerOffers } from './drawer-nav';
 export type ScreenAccess = 'unknown' | 'allowed' | 'denied';
 
 export interface ScreenAccessInputs {
-  /** The saved permission set, and whether it has been read (useEffectivePermissionsState). */
-  saved: { permissions: ReadonlySet<Permission> | undefined; read: boolean };
-  /** The saved module set, and whether it has been read (useEnabledModulesState). */
-  modules: { modules: Set<ModuleId>; read: boolean };
+  /** The saved permission set, and whether the store has answered (useEffectivePermissionsState). */
+  saved: { permissions: ReadonlySet<Permission> | undefined; answered: boolean };
+  /** The saved module set, and what the store answered (useEnabledModulesState). */
+  modules: { modules: Set<ModuleId>; answered: false | 'saved' | 'nothing-saved' };
   /** The member's role in the workspace on screen, or null while unknown (useRole). */
   role: Role | null;
   /** The role is being read for the workspace on screen. */
@@ -47,9 +54,13 @@ function roleWhenNothingSaved(
   return input.roleLoading ? 'unknown' : 'denied';
 }
 
+/** No optional module: what a screen decides with while no module set is saved. */
+const NO_SAVED_MODULES: Set<ModuleId> = new Set<ModuleId>();
+
 /** Whether the screen behind this side-menu link opens for the member. */
 export function drawerEntryAccess(href: string, input: ScreenAccessInputs): ScreenAccess {
-  if (!input.saved.read || !input.modules.read) return 'unknown';
+  if (!input.saved.answered || !input.modules.answered) return 'unknown';
+  const modules = input.modules.answered === 'saved' ? input.modules.modules : NO_SAVED_MODULES;
   let role: Role;
   if (input.saved.permissions === undefined) {
     const known = roleWhenNothingSaved(input);
@@ -60,14 +71,12 @@ export function drawerEntryAccess(href: string, input: ScreenAccessInputs): Scre
     // kept for admins, and one not known yet is not an admin.
     role = input.role ?? 'viewer';
   }
-  return drawerOffers(href, role, input.modules.modules, input.saved.permissions)
-    ? 'allowed'
-    : 'denied';
+  return drawerOffers(href, role, modules, input.saved.permissions) ? 'allowed' : 'denied';
 }
 
 /**
  * Whether the member holds one permission, decided as drawerEntryAccess is:
- * 'unknown' until the saved permissions are read, then the saved set, or with
+ * 'unknown' until the store has answered for the saved permissions, then the saved set, or with
  * nothing saved the known role's defaults. For a control the server checks
  * with that permission alone (New item: items:create).
  */
@@ -75,7 +84,7 @@ export function permissionAccess(
   permission: Permission,
   input: Omit<ScreenAccessInputs, 'modules'>,
 ): ScreenAccess {
-  if (!input.saved.read) return 'unknown';
+  if (!input.saved.answered) return 'unknown';
   if (input.saved.permissions !== undefined) {
     return input.saved.permissions.has(permission) ? 'allowed' : 'denied';
   }

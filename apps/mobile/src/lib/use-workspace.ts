@@ -500,16 +500,23 @@ async function loadWorkspace(userId: string) {
 }
 
 /**
- * Tell every screen to read the saved permissions and warehouse scope again,
- * and wait until they have: the wipe just deleted them with the previous
- * workspace's rows (db.ts deleteOrgData states this duty), and the screens
- * hold the last values read in memory. Called right after the wipe, before
- * the new workspace is shown, so no screen narrows or widens by the previous
- * workspace's permissions or banner while this one's pull is out (or for good
- * offline). Never throws: each re-read keeps its last value on a failure.
+ * Tell every screen to read the saved permissions, modules and warehouse
+ * scope again, and wait until they have: the wipe just deleted them with the
+ * previous workspace's rows (db.ts deleteOrgData states this duty), and the
+ * screens hold the last values read in memory. Called right after the wipe,
+ * before the new workspace is shown, so no screen narrows or widens by the
+ * previous workspace's permissions, modules or banner while this one's pull
+ * is out (or for good offline). The menu keeps the module set it shows until
+ * the pull saves the new one (enabled-modules.ts); a screen gated on the
+ * saved set sees that none is saved (screen-access.ts). Never throws: each
+ * re-read keeps its last value on a failure.
  */
 async function rereadSavedAccess(): Promise<void> {
-  await Promise.all([refreshEffectivePermissions(), refreshWarehouseScope()]);
+  await Promise.all([
+    refreshEffectivePermissions(),
+    refreshEnabledModules(),
+    refreshWarehouseScope(),
+  ]);
 }
 
 /** The retry running now (see retryWorkspace). */

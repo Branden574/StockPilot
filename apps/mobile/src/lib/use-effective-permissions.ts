@@ -88,9 +88,20 @@ export interface EffectivePermissionsState {
    *  `permissions` means "not read yet", not "nothing saved". Never goes
    *  back to false. */
   read: boolean;
+  /** The device store has answered a read: found, absent or unparseable.
+   *  Never set by the wait, nor by a read that threw: false until a read
+   *  comes back, however long it takes. Never goes back to false. A screen
+   *  deciding what it reads or shows by the saved set uses this alone
+   *  (screen-access.ts), so it never decides from the static defaults the
+   *  wait falls back to. */
+  answered: boolean;
 }
 
-const UNREAD: EffectivePermissionsState = { permissions: undefined, read: false };
+const UNREAD: EffectivePermissionsState = {
+  permissions: undefined,
+  read: false,
+  answered: false,
+};
 
 /**
  * How long a screen waits for the first read of the saved set. Reading the
@@ -102,8 +113,13 @@ const UNREAD: EffectivePermissionsState = { permissions: undefined, read: false 
  */
 export const SAVED_PERMISSIONS_READ_WAIT_MS = 2000;
 
-/** Read with nothing saved: the static defaults decide. */
-const READ_NOTHING_SAVED: EffectivePermissionsState = { permissions: undefined, read: true };
+/** Read, by the wait or a read that threw, with nothing saved and nothing
+ *  answered: the static defaults decide where `read` is enough. */
+const READ_NOTHING_SAVED: EffectivePermissionsState = {
+  permissions: undefined,
+  read: true,
+  answered: false,
+};
 
 export function useEffectivePermissionsState(): EffectivePermissionsState {
   const [state, setState] = React.useState<EffectivePermissionsState>(UNREAD);
@@ -138,6 +154,7 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
       setState({
         permissions: persisted && persisted.size > 0 ? persisted : undefined,
         read: true,
+        answered: true,
       });
     };
     listeners.add(reread);
@@ -169,7 +186,7 @@ export const NO_PERMISSIONS: ReadonlySet<Permission> = new Set<Permission>();
  * SAVED_PERMISSIONS_READ_WAIT_MS), so nothing waits on it for long.
  */
 export function permissionsOnceRead(
-  state: EffectivePermissionsState,
+  state: Pick<EffectivePermissionsState, 'permissions' | 'read'>,
 ): ReadonlySet<Permission> | undefined {
   return state.read ? state.permissions : NO_PERMISSIONS;
 }

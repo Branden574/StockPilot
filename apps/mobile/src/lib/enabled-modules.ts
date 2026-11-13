@@ -50,14 +50,16 @@ export async function readPersistedEnabledModules(): Promise<Set<ModuleId> | nul
  * Module-level subscriber set — notified by `refreshEnabledModules()`.
  * Mirrors the `listeners` pattern used in `use-workspace.ts`.
  */
-const listeners = new Set<() => void>();
+const listeners = new Set<() => Promise<void>>();
 
 /**
  * Notify all active `useEnabledModules` hooks to re-read the persisted
  * module set. Call this after a snapshot pull completes (e.g. on org switch).
+ * Resolves once every one has read it (a workspace switch waits for that
+ * before it shows the new workspace); never rejects.
  */
-export function refreshEnabledModules(): void {
-  for (const fn of listeners) fn();
+export function refreshEnabledModules(): Promise<void> {
+  return Promise.all([...listeners].map((fn) => fn().catch(() => undefined))).then(() => undefined);
 }
 
 /**
@@ -81,6 +83,13 @@ export interface EnabledModulesState {
    *  answered within MODULES_READ_WAIT_MS. Until then `modules` is the
    *  default, not this workspace's set. Never goes back to false. */
   read: boolean;
+  /** What the device store last answered: false until a read has come back
+   *  (never the wait, never a read that threw), however long it takes; then
+   *  'saved' (`modules` is the saved set) or 'nothing-saved' (no set, or one
+   *  that does not parse: `modules` is only the menu's default or the set
+   *  shown before). Never goes back to false. A screen deciding what it reads
+   *  or shows uses this alone (screen-access.ts); the menu keeps `modules`. */
+  answered: false | 'saved' | 'nothing-saved';
 }
 
 /**
@@ -93,14 +102,16 @@ export interface EnabledModulesState {
 export const MODULES_READ_WAIT_MS = 2000;
 
 /**
- * useEnabledModules with whether the saved set has been read: for a screen
- * that must not decide from the permissive default (screen-access.ts). The
- * module set itself follows the same rules as useEnabledModules.
+ * useEnabledModules with whether the saved set has been read, and what the
+ * device store answered: for a screen that must not decide from the
+ * permissive default (screen-access.ts). The module set itself follows the
+ * same rules as useEnabledModules.
  */
 export function useEnabledModulesState(): EnabledModulesState {
   const [state, setState] = React.useState<EnabledModulesState>({
     modules: DEFAULT_ENABLED_MODULES,
     read: false,
+    answered: false,
   });
 
   React.useEffect(() => {
@@ -119,14 +130,20 @@ export function useEnabledModulesState(): EnabledModulesState {
       try {
         persisted = await readPersistedEnabledModules();
       } catch {
-        // The device store could not be read: the last set read stays, and a
-        // first read still counts as read.
-        persisted = null;
+        // The device store could not be read: the last set read stays, a
+        // first read still counts as read, and nothing is answered.
+        stopWaiting();
+        if (!cancelled) setState((prev) => (prev.read ? prev : { ...prev, read: true }));
+        return;
       }
       stopWaiting();
       if (cancelled) return;
       // Nothing saved keeps the set already shown, as before.
-      setState((prev) => ({ modules: persisted ?? prev.modules, read: true }));
+      setState((prev) => ({
+        modules: persisted ?? prev.modules,
+        read: true,
+        answered: persisted ? 'saved' : 'nothing-saved',
+      }));
     };
     listeners.add(reread);
     void reread();

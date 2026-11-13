@@ -82,7 +82,13 @@ vi.mock('./warehouse-scope', () => ({
     events.push('scope re-read');
   }),
 }));
-vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
+vi.mock('./enabled-modules', () => ({
+  refreshEnabledModules: vi.fn(async () => {
+    events.push('modules re-read asked');
+    await reread.hold;
+    events.push('modules re-read');
+  }),
+}));
 vi.mock('./sync', () => ({
   syncNow: vi.fn(async () => {}),
   syncAfterRunning: vi.fn(async () => {}),
@@ -194,14 +200,22 @@ describe('the saved permissions and scope are read again before a workspace is s
     expect(events).not.toContain('shown org-b');
     release();
     await switching;
-    expect(events).toEqual([
-      'wipe',
+    // S75: the saved module set too, so a screen gated on it (screen-access.ts)
+    // never decides by the previous workspace's modules.
+    expect(events.slice(0, 1)).toEqual(['wipe']);
+    expect(events.slice(1, 4).sort()).toEqual([
+      'modules re-read asked',
       'permissions re-read asked',
       'scope re-read asked',
+    ]);
+    expect(events.slice(4, 7).sort()).toEqual([
+      'modules re-read',
       'permissions re-read',
       'scope re-read',
-      'shown org-b',
     ]);
+    // The switch's own pull may re-read the modules again once it lands
+    // (syncNow(true).then(refreshEnabledModules)).
+    expect(events[7]).toBe('shown org-b');
   });
 
   it("the load's repair (another account's workspace was saved): the same order", async () => {
@@ -216,7 +230,9 @@ describe('the saved permissions and scope are read again before a workspace is s
     expect(wipe).toBeGreaterThan(-1);
     expect(events.indexOf('permissions re-read')).toBeGreaterThan(wipe);
     expect(events.indexOf('scope re-read')).toBeGreaterThan(wipe);
+    expect(events.indexOf('modules re-read')).toBeGreaterThan(wipe);
     expect(shown).toBeGreaterThan(events.indexOf('permissions re-read'));
     expect(shown).toBeGreaterThan(events.indexOf('scope re-read'));
+    expect(shown).toBeGreaterThan(events.indexOf('modules re-read'));
   });
 });

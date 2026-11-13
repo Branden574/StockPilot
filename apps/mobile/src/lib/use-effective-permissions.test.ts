@@ -89,7 +89,7 @@ describe('useEffectivePermissionsState', () => {
   it('before the saved set is read: not read, no set, and a gate on it offers nothing (mutation: start as read)', () => {
     db.getMeta.mockReturnValue(new Promise(() => undefined));
     const first = useEffectivePermissionsState();
-    expect(first).toEqual({ permissions: undefined, read: false });
+    expect(first).toEqual({ permissions: undefined, read: false, answered: false });
     expect(permissionsOnceRead(first)).toBe(NO_PERMISSIONS);
     expect(db.getMeta).toHaveBeenCalledWith(EFFECTIVE_PERMISSIONS_META_KEY);
   });
@@ -113,7 +113,7 @@ describe('useEffectivePermissionsState', () => {
     useEffectivePermissionsState();
     await settle();
     const now = useEffectivePermissionsState();
-    expect(now).toEqual({ permissions: undefined, read: true });
+    expect(now).toEqual({ permissions: undefined, read: true, answered: true });
     expect(permissionsOnceRead(now)).toBeUndefined();
   });
 
@@ -123,7 +123,13 @@ describe('useEffectivePermissionsState', () => {
     db.getMeta.mockRejectedValue(new Error('database is locked'));
     useEffectivePermissionsState();
     await settle();
-    expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: true });
+    // Read, for the order screen; never answered, for a screen that must not
+    // decide from the defaults (screen-access.ts).
+    expect(useEffectivePermissionsState()).toEqual({
+      permissions: undefined,
+      read: true,
+      answered: false,
+    });
   });
 
   it('a later read that fails keeps the set already read (as before: a failed read never blanked it)', async () => {
@@ -148,11 +154,19 @@ describe('useEffectivePermissionsState', () => {
     try {
       const late = deferredRead();
       db.getMeta.mockReturnValue(late.promise);
-      expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: false });
+      expect(useEffectivePermissionsState()).toEqual({
+        permissions: undefined,
+        read: false,
+        answered: false,
+      });
       await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS - 1);
       expect(useEffectivePermissionsState().read).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
-      expect(useEffectivePermissionsState()).toEqual({ permissions: undefined, read: true });
+      expect(useEffectivePermissionsState()).toEqual({
+        permissions: undefined,
+        read: true,
+        answered: false,
+      });
       // The set lands late: it replaces the static defaults, still read.
       late.resolve(saved('orders:approve'));
       await vi.advanceTimersByTimeAsync(0);
@@ -204,6 +218,65 @@ describe('useEffectivePermissionsState', () => {
     const now = useEffectivePermissionsState();
     expect(now.read).toBe(true);
     expect(now.permissions?.has('orders:approve')).toBe(true);
+  });
+});
+
+describe('answered: the device store has answered, never the wait (S75)', () => {
+  /**
+   * `read` turns true after SAVED_PERMISSIONS_READ_WAIT_MS with nothing
+   * saved, for the order screen, which must never wait for good. A screen
+   * deciding what it reads or shows by the saved set (screen-access.ts) must
+   * not decide from that default: it waits for `answered`, which only a read
+   * that came back sets, however long it takes.
+   */
+  it('a store that has not answered is not answered, however long it takes; the wait never sets it', async () => {
+    vi.useFakeTimers();
+    try {
+      const late = deferredRead();
+      db.getMeta.mockReturnValue(late.promise);
+      useEffectivePermissionsState();
+      await vi.advanceTimersByTimeAsync(SAVED_PERMISSIONS_READ_WAIT_MS * 20);
+      const waited = useEffectivePermissionsState();
+      expect(waited.read).toBe(true);
+      expect(waited.answered).toBe(false);
+      late.resolve(saved('cycle_counts:read'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useEffectivePermissionsState().answered).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['a saved set', saved('items:create')],
+    ['nothing saved', null],
+    ['a set that does not parse', 'not json'],
+  ])('%s: answered', async (_label, raw) => {
+    db.getMeta.mockResolvedValue(raw);
+    useEffectivePermissionsState();
+    await settle();
+    expect(useEffectivePermissionsState().answered).toBe(true);
+  });
+
+  it('a store that throws has not answered; a later read that comes back answers', async () => {
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    useEffectivePermissionsState();
+    await settle();
+    expect(useEffectivePermissionsState().answered).toBe(false);
+    db.getMeta.mockResolvedValue(saved('items:create'));
+    await refreshEffectivePermissions();
+    expect(useEffectivePermissionsState().answered).toBe(true);
+  });
+
+  it('once answered, a later read that throws keeps it answered, with the set read', async () => {
+    db.getMeta.mockResolvedValue(saved('items:create'));
+    useEffectivePermissionsState();
+    await settle();
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    await refreshEffectivePermissions();
+    const now = useEffectivePermissionsState();
+    expect(now.answered).toBe(true);
+    expect([...(now.permissions ?? [])]).toEqual(['items:create']);
   });
 });
 
