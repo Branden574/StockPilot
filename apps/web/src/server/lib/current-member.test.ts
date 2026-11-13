@@ -113,7 +113,9 @@ describe('readCurrentMember', () => {
     const stub = world({ membershipRead: { data: null, error: READ_ERROR } });
     await expect(readCurrentMember(stub.client, ORG, 'user-1')).resolves.toEqual({
       readable: false,
-      failures: [{ read: 'membership', message: READ_ERROR.message }],
+      failures: [
+        { read: 'membership', error: expect.objectContaining({ message: READ_ERROR.message }) },
+      ],
     });
   });
 
@@ -124,7 +126,9 @@ describe('readCurrentMember', () => {
     });
     await expect(readCurrentMember(stub.client, ORG, 'user-1')).resolves.toEqual({
       readable: false,
-      failures: [{ read: 'profile', message: READ_ERROR.message }],
+      failures: [
+        { read: 'profile', error: expect.objectContaining({ message: READ_ERROR.message }) },
+      ],
     });
   });
 });

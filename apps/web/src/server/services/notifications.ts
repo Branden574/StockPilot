@@ -72,7 +72,7 @@ export async function createNotification(
     if (!recipient.readable) {
       for (const failure of recipient.failures) {
         void reportError(
-          new Error(failure.message),
+          failure.error,
           failure.read === 'profile'
             ? { tag: 'notifications.create_disabled_check', extra: { userId: args.userId } }
             : {

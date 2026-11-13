@@ -10,7 +10,8 @@ type AdminClient = SupabaseClient;
 /** One of the two reads behind the current-member rule, failed. */
 export interface CurrentMemberReadFailure {
   read: 'membership' | 'profile';
-  message: string;
+  /** The read's error, for reportError only: it is never answered (S31). */
+  error: Error;
 }
 
 export type CurrentMemberAnswer =
@@ -56,8 +57,10 @@ export async function readCurrentMember(
     admin.from('user_profiles').select('disabled_at').eq('id', userId).maybeSingle(),
   ]);
   const failures: CurrentMemberReadFailure[] = [];
-  if (membership.error) failures.push({ read: 'membership', message: membership.error.message });
-  if (profile.error) failures.push({ read: 'profile', message: profile.error.message });
+  if (membership.error) {
+    failures.push({ read: 'membership', error: new Error(membership.error.message) });
+  }
+  if (profile.error) failures.push({ read: 'profile', error: new Error(profile.error.message) });
   if (failures.length > 0) return { readable: false, failures };
   const disabled = Boolean((profile.data as { disabled_at?: string | null } | null)?.disabled_at);
   return { readable: true, current: Boolean(membership.data) && !disabled };
@@ -86,7 +89,13 @@ export async function ownAddressVerdict(
   try {
     const answer = await readCurrentMember(admin, person.organizationId, person.userId);
     if (answer.readable) return answer.current ? 'current' : 'not_current';
-    failure = new Error(answer.failures.map((f) => `${f.read} read: ${f.message}`).join('; '));
+    // One report for the one or two reads that failed.
+    const [first, second] = answer.failures;
+    failure = new Error(
+      second
+        ? `${first!.read} read: ${first!.error.message}; ${second.read} read: ${second.error.message}`
+        : `${first!.read} read: ${first!.error.message}`,
+    );
   } catch (err) {
     failure = err;
   }
