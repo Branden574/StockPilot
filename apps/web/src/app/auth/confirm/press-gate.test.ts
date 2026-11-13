@@ -77,7 +77,7 @@ function mountMarkup(): void {
   </main>`;
 }
 
-/** The form alone: a page that names no address (a link written before S25's first release). */
+/** The form alone, with no address marked: the gate then waits on the quiet second only. */
 function mount(): { form: HTMLFormElement; button: HTMLButtonElement } {
   mountMarkup();
   return runGate();

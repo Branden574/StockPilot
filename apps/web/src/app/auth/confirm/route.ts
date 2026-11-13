@@ -84,11 +84,11 @@ import type { EmailOtpType } from '@supabase/supabase-js';
  *     has not arrived yet; the page then says in words that it needs
  *     JavaScript;
  *   - where a link lands is fixed by its type (lib/auth/confirm-landing.ts).
- * A link written by a build from before S25's first release carries no `r`:
- * it gets the page it got before, with the gate, and is logged with its type.
- * The next release requires `r` on every link. What stays open: a person who
- * reads another account's address and presses anyway, or is talked into
- * pressing again later (INV-E5, "Not covered").
+ * A link without `r` gets the type's refused answer, on GET before the
+ * session is read or anything is looked up, and on POST before verifyOtp, and
+ * is logged with its type only: every link the app writes carries `r`. What
+ * stays open: a person who reads another account's address and presses
+ * anyway, or is talked into pressing again later (INV-E5, "Not covered").
  */
 
 /** Only the email types we actually send through this route. 'magiclink' is
@@ -121,9 +121,10 @@ function refusedRedirect(origin: string, type: string | null): NextResponse {
 }
 
 /**
- * The answer for a link whose `r` did not check out (changed, cut, moved to
- * another link, account or type): the refused answer, which says nothing, as
- * for a post from another site. An email change has its own page.
+ * The answer for a link whose `r` is missing or did not check out (changed,
+ * cut, moved to another link, account or type): the refused answer, which
+ * says nothing, as for a post from another site. An email change has its own
+ * page.
  */
 function refusedAnswer(origin: string, type: string | null): NextResponse {
   return type === 'email_change' ? emailChangeExpiredPage() : refusedRedirect(origin, type);
@@ -309,18 +310,6 @@ async function signedInAccount(): Promise<{ id: string; email: string | null } |
 }
 
 /**
- * S14's notice, for a link written before S25's first release in a browser
- * that is already signed in: such a link names no account, so the page says
- * what pressing on may do. It goes when the next release requires `r`.
- */
-function signedInNotice(email: string | null): string {
-  const who = email
-    ? `You're signed in as <strong>${escapeHtml(email)}</strong> on this browser.`
-    : 'This browser is already signed in to StockPilot.';
-  return `<p class="note">${who} If this link was sent to a different account, continuing signs you in to that account instead. If you didn't ask for this link, close this page.</p>`;
-}
-
-/**
  * The one line naming the account a signed link is for (S25): its full
  * address, looked up on the server, so a lookalike cannot hide behind a mask.
  * Fixed words per type; only the escaped address varies.
@@ -383,21 +372,21 @@ const NO_SCRIPT_LINE =
   'This page needs JavaScript to continue. Turn JavaScript on for this site, or open the link from your email in another browser.';
 
 /**
- * The click-through page: the lines above the form (the account a signed link
- * is for, and any notice), the form, which carries `r` back to POST when the
- * link had one, and the press gate after it. The button is disabled here and
- * enabled only by the gate's script, so it cannot be pressed where that script
- * does not run, or before the end of it has arrived; a browser with scripts
- * off shows NO_SCRIPT_LINE instead. Every value from the request is
+ * The click-through page: the lines above the form (the account the link is
+ * for, and any notice), the form, which carries `r` back to POST, and the
+ * press gate after it. The button is disabled here and enabled only by the
+ * gate's script, so it cannot be pressed where that script does not run, or
+ * before the end of it has arrived; a browser with scripts off shows
+ * NO_SCRIPT_LINE instead. Every value from the request is
  * escaped, and each was checked first (the type against ALLOWED_TYPES, next
- * against the type's landings, the token hash and `r` by their shapes when
- * `r` is present), so nothing from the URL can add markup or reach the script.
+ * against the type's landings, the token hash and `r` by their shapes and
+ * `r`'s signature), so nothing from the URL can add markup or reach the script.
  */
 function confirmPage(args: {
   type: string;
   tokenHash: string;
   next: string;
-  r: string | null;
+  r: string;
   lines: string;
 }): NextResponse {
   const { type } = args;
@@ -427,7 +416,7 @@ function confirmPage(args: {
       <input type="hidden" name="token_hash" value="${escapeHtml(args.tokenHash)}">
       <input type="hidden" name="type" value="${escapeHtml(type)}">
       <input type="hidden" name="next" value="${escapeHtml(args.next)}">
-      ${args.r === null ? '' : `<input type="hidden" name="r" value="${escapeHtml(args.r)}">`}
+      <input type="hidden" name="r" value="${escapeHtml(args.r)}">
       <button type="submit" class="btn" disabled>
         ${button}
       </button>
@@ -449,18 +438,12 @@ export async function GET(request: NextRequest) {
   const r = searchParams.get('r');
 
   if (r === null) {
-    // A link written by a build from before S25's first release carries no
-    // r. It gets the page it got before, and the log line, type only, shows
-    // when no such link is opened any more. The next release requires r.
+    // Every link the app writes carries r (lib/auth/confirm-link.ts). One
+    // without it names no account, so it gets the refused answer before
+    // anything is read: no session read, no lookup, no form. Logged with the
+    // type only.
     console.info('[auth/confirm] link without a recipient', { type });
-    const signedIn = await signedInAccount();
-    return confirmPage({
-      type,
-      tokenHash,
-      next,
-      r: null,
-      lines: signedIn ? signedInNotice(signedIn.email) : '',
-    });
+    return refusedAnswer(origin, type);
   }
 
   // Checked before anything is read: a link r does not vouch for costs no
@@ -571,19 +554,17 @@ export async function POST(request: NextRequest) {
   }
 
   // The account the link names (S25), checked again before the token is
-  // spent: the page's form carries r back, and a post can carry any r. A
-  // changed one is refused and one past its hour expired, as on GET.
-  let recipient: string | null = null;
-  if (r !== null) {
-    const verdict = verifyConfirmRecipient({ type: type ?? '', tokenHash: tokenHash ?? '', r });
-    if (verdict.status === 'invalid') return refusedAnswer(origin, type);
-    if (verdict.status === 'stale') return expiredAnswer(origin, type);
-    recipient = verdict.userId;
-  } else {
-    // A link written before S25's first release: verified as before, and
-    // logged (see GET).
+  // spent: the page's form carries r back, and a post can carry any r, or
+  // none. A post without r is refused (see GET), a changed one is refused and
+  // one past its hour expired, as on GET.
+  if (r === null) {
     console.info('[auth/confirm] link without a recipient', { type: loggedType(type) });
+    return refusedAnswer(origin, type);
   }
+  const verdict = verifyConfirmRecipient({ type: type ?? '', tokenHash: tokenHash ?? '', r });
+  if (verdict.status === 'invalid') return refusedAnswer(origin, type);
+  if (verdict.status === 'stale') return expiredAnswer(origin, type);
+  const recipient = verdict.userId;
 
   if (tokenHash && type && ALLOWED_TYPES.has(type as EmailOtpType)) {
     const supabase = await createClient();
@@ -596,7 +577,7 @@ export async function POST(request: NextRequest) {
     // builder of ours signed the wrong id (none is known). The browser must
     // not stay in an account the page did not name.
     const sessionUserId = data?.session?.user?.id ?? null;
-    if (recipient !== null && sessionUserId !== null && sessionUserId !== recipient) {
+    if (sessionUserId !== null && sessionUserId !== recipient) {
       if (type === 'email_change') {
         // GoTrue has already applied the change, to the session's account:
         // repair its profile and tell its old address, as for any change.

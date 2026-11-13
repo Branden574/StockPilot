@@ -314,9 +314,8 @@ press only after a quiet second in front with every address it names on screen,
 keeps its button disabled until the page's script has run and refuses a post
 that script did not let through,
 shows neither address for an email-change link whose change is no longer
-pending, and each link type lands on a fixed page. The second S25 release
-requires `r` on every link; until then a link written before the first release
-gets the page it got before.
+pending, and each link type lands on a fixed page. A link without `r` is
+refused on `GET` and `POST` before anything is read or spent.
 
 _Evidence_ (INV-E5): `apps/web/src/lib/auth/cross-site-request.test.ts`,
 `apps/web/src/lib/auth/api-context.cross-site.test.ts`,

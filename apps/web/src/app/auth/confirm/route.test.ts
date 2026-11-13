@@ -113,6 +113,23 @@ function linkQuery(args: {
   return q.toString();
 }
 
+/** The fields the page's form posts for a link: its token hash, type, landing and r. */
+function pressFields(args: {
+  type: string;
+  next?: string;
+  tokenHash?: string;
+  userId?: string;
+}): Record<string, string> {
+  const tokenHash = args.tokenHash ?? HASH_A;
+  const fields: Record<string, string> = {
+    token_hash: tokenHash,
+    type: args.type,
+    r: signedRef({ type: args.type, tokenHash, userId: args.userId ?? USER_A }),
+  };
+  if (args.next !== undefined) fields.next = args.next;
+  return fields;
+}
+
 function getReq(qs: string, headers: Record<string, string> = {}): NextRequest {
   return new NextRequest(`${BASE}/auth/confirm?${qs}`, { headers });
 }
@@ -164,13 +181,13 @@ beforeEach(() => {
 
 describe('GET /auth/confirm', () => {
   it('renders the click-through page WITHOUT consuming the token', async () => {
-    const res = await GET(getReq('token_hash=abc123&type=recovery&next=%2Freset%2Fcomplete'));
+    const res = await GET(getReq(linkQuery({ type: 'recovery', next: '/reset/complete' })));
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/html');
     expect(res.headers.get('cache-control')).toBe('no-store');
     const html = await res.text();
     expect(html).toContain('form method="post"');
-    expect(html).toContain('abc123');
+    expect(html).toContain(HASH_A);
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
@@ -199,24 +216,22 @@ describe('GET /auth/confirm', () => {
 describe('POST /auth/confirm', () => {
   it('verifies the token and redirects to the sanitized next path', async () => {
     verifyOtp.mockResolvedValue({ error: null });
-    const res = await POST(
-      postReq({ token_hash: 'abc123', type: 'recovery', next: '/reset/complete' }),
-    );
-    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc123' });
+    const res = await POST(postReq(pressFields({ type: 'recovery', next: '/reset/complete' })));
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: HASH_A });
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 
   it('sends expired/used recovery tokens to /reset with the notice param', async () => {
     verifyOtp.mockResolvedValue({ error: { message: 'Token has expired or is invalid' } });
-    const res = await POST(postReq({ token_hash: 'stale', type: 'recovery', next: '/reset/complete' }));
+    const res = await POST(postReq(pressFields({ type: 'recovery', next: '/reset/complete' })));
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_expired`);
   });
 
   it('neutralizes protocol-relative next paths (the link type decides where it lands)', async () => {
     verifyOtp.mockResolvedValue({ error: null });
-    const res = await POST(postReq({ token_hash: 'abc', type: 'recovery', next: '//evil.com' }));
+    const res = await POST(postReq(pressFields({ type: 'recovery', next: '//evil.com' })));
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 
@@ -246,10 +261,10 @@ describe('POST /auth/confirm from another site', () => {
     async (site) => {
       verifyOtp.mockResolvedValue({ error: null });
       const res = await POST(
-        postReq(
-          { token_hash: 'held-by-another-page', type: 'recovery', next: '/reset/complete' },
-          { 'sec-fetch-site': site, origin: 'https://evil.example' },
-        ),
+        postReq(pressFields({ type: 'recovery', next: '/reset/complete' }), {
+          'sec-fetch-site': site,
+          origin: 'https://evil.example',
+        }),
       );
       expect(res.status).toBe(303);
       expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
@@ -261,10 +276,7 @@ describe('POST /auth/confirm from another site', () => {
     verifyOtp.mockResolvedValue({ error: null });
     for (const type of ['invite', 'magiclink']) {
       const res = await POST(
-        postReq(
-          { token_hash: 'held', type, next: '/dashboard' },
-          { 'sec-fetch-site': 'cross-site' },
-        ),
+        postReq(pressFields({ type, next: '/dashboard' }), { 'sec-fetch-site': 'cross-site' }),
       );
       expect(res.status, type).toBe(303);
       expect(res.headers.get('location'), type).toBe(`${BASE}/signin?error=link_refused`);
@@ -286,7 +298,7 @@ describe('POST /auth/confirm from another site', () => {
 
   it('an email change from another site: its own expired page, and nothing changes', async () => {
     const res = await POST(
-      postReq({ token_hash: 'side-b', type: 'email_change' }, { 'sec-fetch-site': 'same-site' }),
+      postReq(pressFields({ type: 'email_change' }), { 'sec-fetch-site': 'same-site' }),
     );
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -314,12 +326,12 @@ describe('POST /auth/confirm from another site', () => {
   it("this route's own page (same-origin, Origin null by its no-referrer policy): verified as before", async () => {
     verifyOtp.mockResolvedValue({ error: null });
     const res = await POST(
-      postReq(
-        { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' },
-        { 'sec-fetch-site': 'same-origin', origin: 'null' },
-      ),
+      postReq(pressFields({ type: 'recovery', next: '/reset/complete' }), {
+        'sec-fetch-site': 'same-origin',
+        origin: 'null',
+      }),
     );
-    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: 'abc123' });
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'recovery', token_hash: HASH_A });
     expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
   });
 
@@ -914,89 +926,110 @@ describe('GET /auth/confirm for each email-change link, by who this browser is s
       expect(html).not.toContain('Continuing signs you in as');
     });
   });
+
+  // The pending address is whatever GoTrue's admin read returns for the
+  // account. The app's own change-email form takes none of < > " &, so this is
+  // the stored value as the route receives it: a quoted local part carrying
+  // markup characters. It is printed escaped, in the same marked span as every
+  // other address, and no markup from it reaches the page.
+  it('signed in as another account, a pending address with markup characters: the notice and the line show it escaped and marked like every other address', async () => {
+    const pending = `"</span><b title='t'>x&y</b>"@example.com`;
+    const escaped =
+      '&quot;&lt;/span&gt;&lt;b title=&#39;t&#39;&gt;x&amp;y&lt;/b&gt;&quot;@example.com';
+    signedInAs(USER_B, EMAIL_B);
+    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: pending }));
+    const res = await GET(getReq(linkQuery({ type: 'email_change' })));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(
+      `<p class="note">You're signed in as ${see(EMAIL_B)} on this browser. If the other address has not confirmed the change yet, continuing signs no one in and you stay signed in as ${see(EMAIL_B)}. If it has, continuing completes the change and signs you in as ${see(escaped)} instead. If you didn't ask for this link, close this page.</p>`,
+    );
+    expect(html).toContain(
+      `This link changes the sign-in email of ${see('old@example.com')} to ${see(escaped)}.`,
+    );
+    expect(html).not.toContain(pending);
+    expect(html).not.toMatch(/<b\b/i);
+    // Two addresses in the line and three in the notice, each in its own span.
+    expect(html.match(/<span class="addr" data-press-gate-see>/g)).toHaveLength(5);
+    expect(html.match(/<\/span>/g)).toHaveLength(5);
+  });
 });
 
-// S25's first release: a link written by an earlier build carries no r. It
-// gets the page it got before, with S14's notice when signed in, and is
-// logged with its type only. The next release requires r on every link.
-describe('GET /auth/confirm for a link written before S25', () => {
-  const NOTICE =
-    'If this link was sent to a different account, continuing signs you in to that account instead.';
+// Every link the app writes carries r (lib/auth/confirm-link.ts, and the
+// sweeps in lib/auth/confirm-landing.test.ts). A link without it gets the
+// refused answer of its type before anything is read: no session read, no
+// lookup, no form, nothing spent. Logged with the type only.
+describe('GET /auth/confirm refuses a link without r (S25)', () => {
+  it.each([
+    [
+      'recovery',
+      'token_hash=abc123&type=recovery&next=%2Freset%2Fcomplete',
+      '/reset?error=link_refused',
+    ],
+    [
+      'invite',
+      `token_hash=${HASH_A}&type=invite&next=%2Freset%2Fcomplete`,
+      '/signin?error=link_refused',
+    ],
+    [
+      'magiclink',
+      `token_hash=${HASH_A}&type=magiclink&next=%2Fdashboard`,
+      '/signin?error=link_refused',
+    ],
+  ])(
+    '%s: the refused answer, no form, no session read, no lookup, and one log line with the type only',
+    async (type, qs, location) => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+      const res = await GET(
+        getReq(qs, { 'sec-fetch-site': 'cross-site', 'sec-fetch-mode': 'navigate' }),
+      );
+      expect(res.status).toBe(303);
+      expect(res.headers.get('location')).toBe(`${BASE}${location}`);
+      expect(getUser).not.toHaveBeenCalled();
+      expect(getUserById).not.toHaveBeenCalled();
+      expect(verifyOtp).not.toHaveBeenCalled();
+      expect(info.mock.calls).toEqual([['[auth/confirm] link without a recipient', { type }]]);
+      const logged = JSON.stringify(info.mock.calls);
+      expect(logged).not.toContain('abc123');
+      expect(logged).not.toContain(HASH_A);
+      info.mockRestore();
+    },
+  );
 
-  it('the page as before, with the notice naming the account this browser is signed in as, and a log line with the type only', async () => {
+  it('an email change: its own expired page, with no form and no address', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    signedInAs(USER_B, EMAIL_B);
-    const res = await GET(getReq('token_hash=abc123&type=recovery&next=%2Freset%2Fcomplete'));
+    const res = await GET(getReq(`token_hash=${HASH_A}&type=email_change`));
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain(
-      "You're signed in as <strong>member@example.com</strong> on this browser.",
-    );
-    expect(html).toContain(NOTICE);
-    expect(html).toContain("If you didn't ask for this link, close this page.");
-    expect(html).toContain('form method="post"');
-    expect(html).not.toContain('name="r"');
-    expect(html).not.toContain('class="recipient"');
+    expect(html).toContain('This link has expired or was already used');
+    expect(html).toContain('Nothing about your account has changed');
+    expect(html).not.toContain('<form');
+    expect(html).not.toContain('<script');
+    expect(html).not.toContain(HASH_A);
+    expect(getUser).not.toHaveBeenCalled();
     expect(getUserById).not.toHaveBeenCalled();
-    expect(verifyOtp).not.toHaveBeenCalled();
-    expect(info).toHaveBeenCalledTimes(1);
-    expect(info.mock.calls[0]).toEqual([
-      '[auth/confirm] link without a recipient',
-      { type: 'recovery' },
-    ]);
-    info.mockRestore();
-  });
-
-  it('signed out: no notice, and the press gate as on every form', async () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {});
-    const html = await (await GET(getReq('token_hash=abc123&type=recovery'))).text();
-    expect(getUser).toHaveBeenCalledTimes(1);
-    expect(html).not.toContain(NOTICE);
-    expect(html).toContain('This link works once. Press the button to continue.');
-    expect(html.match(/<script\b/gi)).toHaveLength(1);
-    expect(html).toContain(`<script>${PRESS_GATE_SCRIPT}</script>`);
-    // The same disabled button and the same words for a browser without
-    // scripts as on a signed link's page.
-    expect(html.match(/<button\b[^>]*>/gi)).toEqual([
-      '<button type="submit" class="btn" disabled>',
-    ]);
-    expect(html).toContain(
-      '<noscript><p class="needs-script">This page needs JavaScript to continue.',
-    );
-    // No account to name, so nothing for the gate to wait on but the second,
-    // and no id for a link to scroll to either.
-    expect(html.slice(0, html.indexOf('<script>'))).not.toContain(PRESS_GATE_SEE_ATTR);
-    expect(html).not.toMatch(/\sid\s*=/i);
-    vi.mocked(console.info).mockRestore();
-  });
-
-  it('a session with no email still gets the notice, without a name', async () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {});
-    getUser.mockResolvedValueOnce({ data: { user: { id: USER_B, email: null } }, error: null });
-    const html = await (await GET(getReq('token_hash=abc123&type=magiclink'))).text();
-    expect(html).toContain('This browser is already signed in to StockPilot.');
-    expect(html).toContain(NOTICE);
-    vi.mocked(console.info).mockRestore();
-  });
-
-  it('a session check that throws: the page still renders, without the notice', async () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {});
-    getUser.mockRejectedValueOnce(new Error('network'));
-    const res = await GET(getReq('token_hash=abc123&type=recovery'));
-    expect(res.status).toBe(200);
-    const html = await res.text();
-    expect(html).not.toContain(NOTICE);
-    expect(html).toContain('form method="post"');
-    vi.mocked(console.info).mockRestore();
-  });
-
-  it('the log names only a known link type', async () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    await GET(getReq('token_hash=abc123&type=email_change'));
     expect(info.mock.calls).toEqual([
       ['[auth/confirm] link without a recipient', { type: 'email_change' }],
     ]);
     info.mockRestore();
+  });
+
+  it('in a browser signed in to any account: the same refused answer, and no notice', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    signedInAs(USER_B, EMAIL_B);
+    const res = await GET(getReq(`token_hash=${HASH_A}&type=magiclink&next=%2Fdashboard`));
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(`${BASE}/signin?error=link_refused`);
+    expect(await res.text()).not.toContain(EMAIL_B);
+    expect(getUser).not.toHaveBeenCalled();
+    vi.mocked(console.info).mockRestore();
+  });
+
+  it('an r that is present but empty is refused the same way, as one that does not check out', async () => {
+    const res = await GET(getReq(`token_hash=${HASH_A}&type=recovery&r=`));
+    expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
+    expect(getUser).not.toHaveBeenCalled();
+    expect(getUserById).not.toHaveBeenCalled();
   });
 });
 
@@ -1075,12 +1108,12 @@ describe('POST /auth/confirm takes a press only through the press gate (S25)', (
 
   it('a post with no Sec-Fetch-Site and no Origin is held to the field as well: refused without it with nothing spent, verified with it', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const fields = { token_hash: HASH_A, type: 'recovery', next: '/reset/complete' };
+    const fields = pressFields({ type: 'recovery', next: '/reset/complete' });
     const refused = await POST(postWithoutGate(fields, {}));
     expect(refused.status).toBe(303);
     expect(refused.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
     expect(refused.headers.get('set-cookie')).toBeNull();
-    const change = await POST(postWithoutGate({ token_hash: HASH_A, type: 'email_change' }, {}));
+    const change = await POST(postWithoutGate(pressFields({ type: 'email_change' }), {}));
     expect(change.status).toBe(200);
     expect(await change.text()).toContain('This link has expired or was already used');
     expect(verifyOtp).not.toHaveBeenCalled();
@@ -1102,7 +1135,8 @@ describe('POST /auth/confirm takes a press only through the press gate (S25)', (
 
   it('any other value in the field, an empty one, or no form at all is refused the same way', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const fields = { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' };
+    verifyOtp.mockResolvedValue({ error: null });
+    const fields = pressFields({ type: 'recovery', next: '/reset/complete' });
     for (const value of ['', '1', 'true', 'ARMED', ` ${PRESS_GATE_PASSED_VALUE}`]) {
       const res = await POST(
         postWithoutGate({ ...fields, [PRESS_GATE_PASSED_FIELD]: value }, SAME_ORIGIN),
@@ -1132,7 +1166,8 @@ describe('POST /auth/confirm takes a press only through the press gate (S25)', (
 
   it('a post from another site is still refused first, with or without the field, and is not logged as a gate refusal', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const fields = { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' };
+    verifyOtp.mockResolvedValue({ error: null });
+    const fields = pressFields({ type: 'recovery', next: '/reset/complete' });
     const elsewhere = { 'sec-fetch-site': 'cross-site', origin: 'https://elsewhere.example' };
     for (const req of [postWithoutGate(fields, elsewhere), postReq(fields, elsewhere)]) {
       const res = await POST(req);
@@ -1255,15 +1290,55 @@ describe('POST /auth/confirm checks r before the token is spent (S25)', () => {
     expect(verifyOtp).not.toHaveBeenCalled();
   });
 
-  it('a press from a link written before S25: answered as before, and logged with its type only', async () => {
+  it.each([
+    ['recovery', '/reset/complete', `${BASE}/reset?error=link_refused`],
+    ['invite', '/reset/complete', `${BASE}/signin?error=link_refused`],
+    ['magiclink', '/dashboard', `${BASE}/signin?error=link_refused`],
+  ])(
+    'a press of a %s link without r, through the gate from this very page: the refused answer, nothing spent, and one log line with the type only',
+    async (type, next, location) => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+      verifyOtp.mockResolvedValue({ data: { session: { user: { id: USER_A } } }, error: null });
+      const res = await POST(postReq({ token_hash: HASH_A, type, next }, SAME_ORIGIN));
+      expect(res.status).toBe(303);
+      expect(res.headers.get('location')).toBe(location);
+      expect(res.headers.get('set-cookie')).toBeNull();
+      expect(verifyOtp).not.toHaveBeenCalled();
+      expect(getUser).not.toHaveBeenCalled();
+      expect(signOut).not.toHaveBeenCalled();
+      expect(info.mock.calls).toEqual([['[auth/confirm] link without a recipient', { type }]]);
+      expect(JSON.stringify(info.mock.calls)).not.toContain(HASH_A);
+      info.mockRestore();
+    },
+  );
+
+  it('an email change without r: its own expired page, and nothing spent or changed', async () => {
+    vi.spyOn(console, 'info').mockImplementation(() => {});
+    verifyOtp.mockResolvedValue({
+      data: { user: { id: USER_A }, session: { user: { id: USER_A } } },
+      error: null,
+    });
+    const res = await POST(postReq({ token_hash: HASH_A, type: 'email_change' }, SAME_ORIGIN));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Nothing about your account has changed');
+    expect(verifyOtp).not.toHaveBeenCalled();
+    expect(completeEmailChange).not.toHaveBeenCalled();
+    vi.mocked(console.info).mockRestore();
+  });
+
+  it('a press without r from a browser that sends no Sec-Fetch-Site is refused the same way', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    verifyOtp.mockResolvedValue({ error: null });
+    verifyOtp.mockResolvedValue({ data: { session: { user: { id: USER_A } } }, error: null });
     const res = await POST(
-      postReq({ token_hash: 'abc123', type: 'recovery', next: '/reset/complete' }, SAME_ORIGIN),
+      postReq(
+        { token_hash: HASH_A, type: 'recovery', next: '/reset/complete' },
+        { origin: 'null' },
+      ),
     );
-    expect(verifyOtp).toHaveBeenCalledTimes(1);
-    expect(res.headers.get('location')).toBe(`${BASE}/reset/complete`);
+    expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
+    expect(verifyOtp).not.toHaveBeenCalled();
     expect(info.mock.calls).toEqual([
+      ['[auth/confirm] confirmation posted without Sec-Fetch-Site', { type: 'recovery' }],
       ['[auth/confirm] link without a recipient', { type: 'recovery' }],
     ]);
     info.mockRestore();
@@ -1380,19 +1455,15 @@ describe('/auth/confirm lands where the link type says, not where the link says'
     ['recovery', '', '/reset/complete'],
   ])('POST %s with next %s: lands on %s', async (type, next, landing) => {
     verifyOtp.mockResolvedValue({ error: null });
-    const res = await POST(
-      postReq(
-        { token_hash: 'abc123', type, next },
-        { 'sec-fetch-site': 'same-origin', origin: 'null' },
-      ),
-    );
+    const res = await POST(postReq(pressFields({ type, next }), SAME_ORIGIN));
+    expect(verifyOtp).toHaveBeenCalledTimes(1);
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}${landing}`);
   });
 
   it('GET carries the landing in its form, not the path the link chose', async () => {
     const html = await (
-      await GET(getReq('token_hash=abc123&type=magiclink&next=%2Fdashboard%2Fitems%2Fnew'))
+      await GET(getReq(linkQuery({ type: 'magiclink', next: '/dashboard/items/new' })))
     ).text();
     expect(html).toContain('<input type="hidden" name="next" value="/dashboard">');
     expect(html).not.toContain('/dashboard/items/new');
@@ -1435,21 +1506,20 @@ describe('/auth/confirm lands where the link type says, not where the link says'
 // ─────────────────────────────────────────────────────────────────────────
 describe('/auth/confirm — email_change', () => {
   it('GET renders the click-through form for an email_change token without consuming it', async () => {
-    vi.spyOn(console, 'info').mockImplementation(() => {});
-    const res = await GET(getReq('token_hash=ec123&type=email_change'));
+    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: 'new@example.com' }));
+    const res = await GET(getReq(linkQuery({ type: 'email_change' })));
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('Confirm your email change');
     expect(html).toContain('form method="post"');
-    expect(html).toContain('ec123');
+    expect(html).toContain(HASH_A);
     expect(verifyOtp).not.toHaveBeenCalled();
-    vi.mocked(console.info).mockRestore();
   });
 
   it('FIRST confirmation (no session returned) renders "one to go" and completes nothing', async () => {
     verifyOtp.mockResolvedValue({ data: { user: null, session: null }, error: null });
-    const res = await POST(postReq({ token_hash: 'side-a', type: 'email_change' }));
-    expect(verifyOtp).toHaveBeenCalledWith({ type: 'email_change', token_hash: 'side-a' });
+    const res = await POST(postReq(pressFields({ type: 'email_change' })));
+    expect(verifyOtp).toHaveBeenCalledWith({ type: 'email_change', token_hash: HASH_A });
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
     const html = await res.text();
@@ -1460,11 +1530,11 @@ describe('/auth/confirm — email_change', () => {
 
   it('SECOND confirmation (session returned) completes the change and lands on Profile', async () => {
     verifyOtp.mockResolvedValue({
-      data: { user: { id: 'u-1' }, session: { user: { id: 'u-1', email: 'new@example.com' } } },
+      data: { user: { id: USER_A }, session: { user: { id: USER_A, email: 'new@example.com' } } },
       error: null,
     });
-    const res = await POST(postReq({ token_hash: 'side-b', type: 'email_change' }));
-    expect(completeEmailChange).toHaveBeenCalledWith({ userId: 'u-1' });
+    const res = await POST(postReq(pressFields({ type: 'email_change' })));
+    expect(completeEmailChange).toHaveBeenCalledWith({ userId: USER_A });
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
   });
@@ -1491,18 +1561,21 @@ describe('/auth/confirm — email_change', () => {
 
   it('IGNORES next for email_change — the destination is hard-coded', async () => {
     verifyOtp.mockResolvedValue({
-      data: { user: { id: 'u-1' }, session: { user: { id: 'u-1' } } },
+      data: { user: { id: USER_A }, session: { user: { id: USER_A } } },
       error: null,
     });
     const res = await POST(
-      postReq({ token_hash: 'side-b', type: 'email_change', next: '/dashboard/orders' }),
+      postReq(pressFields({ type: 'email_change', next: '/dashboard/orders' })),
     );
     expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
   });
 
   it('an expired/used/tampered email_change link gets its own page, never the /signin bounce, and mutates nothing', async () => {
-    verifyOtp.mockResolvedValue({ data: { user: null, session: null }, error: { message: 'Token has expired or is invalid' } });
-    const res = await POST(postReq({ token_hash: 'stale', type: 'email_change' }));
+    verifyOtp.mockResolvedValue({
+      data: { user: null, session: null },
+      error: { message: 'Token has expired or is invalid' },
+    });
+    const res = await POST(postReq(pressFields({ type: 'email_change' })));
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('expired or was already used');
@@ -1512,11 +1585,11 @@ describe('/auth/confirm — email_change', () => {
 
   it('a completion hook failure never blocks the redirect (best-effort notify)', async () => {
     verifyOtp.mockResolvedValue({
-      data: { user: { id: 'u-1' }, session: { user: { id: 'u-1' } } },
+      data: { user: { id: USER_A }, session: { user: { id: USER_A } } },
       error: null,
     });
     completeEmailChange.mockRejectedValueOnce(new Error('resend down'));
-    const res = await POST(postReq({ token_hash: 'side-b', type: 'email_change' }));
+    const res = await POST(postReq(pressFields({ type: 'email_change' })));
     expect(res.status).toBe(303);
     expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
   });
@@ -1552,7 +1625,7 @@ describe('GET /auth/confirm page look', () => {
 
   it('the email-change status page keeps its words and its one link, and loads no script', async () => {
     verifyOtp.mockResolvedValueOnce({ data: {}, error: { message: 'expired' } });
-    const res = await POST(postReq({ token_hash: 'x', type: 'email_change' }));
+    const res = await POST(postReq(pressFields({ type: 'email_change' })));
     const html = await res.text();
     expect(html).not.toMatch(/<script\b/i);
     expect(html).toContain(
