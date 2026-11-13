@@ -40,10 +40,15 @@
  *
  * Fail-safe: the button stays enabled in the markup, so a browser where this
  * does not run posts as before, and the pointer can arm a page whose browser
- * never reports focus. A window that the page opening it has barred from
- * running scripts is not shown the page at all: the app sends its opener
- * policy with it (next.config.ts), and a browser then refuses to load it
- * there (security-headers.test.ts holds the header to this path). What it
+ * never reports focus. The page must therefore not be shown where another
+ * site has stopped this from running. It cannot be framed, and it is sent
+ * with the app's opener policy header (next.config.ts;
+ * security-headers.test.ts holds all three headers to this path, and
+ * route.test.ts holds the page to setting none of them itself). With that
+ * header, Chromium 156, Firefox 157 and WebKit 27.2 each refused to load the
+ * page in a window opened from a sandboxed frame, or from a page under a CSP
+ * sandbox, that may not run scripts (review of 2026-11-12: those two ways of
+ * opening it and those three browser versions are what was tried). What it
  * does not stop: a person talked into stopping on the page and pressing again
  * later (every line of every address it names has then been on screen for at
  * least a second), INV-E5.

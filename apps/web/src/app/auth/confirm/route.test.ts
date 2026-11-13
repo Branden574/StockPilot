@@ -510,6 +510,22 @@ describe('GET /auth/confirm names the account the link is for (S25)', () => {
     expect(html).not.toMatch(/<button[^>]*\bdisabled\b/);
   });
 
+  // The gate counts on three headers the app's header rules send to this
+  // path: the opener policy and the two that refuse a frame
+  // (src/test/security-headers.test.ts). A header of the page's own would
+  // replace or double the rule's value, so the page sets none of them.
+  it('sets no opener policy or framing header of its own: the header rules of the app send them', async () => {
+    const res = await GET(getReq(linkQuery({ type: 'magiclink', next: '/dashboard' })));
+    expect(res.status).toBe(200);
+    for (const name of [
+      'cross-origin-opener-policy',
+      'x-frame-options',
+      'content-security-policy',
+    ]) {
+      expect(res.headers.get(name), name).toBeNull();
+    }
+  });
+
   it('gives no element an id a link could scroll to, and marks every address it names for the gate (S25 review)', async () => {
     // Signed in as another account: the line names the link's account, and
     // the note names both.

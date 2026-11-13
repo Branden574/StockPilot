@@ -60,10 +60,13 @@
 
      AMENDED 2026-11-12 (docket S25, merge of main): INV-E5's Tested at text
      says what the wider sweeps of confirm-landing.test.ts hold, and its
-     Enforced by text names the opener policy header the page is sent with,
-     now pinned on that path in security-headers.test.ts. The sentences on
-     links written before the first release were reworded. Nothing else in
-     this document was re-verified. -->
+     Enforced by text names the three headers the confirmation page counts
+     on (the opener policy and the two that refuse a frame), now pinned on
+     that path in security-headers.test.ts, which also records in which
+     browser versions and for which ways of opening the page the opener
+     policy was seen to refuse it. The sentences on links written before the
+     first release were reworded. Nothing else in this document was
+     re-verified. -->
 
 # Security invariants
 
@@ -1515,14 +1518,18 @@ application structure.
   address the page names has been on screen through such a second: wholly,
   or, for one taller than the window, each of its lines
   ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)); the
-  page gives no element an id, so no link opens it scrolled to the button,
-  and it is sent with the app's opener policy header, so a browser does not
-  show it in a window that the page opening it has barred from running
-  scripts. A
+  page gives no element an id, so no link opens it scrolled to the button. A
   window swap (DoubleClickjacking), or a window another site opens small and
   scrolled past the line or into the middle of a long address, therefore
   gets no press before the account's address has been on screen for a
-  second. A link written by a build from before the first S25 release carries
+  second. The button is enabled in the markup, so the page counts on three of
+  the app's headers to keep it from being shown where another site has
+  stopped its script from running: the two that refuse a frame
+  (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) and the opener policy;
+  [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
+  holds all three to the page's path and records for which ways of opening
+  the page, and in which browser versions, the opener policy was seen to
+  refuse it. A link written by a build from before the first S25 release carries
   no `r`: it gets the page it got before, with the signed-in notice and the
   gate, and is logged (type only); the second release requires `r` on every
   link. Where a link lands is fixed by its type
@@ -1578,7 +1585,9 @@ application structure.
   path; and in the rest of the repository only the two sign-in harnesses do
   either, each signing `r` and waiting for the gate);
   [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
-  (the opener policy header reaches the page, in one value);
+  (the opener policy header and the two headers that refuse a frame reach
+  the page, each in one value; `route.test.ts` holds the page to setting
+  none of the three itself);
   [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
   (another origin's link, image or frame leaves a live session alone and still
   clears a gone one); and

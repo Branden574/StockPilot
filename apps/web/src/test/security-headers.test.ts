@@ -34,6 +34,23 @@ function headerValues(all: HeaderRule[], key: string): string[] {
   );
 }
 
+/** The emailed-link page (app/auth/confirm), whose press gate counts on three of these headers. */
+const EMAILED_LINK_PAGE = '/auth/confirm';
+
+/**
+ * The rules that send `key` to `path`. One is right: with two a browser gets
+ * two values, and with none it gets none.
+ */
+function sending(all: HeaderRule[], key: string, path: string): HeaderRule[] {
+  return all.filter(
+    (r) =>
+      r.headers.some((h) => h.key.toLowerCase() === key.toLowerCase()) &&
+      new RegExp(`^${r.source.replace(/\/:path\+$/, '/.+').replace(/\/:path\*$/, '/.*')}$`).test(
+        path,
+      ),
+  );
+}
+
 async function csp(): Promise<string> {
   const values = headerValues(await rules(), 'Content-Security-Policy');
   expect(values).toHaveLength(1);
@@ -101,23 +118,23 @@ describe('COOP / CORP / COEP (MED-28)', () => {
   });
 
   // The emailed-link page (app/auth/confirm, docket S25) counts on this
-  // header as well. Its one script, the press gate, holds a press back until
+  // header as well, and on the two that refuse a frame (pinned to its path
+  // further down). Its one script, the press gate, holds a press back until
   // the account the link is for has been on screen, and its button is left
-  // enabled in the markup on purpose. While the header is sent, a browser
-  // refuses to open the page in a window that the page opening it has barred
-  // from running scripts, so the page is not shown there without its gate.
-  // Before this header stops reaching that path, or says unsafe-none there,
-  // give the page its own answer for such a window.
-  it('sends COOP on the emailed-link page, whose press gate counts on it', async () => {
-    const all = await rules();
-    const coopRules = all.filter((r) =>
-      r.headers.some((h) => h.key.toLowerCase() === 'cross-origin-opener-policy'),
-    );
-    const covering = coopRules.filter((r) =>
-      new RegExp(`^${r.source.replace(/\/:path\+$/, '/.+').replace(/\/:path\*$/, '/.*')}$`).test(
-        '/auth/confirm',
-      ),
-    );
+  // enabled in the markup on purpose, so the page must not be shown where
+  // another site has stopped its script from running:
+  //   - in a frame: X-Frame-Options DENY and the CSP's frame-ancestors 'none'
+  //     refuse that;
+  //   - in a window opened from a sandboxed frame, or from a page under a CSP
+  //     sandbox, that may not run scripts: with this header sent, Chromium
+  //     156, Firefox 157 and WebKit 27.2 each refused to load the page there
+  //     (review of 2026-11-12; those two ways of opening it and those three
+  //     browser versions are what was tried).
+  // Before one of the three stops reaching that path, or this one says
+  // unsafe-none there, give the page its own answer for a window that runs
+  // no script.
+  it('sends COOP on the emailed-link page, whose press gate counts on it: with it Chromium 156, Firefox 157 and WebKit 27.2 refused to load the page in a window opened from a sandboxed frame or from a page under a CSP sandbox', async () => {
+    const covering = sending(await rules(), 'Cross-Origin-Opener-Policy', EMAILED_LINK_PAGE);
     // Exactly one rule, so the page gets one value: two would not parse.
     expect(covering).toHaveLength(1);
     const values = headerValues(covering, 'Cross-Origin-Opener-Policy');
@@ -198,6 +215,22 @@ describe('the pre-existing header set is not regressed', () => {
     const policy = await csp();
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain("object-src 'none'");
+  });
+
+  // The two pins above read every rule at once, so they would still pass if
+  // the headers moved to a rule for other paths. The emailed-link page counts
+  // on both (see the COOP pin for that page above): no site can show it in a
+  // frame, where a frame's sandbox could stop its press gate from running.
+  it('sends the two headers that refuse a frame on the emailed-link page, each in one value', async () => {
+    const all = await rules();
+    const frameOptions = sending(all, 'X-Frame-Options', EMAILED_LINK_PAGE);
+    expect(frameOptions).toHaveLength(1);
+    expect(headerValues(frameOptions, 'X-Frame-Options')).toEqual(['DENY']);
+    const policyRules = sending(all, 'Content-Security-Policy', EMAILED_LINK_PAGE);
+    expect(policyRules).toHaveLength(1);
+    const policies = headerValues(policyRules, 'Content-Security-Policy');
+    expect(policies).toHaveLength(1);
+    expect(policies[0]!.split(';').map((d) => d.trim())).toContain("frame-ancestors 'none'");
   });
 });
 
