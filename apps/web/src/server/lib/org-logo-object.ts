@@ -4,6 +4,7 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { isValidStoragePath, orgLogoPathShape } from '@/lib/storage-path';
 import { createAdminClient } from '@/lib/supabase/admin';
+import { keepAlive } from '@/server/services/lib/defer';
 
 /** The bucket every organization logo is stored in. */
 export const ORG_LOGO_BUCKET = 'org-logos';
@@ -29,14 +30,15 @@ export function orgLogoBucketUrlPrefix(): string {
  * organization's folder, a nested folder, or a path that steps out of the
  * folder (isValidStoragePath with the shape pinned to `organizationId`). A
  * query string (an older `?t=` cache-buster) is ignored. With no storage
- * address configured, no link is one of ours. Null always means "nothing of
- * this organization's to touch".
+ * address configured, no link is one of ours, and a value that is not a
+ * string is no link. Never throws. Null always means "nothing of this
+ * organization's to touch".
  */
 export function orgLogoObjectPath(
   url: string | null | undefined,
   organizationId: string,
 ): string | null {
-  if (!url || !storageBase()) return null;
+  if (typeof url !== 'string' || !url || !storageBase()) return null;
   const prefix = orgLogoBucketUrlPrefix();
   const noQuery = url.split('?')[0] ?? url;
   if (!noQuery.startsWith(prefix)) return null;
@@ -59,10 +61,26 @@ export function orgLogoObjectPath(
  * held the person to owner or admin of `organizationId`, and the path is
  * pinned to that organization's folder above.
  *
- * Best effort: never throws. A failed removal is reported (the organization
- * id only, no object path) and the save stands.
+ * Best effort: never throws or rejects. A failed removal is reported (the
+ * organization id only, no object path) and the save stands.
+ *
+ * KEPT ALIVE PAST THE RESPONSE, like audit(): the removal starts here and is
+ * handed to after() (lib/defer.ts keepAlive), so the caller need not wait for
+ * storage before it answers (`void removePreviousOrgLogo(...)`), and the
+ * platform keeps the invocation running until the removal has answered. The
+ * returned promise is that same removal.
  */
-export async function removePreviousOrgLogo(input: {
+export function removePreviousOrgLogo(input: {
+  organizationId: string;
+  previousUrl: string | null | undefined;
+  savedUrl: string | null | undefined;
+}): Promise<void> {
+  const removal = removeNow(input);
+  keepAlive(removal);
+  return removal;
+}
+
+async function removeNow(input: {
   organizationId: string;
   previousUrl: string | null | undefined;
   savedUrl: string | null | undefined;

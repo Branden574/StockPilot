@@ -737,7 +737,7 @@ describe('setOrgLogoUrlAction', () => {
       });
       expect(audit).toHaveBeenCalledTimes(1);
       expect(revalidateTag).toHaveBeenCalledWith('dashboard-org', 'max');
-      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(reportErrorMock).toHaveBeenCalledTimes(1));
       expect(reportErrorMock).toHaveBeenCalledWith(
         expect.any(Error),
         expect.objectContaining({ tag: 'org.logo.remove_previous' }),
@@ -754,6 +754,7 @@ describe('setOrgLogoUrlAction', () => {
       const result = await setOrgLogoUrlAction({ url: null });
       expect(result.ok).toBe(true);
       expect(audit).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(reportErrorMock).toHaveBeenCalled());
       expect(reportErrorMock).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({ tag: 'org.logo.remove_previous' }),
@@ -788,6 +789,54 @@ describe('setOrgLogoUrlAction', () => {
       expect(logoStorage.remove).toHaveBeenCalledTimes(1);
       expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-200.png']);
       expect(stubHolder.stub!.chainArgs.get('organizations.update')).toBeUndefined();
+    });
+
+    it('the answer and the audit row do not wait for the removal', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      let settleRemoval: (value: { data: null; error: null }) => void = () => {};
+      logoStorage.remove.mockImplementation(
+        () => new Promise((resolve) => { settleRemoval = resolve; }),
+      );
+      const outcome = await Promise.race([
+        setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-200.png` }),
+        new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), 200)),
+      ]);
+      expect(outcome).toEqual({ ok: true, data: undefined });
+      expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-100.png']);
+      expect(audit).toHaveBeenCalledTimes(1);
+      settleRemoval({ data: null, error: null });
+    });
+
+    it('a removal that fails after the answer is reported', async () => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      let failRemoval: (reason: Error) => void = () => {};
+      logoStorage.remove.mockImplementation(
+        () => new Promise((_resolve, reject) => { failRemoval = reject; }),
+      );
+      const outcome = await Promise.race([
+        setOrgLogoUrlAction({ url: null }),
+        new Promise<'still waiting'>((resolve) => setTimeout(() => resolve('still waiting'), 200)),
+      ]);
+      expect(outcome).toEqual({ ok: true, data: undefined });
+      expect(reportErrorMock).not.toHaveBeenCalled();
+      failRemoval(new Error('connection reset'));
+      await vi.waitFor(() =>
+        expect(reportErrorMock).toHaveBeenCalledWith(
+          expect.any(Error),
+          expect.objectContaining({ tag: 'org.logo.remove_previous' }),
+        ),
+      );
+      expect(JSON.stringify(reportErrorMock.mock.calls)).not.toContain('logo-100');
+    });
+
+    it.each([
+      ['Replace', `${LOGO_URL_BASE}logo-200.png`],
+      ['Remove', null],
+    ])('%s refreshes the public catalog page cache of organization data', async (_l, url) => {
+      withPrevious(`${LOGO_URL_BASE}logo-100.png`);
+      const result = await setOrgLogoUrlAction({ url });
+      expect(result.ok).toBe(true);
+      expect(revalidateTag).toHaveBeenCalledWith('public-org-by-token', 'max');
     });
 
     it('a staff member removes nothing', async () => {

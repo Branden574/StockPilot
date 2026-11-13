@@ -42,6 +42,7 @@ import {
 import { orgLogoBucketUrlPrefix, removePreviousOrgLogo } from '@/server/lib/org-logo-object';
 import { audit } from '@/server/services/audit';
 import { ServiceError, mfaGateError, withContext } from '@/server/services/context';
+import { PUBLIC_TOKEN_RESOLVE_TAG } from '@/server/services/public-links';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
 import { assertStepUpHeld, sessionChangedError } from '@/server/services/step-up-held';
 import { actionErrorResult } from '@/server/lib/action-error-result';
@@ -518,8 +519,10 @@ export async function setOrgLogoUrlAction(input: {
     if (!updated) throw new ServiceError('not_found', 'Organization not found.');
     // S76: the save stands; now remove the object the column held before, if
     // it is this organization's logo object and not the one just saved. Never
-    // throws: a failed removal is reported and the save stays.
-    await removePreviousOrgLogo({
+    // rejects: a failed removal is reported and the save stays. Not awaited:
+    // the helper keeps the removal alive past the response (keepAlive), so the
+    // answer and the audit row do not wait for storage.
+    void removePreviousOrgLogo({
       organizationId: ctx.organizationId,
       previousUrl: prev?.logo_url ?? null,
       savedUrl: persistUrl,
@@ -538,6 +541,10 @@ export async function setOrgLogoUrlAction(input: {
     // the new logo appears in the dashboard shell on next nav instead
     // of being stale for up to 60s. Static cross-org tag.
     revalidateTag('dashboard-org', 'max');
+    // The public catalog page caches organization data (with the logo link)
+    // under this tag for 60 s; refresh it so the page shows the new logo, or
+    // none, on its next load.
+    revalidateTag(PUBLIC_TOKEN_RESOLVE_TAG, 'max');
     revalidatePath('/dashboard', 'layout');
     return ok(undefined);
   } catch (e) {
