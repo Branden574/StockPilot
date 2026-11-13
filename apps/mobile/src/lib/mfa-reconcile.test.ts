@@ -232,14 +232,18 @@ describe('reconcile: an authenticator removed since the session was stored', () 
 describe('reconcile: the note is never kept for a session that entered its code', () => {
   /** A reconciler whose refresh is held open until the test settles it. */
   function slowRefresh(first: SessionLike) {
-    const state = { current: first as SessionLike | null, reads: 0 };
+    const state = {
+      current: first as SessionLike | null,
+      /** The note as each read of the session found it. */
+      noteAtRead: [] as (string | null)[],
+    };
     let settle!: (s: SessionLike | null) => void;
     const pending = new Promise<SessionLike | null>((resolve) => {
       settle = resolve;
     });
     const reconcile = createStepUpReconciler({
       currentSession: async () => {
-        state.reads += 1;
+        state.noteAtRead.push(stepUpForcedFor());
         return state.current;
       },
       refreshSession: () => pending,
@@ -283,13 +287,24 @@ describe('reconcile: the note is never kept for a session that entered its code'
     const off = subscribeStepUpForced(() => heard.push(stepUpForcedFor()));
     const run = reconcile(liveUser([TOTP]));
     await reachRefresh();
-    expect(state.reads).toBe(1);
+    expect(state.noteAtRead).toEqual([null]);
     settle(null);
     expect(await run).toBe('forced');
     off();
-    // Raised at once on the failed refresh, then one more read; still aal1, so it stays.
+    // Raised at once on the failed refresh; the one further read finds the
+    // note already up. Still aal1, so it stays.
     expect(heard).toEqual(['u1']);
-    expect(state.reads).toBe(2);
+    expect(state.noteAtRead).toEqual([null, 'u1']);
+    expect(stepUpForcedFor()).toBe('u1');
+  });
+
+  it('the same holds when the refresh answers without the factor', async () => {
+    const { state, reconcile, settle } = slowRefresh(session('aal1'));
+    const run = reconcile(liveUser([TOTP]));
+    await reachRefresh();
+    settle(session('aal1'));
+    expect(await run).toBe('forced');
+    expect(state.noteAtRead).toEqual([null, 'u1']);
     expect(stepUpForcedFor()).toBe('u1');
   });
 
@@ -309,6 +324,27 @@ describe('reconcile: the note is never kept for a session that entered its code'
       });
       expect(await reconcile(liveUser([TOTP])), second).toBe('forced');
       expect(stepUpForcedFor(), second).toBe('u1');
+    }
+  });
+
+  it('a note settled while the second read is out is not raised again when the read answers', async () => {
+    for (const settledBy of ['the code', 'a sign-out'] as const) {
+      setStepUpForcedFor(null);
+      let reads = 0;
+      const reconcile = createStepUpReconciler({
+        currentSession: async () => {
+          reads += 1;
+          if (reads === 1) return session('aal1');
+          // This read answers with the session as it was; before the run goes
+          // on, the note is settled (auth-context.tsx clears it on both events).
+          expect(stepUpForcedFor()).toBe('u1');
+          setStepUpForcedFor(null);
+          return settledBy === 'the code' ? session('aal1') : null;
+        },
+        refreshSession: async () => null,
+      });
+      expect(await reconcile(liveUser([TOTP])), settledBy).toBe('none');
+      expect(stepUpForcedFor(), settledBy).toBeNull();
     }
   });
 

@@ -483,10 +483,14 @@ describe('6. the server-backed note is read by one rule', () => {
   it('the reconcile raises the note in one place, then reads the session again and withdraws it at aal2', () => {
     const reconcile = code('src/lib/mfa-reconcile.ts');
     expect(reconcile).toContain(
-      "async function raise(userId: string): Promise<StepUpReconcileOutcome> { setStepUpForcedFor(userId); let now: SessionLike | null = null; try { now = await deps.currentSession(); } catch { now = null; } if (now?.user?.id === userId && tokenAal(now.access_token) === 'aal2') { if (forcedFor === userId) setStepUpForcedFor(null); return 'none'; } return 'forced'; }",
+      "async function raise(userId: string): Promise<StepUpReconcileOutcome> { setStepUpForcedFor(userId); let now: SessionLike | null = null; try { now = await deps.currentSession(); } catch { now = null; } if (now?.user?.id === userId && tokenAal(now.access_token) === 'aal2') { if (forcedFor === userId) setStepUpForcedFor(null); return 'none'; } return forcedFor === userId ? 'forced' : 'none'; }",
     );
-    // Both ways a run ends with the gate held up go through it.
+    // Both ways a run ends with the gate held up go through it, and the note
+    // is set nowhere else: once, before the second read.
     expect(reconcile.match(/return raise\(userId\);/g)).toHaveLength(2);
+    expect(reconcile.match(/(?<!function )setStepUpForcedFor\((?!null\))[^)]*\)/g)).toEqual([
+      'setStepUpForcedFor(userId)',
+    ]);
     // A run that finds the session at aal2 withdraws the note before anything else.
     const run = reconcile.slice(reconcile.indexOf('async function run('));
     const atAal2 = run.indexOf(

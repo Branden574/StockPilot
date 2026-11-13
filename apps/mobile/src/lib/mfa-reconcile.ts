@@ -133,6 +133,8 @@ export function createStepUpReconciler(
    * the note is withdrawn. Set first and read second: a code verified after
    * the note is set clears it itself (auth-context.tsx), so no order of the
    * two leaves a note on a session at aal2. A read that fails keeps the note.
+   * The note is set once, before the read: whatever settles it while the read
+   * is out (a verified code, a sign-out) is not undone when the read answers.
    */
   async function raise(userId: string): Promise<StepUpReconcileOutcome> {
     setStepUpForcedFor(userId);
@@ -146,7 +148,7 @@ export function createStepUpReconciler(
       if (forcedFor === userId) setStepUpForcedFor(null);
       return 'none';
     }
-    return 'forced';
+    return forcedFor === userId ? 'forced' : 'none';
   }
 
   async function run(liveUser: UserLike | null | undefined): Promise<StepUpReconcileOutcome> {
