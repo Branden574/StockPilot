@@ -170,12 +170,19 @@ export class UomConversionsService {
 
   async delete(id: string) {
     assertPermission(this.ctx, 'items:update');
-    const { error } = await this.ctx.supabase
+    // The deleted row is asked back (S41): a filtered delete that matches no
+    // row is not an error, so only the returned row proves a conversion of
+    // this organization was deleted. No row answers not_found and records
+    // nothing.
+    const { data: row, error } = await this.ctx.supabase
       .from('uom_conversions')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!row) throw new ServiceError('not_found', 'Unit conversion not found.');
     await audit(
       {
         event: 'uom_conversion.deleted',

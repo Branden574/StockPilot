@@ -16,6 +16,15 @@ export function parseUserAgent(ua: string | null): {
     return { browser: 'StockPilot app', os, label: `StockPilot app on ${os}` };
   }
 
+  const { browser, os } = browserAndSystem(ua);
+  return { browser, os, label: `${browser} on ${os}` };
+}
+
+/**
+ * The browser and the system an agent names, each one of a fixed set of
+ * words. The agent's own text is only tested, never returned.
+ */
+function browserAndSystem(ua: string): { browser: string; os: string } {
   const os =
     /iPhone|iPad|iOS/i.test(ua) ? 'iOS'
     : /Android/i.test(ua) ? 'Android'
@@ -33,5 +42,18 @@ export function parseUserAgent(ua: string | null): {
     : /Safari\//i.test(ua) ? 'Safari'
     : 'Unknown browser';
 
-  return { browser, os, label: `${browser} on ${os}` };
+  return { browser, os };
+}
+
+/**
+ * "<browser> on <system>" for a web sign-in, from fixed words only: "Chrome
+ * on macOS", or "Unknown browser on Unknown OS" for an agent that names
+ * neither (or none at all). The same words Active sessions shows for a
+ * browser. It has no app branch: this names a browser, whatever the agent
+ * says about itself. What the organization's alerts call a web sign-in's
+ * device (lib/auth/login-device.ts).
+ */
+export function browserDeviceName(ua: string | null): string {
+  const { browser, os } = browserAndSystem(ua ?? '');
+  return `${browser} on ${os}`;
 }

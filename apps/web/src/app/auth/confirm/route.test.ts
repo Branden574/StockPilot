@@ -869,6 +869,65 @@ describe('GET /auth/confirm in a browser that is already signed in', () => {
   });
 });
 
+// An email change sends two links, one to each address, and GoTrue takes them
+// in either order: the first press records one confirmation and makes no
+// session, the second completes the change and makes a session for the
+// account, under its new address. Both links name the same account and type,
+// so the page reads the same for either one, and the notice for a browser
+// signed in as another account says what a press does in each case.
+describe('GET /auth/confirm for each email-change link, by who this browser is signed in as', () => {
+  const see = (email: string) => `<span class="addr" ${PRESS_GATE_SEE_ATTR}>${email}</span>`;
+  const LINE = `This link changes the sign-in email of ${see('old@example.com')} to ${see('new@example.com')}. If neither address is yours, close this page.`;
+  const AFTER_BOTH = `If it has, continuing completes the change and signs you in as ${see('new@example.com')} instead. If you didn't ask for this link, close this page.</p>`;
+
+  /** The page for the email-change link with this token hash, the change still waiting. */
+  async function page(tokenHash: string): Promise<string> {
+    getUserById.mockResolvedValueOnce(account('old@example.com', { new_email: 'new@example.com' }));
+    const res = await GET(getReq(linkQuery({ type: 'email_change', tokenHash })));
+    expect(res.status).toBe(200);
+    return res.text();
+  }
+
+  describe.each([
+    ['the link sent to the current address', HASH_A],
+    ['the link sent to the new address', HASH_B],
+  ])('%s', (_side, tokenHash) => {
+    it('signed out: the line naming both addresses, and no notice', async () => {
+      const html = await page(tokenHash);
+      expect(html).toContain(LINE);
+      expect(html).not.toContain('class="note"');
+    });
+
+    it('signed in as the account the link is for: the same, with no notice', async () => {
+      signedInAs(USER_A, 'old@example.com');
+      const html = await page(tokenHash);
+      expect(html).toContain(LINE);
+      expect(html).not.toContain('class="note"');
+    });
+
+    it('signed in as another account: the notice says what a press does before and after the other address confirms', async () => {
+      signedInAs(USER_B, EMAIL_B);
+      const html = await page(tokenHash);
+      expect(html).toContain(LINE);
+      expect(html).toContain(
+        `<p class="note">You're signed in as ${see(EMAIL_B)} on this browser. If the other address has not confirmed the change yet, continuing signs no one in and you stay signed in as ${see(EMAIL_B)}. ${AFTER_BOTH}`,
+      );
+      expect(html).not.toContain('Continuing signs you in as');
+      expect(html).toContain('<form method="post" action="/auth/confirm" data-press-gate>');
+      expect(verifyOtp).not.toHaveBeenCalled();
+    });
+
+    it('signed in as another account with no email: the same notice, without a name', async () => {
+      signedInAs(USER_B, null);
+      const html = await page(tokenHash);
+      expect(html).toContain(
+        `<p class="note">This browser is already signed in to another StockPilot account. If the other address has not confirmed the change yet, continuing signs no one in and you stay signed in to that account. ${AFTER_BOTH}`,
+      );
+      expect(html).not.toContain('Continuing signs you in as');
+    });
+  });
+});
+
 // Every link the app writes carries r (lib/auth/confirm-link.ts, and the
 // sweeps in lib/auth/confirm-landing.test.ts). A link without it gets the
 // refused answer of its type before anything is read: no session read, no

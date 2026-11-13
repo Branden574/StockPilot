@@ -39,12 +39,32 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  *   read as "no authenticator" and the gate was skipped at aal1, until the
  *   layout took the list only as the context user's own. The last block runs
  *   the REAL factor list; the blocks before it stub the member's own.
+ *
+ * requireOrgContext() now asks the same question before the layout does
+ * (docket S43c, lib/auth/step-up-gate), on the same two reads held to the same
+ * member. These blocks take that gate out, so they still show the layout's
+ * own gate standing by itself. The final block puts it back, as in a real
+ * request, and runs the same sessions through both.
  */
 
 const hoisted = vi.hoisted(() => ({
   realClaimsRead: null as null | (() => Promise<unknown>),
   realFactorsRead: null as null | (() => Promise<unknown>),
+  /** Take requireOrgContext()'s own code gate out, leaving the layout's alone. */
+  codeGateOut: true,
 }));
+vi.mock('@/lib/auth/step-up-gate', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/auth/step-up-gate')>();
+  return {
+    ...real,
+    startStepUpReads: () =>
+      hoisted.codeGateOut
+        ? ({} as ReturnType<typeof real.startStepUpReads>)
+        : real.startStepUpReads(),
+    stepUpIsOwed: async (...args: Parameters<typeof real.stepUpIsOwed>) =>
+      hoisted.codeGateOut ? false : real.stepUpIsOwed(...args),
+  };
+});
 
 let jar = new Map<string, string>();
 vi.mock('next/headers', async () => {
@@ -198,6 +218,90 @@ let authCalls: string[];
 let authAs: string[];
 let restSubjects: string[];
 let onContextAnswered: (() => void) | null;
+/** Tells a late read still waiting for the context that the render ended without an answer. */
+let contextNeverAnswered: (() => void) | null;
+/** Every request the fake network below is still answering. */
+const inFlight = new Set<Promise<Response>>();
+/** The real timers, kept before any test fakes one (the tests here fake Date only). */
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
+/** How long, in real time, the settling below waits before it fails naming why. */
+const SETTLE_LIMIT_MS = 5_000;
+
+/**
+ * Wait until every read the render left behind has finished, and every request
+ * it made has been answered.
+ *
+ * A render that redirects leaves reads under way: requireOrgContext()'s code
+ * gate does not wait for the layout's factor list, and the layout does not wait
+ * for its claims read. Each of their requests moves THIS FILE'S fake clock on
+ * when it is answered (the stub in beforeEach). Left running into the next
+ * test, one moved that test's clock after its cookie was made and before its
+ * render, so the cookie it built to cross auth-js's margin during the render
+ * had crossed it already, and the test ran the other scenario (docket T27:
+ * a few runs in a hundred under load, "REDIRECT:/signin" where the code page
+ * was expected; which landed first was the operating system's choice, through
+ * the WebCrypto work both tests wait on). Settled here, a test's requests all
+ * land on its own clock and in its own lists, and each test starts on the
+ * clock and cookie it set.
+ */
+async function settleWhatTheRenderLeftBehind(): Promise<void> {
+  // A late read still waiting for get_request_context() never started: the
+  // render ended without that answer (a broken loader, say), so it is told so
+  // and ends, instead of holding this wait open.
+  contextNeverAnswered?.();
+  const leftBehind = () => [
+    ...inFlight,
+    ...vi.mocked(getMfaFactorsForRequest).mock.results.map((r) => r.value as unknown),
+    ...vi.mocked(getVerifiedSessionClaimsForRequest).mock.results.map((r) => r.value as unknown),
+  ];
+  const settled = async () => {
+    for (let seen = -1; seen !== leftBehind().length || inFlight.size > 0;) {
+      seen = leftBehind().length;
+      await Promise.allSettled(leftBehind());
+      // A read that settles can start another (the code gate starts the factor
+      // list once the claims show aal1): one more turn, then look again.
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    }
+  };
+  // Bounded in real time, so a read that never settles fails here by name
+  // instead of as a 30 s hook timeout.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const outOfTime = new Promise<never>((_, reject) => {
+    timer = realSetTimeout(
+      () =>
+        reject(new Error(`a read the render started never settled (waited ${SETTLE_LIMIT_MS} ms)`)),
+      SETTLE_LIMIT_MS,
+    );
+  });
+  try {
+    await Promise.race([settled(), outOfTime]);
+  } finally {
+    realClearTimeout(timer);
+    // Emptied once this test's reads have been waited for (or this test has
+    // failed above), never before: every entry of the two histories is then a
+    // read of the test that started it, from its first one. An index taken in
+    // beforeEach would instead trust that nothing emptied the histories in
+    // between (setup.ts's vi.resetAllMocks() does after each test, when it gets
+    // to run), and a wrong index could skip a read of this test's own. Not
+    // emptied, a read that never settles would hold every later test's wait.
+    vi.mocked(getMfaFactorsForRequest).mockClear();
+    vi.mocked(getVerifiedSessionClaimsForRequest).mockClear();
+    inFlight.clear();
+  }
+}
+
+/**
+ * Resolves true once get_request_context() has answered, and false when the
+ * render ended without that answer: then a reader that starts after the
+ * context never starts.
+ */
+function afterTheContextAnswers(): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    onContextAnswered = () => resolve(true);
+    contextNeverAnswered = () => resolve(false);
+  });
+}
 
 beforeAll(async () => {
   projectKey = await makeSigningKey('project-kid-1');
@@ -260,44 +364,56 @@ beforeEach(() => {
   authAs = [];
   restSubjects = [];
   onContextAnswered = null;
+  contextNeverAnswered = null;
+  hoisted.codeGateOut = true;
   server = fakeAuthServer(projectKey);
-  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = new URL(
-      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
-    );
-    let answer: Response;
-    if (url.pathname.startsWith('/rest/v1/')) {
-      const bearer =
-        new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-      const subject = subOf(bearer);
-      restSubjects.push(subject ?? '(none)');
-      answer = rest(url, subject);
-    } else {
-      const path = url.pathname.replace('/auth/v1', '');
-      const bearer =
-        new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
-      authCalls.push(path);
-      authAs.push(`${path} as ${subOf(bearer) ?? '-'}`);
-      answer = await server.fetch(input, init);
-    }
-    // A network answer arrives in a later turn of the event loop, after every
-    // read the render started in this one has loaded the session. Answered in
-    // the same turn, the key-set fetch (paid by whichever test runs first)
-    // would move the clock between two of the render's loads.
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    vi.setSystemTime(Date.now() + ROUND_TRIP_MS);
-    if (url.pathname === '/rest/v1/rpc/get_request_context') onContextAnswered?.();
-    return answer;
+  vi.stubGlobal('fetch', (input: RequestInfo | URL, init?: RequestInit) => {
+    const answered = answerRoundTrip(input, init);
+    inFlight.add(answered);
+    const done = () => inFlight.delete(answered);
+    answered.then(done, done);
+    return answered;
   });
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await settleWhatTheRenderLeftBehind();
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** One request to the fake Auth server or PostgREST, answered a round trip later. */
+async function answerRoundTrip(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url = new URL(
+    typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+  );
+  let answer: Response;
+  if (url.pathname.startsWith('/rest/v1/')) {
+    const bearer =
+      new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    const subject = subOf(bearer);
+    restSubjects.push(subject ?? '(none)');
+    answer = rest(url, subject);
+  } else {
+    const path = url.pathname.replace('/auth/v1', '');
+    const bearer =
+      new Headers(init?.headers).get('authorization')?.replace(/^Bearer\s+/i, '') ?? '';
+    authCalls.push(path);
+    authAs.push(`${path} as ${subOf(bearer) ?? '-'}`);
+    answer = await server.fetch(input, init);
+  }
+  // A network answer arrives in a later turn of the event loop, after every
+  // read the render started in this one has loaded the session. Answered in
+  // the same turn, the key-set fetch (paid by whichever test runs first)
+  // would move the clock between two of the render's loads.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  vi.setSystemTime(Date.now() + ROUND_TRIP_MS);
+  if (url.pathname === '/rest/v1/rpc/get_request_context') onContextAnswered?.();
+  return answer;
+}
 
 /**
  * The member's own session, signed by the project key, at `aal`; its cookie
@@ -344,9 +460,8 @@ async function memberOwnRefresh() {
  */
 function startClaimsReadAfterTheContext() {
   vi.mocked(getVerifiedSessionClaimsForRequest).mockImplementationOnce(async () => {
-    await new Promise<void>((resolve) => {
-      onContextAnswered = resolve;
-    });
+    // No answer, no late reader: nothing verified (the read never rejects).
+    if (!(await afterTheContextAnswers())) return null;
     return (await hoisted.realClaimsRead!()) as Awaited<
       ReturnType<typeof getVerifiedSessionClaimsForRequest>
     >;
@@ -443,9 +558,10 @@ function readTheRealFactorList() {
  */
 function startFactorsReadAfterTheContext() {
   vi.mocked(getMfaFactorsForRequest).mockImplementationOnce(async () => {
-    await new Promise<void>((resolve) => {
-      onContextAnswered = resolve;
-    });
+    // No answer, no late reader: a failed read, which the layout observes.
+    if (!(await afterTheContextAnswers())) {
+      throw new Error('the context never answered, so the late factor list never started');
+    }
     return (await hoisted.realFactorsRead!()) as Awaited<
       ReturnType<typeof getMfaFactorsForRequest>
     >;
@@ -495,5 +611,81 @@ describe("the layout gate with the real session reads: the factor list is the me
     await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
     expect(restSubjects).toEqual([MEMBER]);
     expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+  });
+});
+
+/**
+ * As in a real request: requireOrgContext()'s gate runs first, then the
+ * layout's. The fixture's proxy headers carry no page to come back to, so the
+ * context's redirect is the bare code page.
+ */
+describe("with requireOrgContext()'s own gate in front, the same sessions get the same answers", () => {
+  const TO_CODE_PAGE = /^REDIRECT:\/signin\/mfa$/;
+
+  beforeEach(() => {
+    hoisted.codeGateOut = false;
+  });
+
+  it("the member's aal1 token beside another account's aal2 refresh token: the code page", async () => {
+    await memberCookie('aal1', OTHER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await otherAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    expect(restSubjects).toEqual([MEMBER]);
+  });
+
+  it('crossing the margin before the render: the identity is still refuted (sign-in), and no context is made', async () => {
+    await memberCookie('aal1', OTHER_REFRESH, CROSSED_BEFORE_RENDER);
+    await otherAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(/^REDIRECT:\/signin$/);
+    expect(restSubjects).toEqual([OTHER]);
+  });
+
+  it("the member's aal1 token with a no-factor account's refresh token, the real list first: the code page", async () => {
+    readTheRealFactorList();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    expect(restSubjects).toEqual([MEMBER]);
+  });
+
+  it("the real list started after the context, refreshed into a no-factor account: the code page, never 'no authenticator'", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    // The context is the member's (the proxy's header, confirmed)...
+    expect(restSubjects).toEqual([MEMBER]);
+    // ...and the layout's own factor list, started late in place of its first
+    // read and left behind by the code gate's redirect, refreshed into the
+    // no-factor account and read it: one refresh, one /user as that account.
+    // The code gate's own list in this file is the stub of the member's own
+    // (outside a render, cache() shares no read between the two calls), so
+    // the rule that the gate takes only the member's own list is held by
+    // src/lib/auth/session.step-up.test.ts ("another account's factor list is
+    // no answer").
+    await settleWhatTheRenderLeftBehind();
+    expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+    expect(authAs).toContain(`/user as ${NO_FACTOR}`);
+  });
+
+  // The other order of the same cookie, forced by its `expires_at`: already
+  // inside the margin when the render starts, so the context's own read
+  // refreshes into the no-factor account too and get_request_context() refutes
+  // the proxy's member. Sign-in, which is as closed as the code page: the
+  // member gets neither the dashboard nor "no authenticator". Before T27 this
+  // order ran by accident, when an earlier test's request moved the clock.
+  it("the same cookie already inside the margin when the render starts: the identity is refuted (sign-in), never 'no authenticator'", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSED_BEFORE_RENDER);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(/^REDIRECT:\/signin$/);
+    expect(restSubjects).toEqual([NO_FACTOR]);
+  });
+
+  it("control: the member's own aal2 session, refreshing before the render or during it, renders the dashboard", async () => {
+    await memberCookie('aal2', MEMBER_REFRESH, CROSSED_BEFORE_RENDER);
+    await memberOwnRefresh();
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    expect(restSubjects).toEqual([MEMBER]);
   });
 });

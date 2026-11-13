@@ -830,6 +830,23 @@ PGTAP_TESTS=(
   # own preflight is replayed from the recorded statements. The lock footprint
   # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
   supabase/tests/0417_recovery_codes_need_aal2.test.sql
+  # Cycle count release (0419, docket item S42): release_cycle_count refuses
+  # everyone but a manager of the count's organization on a count with no
+  # assignee (the old check was NULL there and refused no one: any signed-in
+  # account of any organization that knew the id released the count and got
+  # its row back past row level security; a non-manager assignee's second
+  # release after the first went through is refused now too), and refuses
+  # the assignee once has_permission stock:adjust no longer holds for them in
+  # the count's organization (a member removed from it, a disabled account,
+  # an expired act-as seat, a viewer, a member whose stock:adjust was
+  # revoked). Managers are unaffected, with or without stock:adjust, on their
+  # own counts too, and the assignee's rule is that permission, not a rank (a
+  # viewer granted stock:adjust releases their own count, as the app
+  # allows). The restated body is production's with its two added blocks
+  # removed, and taking each block out lets the refused calls through. The
+  # two-session proof is scripts/db-concurrency/0419_release_race.sh; the
+  # lock footprint is scripts/db-concurrency/0419_migration_lock_footprint.sh.
+  supabase/tests/0419_release_cycle_count_assignee_check.test.sql
 
   # AI read scoping.
   supabase/tests/0320_semantic_search_org_scope.test.sql
@@ -924,6 +941,17 @@ WEB_TESTS=(
   # other than http or https, a Slack or Teams URL on another host) is final
   # and never sent, while a failed lookup of the host is retried with backoff.
   src/server/services/integration-events.delivery-lookup.test.ts
+  # Slack and Teams show an event's text as text (docket S56): every text field
+  # of every alert card type, and the operator's error report, is escaped for
+  # its channel by one rule (lib/chat-text.ts); a card field is also put on one
+  # line and capped, a report keeps its lines and its length, and the generic
+  # webhook body is the data as it was sent. A web sign-in's device is named in
+  # the organization's alerts by browser and system, from fixed words
+  # (login-device.test.ts, listed with the sign-in notes).
+  src/lib/chat-text.test.ts
+  src/server/services/integration-events.chat-text.test.ts
+  src/lib/error-reporter.chat-text.test.ts
+  src/lib/auth/user-agent.test.ts
   # That routing itself, with the real fetch against loopback servers: plain
   # fetch only for a Storage read on the exact project origin, and it never
   # follows a redirect (the origin's GoTrue verify answers a bogus token with a
@@ -998,6 +1026,29 @@ WEB_TESTS=(
   src/lib/auth/api-context.refresh-swap.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
+  # A session that still owes its authenticator code gets no organization
+  # context (docket S43c): requireOrgContext() sends it to /signin/mfa, so
+  # every dashboard page by itself and every Server Action that works for an
+  # organization is held to the rule (the real loader, gate and withContext());
+  # the code page shows its form to exactly that session, and the actions that
+  # run before the code still run; an /api route keeps its own 401 or 403
+  # instead of the page redirect; and two sweeps on the TypeScript syntax tree
+  # hold every Server Action, and every dashboard page and layout, to the gate
+  # or to a reviewed list (src/test/gate-reach.ts reads what each can call).
+  # platform-admin.gates.test.ts and platform-admin.refresh-swap.test.ts
+  # (below) hold the platform-admin gates to the same rule, on the allowlisted
+  # account's own session level. The customer portal is its own identity
+  # funnel (resolvePortalContext, service-role reads): portal.step-up.test.ts
+  # holds it to the rule too, on the real session client, before the
+  # service-role client is made. Each file carries the "Security invariant"
+  # marker.
+  src/lib/auth/session.step-up.test.ts
+  src/server/actions/step-up.actions.test.ts
+  'src/app/(auth)/signin/mfa/page.step-up.test.tsx'
+  src/app/api/v1/me/permissions/route.step-up.test.ts
+  src/server/services/portal.step-up.test.ts
+  src/test/action-step-up.guard.test.ts
+  src/test/page-step-up.guard.test.ts
   # The phone's sign-in and sign-out notes (S5a), the other two routes on the
   # AAL1 allowlist: an aal1 session of an account with an authenticator writes
   # the sign-in row (code owed) and the device note, and its sign-out revokes
@@ -1274,6 +1325,15 @@ WEB_TESTS=(
   src/server/services/rentals.other-organization.test.ts
   src/server/services/bundles.other-organization.test.ts
   src/server/actions/movements.other-organization.test.ts
+
+  # S41: the same rule for table writes. A write filtered to the active
+  # organization asks its row back and answers not_found, with no audit row,
+  # when none came back; a write to a child table reads its parent in the
+  # active organization first; a write keyed by an id alone carries the
+  # organization. The guard above reads every update, delete and upsert chain
+  # under apps/web/src, holds each to both rules, and takes the row proof,
+  # the read or the filter out of each changed site in turn.
+  src/server/services/row-writes.other-organization.test.ts
 
   # Book Order Totals (0379): the service gate (reports:read with the MFA
   # step-up, orders and books modules) before any read, the verified

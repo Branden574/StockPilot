@@ -19,6 +19,7 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { assertModuleEnabled, assertPermission, ServiceError, withContext, type ServiceContext } from './context';
 import { audit } from './audit';
 import { fetchAllRowsByIds } from './lib/fetch-by-ids';
+import { readInActiveOrg } from './lib/in-active-org';
 
 // ── Schemas ─────────────────────────────────────────────────────────────────
 
@@ -330,8 +331,16 @@ export class CustomersService {
     if (error) throw new ServiceError('internal_error', error.message);
   }
 
+  /**
+   * removePrice, removeCatalogItem and removeUser read their parent (the
+   * price list or the customer) in THIS organization first (S41), as the
+   * matching set and add methods do. The child tables carry no organization
+   * column of their own, so the parent read is what keeps the delete in the
+   * active organization. A miss answers not_found and nothing is deleted.
+   */
   async removePrice(priceListId: string, itemId: string): Promise<void> {
     this.gate();
+    await readInActiveOrg(this.ctx, 'price_lists', priceListId, 'Price list not found');
     const { error } = await this.ctx.supabase
       .from('price_list_items')
       .delete()
@@ -400,6 +409,7 @@ export class CustomersService {
 
   async removeCatalogItem(customerId: string, itemId: string): Promise<void> {
     this.gate();
+    await readInActiveOrg(this.ctx, 'customers', customerId, 'Customer not found');
     const { error } = await this.ctx.supabase
       .from('customer_catalog')
       .delete()
@@ -587,6 +597,7 @@ export class CustomersService {
 
   async removeUser(customerId: string, userId: string): Promise<void> {
     this.gate();
+    await readInActiveOrg(this.ctx, 'customers', customerId, 'Customer not found');
     const { error } = await this.ctx.supabase
       .from('customer_users')
       .delete()

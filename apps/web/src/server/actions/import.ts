@@ -244,7 +244,7 @@ function indexWarehousesByName(
   return index;
 }
 
-export /**
+/**
  * Runs `fn` over `items` with at most `limit` in flight.
  *
  * `limit` workers each pull the next index off a shared cursor, so a slow row

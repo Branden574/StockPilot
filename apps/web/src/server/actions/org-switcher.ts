@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { requireSession } from '@/lib/auth/session';
+import { requireOrgContext } from '@/lib/auth/session';
 import { createClient } from '@/lib/supabase/server';
 import { ServiceError } from '@/server/services/context';
 import { actionErrorResult } from '@/server/lib/action-error-result';
@@ -27,7 +27,10 @@ export async function switchOrganizationAction(input: {
   const parsed = schema.safeParse(input);
   if (!parsed.success) return err('validation_error', 'Invalid organization id');
   try {
-    const session = await requireSession();
+    // The member's current context, not only a session: the switcher lives in
+    // the dashboard, and a session that still owes its authenticator code is
+    // sent to enter it before the active organization changes.
+    const session = await requireOrgContext();
     const supabase = await createClient();
 
     // Membership check before we touch the profile row.
