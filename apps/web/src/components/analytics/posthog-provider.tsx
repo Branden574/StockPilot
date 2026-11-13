@@ -63,9 +63,10 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
     void import('posthog-js').then(({ default: posthog }) => {
       if (cancelled || posthog.__loaded) return; // unmounted or already initialized
       posthog.init(key, {
-        // First-party reverse proxy (next.config rewrites /ingest → PostHog US
-        // Cloud). Same-origin so the app's CSP connect-src 'self' allows it and
-        // ad blockers / Brave can't drop it. MUST match the /ingest rewrite.
+        // First-party proxy: the route at app/ingest/[...path]/route.ts passes
+        // these requests on to PostHog US Cloud. Same-origin so the app's CSP
+        // connect-src 'self' allows it and ad blockers / Brave can't drop it.
+        // MUST match that route's folder.
         api_host: '/ingest',
         // Where the PostHog APP lives (toolbar/links) — NOT the ingest path.
         ui_host: 'https://us.posthog.com',
@@ -101,11 +102,13 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         advanced_disable_feature_flags: true,
         // Nor send the page's address as a Referer. A beacon or a script tag
         // goes by the page's referrer policy, which for a same-origin request
-        // such as /ingest is the full address, query and all (next.config.ts),
-        // and the /ingest rewrite forwards it to PostHog: the remote config
-        // script on every page load, the beacon that empties the queue as the
-        // page goes away. The SDK's own fetch asks for the origin only, so the
-        // queue goes by fetch (keepalive) and each script asks for the same.
+        // such as /ingest is the full address, query and all (next.config.ts):
+        // the remote config script on every page load, the beacon that empties
+        // the queue as the page goes away. The /ingest route passes no Referer
+        // on to PostHog (app/ingest/[...path]/route.ts), and these keep the
+        // address out of the request in the first place. The SDK's own fetch
+        // asks for the origin only, so the queue goes by fetch (keepalive) and
+        // each script asks for the same.
         disable_beacon: true,
         prepare_external_dependency_script: (script) => {
           script.setAttribute('referrerpolicy', 'strict-origin');
