@@ -36,6 +36,12 @@ import {
   setMeta,
   withDbTransaction,
 } from './db';
+import {
+  BUNDLE_REFILL_META_KEY,
+  bundleRefillStep,
+  parseBundleRefill,
+  serializeBundleRefill,
+} from './bundle-refill';
 import { classifyDrainFailure } from './drain-failure';
 import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
 import {
@@ -454,6 +460,12 @@ export async function pullSnapshot(
 
   if (!(await isOnline())) return null;
 
+  // A kit the server lists as active was missing from the phone after an
+  // earlier pull (bundle-refill.ts): this pull goes in full, once, to fetch it.
+  if (!force && parseBundleRefill(await getMeta(BUNDLE_REFILL_META_KEY)).fullPullOwed) {
+    force = true;
+  }
+
   // Noted before the cursor is read and before api() reads the workspace
   // header: any cache wipe asked for after this point (a workspace switch or
   // repair, a sign-out) makes this answer stale. See db.ts cacheGeneration.
@@ -501,6 +513,9 @@ export async function pullSnapshot(
   let modulesChanged = false;
   let permissionsChanged = false;
   let scopeChanged = false;
+  // Active kits a full pull still did not send (bundle-refill.ts), reported
+  // once the pull has committed.
+  let kitsStillMissing: string[] | null = null;
 
   await withDbTransaction(db, async () => {
     // A wipe asked for while the request was out (a workspace switch or
@@ -706,6 +721,20 @@ export async function pullSnapshot(
       );
       await db.runAsync(STALE_BUNDLE_COMPONENTS_DELETE_SQL, [activeIds]);
       await db.runAsync(STALE_BUNDLES_DELETE_SQL, [activeIds]);
+      // A kit the list names that the phone does not hold (it was dropped
+      // while the member could not see kits, and has not changed since):
+      // the next pull goes in full, once (bundle-refill.ts).
+      const cached = await db.getAllAsync<{ id: string }>('select id from bundles');
+      const prevRefill = await getMeta(BUNDLE_REFILL_META_KEY);
+      const refill = bundleRefillStep({
+        fullPull: since === null,
+        activeIds: JSON.parse(activeIds) as string[],
+        cachedIds: new Set(cached.map((r) => r.id)),
+        previous: parseBundleRefill(prevRefill),
+      });
+      const nextRefill = serializeBundleRefill(refill.next);
+      if (nextRefill !== prevRefill) await setMeta(BUNDLE_REFILL_META_KEY, nextRefill);
+      kitsStillMissing = refill.stillMissing;
     }
 
     // Full pull: everything the server returned was just stamped with `now`,
@@ -793,6 +822,12 @@ export async function pullSnapshot(
       '[sync] the cache was wiped, or the account changed, while the snapshot was loading; it was discarded',
     );
     return null;
+  }
+  if (kitsStillMissing) {
+    const n = (kitsStillMissing as string[]).length;
+    console.warn(
+      `[sync] a full pull did not send ${n} active kit${n === 1 ? '' : 's'} the server lists; it is not asked for again until the list changes`,
+    );
   }
   // Notify the live readers only after the new values are committed.
   if (modulesChanged) refreshEnabledModules();

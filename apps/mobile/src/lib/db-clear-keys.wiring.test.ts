@@ -3,6 +3,7 @@ import * as path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
 
+import { BUNDLE_REFILL_META_KEY } from './bundle-refill';
 import { CACHE_USER_META_KEY, PHOTOS_PENDING_META_KEY } from './cache-owner';
 import { ENABLED_MODULES_META_KEY } from './enabled-modules';
 import { EFFECTIVE_PERMISSIONS_META_KEY } from './use-effective-permissions';
@@ -94,6 +95,7 @@ function clearBody(src: string): string {
 
 /** Resolve `setMeta(X)` arguments in sync.ts to the literal meta key. */
 const KEY_BY_CONSTANT: Record<string, string> = {
+  BUNDLE_REFILL_META_KEY,
   CACHE_USER_META_KEY,
   ENABLED_MODULES_META_KEY,
   EFFECTIVE_PERMISSIONS_META_KEY,
@@ -122,13 +124,21 @@ describe('clearOrgScopedTables clears every org-scoped meta key sync.ts persists
   const body = clearBody(dbSrc);
   const persisted = persistedMetaKeys(syncSrc);
 
-  it('sync.ts persists the five keys we know about (guard on the guard)', () => {
+  // S75 added bundles_refill: the kits a pull found missing (bundle-refill.ts).
+  it('sync.ts persists the six keys we know about (guard on the guard)', () => {
     expect(persisted.sort()).toEqual(
-      ['cache_user_id', 'effective_permissions', 'enabled_modules', 'last_synced_at', 'warehouse_scope'].sort(),
+      [
+        'bundles_refill',
+        'cache_user_id',
+        'effective_permissions',
+        'enabled_modules',
+        'last_synced_at',
+        'warehouse_scope',
+      ].sort(),
     );
   });
 
-  it.each(['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope'])(
+  it.each(['last_synced_at', 'enabled_modules', 'effective_permissions', 'warehouse_scope', 'bundles_refill'])(
     'clears %s',
     (key) => {
       expect(body).toContain(`delete from meta where key = '${key}';`);
