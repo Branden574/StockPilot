@@ -80,9 +80,23 @@ function buildAdmin(opts: {
   answers?: Record<string, unknown>;
 }) {
   const stub = makeSupabaseStub({
-    'organization_members.select': opts.membersError
-      ? { data: null, error: opts.membersError }
-      : { data: opts.members ?? [], error: null },
+    // Two reads share this key: the audience's member list, and
+    // createNotification's membership point read (docket S36, a list read of
+    // one person). Every recipient is a current member of ORG unless listed in
+    // formerMemberIds; the point read's own filters are pinned in
+    // notifications.test.ts and current-member.test.ts.
+    'organization_members.select': (call: MockCall) => {
+      const eq = (col: string) =>
+        call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1];
+      const userId = eq('user_id') as string | undefined;
+      if (userId !== undefined) {
+        const current = eq('organization_id') === ORG && !(opts.formerMemberIds ?? []).includes(userId);
+        return { data: current ? [{ user_id: userId }] : [], error: null };
+      }
+      return opts.membersError
+        ? { data: null, error: opts.membersError }
+        : { data: opts.members ?? [], error: null };
+    },
     'role_permission_overrides.select': { data: opts.roleOverrides ?? [], error: null },
     'user_permission_overrides.select': { data: opts.userOverrides ?? [], error: null },
     // The module's one settings row, read as a list (PostgREST's own shape).
@@ -97,20 +111,7 @@ function buildAdmin(opts: {
     // test that needs a SPECIFIC user disabled uses disabledUserIds only
     // for documentation; createNotification's real per-row check happens
     // against whatever this key returns for every .eq('id', userId) call.
-    'user_profiles.select': { data: { disabled_at: null }, error: null },
-    // createNotification's membership point read (docket S36): every
-    // recipient is a current member of ORG unless listed in formerMemberIds.
-    // Its own filters are pinned in notifications.test.ts.
-    'organization_members.select.maybeSingle': (call: MockCall) => {
-      const eq = (col: string) =>
-        call.args.find((a, i) => call.methods[i] === 'eq' && a[0] === col)?.[1];
-      const userId = eq('user_id') as string | undefined;
-      const current =
-        eq('organization_id') === ORG &&
-        userId !== undefined &&
-        !(opts.formerMemberIds ?? []).includes(userId);
-      return { data: current ? [{ user_id: userId }] : [], error: null };
-    },
+    'user_profiles.select': { data: [{ disabled_at: null }], error: null },
     'notifications.insert': { data: { id: 'notif-x' }, error: null },
     ...(opts.answers as Record<string, never> | undefined),
   });
@@ -525,16 +526,16 @@ describe('notifyMaintenanceEvent — insert shape, link, and NO push call', () =
     const base = stub.client.from;
     stub.client.from = (table: string) => {
       if (table !== 'user_profiles') return base(table);
-      // createNotification's first request: the disabled-account read.
+      // createNotification's disabled-account read (a list read of one row).
       return {
         select: () => ({
           eq: () => ({
-            maybeSingle: async () => {
+            limit: async () => {
               inFlight += 1;
               peak = Math.max(peak, inFlight);
               await new Promise((r) => setTimeout(r, 2));
               inFlight -= 1;
-              return { data: { disabled_at: null }, error: null };
+              return { data: [{ disabled_at: null }], error: null };
             },
           }),
         }),

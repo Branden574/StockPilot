@@ -75,8 +75,8 @@ function baseArgs(userId: string) {
 describe('createNotification — disabled accounts', () => {
   it('never inserts a notification row for a disabled recipient', async () => {
     const stub = makeSupabaseStub({
-      'user_profiles.select': { data: { disabled_at: '2026-07-30T00:00:00Z' }, error: null },
-      'organization_members.select.maybeSingle': memberships([{ user_id: 'user-disabled' }]),
+      'user_profiles.select': { data: [{ disabled_at: '2026-07-30T00:00:00Z' }], error: null },
+      'organization_members.select': memberships([{ user_id: 'user-disabled' }]),
     });
     adminHolder.client = stub.client;
 
@@ -90,8 +90,8 @@ describe('createNotification — disabled accounts', () => {
 
   it('still inserts for an active recipient in the same batch', async () => {
     const stub = makeSupabaseStub({
-      'user_profiles.select': { data: { disabled_at: null }, error: null },
-      'organization_members.select.maybeSingle': memberships([{ user_id: 'user-active' }]),
+      'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+      'organization_members.select': memberships([{ user_id: 'user-active' }]),
       'notifications.insert': { data: { id: 'notif-1' }, error: null },
     });
     adminHolder.client = stub.client;
@@ -103,14 +103,13 @@ describe('createNotification — disabled accounts', () => {
   });
 
   it('fails CLOSED: a disabled_at read that errors writes nothing (so pushes nothing), and is reported once', async () => {
-    // Docket S36 (integrator decision 2026-11-01): this read used to fail
-    // OPEN, an unreadable profile counting as "not disabled", so the row was
-    // written and pushed. Best-effort delivery makes a notice dropped on a
-    // read error acceptable; a push carrying the organization's data to an
+    // Docket S36 (integrator decision 2026-11-01): an unreadable profile never
+    // counts as "not disabled". Best-effort delivery makes a notice dropped on
+    // a read error acceptable; a push carrying the organization's data to an
     // account disabled for suspected compromise is not.
     const stub = makeSupabaseStub({
       'user_profiles.select': { data: null, error: { message: 'boom' } },
-      'organization_members.select.maybeSingle': memberships([{ user_id: 'user-unknown' }]),
+      'organization_members.select': memberships([{ user_id: 'user-unknown' }]),
       'notifications.insert': { data: { id: 'notif-2' }, error: null },
     });
     adminHolder.client = stub.client;
@@ -128,23 +127,22 @@ describe('createNotification — disabled accounts', () => {
 });
 
 /**
- * Docket S36 (review of #440): the database's own notices stop reaching
- * someone who is no longer a member of the organization (0422,
- * _notify_is_current_member), but the app writes notices too, all through
- * this function: the partial hand-over and backorder-shipped notices, the
- * line edits on a pending order and the return events on the person's order
- * went to the order's stored requester id, and the 0028 trigger pushed every
- * row to that person's phone. The same rule now holds here, for every caller:
- * an accepted membership of the notice's organization that is not an Act-as
- * seat, read with the account-disable check above through one shared helper
- * (server/lib/current-member.ts), both failing closed.
+ * Docket S36 (review of #440): the database's own notices go only to a
+ * current member of the organization (0422, _notify_is_current_member), and
+ * the app's notices, all written through this function (the partial hand-over
+ * and backorder-shipped notices, the line edits on a pending order and the
+ * return events, each addressed to the order's stored requester id), follow
+ * the same rule for every caller: an accepted membership of the notice's
+ * organization that is not an Act-as seat, read with the account-disable
+ * check above through one shared helper (server/lib/current-member.ts), both
+ * failing closed.
  */
 describe('createNotification — current members of the organization only (docket S36)', () => {
   it('writes nothing for someone removed from the organization, or who left it', async () => {
     const stub = makeSupabaseStub({
-      'user_profiles.select': { data: { disabled_at: null }, error: null },
+      'user_profiles.select': { data: [{ disabled_at: null }], error: null },
       // The organization still has other members; this person is not one.
-      'organization_members.select.maybeSingle': memberships([{ user_id: 'someone-else' }]),
+      'organization_members.select': memberships([{ user_id: 'someone-else' }]),
       'notifications.insert': { data: { id: 'notif-3' }, error: null },
     });
     adminHolder.client = stub.client;
@@ -164,8 +162,8 @@ describe('createNotification — current members of the organization only (docke
       { user_id: 'user-invite', accepted_at: null },
     ]) {
       const stub = makeSupabaseStub({
-        'user_profiles.select': { data: { disabled_at: null }, error: null },
-        'organization_members.select.maybeSingle': memberships([row]),
+        'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+        'organization_members.select': memberships([row]),
         'notifications.insert': { data: { id: 'notif-4' }, error: null },
       });
       adminHolder.client = stub.client;
@@ -177,8 +175,8 @@ describe('createNotification — current members of the organization only (docke
 
   it("a membership of another organization does not count for this organization's notice", async () => {
     const stub = makeSupabaseStub({
-      'user_profiles.select': { data: { disabled_at: null }, error: null },
-      'organization_members.select.maybeSingle': memberships([
+      'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+      'organization_members.select': memberships([
         { user_id: 'user-elsewhere', organization_id: 'org-2' },
       ]),
       'notifications.insert': { data: { id: 'notif-5' }, error: null },
@@ -191,8 +189,8 @@ describe('createNotification — current members of the organization only (docke
 
   it('a membership read that fails writes nothing, and is reported (it never counts as a membership)', async () => {
     const stub = makeSupabaseStub({
-      'user_profiles.select': { data: { disabled_at: null }, error: null },
-      'organization_members.select.maybeSingle': {
+      'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+      'organization_members.select': {
         data: null,
         error: { message: 'canceling statement due to statement timeout', code: '57014' },
       },
@@ -213,8 +211,8 @@ describe('createNotification — current members of the organization only (docke
 
   it('a current member of any role is written to, once', async () => {
     const stub = makeSupabaseStub({
-      'user_profiles.select': { data: { disabled_at: null }, error: null },
-      'organization_members.select.maybeSingle': memberships([
+      'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+      'organization_members.select': memberships([
         { user_id: 'user-staff' },
         { user_id: 'user-seat', impersonation_expires_at: '2026-11-01T12:45:00Z' },
       ]),

@@ -133,9 +133,9 @@ describe('confirmPhysicalSignature: the requester is reached at their own addres
 
   it('a partial hand-over emails the member at their profile address', async () => {
     admin.results = {
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
+      'user_profiles.select': { data: [PROFILE], error: null },
       'notification_preferences.select.maybeSingle': { data: null, error: null },
-      'organization_members.select.maybeSingle': CURRENT_MEMBER,
+      'organization_members.select': CURRENT_MEMBER,
     };
     await service({ ...MEMBER, status: 'backordered', order_number: 49 }, { prior: 0, requested: 5, fulfilled: 2 })
       .confirmPhysicalSignature('ord-1', 'Dock Signer');
@@ -152,9 +152,9 @@ describe('confirmPhysicalSignature: the requester is reached at their own addres
 
   it('a backorder remainder handed over emails the member at their profile address', async () => {
     admin.results = {
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
+      'user_profiles.select': { data: [PROFILE], error: null },
       'notification_preferences.select.maybeSingle': { data: { email_order_completed: true }, error: null },
-      'organization_members.select.maybeSingle': CURRENT_MEMBER,
+      'organization_members.select': CURRENT_MEMBER,
     };
     await service({ ...MEMBER, status: 'completed', order_number: 49 }, { prior: 2, requested: 5, fulfilled: 5 })
       .confirmPhysicalSignature('ord-1', 'Dock Signer');

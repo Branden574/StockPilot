@@ -67,8 +67,8 @@ function wire(requesterIsMember: boolean) {
   });
   const stub = makeSupabaseStub({
     // createNotification's reads, then its insert.
-    'user_profiles.select': { data: { disabled_at: null }, error: null },
-    'organization_members.select.maybeSingle': servedLikePostgrest([
+    'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+    'organization_members.select': servedLikePostgrest([
       member(APPROVER),
       ...(requesterIsMember ? [member(REQUESTER)] : []),
     ]),

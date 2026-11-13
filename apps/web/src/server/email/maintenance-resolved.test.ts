@@ -75,8 +75,10 @@ function makeStub(overrides: Record<string, unknown> = {}) {
     'maintenance_request_share_links.select': NO_ACTIVE_LINK,
     'maintenance_request_attachments.select': NO_RESOLUTION_PHOTOS,
     // S36: the requester is still a current member of the request's
-    // organization (maintenance-resolved.member.test.ts covers the rest).
-    'organization_members.select.maybeSingle': servedLikePostgrest([
+    // organization, on an account that is not disabled
+    // (maintenance-resolved.member.test.ts covers the rest).
+    'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+    'organization_members.select': servedLikePostgrest([
       {
         organization_id: ORG_ID,
         user_id: 'requester-1',

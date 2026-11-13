@@ -171,22 +171,22 @@ function buildAdmin(s: Scenario) {
     'order_request_lines.select': linesResult,
     'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
     // Two reads, each able to fail on its own (S36): the current-member
-    // check's (disabled_at) and the requester's own address (email, full_name).
-    'user_profiles.select.maybeSingle': (call: MockCall): QueryResult => {
+    // check's (disabled_at, a list read) and the requester's own address
+    // (email, full_name, a point read).
+    'user_profiles.select': (call: MockCall): QueryResult => {
       const columns = String(callArgs(call, 'select')?.[0] ?? '');
-      const fails = columns.includes('disabled_at') ? s.disabledReadFails : s.ownAddressReadFails;
+      const memberCheck = columns.includes('disabled_at');
+      const fails = memberCheck ? s.disabledReadFails : s.ownAddressReadFails;
       if (fails) return { data: null, error: READ_ERROR };
-      return {
-        data: s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile,
-        error: null,
-      };
+      const row = s.profile === undefined ? { email: 'alice@site.org', full_name: 'Alice' } : s.profile;
+      return { data: memberCheck ? (row ? [row] : []) : row, error: null };
     },
     'notification_preferences.select.maybeSingle': s.prefReadFails
       ? { data: null, error: READ_ERROR }
       : { data: { email_order_completed: s.emailOrderCompleted ?? true }, error: null },
     // S36: the requester's own address is used only while they are a current
     // member of the order's organization (server/lib/current-member.ts).
-    'organization_members.select.maybeSingle': s.membershipReadFails
+    'organization_members.select': s.membershipReadFails
       ? { data: null, error: READ_ERROR }
       : servedLikePostgrest(
           s.requesterIsMember === false
@@ -690,12 +690,11 @@ describe('POST /api/orders/sign — reads after the signature is recorded', () =
  * Docket S36 (integrator decision 2026-11-01 on #440, with its precision): a
  * member's OWN address (their profile's; the order kept none) is used only
  * while they are a current member of the order's organization, the rule 0422
- * and createNotification apply to every notice and push. Before, a requester
- * removed from the organization, or who left it, stopped getting the in-app
- * notices about their order but still got every hand-over email at their own
- * address: the partial hand-over (order-handover-notify.ts :210), backordered
- * items shipped (:282), a replacement's partial hand-over (:139) and the
- * completion receipt. An address the order recorded is unchanged (the
+ * and createNotification apply to every notice and push. That covers every
+ * hand-over email to the requester's own address: the partial hand-over
+ * (order-handover-notify.ts :210), backordered items shipped (:282), a
+ * replacement's partial hand-over (:139) and the completion receipt. An
+ * address the order recorded is emailed whoever placed the order (the
  * on-behalf and deleted-requester tests above).
  */
 describe('POST /api/orders/sign — a requester who is no longer a member (S36)', () => {
@@ -956,7 +955,7 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
       'order_request_lines.select': { data: [{ quantity_fulfilled: 0 }], error: null },
       'rpc:confirm_order_signature': { data: { id: 'ord-1' }, error: null },
       'notification_preferences.select.maybeSingle': { data: null, error: null },
-      'organization_members.select.maybeSingle': servedLikePostgrest([]),
+      'organization_members.select': servedLikePostgrest([]),
     }).client;
 
     await POST(request());

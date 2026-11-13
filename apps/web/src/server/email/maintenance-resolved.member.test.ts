@@ -10,11 +10,9 @@ import { makeSupabaseStub, servedLikePostgrest, type QueryResult } from '@/test/
  * maintenance_requests:submit files a request. So it follows the
  * current-member rule of 0422 and createNotification: it goes only while the
  * requester is an accepted member of the request's organization, not an
- * Act-as seat, on an account that is not disabled. Before, someone removed
- * from the organization, or who left it, still got the resolution note, the
- * resolver's name and the proof photos by email, while their in-app notices
- * stopped. The check runs before the one-shot claim, so a skipped send never
- * burns the marker.
+ * Act-as seat, on an account that is not disabled, the same audience as the
+ * in-app notices. The check runs before the one-shot claim, so a skipped send
+ * never burns the marker.
  */
 
 const sendEmailMock = vi.hoisted(() => vi.fn(async (_a: { to: string }) => ({ ok: true })));
@@ -65,7 +63,8 @@ function makeStub(membership: QueryResult | ReturnType<typeof servedLikePostgres
     'organization_modules.select': { data: { settings: {} }, error: null },
     'maintenance_request_share_links.select': { data: null, error: null },
     'maintenance_request_attachments.select': { data: null, error: null, count: 0 },
-    'organization_members.select.maybeSingle': membership,
+    'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+    'organization_members.select': membership,
   });
 }
 

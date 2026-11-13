@@ -52,8 +52,8 @@ function world(opts: {
     disabled_at: (opts.disabled ?? []).includes(id) ? '2026-10-01T00:00:00Z' : null,
   }));
   return makeSupabaseStub({
-    'organization_members.select.maybeSingle': opts.membershipRead ?? servedLikePostgrest(members),
-    'user_profiles.select.maybeSingle': opts.profileRead ?? servedLikePostgrest(profiles),
+    'organization_members.select': opts.membershipRead ?? servedLikePostgrest(members),
+    'user_profiles.select': opts.profileRead ?? servedLikePostgrest(profiles),
   });
 }
 
@@ -119,6 +119,25 @@ describe('readCurrentMember', () => {
     });
   });
 
+  it('a membership read that answers no list (an empty body) is unreadable, never "not a member"', async () => {
+    const stub = world({ membershipRead: { data: null, error: null } });
+    await expect(readCurrentMember(stub.client, ORG, 'user-1')).resolves.toEqual({
+      readable: false,
+      failures: [{ read: 'membership', error: expect.objectContaining({ name: 'ListReadError' }) }],
+    });
+  });
+
+  it('a profile read that answers no list (an empty body) is unreadable, never "not disabled"', async () => {
+    const stub = world({
+      members: [{ user_id: 'user-1' }],
+      profileRead: { data: null, error: null },
+    });
+    await expect(readCurrentMember(stub.client, ORG, 'user-1')).resolves.toEqual({
+      readable: false,
+      failures: [{ read: 'profile', error: expect.objectContaining({ name: 'ListReadError' }) }],
+    });
+  });
+
   it('a profile read that fails is unreadable, never "not disabled"', async () => {
     const stub = world({
       members: [{ user_id: 'user-1' }],
@@ -169,6 +188,20 @@ describe("ownAddressVerdict (an email to a member's own address)", () => {
       tag: 'orders.test.requester_member_check',
       level: 'warning',
       extra: { orderId: 'ord-1', organizationId: ORG, userId: 'user-1' },
+    });
+  });
+
+  it('a profile read that answers no list: unreadable, reported once, never "current"', async () => {
+    const stub = world({
+      members: [{ user_id: 'user-1' }],
+      profileRead: { data: null, error: null },
+    });
+    await expect(
+      ownAddressVerdict(stub.client, { organizationId: ORG, userId: 'user-1' }, report),
+    ).resolves.toBe('unreadable');
+    expect(reportErrorMock).toHaveBeenCalledTimes(1);
+    expect(reportErrorMock.mock.calls[0]![0]).toMatchObject({
+      message: expect.stringContaining('profile read: user_profiles answered no list'),
     });
   });
 

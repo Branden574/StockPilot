@@ -34,8 +34,10 @@ vi.mock('@/lib/supabase/admin', async () => {
       stub({
         'notification_preferences.select.maybeSingle': prefsResult.value as never,
         // S36: the live requester is still a current member of the order's
-        // organization (order-requests.member-email.test.ts covers the rest).
-        'organization_members.select.maybeSingle': servedLikePostgrest([
+        // organization, on an account that is not disabled
+        // (order-requests.member-email.test.ts covers the rest).
+        'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+        'organization_members.select': servedLikePostgrest([
           {
             organization_id: 'org-test',
             user_id: 'u-live',

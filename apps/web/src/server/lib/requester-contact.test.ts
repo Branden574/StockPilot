@@ -49,8 +49,8 @@ beforeEach(() => vi.clearAllMocks());
 describe('resolveRequesterContact', () => {
   it("a member's own order: their profile address and name", async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
-      'organization_members.select.maybeSingle': members([{ user_id: 'user-req' }]),
+      'user_profiles.select': { data: [PROFILE], error: null },
+      'organization_members.select': members([{ user_id: 'user-req' }]),
     });
     await expect(
       resolveRequesterContact(
@@ -73,7 +73,7 @@ describe('resolveRequesterContact', () => {
   });
 
   it('an on-behalf-of order: the address it recorded, with no profile or membership read', async () => {
-    const admin = makeSupabaseStub({ 'user_profiles.select.maybeSingle': { data: PROFILE, error: null } });
+    const admin = makeSupabaseStub({ 'user_profiles.select': { data: [PROFILE], error: null } });
     await expect(
       resolveRequesterContact(
         admin.client,
@@ -96,7 +96,7 @@ describe('resolveRequesterContact', () => {
   });
 
   it('A3: a requester who deleted their account gets no address, even one the order kept', async () => {
-    const admin = makeSupabaseStub({ 'user_profiles.select.maybeSingle': { data: PROFILE, error: null } });
+    const admin = makeSupabaseStub({ 'user_profiles.select': { data: [PROFILE], error: null } });
     await expect(
       resolveRequesterContact(
         admin.client,
@@ -151,12 +151,10 @@ describe('resolveRequesterContact', () => {
  * NULL, requester_user_id set) is used only while they are a current member of
  * the order's organization: an accepted membership, not an Act-as seat, on an
  * account that is not disabled (0422's _notify_is_current_member). An address
- * the order recorded for an outside person is sent as before, whoever placed
- * the order. Before, a member removed from the organization, or who left it,
- * kept getting the hand-over emails about their old orders at their own
- * address (order-handover-notify.ts :139, :210, :282, and the sign route's
- * completion receipt), while 0422 and createNotification stopped every notice
- * and push to them.
+ * the order recorded for an outside person is sent whoever placed the order.
+ * The hand-over emails (order-handover-notify.ts :139, :210, :282, and the
+ * sign route's completion receipt) follow the same audience as the notices
+ * and pushes of 0422 and createNotification.
  */
 describe("resolveRequesterContact: a member's own address follows the current-member rule (S36)", () => {
   const OWN_ORDER = {
@@ -169,9 +167,9 @@ describe("resolveRequesterContact: a member's own address follows the current-me
 
   it('a requester removed from the organization, or who left it: no address; the withheld one is named for the caller', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
+      'user_profiles.select': { data: [PROFILE], error: null },
       // The organization still has members; the requester is not one.
-      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+      'organization_members.select': members([{ user_id: 'someone-else' }]),
     });
     await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
       email: null,
@@ -185,8 +183,8 @@ describe("resolveRequesterContact: a member's own address follows the current-me
 
   it("a membership of another organization does not count for this order's emails", async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
-      'organization_members.select.maybeSingle': members([
+      'user_profiles.select': { data: [PROFILE], error: null },
+      'organization_members.select': members([
         { user_id: 'user-req', organization_id: 'org-2' },
       ]),
     });
@@ -198,17 +196,17 @@ describe("resolveRequesterContact: a member's own address follows the current-me
 
   it("a support Act-as seat's or a disabled account's own address is withheld too", async () => {
     const seat = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
-      'organization_members.select.maybeSingle': members([
+      'user_profiles.select': { data: [PROFILE], error: null },
+      'organization_members.select': members([
         { user_id: 'user-req', impersonation_expires_at: '2026-11-01T12:45:00Z' },
       ]),
     });
     const disabled = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': {
-        data: { ...PROFILE, disabled_at: '2026-10-01T00:00:00Z' },
+      'user_profiles.select': {
+        data: [{ ...PROFILE, disabled_at: '2026-10-01T00:00:00Z' }],
         error: null,
       },
-      'organization_members.select.maybeSingle': members([{ user_id: 'user-req' }]),
+      'organization_members.select': members([{ user_id: 'user-req' }]),
     });
     for (const admin of [seat, disabled]) {
       await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toMatchObject(
@@ -222,8 +220,8 @@ describe("resolveRequesterContact: a member's own address follows the current-me
 
   it('a membership read that fails: no address (fail closed), reported once under the caller tag', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
-      'organization_members.select.maybeSingle': {
+      'user_profiles.select': { data: [PROFILE], error: null },
+      'organization_members.select': {
         data: null,
         error: { message: 'connection reset' },
       },
@@ -252,8 +250,8 @@ describe("resolveRequesterContact: a member's own address follows the current-me
     // requester_email = the buyer's address on every portal order. The buyer
     // is a customer, not a member, and their address is the order's own.
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
-      'organization_members.select.maybeSingle': members([]),
+      'user_profiles.select': { data: [PROFILE], error: null },
+      'organization_members.select': members([]),
     });
     await expect(
       resolveRequesterContact(
@@ -299,8 +297,8 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
   };
   const READ_ERROR = { message: 'connection reset' };
 
-  /** user_profiles, answered per read: the member check selects disabled_at,
-   *  the address read selects email and full_name. */
+  /** user_profiles, answered per read: the member check selects disabled_at
+   *  (a list read), the address read selects email and full_name. */
   function profiles(answers: {
     disabledRead?: 'fails';
     addressRead?: 'fails' | 'throws' | 'no row';
@@ -310,7 +308,7 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
       if (columns.includes('disabled_at')) {
         return answers.disabledRead === 'fails'
           ? { data: null, error: READ_ERROR }
-          : { data: { disabled_at: null }, error: null };
+          : { data: [{ disabled_at: null }], error: null };
       }
       if (answers.addressRead === 'throws') throw new Error('network');
       if (answers.addressRead === 'fails') return { data: null, error: READ_ERROR };
@@ -335,8 +333,8 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
 
   it('a former member whose address read fails: no address, the withheld one flagged unknown, the failed read reported', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': profiles({ addressRead: 'fails' }),
-      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+      'user_profiles.select': profiles({ addressRead: 'fails' }),
+      'organization_members.select': members([{ user_id: 'someone-else' }]),
     });
     await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
       email: null,
@@ -351,8 +349,8 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
 
   it('a former member whose address read throws: the same', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': profiles({ addressRead: 'throws' }),
-      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+      'user_profiles.select': profiles({ addressRead: 'throws' }),
+      'organization_members.select': members([{ user_id: 'someone-else' }]),
     });
     await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toMatchObject({
       email: null,
@@ -364,8 +362,8 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
 
   it('both profile reads fail, so the member check cannot answer either: flagged unknown, each failed read reported once', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': profiles({ disabledRead: 'fails', addressRead: 'fails' }),
-      'organization_members.select.maybeSingle': members([{ user_id: 'user-req' }]),
+      'user_profiles.select': profiles({ disabledRead: 'fails', addressRead: 'fails' }),
+      'organization_members.select': members([{ user_id: 'user-req' }]),
     });
     await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
       email: null,
@@ -385,8 +383,8 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
 
   it('a current member whose address read fails: no address, as before, nothing withheld, and the failed read reported', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': profiles({ addressRead: 'fails' }),
-      'organization_members.select.maybeSingle': members([{ user_id: 'user-req' }]),
+      'user_profiles.select': profiles({ addressRead: 'fails' }),
+      'organization_members.select': members([{ user_id: 'user-req' }]),
     });
     await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
       email: null,
@@ -401,8 +399,8 @@ describe('resolveRequesterContact: an own address that cannot be read (S36)', ()
 
   it('no profile row is an answer, not a failure: nothing to withhold and nothing reported', async () => {
     const admin = makeSupabaseStub({
-      'user_profiles.select.maybeSingle': profiles({ addressRead: 'no row' }),
-      'organization_members.select.maybeSingle': members([{ user_id: 'someone-else' }]),
+      'user_profiles.select': profiles({ addressRead: 'no row' }),
+      'organization_members.select': members([{ user_id: 'someone-else' }]),
     });
     await expect(resolveRequesterContact(admin.client, OWN_ORDER, REPORT)).resolves.toEqual({
       email: null,

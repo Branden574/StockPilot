@@ -3,6 +3,7 @@ import 'server-only';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { reportError } from '@/lib/error-reporter';
+import { listRows } from '@/server/services/lib/list-rows';
 
 /** A service-role client (createAdminClient, or one handed in by a caller). */
 type AdminClient = SupabaseClient;
@@ -45,6 +46,9 @@ export async function readCurrentMember(
   organizationId: string,
   userId: string,
 ): Promise<CurrentMemberAnswer> {
+  // Both are list reads (docket S27): an answer that is not a list (an empty
+  // body) is a failed read, never "no row", so it can read neither as "not a
+  // member" in silence nor as "not disabled".
   const [membership, profile] = await Promise.all([
     admin
       .from('organization_members')
@@ -53,17 +57,55 @@ export async function readCurrentMember(
       .eq('user_id', userId)
       .not('accepted_at', 'is', null)
       .is('impersonation_expires_at', null)
-      .maybeSingle(),
-    admin.from('user_profiles').select('disabled_at').eq('id', userId).maybeSingle(),
+      .limit(2),
+    admin.from('user_profiles').select('disabled_at').eq('id', userId).limit(2),
   ]);
   const failures: CurrentMemberReadFailure[] = [];
-  if (membership.error) {
-    failures.push({ read: 'membership', error: new Error(membership.error.message) });
+  const memberRows = rowsOf<{ user_id: string }>(
+    'membership',
+    'organization_members',
+    membership,
+    failures,
+  );
+  const profileRows = rowsOf<{ disabled_at?: string | null }>(
+    'profile',
+    'user_profiles',
+    profile,
+    failures,
+  );
+  if (failures.length > 0 || !memberRows || !profileRows) {
+    return { readable: false, failures };
   }
-  if (profile.error) failures.push({ read: 'profile', error: new Error(profile.error.message) });
-  if (failures.length > 0) return { readable: false, failures };
-  const disabled = Boolean((profile.data as { disabled_at?: string | null } | null)?.disabled_at);
-  return { readable: true, current: Boolean(membership.data) && !disabled };
+  const disabled = Boolean(profileRows[0]?.disabled_at);
+  return { readable: true, current: memberRows.length === 1 && !disabled };
+}
+
+/**
+ * The rows of one point read, or null with its failure recorded: an error, an
+ * answer that is not a list, or more than one row for a key that names one.
+ */
+function rowsOf<Row>(
+  read: CurrentMemberReadFailure['read'],
+  table: string,
+  res: { data?: unknown; error?: { message: string } | null; status?: number | null },
+  failures: CurrentMemberReadFailure[],
+): Row[] | null {
+  if (res.error) {
+    failures.push({ read, error: new Error(res.error.message) });
+    return null;
+  }
+  let rows: Row[];
+  try {
+    rows = listRows<Row>(table, res);
+  } catch (err) {
+    failures.push({ read, error: err instanceof Error ? err : new Error(String(err)) });
+    return null;
+  }
+  if (rows.length > 1) {
+    failures.push({ read, error: new Error(`${table} answered more than one row`) });
+    return null;
+  }
+  return rows;
 }
 
 export type OwnAddressVerdict = 'current' | 'not_current' | 'unreadable';

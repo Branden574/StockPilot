@@ -11,12 +11,12 @@ import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/tes
  * of 0422 and createNotification: an accepted membership of the order's
  * organization, not an Act-as seat, on an account that is not disabled. A read
  * that fails sends nothing and is reported. An address the order recorded for
- * an outside person (on-behalf, public link, portal) is emailed as before.
+ * an outside person (on-behalf, public link, portal) is emailed whoever placed
+ * the order.
  *
- * Before, a member removed from the organization, or who left it, stopped
- * getting the notices and pushes about their old orders but kept getting the
- * emails: the three hand-over emails (order-handover-notify.ts :139, :210,
- * :282 at af14d9dd7) and every status email (resolveRecipient).
+ * The rule covers the three hand-over emails (order-handover-notify.ts :139,
+ * :210, :282 at af14d9dd7) and every status email (resolveRecipient), the same
+ * audience as the notices and pushes.
  *
  * Here the paper hand-over runs for real with only the database and the mail
  * transport stubbed: confirmPhysicalSignature -> resolveRequesterContact ->
@@ -114,13 +114,15 @@ function member(userId: string) {
 /** The service-role database: the requester a current member of ORG or not. */
 function wireAdmin(opts: { requesterIsMember: boolean; membershipFails?: boolean }) {
   const stub = makeSupabaseStub({
-    'organization_members.select.maybeSingle': opts.membershipFails
+    'organization_members.select': opts.membershipFails
       ? { data: null, error: READ_ERROR }
       : servedLikePostgrest([
           member(MANAGER),
           ...(opts.requesterIsMember ? [member(REQUESTER)] : []),
         ]),
-    'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
+    // The current-member check's list read (disabled_at) and the address
+    // point read both answer from this one row.
+    'user_profiles.select': { data: [PROFILE], error: null },
     'notification_preferences.select.maybeSingle': { data: null, error: null },
     'notifications.insert': { data: { id: 'notif-1' }, error: null },
     // The partial email's per-line table.
