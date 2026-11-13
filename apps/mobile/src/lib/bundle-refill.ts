@@ -17,6 +17,14 @@
  * for another full pull. Only a delta that names a kit not already remembered
  * asks again. Saved under BUNDLE_REFILL_META_KEY with the pull's rows.
  *
+ * The full pull is the last one asked for, whatever its answer says about
+ * kits: an answer with no active list at all (an older server, a failed read
+ * of the list) ends the request too, and keeps the ids already remembered, so
+ * a kit still missing after it asks for no second full pull until the
+ * missing set changes. No answer the server can give makes every pull a full
+ * one. The answer for a member who may not see kits (no kits, an empty
+ * active list) names nothing missing, so it never asks, and ends a request.
+ *
  * Cycle counts need none of this: the snapshot reads open counts with no
  * cursor (apps/web/src/app/api/v1/mobile/snapshot/route.ts, the counts read),
  * so every pull carries the complete open list and the pull upserts all of
@@ -56,15 +64,24 @@ export function serializeBundleRefill(state: BundleRefillState): string {
 }
 
 /**
- * After a pull that carried the active list: what to remember, and, after a
- * full pull, the ids it still did not bring (to report), or null.
+ * After a pull: what to remember, and, after a full pull, the ids it still
+ * did not bring (to report), or null. `activeIds` is null when the answer
+ * carried no active list.
  */
 export function bundleRefillStep(input: {
   fullPull: boolean;
-  activeIds: readonly string[];
+  activeIds: readonly string[] | null;
   cachedIds: ReadonlySet<string>;
   previous: BundleRefillState;
 }): { next: BundleRefillState; stillMissing: string[] | null } {
+  if (input.activeIds === null) {
+    // Nothing said about kits: a full pull still ends the request, and the
+    // ids remembered stay remembered; a delta changes nothing.
+    return {
+      next: input.fullPull ? { ...input.previous, fullPullOwed: false } : input.previous,
+      stillMissing: null,
+    };
+  }
   const missing = [...new Set(input.activeIds.filter((id) => !input.cachedIds.has(id)))].sort();
   if (input.fullPull) {
     // A full pull sent every kit it could: what is still missing is reported

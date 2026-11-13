@@ -1335,4 +1335,39 @@ describe('kits the server lists as active but the phone lacks come back (S75)', 
     }
     expect(ids('select id from bundles order by id')).toEqual(['b-archived', 'b-live']);
   });
+
+  it('the full pull a missing kit asked for is the last, even when its answer lists no active kits', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: ['b-new'] }))).toContain('since=');
+    // b-new is not on the phone. The full pull is answered with no active-kit list at all (an older
+    // server, or a failed read of the list): nothing more is owed.
+    const noList = emptySnap({ bundles: [] });
+    expect(await pull(noList)).toBe('/api/v1/mobile/snapshot');
+    expect(await pull(noList)).toContain('since=');
+    expect(await pull(noList)).toContain('since=');
+  });
+
+  it('a kit still missing after the full pull it asked for asks for no second one', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    const names = emptySnap({ bundles: [], activeBundleIds: ['b-new'] });
+    expect(await pull(names)).toContain('since=');
+    // The full pull brings no list and not the kit.
+    expect(await pull(emptySnap({ bundles: [] }))).toBe('/api/v1/mobile/snapshot');
+    // The deltas after it name the same kit, still not on the phone.
+    expect(await pull(names)).toContain('since=');
+    expect(await pull(names)).toContain('since=');
+    expect(ids('select id from bundles')).toEqual([]);
+  });
+
+  it('the answer for a member who may not see kits (no kits, an empty active list) never asks for a full pull, and ends one asked for', async () => {
+    meta.store.set('last_synced_at', CURSOR);
+    const notAllowed = emptySnap({ bundles: [], activeBundleIds: [] });
+    expect(await pull(notAllowed)).toContain('since=');
+    expect(await pull(notAllowed)).toContain('since=');
+    // A full pull owed from before access was taken away.
+    expect(await pull(emptySnap({ bundles: [], activeBundleIds: ['b-live'] }))).toContain('since=');
+    expect(await pull(notAllowed)).toBe('/api/v1/mobile/snapshot');
+    expect(await pull(notAllowed)).toContain('since=');
+    expect(await pull(notAllowed)).toContain('since=');
+  });
 });

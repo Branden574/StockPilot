@@ -721,14 +721,22 @@ export async function pullSnapshot(
       );
       await db.runAsync(STALE_BUNDLE_COMPONENTS_DELETE_SQL, [activeIds]);
       await db.runAsync(STALE_BUNDLES_DELETE_SQL, [activeIds]);
-      // A kit the list names that the phone does not hold (it was dropped
-      // while the member could not see kits, and has not changed since):
-      // the next pull goes in full, once (bundle-refill.ts).
-      const cached = await db.getAllAsync<{ id: string }>('select id from bundles');
+    }
+
+    // A kit the list names that the phone does not hold (it was dropped
+    // while the member could not see kits, and has not changed since): the
+    // next pull goes in full, once. A full pull ends that request whatever its
+    // answer says about kits, a missing list included (bundle-refill.ts).
+    {
+      const listed = Array.isArray(snap.activeBundleIds)
+        ? snap.activeBundleIds.filter((id): id is string => typeof id === 'string')
+        : null;
+      const cached =
+        listed === null ? [] : await db.getAllAsync<{ id: string }>('select id from bundles');
       const prevRefill = await getMeta(BUNDLE_REFILL_META_KEY);
       const refill = bundleRefillStep({
         fullPull: since === null,
-        activeIds: JSON.parse(activeIds) as string[],
+        activeIds: listed,
         cachedIds: new Set(cached.map((r) => r.id)),
         previous: parseBundleRefill(prevRefill),
       });

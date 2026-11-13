@@ -50,6 +50,26 @@ describe('bundleRefillStep', () => {
   });
 });
 
+describe('an answer with no active list (an older server, a failed read of the list)', () => {
+  const owed = { missing: ['k2'], fullPullOwed: true };
+  const noList = (fullPull: boolean, previous: BundleRefillState) =>
+    bundleRefillStep({ fullPull, activeIds: null, cachedIds: new Set(), previous });
+
+  it('a full pull ends the request and keeps the ids remembered', () => {
+    expect(noList(true, owed)).toEqual({
+      next: { missing: ['k2'], fullPullOwed: false },
+      stillMissing: null,
+    });
+    // So the same id on a later delta asks for no second full pull.
+    expect(step(false, ['k2'], [], noList(true, owed).next).next.fullPullOwed).toBe(false);
+  });
+
+  it('a delta changes nothing', () => {
+    expect(noList(false, owed)).toEqual({ next: owed, stillMissing: null });
+    expect(noList(false, none)).toEqual({ next: none, stillMissing: null });
+  });
+});
+
 describe('the saved value', () => {
   it('round-trips, and reads absent or unreadable as nothing missing', () => {
     const v = { missing: ['k2'], fullPullOwed: true };
