@@ -1,3 +1,4 @@
+import type { CreateControlOffer } from './screen-access';
 import { supabase } from './supabase';
 
 /**
@@ -146,6 +147,24 @@ const MOBILE_INVENTORY_TOUR_WITHOUT_ADD: MobileTourDefinition = {
  */
 export function inventoryTourFor(canCreateItems: boolean): MobileTourDefinition {
   return canCreateItems ? MOBILE_INVENTORY_TOUR : MOBILE_INVENTORY_TOUR_WITHOUT_ADD;
+}
+
+/**
+ * The Inventory tour Inventory mounts, given the one it holds, whether the +
+ * is offered (screen-access.ts createControlOffer) and whether the tour is
+ * open (offered or running). None while that answer is not settled, so the
+ * tour never starts, and its outcome is never recorded, for a definition
+ * chosen by accident; and while the tour is open, the one it started with,
+ * so its steps never change under it.
+ */
+export function inventoryTourToShow(
+  held: MobileTourDefinition | null,
+  offer: CreateControlOffer,
+  tourOpen: boolean,
+): MobileTourDefinition | null {
+  if (tourOpen && held !== null) return held;
+  if (offer === 'pending') return null;
+  return inventoryTourFor(offer === 'offered');
 }
 
 export const MOBILE_ORDERS_TOUR: MobileTourDefinition = {

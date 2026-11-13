@@ -347,7 +347,11 @@ export default function BundleDetail() {
                 {gate.words}
               </Body>
               {gate.refresh === 'reread' ? (
-                <Button variant="outline" onPress={() => void retrySavedAccess()}>
+                <Button
+                  variant="outline"
+                  onPress={() => void retrySavedAccess()}
+                  style={{ marginTop: space.md }}
+                >
                   Try again
                 </Button>
               ) : null}

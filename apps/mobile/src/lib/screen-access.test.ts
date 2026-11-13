@@ -143,7 +143,7 @@ describe('what a screen says', () => {
 
   it('while this phone has not synced the workspace for this member', () => {
     expect(NOT_SYNCED_YET).toBe(
-      'This phone has not finished syncing this workspace yet. Connect to the internet and try again.',
+      'This phone has not finished syncing this workspace yet. Check your connection and try again.',
     );
   });
 

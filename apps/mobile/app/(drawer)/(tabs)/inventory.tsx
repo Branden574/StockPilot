@@ -85,7 +85,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
-import { usePermissionAccess } from '@/lib/use-screen-access';
+import { useCreateControlOffer } from '@/lib/use-screen-access';
 import {
   GROUP_COPY,
   countingUnitLabel,
@@ -98,8 +98,12 @@ import { useTheme } from '@/lib/use-theme';
 import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope';
 import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
-import { useTourActive, useTourTarget } from '@/lib/tour-targets';
-import { inventoryTourFor } from '@/lib/onboarding';
+import { useTourActive, useTourTarget, useTourVisible } from '@/lib/tour-targets';
+import {
+  inventoryTourToShow,
+  MOBILE_INVENTORY_TOUR,
+  type MobileTourDefinition,
+} from '@/lib/onboarding';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { GlassSubline } from '@/components/ui/glass/parts';
 import {
@@ -270,10 +274,18 @@ export default function Inventory() {
   const permissions = useEffectivePermissions();
   const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
   // New item is offered only to someone who can create items (items:create,
-  // which the server asserts on every create), decided once the saved
-  // permissions are read (screen-access.ts). A viewer was offered the form
-  // and refused on Save.
-  const canCreateItems = usePermissionAccess('items:create') === 'allowed';
+  // which the server asserts on every create), by the one rule for create
+  // controls (screen-access.ts createControlOffer). A viewer was offered the
+  // form and refused on Save.
+  const createOffer = useCreateControlOffer('items:create');
+  const canCreateItems = createOffer === 'offered';
+  // The tour, with or without its + step: none until that answer is settled,
+  // and the one it started with while it is open (onboarding.ts
+  // inventoryTourToShow). Held in state, updated while rendering.
+  const tourOpen = useTourVisible(MOBILE_INVENTORY_TOUR.id);
+  const [inventoryTour, setInventoryTour] = React.useState<MobileTourDefinition | null>(null);
+  const nextInventoryTour = inventoryTourToShow(inventoryTour, createOffer, tourOpen);
+  if (nextInventoryTour !== inventoryTour) setInventoryTour(nextInventoryTour);
   // Select is offered only when the select bar has something to offer (B42):
   // Review to someone who can start a count, Group and Ungroup to someone who
   // can edit items. A viewer was offered Select and a bar whose Review the
@@ -1047,7 +1059,7 @@ export default function Inventory() {
             </Display>
           )}
           <View style={{ marginTop: lg ? 0 : 10 }}>
-            <MobileTour tour={inventoryTourFor(canCreateItems)} />
+            {inventoryTour ? <MobileTour tour={inventoryTour} /> : null}
           </View>
         </View>
 

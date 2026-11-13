@@ -32,7 +32,7 @@ const LIST = 'app/bundles/index.tsx';
 const DETAIL = 'app/bundles/[id].tsx';
 const BUNDLES_NOT_AVAILABLE = 'Bundles are not available to you in this workspace.';
 const NOT_SYNCED_YET =
-  'This phone has not finished syncing this workspace yet. Connect to the internet and try again.';
+  'This phone has not finished syncing this workspace yet. Check your connection and try again.';
 const SAVED_ACCESS_UNREADABLE =
   'What this phone saved about your access could not be read. Try again.';
 
@@ -147,8 +147,10 @@ describe('a bundle', () => {
     expect(detail).toContain(
       '{state === \'gate\' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> {gate.words} </Body>',
     );
+    // The gap the file already uses between a card's text and its button
+    // (Distribute).
     expect(detail).toContain(
-      '{gate.refresh === \'reread\' ? ( <Button variant="outline" onPress={() => void retrySavedAccess()}> Try again </Button> ) : null}',
+      '{gate.refresh === \'reread\' ? ( <Button variant="outline" onPress={() => void retrySavedAccess()} style={{ marginTop: space.md }} > Try again </Button> ) : null}',
     );
   });
 });

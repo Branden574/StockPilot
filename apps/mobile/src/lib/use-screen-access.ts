@@ -2,7 +2,13 @@ import type { Permission } from '@stockpilot/core';
 
 import { useAuth } from './auth-context';
 import { refreshEnabledModules, useEnabledModulesState } from './enabled-modules';
-import { drawerEntryAccess, permissionAccess, type ScreenAccess } from './screen-access';
+import {
+  createControlOffer,
+  type CreateControlOffer,
+  drawerEntryAccess,
+  permissionAccess,
+  type ScreenAccess,
+} from './screen-access';
 import { refreshCacheOwner, useCacheOwnerState } from './use-cache-owner';
 import {
   refreshEffectivePermissions,
@@ -47,6 +53,17 @@ export function usePermissionAccess(permission: Permission): ScreenAccess {
     role,
     roleLoading,
   });
+}
+
+/**
+ * Whether a control that only leads to a write the server checks with this
+ * permission is offered (screen-access.ts createControlOffer): one rule for
+ * every create control.
+ */
+export function useCreateControlOffer(permission: Permission): CreateControlOffer {
+  const access = usePermissionAccess(permission);
+  const { role, loading: roleLoading } = useRole();
+  return createControlOffer(access, permission, role, roleLoading);
 }
 
 /**

@@ -13,7 +13,7 @@ vi.mock('./nav-icons', () => ({ NAV_ICONS: new Proxy({}, { get: () => () => null
 /** What the screens say (screen-access.ts, pinned there). */
 const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
 const NOT_SYNCED_YET =
-  'This phone has not finished syncing this workspace yet. Connect to the internet and try again.';
+  'This phone has not finished syncing this workspace yet. Check your connection and try again.';
 const SAVED_ACCESS_UNREADABLE =
   'What this phone saved about your access could not be read. Try again.';
 type ScreenAccess = 'unknown' | 'unreadable' | 'not-synced' | 'allowed' | 'denied';

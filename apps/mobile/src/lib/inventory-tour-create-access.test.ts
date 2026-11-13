@@ -8,8 +8,8 @@ vi.mock('./supabase', () => ({ supabase: {} }));
 /**
  * THE INVENTORY TOUR SHOWS THE + STEP ONLY TO A MEMBER WHO SEES THE + (B124).
  *
- * The + on Inventory shows only when the saved access answers 'allowed' for
- * items:create. The tour's step "Add from anywhere" points at it; for anyone
+ * The + on Inventory shows only where the create control is offered
+ * (screen-access.ts createControlOffer). The tour's step "Add from anywhere" points at it; for anyone
  * else it pointed at nothing and told them about a button they do not have.
  * The tour now leaves that step out for them, and keeps every other step in
  * its order.
@@ -35,8 +35,11 @@ describe('inventoryTourFor', () => {
     expect(inventoryTourFor(false)).toBe(tour);
   });
 
-  it('Inventory runs the tour for the member it shows the + to', () => {
+  it('Inventory runs the tour for the member it shows the + to, once that is settled', () => {
     const src = readFileSync(path.resolve(__dirname, '../..', INVENTORY), 'utf8');
-    expect(src).toContain('<MobileTour tour={inventoryTourFor(canCreateItems)} />');
+    expect(src).toContain(
+      'const nextInventoryTour = inventoryTourToShow(inventoryTour, createOffer, tourOpen);',
+    );
+    expect(src).toContain('{inventoryTour ? <MobileTour tour={inventoryTour} /> : null}');
   });
 });

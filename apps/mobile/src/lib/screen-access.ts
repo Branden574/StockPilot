@@ -1,4 +1,4 @@
-import { type ModuleId, type Permission, type Role } from '@stockpilot/core';
+import { can, type ModuleId, type Permission, type Role } from '@stockpilot/core';
 
 import { drawerOffers } from './drawer-nav';
 
@@ -34,9 +34,11 @@ import { drawerOffers } from './drawer-nav';
  *   - otherwise 'allowed' or 'denied', from the saved sets. 'denied' is only
  *     ever the saved sets' answer.
  *
- * The role's static defaults decide nothing here. The role only matters to a
- * link kept for admins, where a role not known yet counts as no admin: it can
- * close such a link, never open one.
+ * The role's default permissions decide nothing a screen reads or shows from
+ * the phone. They may still decide whether a create control is offered
+ * (createControlOffer), because the server checks the write. Otherwise the
+ * role only matters to a link kept for admins, where a role not known yet
+ * counts as no admin: it can close such a link, never open one.
  *
  * Display only, like every gate on the phone: the server decides every read
  * and write it is asked for.
@@ -108,9 +110,38 @@ export function permissionAccess(
   return input.saved.permissions!.has(permission) ? 'allowed' : 'denied';
 }
 
-/** What a gated screen says, offline, while its access is 'not-synced'. */
+/**
+ * Whether a control that only leads to a write the server checks with this
+ * permission (the + on Inventory and Books, the Scan tab's add cards, the
+ * Inventory tour's + step: items:create) is offered:
+ *   - 'allowed': offered; 'denied' (a saved set's answer): hidden;
+ *   - 'unknown': hidden, and 'pending' (not settled yet);
+ *   - 'not-synced' and 'unreadable': by the role's default permissions once
+ *     the role is known (as before the saved sets decided screens), and
+ *     'pending' while it is not. Offered by mistake, the server refuses the
+ *     write; nothing is read or shown from the phone for it.
+ */
+export type CreateControlOffer = 'offered' | 'hidden' | 'pending';
+
+export function createControlOffer(
+  access: ScreenAccess,
+  permission: Permission,
+  role: Role | null,
+  roleLoading: boolean,
+): CreateControlOffer {
+  if (access === 'allowed') return 'offered';
+  if (access === 'denied') return 'hidden';
+  if (access === 'unknown') return 'pending';
+  if (role === null || roleLoading) return 'pending';
+  return can({ role }, permission) ? 'offered' : 'hidden';
+}
+
+/**
+ * What a gated screen says while its access is 'not-synced' and it has
+ * nothing to show: offline, or online after a sync that did not land.
+ */
 export const NOT_SYNCED_YET =
-  'This phone has not finished syncing this workspace yet. Connect to the internet and try again.';
+  'This phone has not finished syncing this workspace yet. Check your connection and try again.';
 
 /** What a gated screen says when its access is 'unreadable' (with Try again). */
 export const SAVED_ACCESS_UNREADABLE =

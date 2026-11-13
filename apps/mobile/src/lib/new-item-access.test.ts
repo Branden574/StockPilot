@@ -31,9 +31,9 @@ describe('the plus on Items and Books', () => {
     ['app/(drawer)/(tabs)/books.tsx', 'New book'],
   ])('%s draws "%s" only when items:create is held, once read', (file, label) => {
     const src = code(file);
-    expect(src).toContain(
-      "const canCreateItems = usePermissionAccess('items:create') === 'allowed';",
-    );
+    // The one rule for create controls (screen-access.ts createControlOffer).
+    expect(src).toContain("const createOffer = useCreateControlOffer('items:create');");
+    expect(src).toContain("const canCreateItems = createOffer === 'offered';");
     const chip = src.indexOf(`accessibilityLabel="${label}"`);
     expect(chip).toBeGreaterThan(-1);
     const gate = src.lastIndexOf('{canCreateItems ? (', chip);

@@ -8,7 +8,7 @@ import { screenFunction } from './__fixtures__/screen-functions';
 /** What the count screens say (screen-access.ts CYCLE_COUNTS_NOT_AVAILABLE, pinned there). */
 const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
 const NOT_SYNCED_YET =
-  'This phone has not finished syncing this workspace yet. Connect to the internet and try again.';
+  'This phone has not finished syncing this workspace yet. Check your connection and try again.';
 const SAVED_ACCESS_UNREADABLE =
   'What this phone saved about your access could not be read. Try again.';
 type ScreenAccess = 'unknown' | 'unreadable' | 'not-synced' | 'allowed' | 'denied';

@@ -88,8 +88,13 @@ import {
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
-import { SCAN_CODE_NOT_FOUND, SCAN_PHOTO_NOT_FOUND } from '@/lib/scan-add-gate';
-import { usePermissionAccess } from '@/lib/use-screen-access';
+import {
+  photoCodes,
+  SCAN_CODE_NOT_FOUND,
+  SCAN_LOOKUP_FAILED,
+  SCAN_PHOTO_NOT_FOUND,
+} from '@/lib/scan-add-gate';
+import { useCreateControlOffer } from '@/lib/use-screen-access';
 import { FONT, TYPE_CEILING, capTo, palette, space, type Palette } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
@@ -220,9 +225,11 @@ export default function Scan() {
   const [item, setItem] = React.useState<FoundItem | null>(null);
   const [addBook, setAddBook] = React.useState<IsbnLookupResult | null>(null);
   const [addItem, setAddItem] = React.useState<UpcLookupResult | null>(null);
-  // The add cards create items: offered only when the saved access answers
-  // 'allowed' for items:create (screen-access.ts), as the server requires.
-  const canCreateItems = usePermissionAccess('items:create') === 'allowed';
+  // The add cards create items: offered by the one rule for create controls
+  // (screen-access.ts createControlOffer), as the server requires
+  // items:create. Finding this workspace's own items is for everyone.
+  const createOffer = useCreateControlOffer('items:create');
+  const canCreateItems = createOffer === 'offered';
   const [busy, setBusy] = React.useState(false);
   const [lastCode, setLastCode] = React.useState<string | null>(null);
   const [signatureToken, setSignatureToken] = React.useState<string | null>(null);
@@ -251,7 +258,7 @@ export default function Scan() {
 
 
   /** Loads an item's rich detail (with image + location name) by id. */
-  async function loadItemById(id: string): Promise<FoundItem | null> {
+  async function loadItemById(id: string): Promise<FoundItem | null | 'failed'> {
     if (!orgId) return null;
     // STOCK IN WAREHOUSES THIS MEMBER CANNOT SEE (0371). It needs only the id,
     // so it starts NOW, alongside the item read, never chained after the
@@ -260,7 +267,7 @@ export default function Scan() {
     // Marks when this read was SENT, which is what unconfirmed-stock.ts
     // judges it on.
     const reportRead = unconfirmedStock.beginRead(id);
-    const { data: row } = await supabase
+    const { data: row, error: rowError } = await supabase
       .from('inventory_items')
       .select(
         `id, name, sku, barcode, quantity_on_hand, status, reorder_point,
@@ -271,6 +278,8 @@ export default function Scan() {
       .eq('id', id)
       .is('deleted_at', null)
       .maybeSingle();
+    // A read that failed is said as failed, never as "not in inventory".
+    if (rowError) return 'failed';
     if (!row) return null;
     // Every read of the total reports to the unconfirmed-stock store, whichever
     // path asked for it (a scan, a placement pick, the re-read after an
@@ -358,14 +367,18 @@ export default function Scan() {
    *   - >1 matches → sets `placementChoices` so the picker sheet renders,
    *     and returns 'ambiguous' so the caller does NOT treat this as a
    *     miss (it very much exists — the user just needs to say which row).
+   *   - the read failed → 'failed': said as a failed lookup, never as "not
+   *     in inventory" (which would offer to add what may well exist).
    */
-  async function loadItemByValue(value: string): Promise<FoundItem | null | 'ambiguous'> {
+  async function loadItemByValue(
+    value: string,
+  ): Promise<FoundItem | null | 'ambiguous' | 'failed'> {
     if (!orgId) return null;
     // Strip characters that would break the `.or(...)` filter string (a
     // stray `,`/`()`/`%` in a scanned barcode would otherwise be parsed as
     // extra filter clauses) — mirrors the web lookup route's sanitization.
     const safe = sanitizeScanCode(value);
-    const { data: rows } = await supabase
+    const { data: rows, error } = await supabase
       .from('inventory_items')
       .select(
         `id, sku, barcode, charter_id, bin_location, quantity_on_hand, item_type, custom_fields,
@@ -374,6 +387,7 @@ export default function Scan() {
       .eq('organization_id', orgId)
       .or(`barcode.eq.${safe},sku.eq.${safe}`)
       .is('deleted_at', null);
+    if (error) return 'failed';
 
     const candidates: ScanCandidate[] = ((rows ?? []) as Record<string, unknown>[]).map((r) => {
       const charterRaw = r.charter as { name?: string | null } | { name?: string | null }[] | null;
@@ -445,7 +459,11 @@ export default function Scan() {
     setBusy(true);
     const found = await loadItemById(candidate.id);
     setBusy(false);
-    if (found) showScannedItem(found);
+    if (found === 'failed') {
+      Alert.alert(SCAN_LOOKUP_FAILED.title, SCAN_LOOKUP_FAILED.message, [
+        { text: 'OK', onPress: reset },
+      ]);
+    } else if (found) showScannedItem(found);
     else reset();
   }
 
@@ -509,10 +527,22 @@ export default function Scan() {
       return;
     }
 
+    if (found === 'failed') {
+      // The workspace could not be asked (offline, a timeout): said as such,
+      // for everyone, and nothing else is looked up or offered.
+      Alert.alert(SCAN_LOOKUP_FAILED.title, SCAN_LOOKUP_FAILED.message, [
+        { text: 'OK', onPress: reset },
+      ]);
+      setBusy(false);
+      return;
+    }
+
     if (!found) {
-      // Not in inventory yet. A member who cannot create items is told so,
-      // with nothing looked up. Otherwise, if the code looks like an ISBN,
-      // try the book-lookup pipeline and offer one-tap add.
+      // Not in inventory yet. Where no create control is offered, that is
+      // said, and neither lookup below is sent: they exist to prefill a new
+      // item (and the product one requires items:create on the server).
+      // Otherwise, if the code looks like an ISBN, try the book-lookup
+      // pipeline and offer one-tap add.
       if (!canCreateItems) {
         Alert.alert(SCAN_CODE_NOT_FOUND.title, SCAN_CODE_NOT_FOUND.message, [
           { text: 'OK', onPress: reset },
@@ -610,7 +640,7 @@ export default function Scan() {
     const found = await loadItemById(itemId);
     // A failed read (null) keeps the card; loadItemById has already reported
     // any total it did read to the unconfirmed-stock store.
-    if (seq !== rereadSeq.current || !found) return;
+    if (seq !== rereadSeq.current || !found || found === 'failed') return;
     setItem((prev) => (prev && prev.id === itemId ? found : prev));
   }
 
@@ -715,6 +745,29 @@ export default function Scan() {
   }, [shownItemId]);
 
   /**
+   * A photo, where no create control is offered: the codes it carried
+   * (scan-add-gate.ts photoCodes), looked up in this workspace's own items.
+   * A match is shown (several placements open the picker), a failed lookup is
+   * said, and "Nothing in this workspace matches this photo." only when
+   * nothing matched.
+   */
+  async function showPhotoMatchInWorkspace(codes: string[]) {
+    for (const value of codes) {
+      const found = await loadItemByValue(value);
+      if (found === 'failed') {
+        Alert.alert(SCAN_LOOKUP_FAILED.title, SCAN_LOOKUP_FAILED.message);
+        return;
+      }
+      if (found === 'ambiguous') return;
+      if (found) {
+        showScannedItem(found);
+        return;
+      }
+    }
+    Alert.alert(SCAN_PHOTO_NOT_FOUND.title, SCAN_PHOTO_NOT_FOUND.message);
+  }
+
+  /**
    * Cover-ID flow. Opens the camera, captures a cover photo, uploads it
    * to /api/v1/ai/identify-from-photo (Gemini Vision), and seeds
    * AddBookCard with whatever Vision returned. The user always
@@ -778,10 +831,11 @@ export default function Scan() {
         },
       });
 
-      // The cards below create items: a member who cannot is told the photo
-      // matches nothing, and no card opens.
+      // Where no create control is offered, the code the photo carried is
+      // looked up in this workspace's own items only (the cards below, and
+      // the lookups that prefill them, are for creating an item).
       if (!canCreateItems) {
-        Alert.alert(SCAN_PHOTO_NOT_FOUND.title, SCAN_PHOTO_NOT_FOUND.message);
+        await showPhotoMatchInWorkspace(photoCodes(vision));
         return;
       }
 
@@ -1362,7 +1416,7 @@ export default function Scan() {
             are, and the number pad of Initial qty has no key that puts it
             away; insetting the scroll by the keyboard (iOS) lets the form
             scroll clear of it and brings the focused box into view. */}
-        {addBook && canCreateItems && (
+        {addBook && (canCreateItems || addBook.existingItem) && (
           <View style={styles.addWrap}>
             <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
               <AddBookCard
@@ -1373,7 +1427,7 @@ export default function Scan() {
                   setAddBook(null);
                   void (async () => {
                     const found = await loadItemById(id);
-                    if (found) showScannedItem(found);
+                    if (found && found !== 'failed') showScannedItem(found);
                     else reset();
                   })();
                 }}
@@ -1382,7 +1436,7 @@ export default function Scan() {
           </View>
         )}
 
-        {addItem && canCreateItems && (
+        {addItem && (canCreateItems || addItem.existingItem) && (
           <View style={styles.addWrap}>
             <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
               <AddItemCard
@@ -1393,7 +1447,7 @@ export default function Scan() {
                   setAddItem(null);
                   void (async () => {
                     const found = await loadItemById(id);
-                    if (found) showScannedItem(found);
+                    if (found && found !== 'failed') showScannedItem(found);
                     else reset();
                   })();
                 }}
