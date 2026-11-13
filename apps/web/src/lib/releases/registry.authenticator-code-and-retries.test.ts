@@ -75,6 +75,8 @@ const NIGHT_IDS = [
   // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: without it): the returns request and names release is published later, at the top, and reaches returns readers and requesters where Returns is on, an owner with every permission and module included, so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
   // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: without it): the phone appearance and returns release is published later, at the top, and reaches every member (its Appearance entry has no audience), so it is read, seen or listed with the newer releases, and every older notice these lead to is the one each test checked before.
   // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: without them): the Release count, AI Assistant and not found releases are published later, at the top, and reach an owner with every permission and module, so they are read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'emailed-links-name-their-account-2026-11',
   'cycle-count-already-released-2026-11',
   'ai-assistant-plain-words-2026-11',
   'changes-that-did-not-happen-2026-11',
@@ -194,10 +196,11 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[15]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[15]?.status).toBe('published');
-    expect(RELEASES[16]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[17]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[16]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[16]?.status).toBe('published');
+    expect(RELEASES[17]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[18]?.id).toBe(LISTS_ID);
     // Re-pinned by docs/whats-new-2026-11-02c (2026-11-02; was: AUTH_CODE_ID): the web fixes release is published later, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-02d (2026-11-02; was: WEB_FIXES_ID): the Export items release is published after it, at the top, the newest published release.
     // Re-pinned by docs/whats-new-2026-11-05 (2026-11-05; was: export-items-permission-2026-11): the S2 release is published after it, at the top, the newest published release.
@@ -207,7 +210,8 @@ describe('the authenticator code release (S43a, release 1)', () => {
       // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: the Add all release): the returns request and names release is published after it, at the top, the newest published release.
       // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: the returns request and names release, the newest published): the phone appearance and returns release is published later, at the top, directly below the Liquid Glass draft.
       // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: the phone appearance and returns release): the Release count release is published after it, at the top, the newest published release.
-      'cycle-count-already-released-2026-11',
+      // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the Release count release): the emailed links release is published after it, at the top, the newest published release.
+      'emailed-links-name-their-account-2026-11',
     );
   });
 
@@ -230,8 +234,9 @@ describe('the authenticator code release (S43a, release 1)', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(at).toBe(Math.max(...RELEASES.slice(15).map((r) => Date.parse(r.publishedAt))));
-    for (const r of RELEASES.slice(16)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(at).toBe(Math.max(...RELEASES.slice(16).map((r) => Date.parse(r.publishedAt))));
+    for (const r of RELEASES.slice(17)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });
@@ -401,9 +406,10 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[15]?.id).toBe(AUTH_CODE_ID);
-    expect(RELEASES[16]?.id).toBe(RETRIES_ID);
-    expect(RELEASES[17]?.id).toBe(LISTS_ID);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[16]?.id).toBe(AUTH_CODE_ID);
+    expect(RELEASES[17]?.id).toBe(RETRIES_ID);
+    expect(RELEASES[18]?.id).toBe(LISTS_ID);
   });
 
   it('is dated in the past on a whole minute, a minute before the authenticator code release, after #454 merged, and after every release below it', () => {
@@ -421,7 +427,8 @@ describe('the integration retries release (B49, B81 and B82)', () => {
     // Re-pinned by docs/whatsnew-returns-1112 (2026-11-12; was: every pinned position one place higher): the returns request and names release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    for (const r of RELEASES.slice(17)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(18)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
   });

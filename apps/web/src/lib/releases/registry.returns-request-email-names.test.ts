@@ -55,6 +55,8 @@ const PHONE_APPEARANCE_ID = 'phone-appearance-returns-2026-11';
 // and module or nobody here, so a test that expects an older notice reads or sees them first, and
 // the notice it checks is the one it checked before.
 const NEWER_IDS_1113 = [
+  // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: without it): the emailed links release is published later, at the top, and reaches every member (it has no audience), so it is read, seen or listed with the newer releases, and every notice this test checks is the one it checked before.
+  'emailed-links-name-their-account-2026-11',
   'cycle-count-already-released-2026-11',
   'ai-assistant-plain-words-2026-11',
   'changes-that-did-not-happen-2026-11',
@@ -148,12 +150,14 @@ describe('the returns request and names release: order, status and date', () => 
     expect(RELEASES[0]?.id).toBe('liquid-glass-2026-11');
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher, and this release the newest published): the phone appearance and returns release is published later, at the top, below the Liquid Glass draft and directly above this one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(RELEASES[4]?.id).toBe(PHONE_APPEARANCE_ID);
-    expect(RELEASES[5]?.id).toBe(ID);
-    expect(RELEASES[6]?.id).toBe(ADD_ALL_ID);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(RELEASES[5]?.id).toBe(PHONE_APPEARANCE_ID);
+    expect(RELEASES[6]?.id).toBe(ID);
+    expect(RELEASES[7]?.id).toBe(ADD_ALL_ID);
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: the phone appearance and returns release): the Release count release is published after it, at the top, the newest published release.
     expect(RELEASES.find((r) => r.status === 'published')?.id).toBe(
-      'cycle-count-already-released-2026-11',
+      // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: the Release count release): the emailed links release is published after it, at the top, the newest published release.
+      'emailed-links-name-their-account-2026-11',
     );
     expect(RELEASES.filter((r) => r.status === 'draft').map((r) => r.id)).toEqual([
       'liquid-glass-2026-11',
@@ -181,12 +185,14 @@ describe('the returns request and names release: order, status and date', () => 
     expect(at).toBeGreaterThanOrEqual(Date.parse('2026-11-12T08:42:00Z'));
     // Re-pinned by docs/whatsnew-phone-1112 (2026-11-12; was: every pinned position one place higher): the phone appearance and returns release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    for (const r of RELEASES.slice(6)) {
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    for (const r of RELEASES.slice(7)) {
       expect(at, r.id).toBeGreaterThan(Date.parse(r.publishedAt));
     }
     // Added by docs/whatsnew-phone-1112 (2026-11-12): the release above it is dated later.
     // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
-    expect(Date.parse(RELEASES[4]!.publishedAt)).toBeGreaterThan(at);
+    // Re-pinned by docs/whatsnew-emailed-links-1113 (2026-11-13; was: every pinned position one place higher): the emailed links release is published at the top, below the Liquid Glass draft, so every position below it moves down by one.
+    expect(Date.parse(RELEASES[5]!.publishedAt)).toBeGreaterThan(at);
   });
 
   it('keeps the Liquid Glass draft above it no older than it, so dates never increase going down', () => {
