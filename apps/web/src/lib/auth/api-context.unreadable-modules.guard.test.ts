@@ -8,6 +8,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * rows and its `organizations.all_modules_comp` flag. supabase-js RESOLVES a
  * failed read as `{ data: null, error }`, so a set built from it looks exactly
  * like an organization that switched every module off.
+ * An organization row that reads back absent with no error (row level security
+ * hid it) counts as a failed read too: its comp flag was never seen.
  *
  * This guard pins, on both auth paths and for every non-core module, that when
  * one of those reads failed and the module is not known to be on:
@@ -103,6 +105,11 @@ const FAILURES: Array<[string, Partial<LegacyContextWorld>, ModuleId[]]> = [
     ['orders', 'rentals'],
   ],
   ['both reads failed', { moduleRowsFail: true, organizationFail: true }, []],
+  [
+    'the organization row read back hidden (rows read)',
+    { organizationHidden: true, comped: true, moduleRows: ['orders'] },
+    ['orders'],
+  ],
 ];
 
 describe.each([

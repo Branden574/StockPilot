@@ -414,7 +414,13 @@ async function resolveApiEnabledModules(
     mods.error ? null : (mods.data as Array<{ module_id: string }> | null),
     comped,
   );
-  return moduleSetFromReads(known, Boolean(mods.error || org.error), NON_CORE_MODULE_IDS);
+  // No organization row without an error is row level security hiding it
+  // from a member, the case the one-round-trip read hands here on purpose
+  // (resolveApiContextFromBundle: `if (!held.organization) return null`). Its
+  // comp flag was never seen, so it counts as a failed read, as the MFA
+  // policy read above holds a hidden row to the strictest policy.
+  const readFailed = Boolean(mods.error || org.error || org.data == null);
+  return moduleSetFromReads(known, readFailed, NON_CORE_MODULE_IDS);
 }
 
 /**

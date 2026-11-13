@@ -31,6 +31,8 @@ export interface LegacyContextWorld {
   comped: boolean;
   /** The organizations row read answers an error (MFA policy and comp flag). */
   organizationFail: boolean;
+  /** The organizations row reads back as absent with no error (row level security hid it). */
+  organizationHidden: boolean;
   /** Single-row answers for other tables, by table name. */
   singles: Record<string, unknown>;
   /** List answers for other tables, by table name. */
@@ -46,6 +48,7 @@ export function legacyContextWorld(over: Partial<LegacyContextWorld> = {}): Lega
     moduleRowsFail: false,
     comped: false,
     organizationFail: false,
+    organizationHidden: false,
     singles: {},
     lists: {},
     calls: [],
@@ -94,11 +97,11 @@ export function legacyContextClient(world: LegacyContextWorld) {
           list: () =>
             world.organizationFail
               ? { data: null, error: READ_FAILED }
-              : { data: [row], error: null },
+              : { data: world.organizationHidden ? [] : [row], error: null },
           single: () =>
             world.organizationFail
               ? { data: null, error: READ_FAILED }
-              : { data: row, error: null },
+              : { data: world.organizationHidden ? null : row, error: null },
         };
       }
       case 'organization_members':

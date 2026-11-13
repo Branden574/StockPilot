@@ -8,6 +8,8 @@ import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { fetchAllRowsByIds, settleAsDataError } from '@/server/services/lib/fetch-by-ids';
 import { fetchAllRows } from '@/server/services/lib/paginate';
+import { ModulesUnavailableError, moduleSetUnreadable } from '@/lib/modules/module-state';
+import { internalErrorResponse } from '@/server/lib/api-error-response';
 
 /**
  * Funnels every supabase error in this route through reportError() and
@@ -165,6 +167,16 @@ async function snapshotGET(req: NextRequest) {
   const ctx = await withApiContext(req);
   if (!ctx) {
     return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  }
+  // The organization's module state could not be read (docket S81). This
+  // route lists the whole set, so it refuses here, before the rate-limit slot
+  // and every read: the route's 500 with its own tag, reported as a warning.
+  // The phone keeps its cache and pulls again. Past this line the set is a
+  // plain one, so no later read of it can throw.
+  if (moduleSetUnreadable(ctx.enabledModules)) {
+    return internalErrorResponse(new ModulesUnavailableError(), 'mobile.snapshot.module_state', {
+      organizationId: ctx.organizationId,
+    });
   }
 
   // Manager-and-above see every warehouse because of their ROLE, and the

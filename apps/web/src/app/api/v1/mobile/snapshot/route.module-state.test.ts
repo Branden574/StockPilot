@@ -8,9 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * context read fails), with the real route behind it. A 200 is an instruction
  * the phone acts on: it stores `enabledModules` and redraws its navigation
  * from it, and it stores the counts and kits it was sent. So the snapshot
- * answers a refusal, 500 `snapshot_uncaught`, the same answer it gives when
- * the caller's permissions cannot be read, and the phone keeps everything it
- * has and tries again on its next tick (sync.ts pullSnapshot).
+ * refuses as soon as the context is built, before its rate-limit slot and
+ * every read: a 500 with the fixed sentence, reported under its own tag as a
+ * warning. The phone keeps everything it has and tries again on its next
+ * tick (sync.ts pullSnapshot).
  */
 
 const refs = vi.hoisted(() => ({
@@ -33,10 +34,14 @@ vi.mock('@/lib/rate-limit', () => ({
   checkRateLimit: vi.fn(async () => ({ allowed: true, resetAt: Date.now() + 60_000 })),
 }));
 
+import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
+import { checkRateLimit } from '@/lib/rate-limit';
 import {
   legacyContextClient,
   legacyContextWorld,
   legacyPhoneHeaders,
+  routeWork,
   type LegacyContextWorld,
 } from '@/test/legacy-api-context';
 
@@ -45,6 +50,7 @@ import { GET } from './route';
 let world: LegacyContextWorld;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   world = legacyContextWorld({ role: 'admin' });
@@ -59,22 +65,34 @@ const pull = () =>
   );
 
 describe('GET /api/v1/mobile/snapshot with the module state unreadable', () => {
-  it('the rows read failed: a 500 refusal, and no module list is sent', async () => {
-    world.moduleRowsFail = true;
-    const res = await pull();
-    expect(res.status).toBe(500);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ error: 'internal_error', code: 'snapshot_uncaught' });
-    expect(body).not.toHaveProperty('enabledModules');
-  });
-
-  it('the comp flag read failed: a 500 refusal, and no module list is sent', async () => {
-    world.organizationFail = true;
-    world.moduleRows = ['orders'];
-    const res = await pull();
-    expect(res.status).toBe(500);
-    expect(await res.json()).toEqual({ error: 'internal_error', code: 'snapshot_uncaught' });
-  });
+  it.each<[string, Partial<LegacyContextWorld>]>([
+    ['the rows read failed', { moduleRowsFail: true }],
+    ['the comp flag read failed', { organizationFail: true, moduleRows: ['orders'] }],
+    ['the organization row read back hidden', { organizationHidden: true, moduleRows: ['orders'] }],
+  ])(
+    '%s: a 500 with the fixed sentence, its own tag at warning level, and no read after it',
+    async (_what, failure) => {
+      Object.assign(world, failure);
+      const res = await pull();
+      expect(res.status).toBe(500);
+      const body = (await res.json()) as Record<string, unknown>;
+      expect(body).toEqual({
+        error: 'internal_error',
+        message: 'Your access could not be checked. Please try again.',
+      });
+      expect(body).not.toHaveProperty('enabledModules');
+      // Refused before the rate-limit slot and before any of the route's reads.
+      expect(checkRateLimit).not.toHaveBeenCalled();
+      expect(routeWork(world)).toEqual([]);
+      // Reported once, under its own tag, as a warning: never as uncaught.
+      expect(reportError).toHaveBeenCalledTimes(1);
+      const [err, context] = vi.mocked(reportError).mock.calls[0]!;
+      expect(err).toBeInstanceOf(ModulesUnavailableError);
+      expect(context).toEqual(
+        expect.objectContaining({ tag: 'mobile.snapshot.module_state', level: 'warning' }),
+      );
+    },
+  );
 
   it('reads that worked: a 200 that lists exactly the enabled modules (core behaviour)', async () => {
     world.moduleRows = ['orders'];

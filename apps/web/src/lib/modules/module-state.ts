@@ -23,7 +23,9 @@ import { MODULE_REGISTRY, type ModuleId } from '@stockpilot/core';
  *     copy, add, delete, clear, the set operations) throws it too, so no
  *     route can send an empty or partial list as the organization's modules.
  * Its own set storage is empty, so code that reaches past these methods
- * (Set.prototype.has.call) still finds nothing on: it never widens.
+ * (Set.prototype.has.call, structuredClone) reads an empty set: it never
+ * reads a module as on. No code here does that; a caller that did would read
+ * every module as off, so none may.
  *
  * LAZY ON PURPOSE. Only a request that asks about a module it cannot know is
  * refused; a route that depends on no optional module answers as before. The
@@ -139,6 +141,15 @@ export function moduleSetFromReads(
   if (!readFailed) return known;
   if (allNonCore.every((id) => known.has(id))) return known;
   return new UnreadableModuleSet(known);
+}
+
+/**
+ * True when some module's state is unknown for this context: the set cannot be
+ * listed. For a route that lists the whole set (the mobile snapshot), which
+ * refuses before any work. Never true for a plain set.
+ */
+export function moduleSetUnreadable(modules: ReadonlySet<ModuleId>): boolean {
+  return modules instanceof UnreadableModuleSet;
 }
 
 /**
