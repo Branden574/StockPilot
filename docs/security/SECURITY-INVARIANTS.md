@@ -37,6 +37,38 @@
      section 8 row updated. The GET list was read from the route files on
      that date; it is not a sweep.
 
+     AMENDED 2026-10-31 (docket S25, first of two releases): INV-E5's
+     Enforced by, Tested at and "Also not covered" texts rewritten for the
+     signed account reference every /auth/confirm link now carries and the
+     page's press gate. The sentence on links written before the first
+     release is transitional: the second release requires the reference on
+     every link and removes it. Nothing else in this document was re-verified.
+
+     AMENDED 2026-11-01 (docket S25 review): INV-E5 said the press gate meant
+     a window swap "cannot land a press on it unseen". It could: another site
+     can open a link in a small window scrolled to the button (the form's
+     fragment id did it in Chromium, Firefox and WebKit), and the gate armed
+     with the account's address never on screen. The gate now waits until
+     every address the page names has been on screen through its quiet
+     second, wholly or, for one taller than the window, line by line (part
+     of it is not enough: a tiny window another site opens at a text
+     fragment inside a long address it chose shows five of its characters),
+     and the page gives no element an id; the Enforced by, Tested at and
+     "Also not covered" texts say so. An email-change link whose change
+     GoTrue no longer holds now gets the expired answer without the addresses.
+     Nothing else in this document was re-verified.
+
+     AMENDED 2026-11-12 (docket S25, merge of main and review): INV-E5's
+     Tested at text says what the wider sweeps of confirm-landing.test.ts
+     hold. Its Enforced by text says the confirmation page's button is
+     disabled in the markup until the page's script has run and that POST
+     refuses a press that script did not let through, and names the three
+     headers that stand behind the gate as a second line (the opener policy
+     and the two that refuse a frame), now pinned on that path in
+     security-headers.test.ts. The sentences on links written before the
+     first release were reworded. Nothing else in this document was
+     re-verified.
+
      AMENDED 2026-11-12 (docket T23): the "Tested at" fields of INV-B3,
      INV-B4 and INV-D2 were rewritten for the detectors as they now stand
      (INV-15/16 bind a CHECK to its column by conkey; INV-26 and INV-31 share
@@ -1749,9 +1781,48 @@ application structure.
   there with no `Sec-Fetch-Site` is verified and logged (type only), by
   decision: without that header no header tells its own post from another
   site's, so refusing would refuse every browser without Fetch Metadata on a
-  page that loads no script and opens on whatever device holds the email.
-  Its page names the account the browser is already signed in as, and where a
-  link lands is fixed by its type
+  page that opens on whatever device holds the email. Every link the app emails names the account it is for (docket
+  S25): `r` carries the user id GoTrue returned with the token and the time
+  the link was built, with an HMAC-SHA256 tag over those, the link's type and
+  its token hash, keyed with a key derived from the service key under a fixed
+  label ([`confirm-recipient.ts`](../../apps/web/src/lib/auth/confirm-recipient.ts);
+  [`confirm-link.ts`](../../apps/web/src/lib/auth/confirm-link.ts) is the only
+  code that writes such a link). The page checks `r` before anything else (a
+  changed, moved or relabelled one gets the type's refused answer and one past
+  65 minutes the expired answer, with no lookup), looks the account up with
+  the service client and prints its full address above the form, and names
+  both accounts when the browser is signed in as another one (compared by id).
+  A failed or slow lookup gets a "try again" page with no form, and an
+  email-change link whose change GoTrue no longer holds (completed, cancelled,
+  or replaced by a newer request) gets the expired answer with neither
+  address. `POST` checks `r` again before `verifyOtp`, and a session GoTrue
+  made for another account than `r` names is signed out again in the same
+  answer. The press counts only once the page has been visible, in front and
+  quiet for a second (no press, key, scroll or resize in it), and every
+  address the page names has been on screen through such a second: wholly,
+  or, for one taller than the window, each of its lines
+  ([`press-gate.ts`](../../apps/web/src/app/auth/confirm/press-gate.ts)); the
+  page gives no element an id, so no link opens it scrolled to the button. A
+  window swap (DoubleClickjacking), or a window another site opens small and
+  scrolled past the line or into the middle of a long address, therefore
+  gets no press before the account's address has been on screen for a
+  second. The button is disabled in the markup and enabled only by that
+  script, as its last step, and the script adds a field to the form when it
+  lets a press through and takes it away whenever the page is not armed;
+  `POST` gives a post without the field the type's refused answer (logged,
+  type only) before `r` is read or `verifyOtp` is called. So nothing can be
+  pressed where the script does not run, or before the end of it has
+  arrived, and a browser that runs no script reads on the page that it needs
+  JavaScript. A change to the CSP that stops inline scripts therefore stops
+  every emailed link until the gate gets a nonce (the B17 test in
+  `security-headers.test.ts` says so). Three of the app's headers stand
+  behind the gate as a second line: the two that refuse a frame
+  (`X-Frame-Options: DENY`, `frame-ancestors 'none'`) and the opener policy;
+  [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
+  holds all three to the page's path. A link written by a build from before the first S25 release carries
+  no `r`: it gets the page it got before, with the signed-in notice and the
+  gate, and is logged (type only); the second release requires `r` on every
+  link. Where a link lands is fixed by its type
   ([`confirm-landing.ts`](../../apps/web/src/lib/auth/confirm-landing.ts)),
   not chosen by the link. The two `GET`s that spend something of the person's
   ask `sentFromAnotherOrigin` (`Sec-Fetch-Site` present and neither
@@ -1773,11 +1844,45 @@ application structure.
   and release-state's `route.cross-site.test.ts` (end to end through Next's
   App Route module);
   [`auth/confirm/route.test.ts`](../../apps/web/src/app/auth/confirm/route.test.ts)
-  (login CSRF: a post from another site, the signed-in notice, the fixed
-  landing) and
+  (login CSRF: a post from another site, `r` checked on `GET` and `POST`
+  before any lookup or `verifyOtp`, the account's address and the notices,
+  the failed lookup, a session made for another account, the gate on the
+  page after a form whose one button is disabled as sent, the words for a
+  browser that runs no script, a post without the gate's field refused
+  before anything is spent, the fixed landing);
+  [`route.recipient-session.test.ts`](../../apps/web/src/app/auth/confirm/route.recipient-session.test.ts)
+  (the real `@supabase/ssr` and auth-js: a press that GoTrue answers for
+  another account leaves with no session cookie, signed out of that session
+  only);
+  [`confirm-recipient.test.ts`](../../apps/web/src/lib/auth/confirm-recipient.test.ts)
+  (the signature: a known-answer vector, every changed part refused, the issue
+  time's bounds, the lab harness's copy held to the same vector);
+  [`confirm-link.test.ts`](../../apps/web/src/lib/auth/confirm-link.test.ts)
+  (the one link writer, and the account lookup's found, gone and failed
+  answers within five seconds);
+  [`press-gate.test.ts`](../../apps/web/src/app/auth/confirm/press-gate.test.ts)
+  (the page's own script: the quiet second, focus, visibility, the window swap,
+  every address on screen through the second at any window size or scroll,
+  line by line for one taller than the window, a browser that never reports
+  focus, the button enabled as the script's last step, and the field on the
+  form only for a press the gate let through);
+  [`route.email-change-replaced.test.ts`](../../apps/web/src/app/auth/confirm/route.email-change-replaced.test.ts)
+  (the real email-change link builder and route: a link sent to a mistyped
+  address, opened after the change was corrected or completed, shows neither
+  address);
   [`confirm-landing.test.ts`](../../apps/web/src/lib/auth/confirm-landing.test.ts)
-  (each type's landings, and sweeps over the five link builders and the
-  repository's sign-in harnesses);
+  (each type's landings, and sweeps over the syntax tree of every source: the
+  five link builders are the only ones that ask GoTrue for a link token, each
+  as many times as reviewed and each signing for the id GoTrue returned with
+  its link; no source but the link writer and the page names the page's
+  path; in the rest of the repository only the two sign-in harnesses do
+  either, each signing `r` and waiting for the gate; and the page's `POST`
+  is the only code in the repository that spends a link's token, after it
+  has asked for the gate's field);
+  [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
+  (the opener policy header and the two headers that refuse a frame reach
+  the page, each in one value; `route.test.ts` holds the page to setting
+  none of the three itself);
   [`auth/session-ended/route.test.ts`](../../apps/web/src/app/auth/session-ended/route.test.ts)
   (another origin's link, image or frame leaves a live session alone and still
   clears a gone one); and
@@ -1831,18 +1936,24 @@ application structure.
   closed.**
   - Navigate and press. Another site can send a browser to `/auth/confirm` with
     a link it holds for its own account (a reset link for its own address is
-    one form away) and with the type it likes. The page must render for that
-    navigation, because a click in webmail is a cross-site navigation too, and
-    its form then posts from the app's own page, so `Sec-Fetch-Site` says
-    `same-origin` and the press is verified. The page now names the account
-    the browser is already signed in as, another site can no longer sign the
-    browser out first, and the link lands where its type says, not on a page
-    the other site chose. A browser that is signed out, whose person presses on
-    for a link they did not ask for, is still signed in to the account the link
-    belongs to. Closing that needs the link builders to add a recipient hint,
-    signed so the page can show it ("this link signs in as j***@..."); that is
-    an owner question. The first version of this entry presented the login
-    CSRF as closed for every browser that sends Fetch Metadata; it was not.
+    one form away). The page must render for that navigation, because a click
+    in webmail is a cross-site navigation too, and its form then posts from the
+    app's own page, so `Sec-Fetch-Site` says `same-origin` and the press is
+    verified. Since docket S25 the page prints the full address of the account
+    the link is for before anyone presses (and both addresses when the browser
+    is signed in as another account), the press counts only after a quiet
+    second in front with every address it names on screen, another site can
+    no longer sign the browser out first, and the link lands where its type
+    says. What stays open: a person who reads another account's address and
+    presses anyway; a person talked into stopping on the page and pressing
+    again later, which the gate cannot tell from a real press (the address has
+    then been on screen for at least a second, though the page may have been
+    scrolled on since); and a lookalike address made to match the full one
+    (much harder than matching a mask). The second S25 release requires `r`
+    on every link; until then a link written before the first release gets
+    the page it got before, which names no account. The first version of
+    this entry presented the login CSRF as closed for every browser that
+    sends Fetch Metadata; it was not.
   - A post from a browser that sends no `Sec-Fetch-Site` (one without Fetch
     Metadata, or one whose header an extension strips), which needs an unspent
     link for an account the attacker holds; the log line shows whether such

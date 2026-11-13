@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse, type NextRequest } from 'next/server';
 
+import { confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { internalErrorResponse } from '@/server/lib/api-error-response';
@@ -17,6 +18,8 @@ import { internalErrorResponse } from '@/server/lib/api-error-response';
  *  - HARDCODED allowlist: only the demo QA account. A recovery link is an
  *    account-takeover primitive, so this must never work for a real user's
  *    email, no matter who holds the secret.
+ *  - The link names the account GoTrue made it for (`r`, docket S25), as
+ *    every emailed link does, so the walk sees the page people see.
  */
 const QA_EMAILS = new Set(['demo@stockpilotusa.com']);
 
@@ -53,7 +56,20 @@ export async function POST(req: NextRequest) {
       'admin.qa-recovery-link',
     );
   }
-  return NextResponse.json({
-    confirmUrl: `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`,
+  const confirmUrl = confirmLinkUrl({
+    tokenHash: hashedToken,
+    type: 'recovery',
+    next: '/reset/complete',
+    userId: data?.user?.id,
   });
+  if (!confirmUrl) {
+    // GoTrue answered no account id the link can name: never a link without
+    // r. Reported under the route's tag, so the walk's 500 has a cause.
+    return internalErrorResponse(
+      new Error('the recovery link could not be signed for its account'),
+      'admin.qa-recovery-link',
+      { message: 'The link could not be signed.' },
+    );
+  }
+  return NextResponse.json({ confirmUrl });
 }

@@ -28,7 +28,8 @@ import {
  *
  *   1. every POST, PUT, PATCH or DELETE exported by a route file under
  *      src/app reaches withApiContext (directly, through the file's own
- *      functions, or through the returns routes' two shared gates), or is
+ *      functions, or through a shared gate in GATE_MODULES: the returns
+ *      routes' two, and the API context gate of docket S26), or is
  *      re-exported from a route that does, or is listed in EXEMPT with how it
  *      authenticates and why it needs no cookie rule;
  *   2. every EXEMPT entry is current: the file exists, exports exactly the
@@ -168,7 +169,7 @@ const EXEMPT: Record<string, Exemption> = {
     auth: 'one-time token',
     session: 'creates',
     reason:
-      'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, before verifyOtp. Its GET reads the session only to say which account the browser is already signed in as.',
+      'The emailed password-reset, invite and email-change links: the single-use token in the form is the credential and the answer sets the session. Its own page posts to it with Origin null (no-referrer), so it refuses a post whose Sec-Fetch-Site names another site, and one whose signed account reference (r, docket S25) does not check out, both before verifyOtp. Its GET checks r too, looks that account up with the service client to name it, and reads the session only to say which account the browser is already signed in as. A session made for another account than r names is signed out again (scope local) in the same answer.',
   },
   'ingest/[...path]/route.ts': {
     methods: ['POST', 'PUT', 'PATCH', 'DELETE'],
@@ -338,7 +339,7 @@ describe('the reviewed exemptions are current', () => {
 });
 
 describe('every withApiContext call is handed the request it judges', () => {
-  // The routes, and the two shared gates whose routes hand them their request.
+  // The routes, and the shared gates whose routes hand them their request.
   const GATE_FILES = Object.entries(GATE_MODULES)
     .filter(([name]) => name !== 'withApiContext')
     .map(([, module]) => `${module}.ts`);
@@ -370,7 +371,8 @@ describe('every withApiContext call is handed the request it judges', () => {
       }
     }
     expect(bad).toEqual([]);
-    // The returns routes call the two shared gates (18 calls on 2026-10-24).
+    // The returns routes call their two shared gates (18 calls on 2026-10-24),
+    // and three routes call the API context gate (docket S26): 21.
     expect(sharedGateCalls).toBeGreaterThan(15);
   });
 
@@ -460,6 +462,31 @@ describe('self-test: the reading reports what it should', () => {
         export async function POST(req: Request) { return 'withApiContext(req)'; }
       `),
     ).toEqual(['POST:-']);
+  });
+
+  // Docket S26: the three routes whose refusal before any work is marked for
+  // the phone reach withApiContext through server/lib/api-context-gate.
+  it('the API context gate counts only from its own module; a namesake is not a gate', () => {
+    const file = 'app/api/v1/items/[id]/adjust/route.ts';
+    const gatesOf = (src: string) => handlers(src, file).map((h) => h.gates);
+    expect(
+      gatesOf(
+        `import { apiContextGate } from '@/server/lib/api-context-gate';
+         export async function POST(req: Request) { const gate = await apiContextGate(req); return gate; }`,
+      ),
+    ).toEqual([['apiContextGate']]);
+    expect(
+      gatesOf(
+        `import { apiContextGate } from '@/server/lib/not-the-gate';
+         export async function POST(req: Request) { const gate = await apiContextGate(req); return gate; }`,
+      ),
+    ).toEqual([[]]);
+    expect(
+      gatesOf(
+        `const apiContextGate = async (r: Request) => ({ ctx: null, r });
+         export async function POST(req: Request) { const gate = await apiContextGate(req); return gate; }`,
+      ),
+    ).toEqual([[]]);
   });
 
   it('the shared returns gates count only from their own modules', () => {

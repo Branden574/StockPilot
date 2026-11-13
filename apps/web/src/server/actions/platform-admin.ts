@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
+import { confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { checkPlatformAdmin, isPlatformAdmin } from '@/lib/auth/platform-admin';
 import { hashPassphrase, verifyPassphrase } from '@/lib/auth/platform-passphrase';
 import { renderWorkspaceReadyEmail } from '@/lib/email/es/families/invites';
@@ -241,23 +242,39 @@ export async function createOrgForCustomerAction(
   // (PKCE-only, lib/supabase/client.test.ts), so the owner would land on
   // /signin, not signed in, with live tokens in the address bar. With no
   // hashed token there is no link of ours to send.
-  const inviteHashedToken = invited.properties?.hashed_token;
-  if (!inviteHashedToken) {
-    await reportError(new Error('generateLink(invite) returned no hashed_token'), {
-      tag: 'platform-admin.invite-link',
-      extra: { orgId },
-    });
-    return err(
-      'internal_error',
-      'Org created, but no invite link could be made, so no email was sent. Open the org in the platform console and choose Send password reset for the owner.',
-    );
-  }
+  //
   // next=/reset/complete, NOT /dashboard: the invite creates a
   // PASSWORD-LESS auth user. Landing them on the dashboard leaves them
   // with no credential — once that session expires, their only way back
   // in is guessing to use "Forgot password". Force the set-a-password
   // form while the invite session is live.
-  const inviteUrl = `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(inviteHashedToken)}&type=invite&next=${encodeURIComponent('/reset/complete')}`;
+  //
+  // The link names the new owner's account (`r`, docket S25), so the page
+  // shows whose invite it is before anyone presses. One that cannot be
+  // signed (no key, or no usable id from GoTrue) is not sent either.
+  const inviteHashedToken = invited.properties?.hashed_token;
+  const inviteUrl = inviteHashedToken
+    ? confirmLinkUrl({
+        tokenHash: inviteHashedToken,
+        type: 'invite',
+        next: '/reset/complete',
+        userId: newUserId,
+      })
+    : null;
+  if (!inviteUrl) {
+    await reportError(
+      new Error(
+        inviteHashedToken
+          ? 'the invite link could not be signed for its account'
+          : 'generateLink(invite) returned no hashed_token',
+      ),
+      { tag: 'platform-admin.invite-link', extra: { orgId } },
+    );
+    return err(
+      'internal_error',
+      'Org created, but no invite link could be made, so no email was sent. Open the org in the platform console and choose Send password reset for the owner.',
+    );
+  }
   // ws-ready (es invitations family) — previously reused the generic
   // invite template; now renders the dedicated workspace-ready design.
   const message = renderWorkspaceReadyEmail({

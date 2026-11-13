@@ -21,6 +21,7 @@ import {
   escalationPrefill,
   escalationRequestStateCopy,
   escalationSourceLines as coreEscalationSourceLines,
+  isRefusedBeforeAnyWrite,
   type EscalateUnavailableReason,
   type EscalationHolder,
   type EscalationPrefill,
@@ -524,6 +525,12 @@ export async function escalateException(occurrenceId: string, fields: Escalation
 export const ESCALATE_UNCONFIRMED_COPY =
   'The server did not answer, so it is not known whether the request was saved. Try again in a moment: if this exception was escalated, its request opens instead of a new one.';
 
+/** The server could not check this person's access and refused before
+ *  doing anything (docket S26, the one 503 marked so): nothing was saved,
+ *  and the form is kept for another try. */
+export const ESCALATE_ACCESS_NOT_CHECKED_COPY =
+  'Your access could not be checked just now, so nothing was saved. Try again in a moment.';
+
 /** A 5xx: the server may have saved a request it could not link or confirm
  *  (core's words; the web says the same). */
 export { ESCALATE_SERVER_PROBLEM_COPY, ESCALATE_TOO_MANY_COPY };
@@ -619,6 +626,10 @@ export function describeEscalateError(e: unknown): EscalateErrorView {
   }
   if (status === 404) return { message: say(ESCALATE_NOT_AVAILABLE_COPY), duplicate: null, retryable: false };
   if (status === 429) return { message: ESCALATE_TOO_MANY_COPY, duplicate: null, retryable: true };
+  // The one 5xx known to come before any write (core reads the whole mark).
+  if (isRefusedBeforeAnyWrite(e)) {
+    return { message: ESCALATE_ACCESS_NOT_CHECKED_COPY, duplicate: null, retryable: true };
+  }
   if (status !== null && status >= 500) {
     return { message: ESCALATE_SERVER_PROBLEM_COPY, duplicate: null, retryable: false };
   }

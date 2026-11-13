@@ -76,17 +76,107 @@ describe('readStoredAuthSession', () => {
   const valid = JSON.stringify({ access_token: 'a', refresh_token: 'r', expires_at: 1, user: { id: 'u1' } });
 
   it('no head entry: no session', async () => {
-    expect(await readStoredAuthSession(reader(null, null), KEY)).toEqual({ present: false, userId: null });
+    expect(await readStoredAuthSession(reader(null, null), KEY)).toEqual({
+      present: false,
+      userId: null,
+      stepUpOwed: false,
+      level: null,
+    });
   });
 
   it('a head entry: a session, and whose', async () => {
-    expect(await readStoredAuthSession(reader(valid, valid), KEY)).toEqual({ present: true, userId: 'u1' });
+    expect(await readStoredAuthSession(reader(valid, valid), KEY)).toEqual({
+      present: true,
+      userId: 'u1',
+      stepUpOwed: false,
+      // These tokens are not JWTs: no level can be read from them.
+      level: null,
+    });
   });
 
   it('a head entry whose chunks are mid-rewrite: still a session, owner not known right now', async () => {
     expect(await readStoredAuthSession(reader('__chunked:2', null), KEY)).toEqual({
       present: true,
       userId: null,
+      // Not readable right now: nothing is sent on a guess (docket S43b).
+      stepUpOwed: true,
+      level: null,
+    });
+  });
+
+  // docket S43b: the same stored entry says whether the session still owes
+  // its authenticator code (mfa-level.ts readStoredStepUp), so the outbox
+  // can hold without the auth lock.
+  describe('whether the stored session still owes its authenticator code', () => {
+    const jwt = (claims: Record<string, unknown>) =>
+      [{ alg: 'HS256', typ: 'JWT' }, claims, 'sig']
+        .map((part) => Buffer.from(JSON.stringify(part)).toString('base64url'))
+        .join('.');
+    const stored = (aal: string | undefined, factors: unknown) =>
+      JSON.stringify({
+        access_token: jwt({ sub: 'u1', ...(aal ? { aal } : {}) }),
+        refresh_token: 'r',
+        expires_at: 1,
+        user: { id: 'u1', ...(factors === undefined ? {} : { factors }) },
+      });
+    const TOTP = [{ id: 'f1', factor_type: 'totp', status: 'verified' }];
+    const read = async (raw: string) => readStoredAuthSession(reader(raw, raw), KEY);
+
+    it('a verified factor and a password-only token: owed', async () => {
+      expect(await read(stored('aal1', TOTP))).toEqual({
+        present: true,
+        userId: 'u1',
+        stepUpOwed: true,
+        level: 'aal1',
+      });
+    });
+
+    it('a verified factor and a token with no level: owed', async () => {
+      expect((await read(stored(undefined, TOTP))).stepUpOwed).toBe(true);
+    });
+
+    it('the code was entered (aal2): not owed', async () => {
+      expect(await read(stored('aal2', TOTP))).toEqual({
+        present: true,
+        userId: 'u1',
+        stepUpOwed: false,
+        level: 'aal2',
+      });
+    });
+
+    it('no factor, or only one that was never verified: not owed', async () => {
+      expect((await read(stored('aal1', undefined))).stepUpOwed).toBe(false);
+      expect((await read(stored('aal1', []))).stepUpOwed).toBe(false);
+      expect(
+        (await read(stored('aal1', [{ id: 'f1', factor_type: 'totp', status: 'unverified' }]))).stepUpOwed,
+      ).toBe(false);
+    });
+
+    it('an entry that is not a readable session: owed', async () => {
+      expect((await read('not json')).stepUpOwed).toBe(true);
+      expect((await read('"a string"')).stepUpOwed).toBe(true);
+    });
+
+    // The level goes with the answer, so the outbox reads the server-backed
+    // note by the gate's rule (mfa-level.ts stepUpNoteHolds).
+    it('the level the stored token carries is read from the same entry', async () => {
+      expect((await read(stored('aal1', undefined))).level).toBe('aal1');
+      expect((await read(stored('aal2', undefined))).level).toBe('aal2');
+      expect((await read(stored(undefined, TOTP))).level).toBeNull();
+    });
+
+    it('an entry that is not a readable session has no level: never read as aal2', async () => {
+      expect((await read('not json')).level).toBeNull();
+      expect((await read('"a string"')).level).toBeNull();
+      // A session at aal2 whose user cannot be read is still unreadable.
+      const noUser = JSON.stringify({ access_token: jwt({ sub: 'u1', aal: 'aal2' }), refresh_token: 'r', expires_at: 1 });
+      expect(await read(noUser)).toEqual({ present: true, userId: null, stepUpOwed: true, level: null });
+    });
+
+    it('reads the stored value once for both answers', async () => {
+      const r = reader(stored('aal1', TOTP), stored('aal1', TOTP));
+      await readStoredAuthSession(r, KEY);
+      expect(r.full).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -199,7 +289,13 @@ describe('against the real auth-js client: the stored session is the truth getSe
     expect(data.session).toBeNull();
     expect(isAuthRetryableFetchError(error)).toBe(true);
     // ...yet the session never left the device:
-    expect(await readStoredAuthSession(reader, KEY)).toEqual({ present: true, userId: 'u1' });
+    expect(await readStoredAuthSession(reader, KEY)).toEqual({
+      present: true,
+      userId: 'u1',
+      stepUpOwed: false,
+      // These tokens are not JWTs: no level can be read from them.
+      level: null,
+    });
   });
 
   it('expired + offline: a local sign-out fails and keeps the session, and endSession says so', async () => {
@@ -236,7 +332,12 @@ describe('against the real auth-js client: the stored session is the truth getSe
       ),
     );
     expect(ended).toBe(true);
-    expect(await readStoredAuthSession(reader, KEY)).toEqual({ present: false, userId: null });
+    expect(await readStoredAuthSession(reader, KEY)).toEqual({
+      present: false,
+      userId: null,
+      stepUpOwed: false,
+      level: null,
+    });
   });
 
   it('a refresh the server REFUSED really ends the session: nothing is left stored', async () => {
@@ -244,7 +345,12 @@ describe('against the real auth-js client: the stored session is the truth getSe
     net.mode = 'refused';
     const { data } = await settle(client.getSession());
     expect(data.session).toBeNull();
-    expect(await readStoredAuthSession(reader, KEY)).toEqual({ present: false, userId: null });
+    expect(await readStoredAuthSession(reader, KEY)).toEqual({
+      present: false,
+      userId: null,
+      stepUpOwed: false,
+      level: null,
+    });
   });
 
   it('a valid token: the stored read and getSession() agree', async () => {

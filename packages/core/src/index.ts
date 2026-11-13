@@ -114,6 +114,7 @@ export * from './time/org-timezone';
 export * from './time/zoned-wall-clock';
 export * from './b2b/pricing-mode';
 export * from './auth/account-status';
+export * from './auth/context-unavailable';
 export * from './email/outlook-compose';
 export * from './email/cc-notice';
 export * from './email/org-email-routing';

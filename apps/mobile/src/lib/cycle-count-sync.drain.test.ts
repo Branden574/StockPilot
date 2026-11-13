@@ -67,6 +67,8 @@ vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }))
 const live = vi.hoisted(() => ({
   orgId: 'org-live' as string | null,
   userId: 'u1' as string | null,
+  /** The session still owes its authenticator code (docket S43b). */
+  stepUpOwed: false,
 }));
 vi.mock('./session-scope', () => ({ liveOutboxScope: vi.fn(async () => ({ ...live })) }));
 
@@ -93,6 +95,7 @@ beforeEach(() => {
   calls.log = [];
   live.orgId = 'org-live';
   live.userId = 'u1';
+  live.stepUpOwed = false;
   cacheMock.outboxQueued.mockReset().mockImplementation(async () => cacheMock.rows);
   for (const name of [
     'outboxAck',
@@ -239,6 +242,58 @@ describe('CycleCountSyncEngine drain — own org, own account, per row (S4a)', (
     expect(cacheMock.outboxAck).toHaveBeenCalledWith(1);
     expect(cacheMock.outboxAck).not.toHaveBeenCalledWith(2);
     expect(cacheMock.outboxReject).toHaveBeenCalledWith(2, REPLACED_BY_LATER_COUNT);
+  });
+});
+
+/**
+ * docket S43b. While the session still owes its authenticator code the count
+ * outbox is left exactly as it is: no count is sent, and no superseded row is
+ * acked or parked. The first drain after the code does both.
+ */
+describe('a session that still owes its authenticator code: the count outbox waits', () => {
+  it('a queued count is not sent, not failed, not rejected, not stamped', async () => {
+    live.stepUpOwed = true;
+    cacheMock.rows = [countRow(1, 'l1', { org: 'org-a', user: 'u1' })];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+  });
+
+  it('a legacy count is not adopted, and a superseded one is neither acked nor parked', async () => {
+    live.stepUpOwed = true;
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(2, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(3, 'l2', { org: 'org-a', user: 'u2' }),
+      countRow(4, 'l2', { org: 'org-a', user: 'u1' }),
+      countRow(5, 'l3', { org: null, user: null }),
+    ];
+
+    await cycleCountSync.forceSync();
+
+    expect(apiMock.api).not.toHaveBeenCalled();
+    expect(calls.log).toEqual([]);
+  });
+
+  it('once the code is entered, the same drain settles and sends them', async () => {
+    live.stepUpOwed = true;
+    cacheMock.rows = [
+      countRow(1, 'l1', { org: 'org-a', user: 'u1' }),
+      countRow(2, 'l1', { org: 'org-a', user: 'u1' }),
+    ];
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual([]);
+
+    live.stepUpOwed = false;
+    await cycleCountSync.forceSync();
+    expect(calls.log).toEqual([
+      'outboxAck:1',
+      'outboxMarkSending:2',
+      `api:${recordPath('l1')}`,
+      'outboxAck:2',
+    ]);
   });
 });
 

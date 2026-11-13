@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, type SupabaseStub } from '@/test/supabase-mock';
 
 // Full warehouse access — these tests cover the approval-threshold gate in
 // updateStatus, not warehouse scoping.
@@ -28,6 +28,14 @@ vi.mock('@/lib/auth/session', () => ({
 
 vi.mock('./audit', () => ({ audit: vi.fn(async () => {}) }));
 
+// Export events are recorded through the service client
+// (server/lib/outbox-events.ts): every createAdminClient() in a test is this
+// stub, so the event the helper writes is read from it.
+const adminHolder = vi.hoisted(() => ({ client: null as unknown }));
+vi.mock('@/lib/supabase/admin', () => ({ createAdminClient: () => adminHolder.client }));
+const reportErrorMock = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
+vi.mock('@/lib/error-reporter', () => ({ reportError: reportErrorMock }));
+
 vi.mock('./item-images', () => ({
   ItemImagesService: class {
     async primaryImagesForItems() {
@@ -42,9 +50,27 @@ vi.mock('./item-images', () => ({
 import { ServiceError } from './context';
 import { PurchaseOrdersService } from './purchase-orders';
 
+let admin: SupabaseStub;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  admin = makeSupabaseStub({ 'rpc:publish_outbox': { data: 'evt-1', error: null } });
+  adminHolder.client = admin.client;
 });
+
+/** The purchase_order.ordered event exactly as it has always been sent. */
+const ORDERED_EVENT = {
+  p_org_id: 'org-test',
+  p_topic: 'purchase_order.ordered',
+  p_aggregate_type: 'purchase_order',
+  p_aggregate_id: 'po-1',
+  p_payload: { poId: 'po-1' },
+  p_dedupe_key: 'purchase_order.ordered:po-1',
+};
+
+function outboxCalls(stub: SupabaseStub) {
+  return stub.rpcCalls.filter((c) => c.name === 'publish_outbox');
+}
 
 /** Stub: one visible PO (no destination → no warehouse gate) + module settings. */
 function stubFor(opts: {
@@ -64,7 +90,6 @@ function stubFor(opts: {
     // updateStatus now appends .select('id').maybeSingle() and fails closed on a
     // 0-row update — return a row so the happy-path transitions still succeed.
     'purchase_orders.update': { data: { id: 'po-1' }, error: null },
-    'rpc:publish_outbox': { data: null, error: null },
   });
 }
 
@@ -78,6 +103,7 @@ describe('PurchaseOrdersService.updateStatus — approval threshold', () => {
     expect((err as ServiceError).message).toMatch(/approval threshold/i);
     // The status write must never have happened.
     expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(outboxCalls(admin)).toHaveLength(0);
   });
 
   it('blocks exactly AT the threshold (>= semantics)', async () => {
@@ -92,7 +118,11 @@ describe('PurchaseOrdersService.updateStatus — approval threshold', () => {
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client, { role: 'manager' }) as never);
     await svc.updateStatus('po-1', 'ordered');
     expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
-    expect(stub.rpcCalls.some((c) => c.name === 'publish_outbox')).toBe(true);
+    // Recorded once, through the service client, after the status change.
+    expect(outboxCalls(admin)).toEqual([{ name: 'publish_outbox', args: ORDERED_EVENT }]);
+    expect(JSON.stringify(outboxCalls(admin)[0]!.args)).toBe(JSON.stringify(ORDERED_EVENT));
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(reportErrorMock).not.toHaveBeenCalled();
   });
 
   it('lets an admin place a PO above the threshold (no settings read needed)', async () => {
@@ -199,7 +229,8 @@ describe('PurchaseOrdersService.updateStatus — cancelled is terminal', () => {
     const svc = new PurchaseOrdersService(makeServiceContext(stub.client) as never);
     await expect(svc.updateStatus('po-1', 'ordered')).resolves.toBeUndefined();
     expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
-    expect(stub.rpcCalls.filter((c) => c.name === 'publish_outbox')).toHaveLength(0);
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(outboxCalls(admin)).toHaveLength(0);
   });
 
   it('maps a residual partial-index 23505 to a clean conflict (not internal_error)', async () => {
@@ -287,5 +318,73 @@ describe('PurchaseOrdersService.updateStatus — cancel cleans up auto-created i
     await svc.updateStatus('po-1', 'cancelled');
 
     expect(stub.chainsAll.get('inventory_items.update')).toBeUndefined();
+  });
+});
+
+describe('PurchaseOrdersService.updateStatus: the purchase_order.ordered export event', () => {
+  it('a member without purchase_orders:manage is refused before anything, and no event is recorded', async () => {
+    const stub = stubFor({ total: 10, settings: {} });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, { role: 'staff' }) as never,
+    );
+    await expect(svc.updateStatus('po-1', 'ordered')).rejects.toMatchObject({ code: 'forbidden' });
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeUndefined();
+    expect(outboxCalls(admin)).toHaveLength(0);
+    expect(outboxCalls(stub)).toHaveLength(0);
+    expect(reportErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('a status change that did not land (no row came back) records no event', async () => {
+    const stub = makeSupabaseStub({
+      'purchase_orders.select': {
+        data: { id: 'po-1', po_number: 'PO-1', status: 'draft', total: 10, destination: null },
+        error: null,
+      },
+      'purchase_order_items.select': { data: [], error: null },
+      'organization_modules.select': { data: { settings: {} }, error: null },
+      'purchase_orders.update': { data: null, error: null },
+    });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, { role: 'admin' }) as never,
+    );
+    await expect(svc.updateStatus('po-1', 'ordered')).rejects.toMatchObject({ code: 'conflict' });
+    expect(outboxCalls(admin)).toHaveLength(0);
+  });
+
+  it('records the event in the active organization, never another', async () => {
+    const stub = stubFor({ total: 10, settings: {} });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, { role: 'admin', organizationId: 'org-active' }) as never,
+    );
+    await svc.updateStatus('po-1', 'ordered');
+    expect(outboxCalls(admin)).toEqual([
+      { name: 'publish_outbox', args: { ...ORDERED_EVENT, p_org_id: 'org-active' } },
+    ]);
+  });
+
+  it('a failed write is reported and the status change stands', async () => {
+    admin = makeSupabaseStub({
+      'rpc:publish_outbox': { data: null, error: { message: 'publish failed', code: 'XX000' } },
+    });
+    adminHolder.client = admin.client;
+    const stub = stubFor({ total: 10, settings: {} });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, { role: 'admin' }) as never,
+    );
+    await expect(svc.updateStatus('po-1', 'ordered')).resolves.toBeUndefined();
+    expect(stub.chainsAll.get('purchase_orders.update')).toBeDefined();
+    expect(reportErrorMock).toHaveBeenCalledWith(
+      { message: 'publish failed', code: 'XX000' },
+      expect.objectContaining({ tag: 'outbox.publish', organizationId: 'org-test' }),
+    );
+  });
+
+  it('cancelling records no export event', async () => {
+    const stub = stubFor({ total: 10, settings: {} });
+    const svc = new PurchaseOrdersService(
+      makeServiceContext(stub.client, { role: 'admin' }) as never,
+    );
+    await svc.updateStatus('po-1', 'cancelled');
+    expect(outboxCalls(admin)).toHaveLength(0);
   });
 });

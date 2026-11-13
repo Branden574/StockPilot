@@ -11,7 +11,9 @@
  *
  * Account deletion reads it as "another request deleted the account a moment
  * ago" (review R7): server/lib/account-deletion.ts and the last check before
- * the delete (server/services/step-up-held.ts).
+ * the delete (server/services/step-up-held.ts). The confirmation page reads
+ * it as "the account this link is for is gone" and answers as for an expired
+ * link (lib/auth/confirm-link.ts).
  */
 export function isUserNotFound(e: unknown): boolean {
   if (!e || typeof e !== 'object') return false;
