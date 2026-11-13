@@ -261,10 +261,10 @@ describe('POST /auth/confirm from another site', () => {
     async (site) => {
       verifyOtp.mockResolvedValue({ error: null });
       const res = await POST(
-        postReq(
-          { token_hash: 'held-by-another-page', type: 'recovery', next: '/reset/complete' },
-          { 'sec-fetch-site': site, origin: 'https://evil.example' },
-        ),
+        postReq(pressFields({ type: 'recovery', next: '/reset/complete' }), {
+          'sec-fetch-site': site,
+          origin: 'https://evil.example',
+        }),
       );
       expect(res.status).toBe(303);
       expect(res.headers.get('location')).toBe(`${BASE}/reset?error=link_refused`);
@@ -276,10 +276,7 @@ describe('POST /auth/confirm from another site', () => {
     verifyOtp.mockResolvedValue({ error: null });
     for (const type of ['invite', 'magiclink']) {
       const res = await POST(
-        postReq(
-          { token_hash: 'held', type, next: '/dashboard' },
-          { 'sec-fetch-site': 'cross-site' },
-        ),
+        postReq(pressFields({ type, next: '/dashboard' }), { 'sec-fetch-site': 'cross-site' }),
       );
       expect(res.status, type).toBe(303);
       expect(res.headers.get('location'), type).toBe(`${BASE}/signin?error=link_refused`);
@@ -301,7 +298,7 @@ describe('POST /auth/confirm from another site', () => {
 
   it('an email change from another site: its own expired page, and nothing changes', async () => {
     const res = await POST(
-      postReq({ token_hash: 'side-b', type: 'email_change' }, { 'sec-fetch-site': 'same-site' }),
+      postReq(pressFields({ type: 'email_change' }), { 'sec-fetch-site': 'same-site' }),
     );
     expect(res.status).toBe(200);
     const html = await res.text();
@@ -1052,7 +1049,8 @@ describe('POST /auth/confirm takes a press only through the press gate (S25)', (
 
   it('any other value in the field, an empty one, or no form at all is refused the same way', async () => {
     vi.spyOn(console, 'info').mockImplementation(() => {});
-    const fields = { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' };
+    verifyOtp.mockResolvedValue({ error: null });
+    const fields = pressFields({ type: 'recovery', next: '/reset/complete' });
     for (const value of ['', '1', 'true', 'ARMED', ` ${PRESS_GATE_PASSED_VALUE}`]) {
       const res = await POST(
         postWithoutGate({ ...fields, [PRESS_GATE_PASSED_FIELD]: value }, SAME_ORIGIN),
@@ -1082,7 +1080,8 @@ describe('POST /auth/confirm takes a press only through the press gate (S25)', (
 
   it('a post from another site is still refused first, with or without the field, and is not logged as a gate refusal', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => {});
-    const fields = { token_hash: 'abc123', type: 'recovery', next: '/reset/complete' };
+    verifyOtp.mockResolvedValue({ error: null });
+    const fields = pressFields({ type: 'recovery', next: '/reset/complete' });
     const elsewhere = { 'sec-fetch-site': 'cross-site', origin: 'https://elsewhere.example' };
     for (const req of [postWithoutGate(fields, elsewhere), postReq(fields, elsewhere)]) {
       const res = await POST(req);
