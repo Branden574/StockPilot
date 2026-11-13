@@ -77,6 +77,8 @@ import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
+import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { FONT, RADIUS, TYPE_CEILING, capTo, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
@@ -232,6 +234,10 @@ export default function CycleCountDetail() {
   const syncSnapshot = useSyncStatus();
 
   const { orgId } = useOrg();
+  // Whether this member may see cycle counts (the side menu's rule, decided
+  // once the saved permissions and modules are read: screen-access.ts). Asked
+  // before the copy on this phone or the database is read.
+  const access = useDrawerEntryAccess('/cycle-counts');
   // The organization's timezone for the "Counted offline <time>" label, so
   // the phone and the web review name the same moment. Fail-soft: without it
   // (offline, a refused read) the device's own zone is used.
@@ -433,6 +439,16 @@ export default function CycleCountDetail() {
   // of it: load() below runs a second when the cache discarded the first.
   const loadOnce = React.useCallback(async (): Promise<LoadPass> => {
     if (!id) return;
+    // Not before it is known (the spinner stays; this runs again once it is),
+    // and not at all for a member who may not see cycle counts.
+    if (access !== 'allowed') {
+      if (access === 'denied') {
+        setReadError(CYCLE_COUNTS_NOT_AVAILABLE);
+        setEmptyState('read-failed');
+        setLoading(false);
+      }
+      return;
+    }
 
     // The copy saved on this phone. A read that fails is said, never a
     // spinner that does not end: load() is fire-and-forget, so a throw here
@@ -633,7 +649,7 @@ export default function CycleCountDetail() {
     } catch {
       setLinked({ kind: 'failed' });
     }
-  }, [id, orgId]);
+  }, [id, orgId, access]);
 
   /** The count's load: one pass, and a second, under a fresh note, when the
    *  cache discarded what the first fetched (see the store in loadOnce).
@@ -867,7 +883,11 @@ export default function CycleCountDetail() {
           </Text>
           <Text style={[styles.emptyBody, { color: c.ink3 }, lg && glassCountStyles(lg).emptyBody]}>
             {readError}
-            {'\n\n'}If the app was just updated, the server may still be catching up.
+            {readError === CYCLE_COUNTS_NOT_AVAILABLE ? null : (
+              <>
+                {'\n\n'}If the app was just updated, the server may still be catching up.
+              </>
+            )}
           </Text>
           <Button
             variant="outline"

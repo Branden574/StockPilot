@@ -65,13 +65,16 @@ import {
   type CycleCountListSummary,
   type CycleCountListView,
 } from '@/lib/cycle-count-history';
+import { ApiError } from '@/lib/api';
 import { listCycleCounts } from '@/lib/cycle-counts-api';
 import { useEnabledModules } from '@/lib/enabled-modules';
 import { useSyncStatus } from '@/lib/cycle-count-sync';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { FONT, RADIUS, TYPE_CEILING, capTo } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
 import { useRole } from '@/lib/use-role';
@@ -210,6 +213,11 @@ export default function CycleCounts() {
   // longer keep load's memoization (react-hooks/preserve-manual-memoization).
   const booksOn = enabledModules.has('books');
   const startHint = startCountHint(booksOn);
+  // The counts downloaded to this phone are shown (offline, or under a read
+  // that failed) only to a member who may see cycle counts: the side menu's
+  // rule, decided once the saved permissions and modules are read
+  // (screen-access.ts). The list itself is the server's, which decides.
+  const storedAccess = useDrawerEntryAccess('/cycle-counts');
 
   // What the list shows (search, status, page), restored per workspace when
   // the screen comes back, so opening a count and returning keeps the view.
@@ -233,11 +241,16 @@ export default function CycleCounts() {
   const inFlight = React.useRef<AbortController | null>(null);
   const orgRef = React.useRef(orgId);
   const viewRef = React.useRef(view);
+  const storedAccessRef = React.useRef(storedAccess);
+  // The last load's outcome depended on storedAccess (it was offline, or its
+  // read failed), so a change of it loads again.
+  const needsAccessRef = React.useRef(false);
   // Kept current for the async load (a layout effect runs before every effect
   // below that reads them).
   React.useLayoutEffect(() => {
     orgRef.current = orgId;
     viewRef.current = view;
+    storedAccessRef.current = storedAccess;
   });
   // The view (and workspace) the last load was started for, so a view change
   // that only reconciles the page to what the server answered does not load
@@ -252,6 +265,7 @@ export default function CycleCounts() {
       inFlight.current = ctrl;
       const activeOrg = orgRef.current;
       requested.current = { orgId: activeOrg, view: target };
+      needsAccessRef.current = false;
 
       let online = true;
       try {
@@ -273,7 +287,18 @@ export default function CycleCounts() {
 
       if (!activeOrg) return; // the workspace is still resolving; its switch loads
       if (!online) {
-        // Offline: only what this device downloaded. Read, never written back.
+        // Offline: only what this device downloaded, and only for a member
+        // who may see cycle counts; until that is known, nothing is claimed.
+        needsAccessRef.current = true;
+        const access = storedAccessRef.current;
+        if (access !== 'allowed') {
+          setPage(null);
+          setDownloaded(null);
+          setError(access === 'denied' ? CYCLE_COUNTS_NOT_AVAILABLE : null);
+          setBusy(false);
+          return;
+        }
+        // Read, never written back.
         const cached = await readDownloaded();
         if (!guard.current.isCurrent(token)) return;
         // null (the read failed) stays null: the screen never claims "none
@@ -317,6 +342,18 @@ export default function CycleCounts() {
         // labelled as downloaded counts only.
         setPage(null);
         setError(e instanceof Error ? e.message : 'Could not load cycle counts.');
+        // The server's refusal (no access to cycle counts, or the module
+        // off) is its answer about this member: the downloaded counts are
+        // never shown in its place. Nor to a member who may not see them.
+        if (e instanceof ApiError && e.status === 403) {
+          setDownloaded(null);
+          return;
+        }
+        needsAccessRef.current = true;
+        if (storedAccessRef.current !== 'allowed') {
+          setDownloaded(null);
+          return;
+        }
         const cached = await readDownloaded();
         if (guard.current.isCurrent(token)) setDownloaded(cached);
       } finally {
@@ -345,6 +382,16 @@ export default function CycleCounts() {
   React.useEffect(() => {
     rememberListView(orgId, view);
   }, [orgId, view]);
+
+  // Whether the downloaded counts may be shown became known, or changed: a
+  // load that depended on it (offline, or under a failed read) runs again.
+  const lastStoredAccess = React.useRef(storedAccess);
+  React.useEffect(() => {
+    if (lastStoredAccess.current === storedAccess) return;
+    lastStoredAccess.current = storedAccess;
+    if (!needsAccessRef.current) return;
+    void load(viewRef.current, { withSummary: true });
+  }, [storedAccess, load]);
 
   // Every return to the screen reloads the SAME view (never page 1), with the
   // tile totals.

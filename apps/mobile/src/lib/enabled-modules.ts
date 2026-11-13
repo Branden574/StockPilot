@@ -62,30 +62,80 @@ export function refreshEnabledModules(): void {
 
 /**
  * React hook returning the current org's enabled module set, defaulting to
- * DEFAULT_ENABLED_MODULES until a persisted value is read.
+ * DEFAULT_ENABLED_MODULES until a persisted value is read (a read that throws
+ * keeps the set shown).
  *
  * Re-reads when `refreshEnabledModules()` is called (e.g. after an in-session
  * org switch triggers a fresh snapshot pull). This fixes the Phase-1 limitation
  * where the drawer/tabs would not update their entitlements without a remount.
  */
 export function useEnabledModules(): Set<ModuleId> {
-  const [modules, setModules] = React.useState<Set<ModuleId>>(DEFAULT_ENABLED_MODULES);
+  return useEnabledModulesState().modules;
+}
+
+/** The module set, and whether the saved set has been read from the device yet. */
+export interface EnabledModulesState {
+  /** The saved set; DEFAULT_ENABLED_MODULES until one is read, and when none is saved. */
+  modules: Set<ModuleId>;
+  /** The saved set has been read once: found, absent or unreadable, or not
+   *  answered within MODULES_READ_WAIT_MS. Until then `modules` is the
+   *  default, not this workspace's set. Never goes back to false. */
+  read: boolean;
+}
+
+/**
+ * How long a screen waits for the first read of the saved set, as for the
+ * saved permissions (use-effective-permissions.ts
+ * SAVED_PERMISSIONS_READ_WAIT_MS): a read that has not answered by then
+ * counts as read with nothing saved, and the set still replaces the default
+ * when it lands.
+ */
+export const MODULES_READ_WAIT_MS = 2000;
+
+/**
+ * useEnabledModules with whether the saved set has been read: for a screen
+ * that must not decide from the permissive default (screen-access.ts). The
+ * module set itself follows the same rules as useEnabledModules.
+ */
+export function useEnabledModulesState(): EnabledModulesState {
+  const [state, setState] = React.useState<EnabledModulesState>({
+    modules: DEFAULT_ENABLED_MODULES,
+    read: false,
+  });
 
   React.useEffect(() => {
     let cancelled = false;
+    let wait: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      wait = null;
+      if (!cancelled) setState((prev) => (prev.read ? prev : { ...prev, read: true }));
+    }, MODULES_READ_WAIT_MS);
+    const stopWaiting = (): void => {
+      if (wait !== null) clearTimeout(wait);
+      wait = null;
+    };
     const reread = async (): Promise<void> => {
       if (cancelled) return;
-      const persisted = await readPersistedEnabledModules();
-      if (cancelled || !persisted) return;
-      setModules(persisted);
+      let persisted: Set<ModuleId> | null;
+      try {
+        persisted = await readPersistedEnabledModules();
+      } catch {
+        // The device store could not be read: the last set read stays, and a
+        // first read still counts as read.
+        persisted = null;
+      }
+      stopWaiting();
+      if (cancelled) return;
+      // Nothing saved keeps the set already shown, as before.
+      setState((prev) => ({ modules: persisted ?? prev.modules, read: true }));
     };
     listeners.add(reread);
     void reread();
     return () => {
       cancelled = true;
+      stopWaiting();
       listeners.delete(reread);
     };
   }, []);
 
-  return modules;
+  return state;
 }

@@ -36,7 +36,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
     '6d32450d4607d50dfe274dc2c06b9fc3d655c40dbe673efa8f546910de3b43f6',
   'app/(drawer)/(tabs)/scan.tsx':
     '99ebd17a73d80075bd405bf5b141343ea2541701b3f011610af9d6620bc450da',
-  'app/cycle-count/[id].tsx': '225237c617095b0e9b0857ca262bbefdb109bc9524436b38f1d34309b31e731e',
+  // Re-pinned for S75 (Classic is meant to change: the count is read only for a member who may
+  // see cycle counts, and the not-available state leaves out the catching-up sentence). Before
+  // S75 the projection was 225237c6...e731e, the pin it had.
+  'app/cycle-count/[id].tsx': 'e75dc5d0a99b4b703ab4af4beae1c90454209cd8a8105e7b6048d0945cd709a4',
   'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
   // Re-pinned for F14 (Classic is meant to change: the RETURN REQUEST section
   // under each of the requester's own open requests). Before F14 the
@@ -99,8 +102,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // The Books and Counts tabs (native-core).
   'app/(drawer)/(tabs)/books.tsx':
     '19ccb3b83458d0c9fcbc9400c13050eb870f595888a6a07f7525438ac712c46c',
+  // Re-pinned for S75 (Classic is meant to change: the counts downloaded to this phone are shown
+  // only to a member who may see cycle counts, never in place of the server's refusal). Before
+  // S75 the projection was 1c00180e...c412, the pin it had.
   'app/(drawer)/(tabs)/cycle-counts.tsx':
-    '1c00180e509cd5ea6b3d6584451599ad9f3efb178bd4805a6a8d10f1b887c412',
+    'b7905f8a4fcb0c6010f24f2f8052abfc4a742a2d9ed4f147a6d8ab5b5ace152b',
   // The order storefront (native-core). checkout.tsx and catalog-screen.tsx
   // are pinned to main's own files at 778b42231 (Add all, #494, merged in
   // 2026-11-10): Classic changed on main, and the pin follows main's code.
