@@ -1159,8 +1159,15 @@ export class TeamService {
  * Validates and consumes an invite token, then creates the membership.
  * Uses the admin client because the recipient may not yet have RLS access
  * to organization_invites for this org.
+ *
+ * A person who is already an accepted member of the invite's organization
+ * keeps their membership exactly as it is: the invite is only marked used
+ * and the result says `alreadyMember: true`.
  */
-export async function acceptInviteWithToken(token: string, userId: string) {
+export async function acceptInviteWithToken(
+  token: string,
+  userId: string,
+): Promise<{ organizationId: string; alreadyMember: boolean }> {
   const admin = createAdminClient();
 
   const { data: invite, error: inviteErr } = await admin
@@ -1204,9 +1211,37 @@ export async function acceptInviteWithToken(token: string, userId: string) {
   const charters: Array<string | null> =
     inviteCharterIds.length > 0 ? inviteCharterIds : [charterId];
 
+  // An accepted member keeps their role, flags, warehouse access and default
+  // organization: nothing below is written for them. A failed read refuses
+  // (it is never read as "no membership"). A row that is not accepted yet is
+  // completed by the upsert below, as before.
+  const { data: existingMembership, error: existingErr } = await admin
+    .from('organization_members')
+    .select('id, role, accepted_at')
+    .eq('organization_id', orgId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (existingErr) throw new ServiceError('internal_error', existingErr.message);
+  if (existingMembership?.accepted_at) {
+    // Marked used so the link cannot be pressed again.
+    await admin.from('organization_invites').update({ accepted_at: now }).eq('id', invite.id as string);
+    await insertAuditRowReported({
+      organization_id: orgId,
+      user_id: userId,
+      event: 'user.invite.accepted',
+      metadata: {
+        invite_id: invite.id,
+        already_member: true,
+        invite_role: role,
+        member_role: existingMembership.role as string,
+      },
+    });
+    return { organizationId: orgId, alreadyMember: true };
+  }
+
   // Create membership (idempotent on unique constraint). all_warehouses is
-  // only included when TRUE so a (theoretical) re-accept of a plain invite
-  // by an existing member never clears a previously granted flag.
+  // only included when TRUE so a re-accept of a plain invite that completes
+  // a not-yet-accepted row never clears a previously granted flag.
   const { error: memberErr } = await admin
     .from('organization_members')
     .upsert(
@@ -1371,5 +1406,5 @@ export async function acceptInviteWithToken(token: string, userId: string) {
     },
   });
 
-  return { organizationId: orgId };
+  return { organizationId: orgId, alreadyMember: false };
 }

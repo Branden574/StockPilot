@@ -1144,7 +1144,7 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
   ],
   'server/services/team.ts#acceptInviteWithToken::organization_invites.update': [
     'not_org_data',
-    'Invite acceptance: the invite row found by its token; the person is not a member yet.',
+    'Invite acceptance: the invite row found by its token, marked used (also when the person is already a member).',
   ],
   'server/services/team.ts#acceptInviteWithToken::user_profiles.update': [
     'own_row',
