@@ -5,6 +5,7 @@ import {
   OutboxWorkspaceLoadingError,
   type LiveScope,
 } from './outbox-scope';
+import { stepUpNoteHolds } from './mfa-level';
 import { stepUpForcedFor } from './mfa-reconcile';
 import { readDeviceAuthSession } from './supabase';
 import { ownSavedWorkspace, readSavedWorkspace, type SavedWorkspace } from './workspace-keys';
@@ -40,26 +41,31 @@ import { ownSavedWorkspace, readSavedWorkspace, type SavedWorkspace } from './wo
  */
 let lastSeenUserId: string | null = null;
 
-/** Who holds the stored session, and whether it still owes its authenticator code. */
+/**
+ * Who holds the stored session, whether it still owes its authenticator code,
+ * and the level its token reached.
+ */
 interface StoredAccount {
   userId: string | null;
   stepUpOwed: boolean;
+  level: string | null;
 }
 
 /**
  * The stored session's account (null when nobody is signed in or it cannot be
- * read now), and whether that session still owes its authenticator code
- * (auth-storage.ts, from the same stored entry; docket S43b).
+ * read now), whether that session still owes its authenticator code, and the
+ * level it reached (auth-storage.ts, all from the same stored entry; docket
+ * S43b). A level that is not there reads as none, which is not aal2.
  */
 async function readStoredAccount(): Promise<StoredAccount> {
   try {
-    const { userId, stepUpOwed } = await readDeviceAuthSession();
+    const { userId, stepUpOwed, level } = await readDeviceAuthSession();
     if (userId) lastSeenUserId = userId;
-    return { userId, stepUpOwed: stepUpOwed === true };
+    return { userId, stepUpOwed: stepUpOwed === true, level: typeof level === 'string' ? level : null };
   } catch {
     // Unreadable reads as nobody, and as a code still owed: every row is
     // held, nothing is sent on a guess.
-    return { userId: null, stepUpOwed: true };
+    return { userId: null, stepUpOwed: true, level: null };
   }
 }
 
@@ -75,7 +81,7 @@ async function readLive(): Promise<{ saved: SavedWorkspace } & StoredAccount> {
 }
 
 export async function liveOutboxScope(): Promise<LiveScope> {
-  const { saved, userId, stepUpOwed } = await readLive();
+  const { saved, userId, stepUpOwed, level } = await readLive();
   // Only a workspace this account saved itself (workspace-keys.ts
   // ownSavedWorkspace; docket B10, integrator decision 3). The drains send a
   // row that has no organization of its own (a legacy row, or one queued
@@ -89,12 +95,14 @@ export async function liveOutboxScope(): Promise<LiveScope> {
   //
   // The code is owed when the stored session says so, or when the server's
   // own factor list said so for this account and the stored copy could not be
-  // brought up to date yet (mfa-reconcile.ts): the drains hold exactly while
-  // the code screen shows.
+  // brought up to date yet (mfa-reconcile.ts). That note is read by the
+  // gate's own rule (mfa-level.ts stepUpNoteHolds), with the stored session's
+  // level: it never holds a session at aal2, so the drains hold while the
+  // code screen shows and not after the code was entered.
   return {
     orgId: ownSavedWorkspace(saved, userId ?? lastSeenUserId),
     userId,
-    stepUpOwed: stepUpOwed || (userId !== null && stepUpForcedFor() === userId),
+    stepUpOwed: stepUpOwed || stepUpNoteHolds(stepUpForcedFor(), userId, level),
   };
 }
 

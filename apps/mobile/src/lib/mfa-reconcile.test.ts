@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import * as level from './mfa-level';
 import { codeGateUp, type SessionLike, type UserLike } from './mfa-level';
 import {
   createStepUpReconciler,
@@ -225,6 +226,141 @@ describe('reconcile: an authenticator removed since the session was stored', () 
     state.refreshTo = session('aal1');
     expect(await reconcile(liveUser())).toBe('refreshed');
     expect(stepUpForcedFor()).toBe('u9');
+  });
+});
+
+describe('reconcile: the note is never kept for a session that entered its code', () => {
+  /** A reconciler whose refresh is held open until the test settles it. */
+  function slowRefresh(first: SessionLike) {
+    const state = { current: first as SessionLike | null, reads: 0 };
+    let settle!: (s: SessionLike | null) => void;
+    const pending = new Promise<SessionLike | null>((resolve) => {
+      settle = resolve;
+    });
+    const reconcile = createStepUpReconciler({
+      currentSession: async () => {
+        state.reads += 1;
+        return state.current;
+      },
+      refreshSession: () => pending,
+    });
+    return { state, reconcile, settle };
+  }
+  /** Let the run read its session and reach its refresh. */
+  const reachRefresh = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
+
+  it('a refresh that fails after the code was entered leaves no note', async () => {
+    const { state, reconcile, settle } = slowRefresh(session('aal1'));
+    const run = reconcile(liveUser([TOTP]));
+    await reachRefresh();
+    // The code is entered while the refresh is still out: auth-js holds the
+    // aal2 session and the provider clears the note (MFA_CHALLENGE_VERIFIED).
+    state.current = session('aal2', [TOTP]);
+    setStepUpForcedFor(null);
+    settle(null);
+    expect(await run).toBe('none');
+    expect(stepUpForcedFor()).toBeNull();
+    expect(codeGateUp(state.current, stepUpForcedFor())).toBe(false);
+  });
+
+  it('a refresh that answers late, without the factor, after the code was entered leaves no note', async () => {
+    const { state, reconcile, settle } = slowRefresh(session('aal1'));
+    const run = reconcile(liveUser([TOTP]));
+    await reachRefresh();
+    state.current = session('aal2', [TOTP]);
+    setStepUpForcedFor(null);
+    settle(session('aal1'));
+    expect(await run).toBe('none');
+    expect(stepUpForcedFor()).toBeNull();
+  });
+
+  it('the session is read again after the note is raised, never before', async () => {
+    const { state, reconcile, settle } = slowRefresh(session('aal1'));
+    const heard: (string | null)[] = [];
+    const off = subscribeStepUpForced(() => heard.push(stepUpForcedFor()));
+    const run = reconcile(liveUser([TOTP]));
+    await reachRefresh();
+    expect(state.reads).toBe(1);
+    settle(null);
+    expect(await run).toBe('forced');
+    off();
+    // Raised at once on the failed refresh, then one more read; still aal1, so it stays.
+    expect(heard).toEqual(['u1']);
+    expect(state.reads).toBe(2);
+    expect(stepUpForcedFor()).toBe('u1');
+  });
+
+  it('a second read that fails, or shows nobody or another account, keeps the note', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const second of ['throws', 'nobody', 'another'] as const) {
+      setStepUpForcedFor(null);
+      let reads = 0;
+      const reconcile = createStepUpReconciler({
+        currentSession: async () => {
+          reads += 1;
+          if (reads === 1) return session('aal1');
+          if (second === 'throws') throw new Error('keychain locked');
+          return second === 'nobody' ? null : session('aal2', [TOTP], 'u2');
+        },
+        refreshSession: async () => null,
+      });
+      expect(await reconcile(liveUser([TOTP])), second).toBe('forced');
+      expect(stepUpForcedFor(), second).toBe('u1');
+    }
+  });
+
+  it('a note found on a session at aal2 is withdrawn, with no refresh', async () => {
+    setStepUpForcedFor('u1');
+    const { state, reconcile } = harness(session('aal2', [TOTP]));
+    expect(await reconcile(liveUser([TOTP]))).toBe('none');
+    expect(stepUpForcedFor()).toBeNull();
+    expect(state.refreshes).toBe(0);
+    // Whatever the server lists: the session entered its code.
+    setStepUpForcedFor('u1');
+    expect(await reconcile(liveUser())).toBe('none');
+    expect(stepUpForcedFor()).toBeNull();
+    expect(state.refreshes).toBe(0);
+  });
+
+  it("a session at aal2 leaves another account's note alone", async () => {
+    setStepUpForcedFor('u9');
+    const { reconcile } = harness(session('aal2', [TOTP]));
+    expect(await reconcile(liveUser([TOTP]))).toBe('none');
+    expect(stepUpForcedFor()).toBe('u9');
+  });
+});
+
+describe('reconcile: whether to refresh is the comparison in mfa-level.ts, not a second copy', () => {
+  it('asks reconcileStepUp with the session it read and the answer it was handed', async () => {
+    const asked = vi.spyOn(level, 'reconcileStepUp');
+    const current = session('aal1');
+    const answer = liveUser([TOTP]);
+    const { reconcile } = harness(current);
+    await reconcile(answer);
+    expect(asked).toHaveBeenCalledWith(current, answer);
+  });
+
+  it('refreshes exactly when reconcileStepUp says so, or a note is no longer backed', async () => {
+    const TWO = [TOTP, { id: 'f2', factor_type: 'phone', status: 'verified' }];
+    const cases: [SessionLike, UserLike][] = [
+      [session('aal1'), liveUser()],
+      [session('aal1'), liveUser([TOTP])],
+      [session('aal1', [TOTP]), liveUser()],
+      [session('aal1', [TOTP]), liveUser(TWO)],
+      [session('aal2', [TOTP]), liveUser(TWO)],
+      [session('aal2', [TOTP]), liveUser()],
+    ];
+    for (const [current, answer] of cases) {
+      setStepUpForcedFor(null);
+      const { state, reconcile } = harness(current);
+      await reconcile(answer);
+      expect(state.refreshes, JSON.stringify([current.user, answer])).toBe(
+        level.reconcileStepUp(current, answer) === 'refresh' ? 1 : 0,
+      );
+    }
   });
 });
 

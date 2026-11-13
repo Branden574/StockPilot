@@ -1,6 +1,6 @@
 import { stepUpOwed } from '@stockpilot/core';
 
-import { stepUpOwedFor, tokenAal, type SessionLike, type UserLike } from './mfa-level';
+import { reconcileStepUp, stepUpOwedFor, tokenAal, type SessionLike, type UserLike } from './mfa-level';
 
 /**
  * KEEPING THE CODE GATE IN STEP WITH THE SERVER.
@@ -25,8 +25,16 @@ import { stepUpOwedFor, tokenAal, type SessionLike, type UserLike } from './mfa-
  * account is noted here (`forcedFor`) and the gate reads that note until a
  * refresh, a verified code or a sign-out settles it.
  *
+ * THE NOTE IS NEVER KEPT FOR A SESSION AT aal2. That session entered its
+ * code, which is what the note asks for. Every reader of the note ignores it
+ * for such a session (mfa-level.ts stepUpNoteHolds: the gate, the outbox
+ * hold, push registration), and the reconcile withdraws it: at the start of
+ * a run, and again right after raising it, because the refresh a run waits
+ * on can end after the code was entered.
+ *
  * No react-native and no supabase client: auth-context.tsx supplies the two
- * calls, and session-scope.ts reads the note.
+ * calls and reads the note for the gate; session-scope.ts (the outbox hold)
+ * and use-push-notifications.ts (push registration) read it too.
  */
 
 // ── The note: the account whose session owes a code its copy does not show ──
@@ -98,8 +106,9 @@ export interface StepUpReconcileDeps {
 
 /**
  * What one reconcile did:
- *   'none'      the session and the server agree, or the answer is not about
- *               this session's account;
+ *   'none'      the session and the server agree, the answer is not about
+ *               this session's account, or the session is at aal2 (it owes
+ *               nothing, and a note about it is withdrawn);
  *   'refreshed' they disagreed and a refresh brought the session up to date;
  *   'forced'    the server lists a verified factor, the session's copy does
  *               not, and no refresh could show it: the gate is held up;
@@ -117,18 +126,47 @@ export function createStepUpReconciler(
 ): (liveUser: UserLike | null | undefined) => Promise<StepUpReconcileOutcome> {
   let running: Promise<StepUpReconcileOutcome> | null = null;
 
+  /**
+   * Raise the gate on the server's word, at once, then read the session
+   * again. The refresh this run waited on (up to its bound) can end after the
+   * code was entered: a session that reached aal2 meanwhile owes nothing, so
+   * the note is withdrawn. Set first and read second: a code verified after
+   * the note is set clears it itself (auth-context.tsx), so no order of the
+   * two leaves a note on a session at aal2. A read that fails keeps the note.
+   */
+  async function raise(userId: string): Promise<StepUpReconcileOutcome> {
+    setStepUpForcedFor(userId);
+    let now: SessionLike | null = null;
+    try {
+      now = await deps.currentSession();
+    } catch {
+      now = null;
+    }
+    if (now?.user?.id === userId && tokenAal(now.access_token) === 'aal2') {
+      if (forcedFor === userId) setStepUpForcedFor(null);
+      return 'none';
+    }
+    return 'forced';
+  }
+
   async function run(liveUser: UserLike | null | undefined): Promise<StepUpReconcileOutcome> {
     const session = await deps.currentSession();
     const userId = session?.user?.id;
     if (!session || !userId || !liveUser || liveUser.id !== userId) return 'none';
 
     const level = tokenAal(session.access_token);
-    const stored = stepUpOwedFor(session);
+    // A session at aal2 entered its code. It owes nothing whatever factors
+    // the server lists, and a note about it has been answered.
+    if (level === 'aal2') {
+      if (forcedFor === userId) setStepUpForcedFor(null);
+      return 'none';
+    }
+
     const live = stepUpOwed(liveUser.factors, level);
     // A note for this account that the server no longer backs is settled the
     // same way as a stale copy: by a refresh, never by dropping it here.
-    const staleNote = forcedFor === userId && !live && level !== 'aal2';
-    if (stored === live && !staleNote) return 'none';
+    const staleNote = forcedFor === userId && !live;
+    if (reconcileStepUp(session, liveUser) === 'none' && !staleNote) return 'none';
 
     // A refresh that throws is a refresh that failed: it must end in the same
     // place, never in a run that gives up before the gate is raised.
@@ -140,14 +178,12 @@ export function createStepUpReconciler(
     }
     if (!refreshed || refreshed.user?.id !== userId) {
       if (!live) return 'kept';
-      setStepUpForcedFor(userId);
-      return 'forced';
+      return raise(userId);
     }
     // The server issued this session, so its copy is the server's. Should it
     // still not show the factor the server just listed, the gate stays up.
     if (live && !stepUpOwedFor(refreshed) && tokenAal(refreshed.access_token) !== 'aal2') {
-      setStepUpForcedFor(userId);
-      return 'forced';
+      return raise(userId);
     }
     if (forcedFor === userId) setStepUpForcedFor(null);
     return 'refreshed';

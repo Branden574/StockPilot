@@ -24,7 +24,9 @@ import { describe, expect, it } from 'vitest';
  *      already reads the user;
  *   5. THE WHOLE SET: every file of the phone that reads the assurance level,
  *      the factors or the gate is listed here with what it does. A new one
- *      fails this test until it is listed and reviewed.
+ *      fails this test until it is listed and reviewed;
+ *   6. the server-backed note is read by one rule: the gate, the outbox hold
+ *      and push registration cannot disagree about it.
  */
 
 const MOBILE_ROOT = path.resolve(__dirname, '../..');
@@ -56,6 +58,21 @@ function functionText(rel: string, name: string): string {
 const AUTH = 'src/lib/auth-context.tsx';
 const LAYOUT = 'app/_layout.tsx';
 
+/** Every source file of the phone under `dir` that is not a test or a fixture. */
+function sourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(path.join(MOBILE_ROOT, dir), { withFileTypes: true })) {
+    const rel = `${dir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '__fixtures__') continue;
+      out.push(...sourceFiles(rel));
+    } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
+      out.push(rel);
+    }
+  }
+  return out;
+}
+
 describe('1. the gate is worked out from the session, in render', () => {
   const auth = code(AUTH);
 
@@ -81,9 +98,9 @@ describe('1. the gate is worked out from the session, in render', () => {
     const sets = auth.match(/setStepUpForcedFor\([^)]*\)/g) ?? [];
     expect(sets.length).toBeGreaterThanOrEqual(2);
     for (const call of sets) expect(call).toBe('setStepUpForcedFor(null)');
-    // Raised in one place: the reconcile, on the server's word.
+    // Raised in one place: the reconcile, on the server's word (section 6).
     const reconcile = code('src/lib/mfa-reconcile.ts');
-    expect(reconcile.match(/setStepUpForcedFor\(userId\)/g)).toHaveLength(2);
+    expect(reconcile.match(/setStepUpForcedFor\(userId\)/g)).toHaveLength(1);
   });
 
   it('sign-in and the cold-launch hydrate wait on nothing for it', () => {
@@ -151,6 +168,7 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
     const dataUser = gate.indexOf('const dataUser = session && !mfaRequired ? session.user : null;');
     expect(dataUser).toBeGreaterThan(-1);
     for (const hook of [
+      'usePushNotifications(dataUser);',
       'useSync(dataUser);',
       'useHeldOrderSubmissions(dataUser?.id ?? null, seeOrders);',
       "useActivityBeacon(dataUser?.id ?? null, segments.join('/'));",
@@ -158,15 +176,30 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
       expect(gate, hook).toContain(hook);
       expect(gate.indexOf(hook), hook).toBeGreaterThan(dataUser);
     }
+    // Each of them once, and what it is handed starts from dataUser.
+    for (const name of ['usePushNotifications', 'useSync', 'useHeldOrderSubmissions', 'useActivityBeacon']) {
+      const calls = gate.match(new RegExp(`\\b${name}\\([^;]*;`, 'g')) ?? [];
+      expect(calls, name).toHaveLength(1);
+      expect(calls[0], name).toMatch(new RegExp(`^${name}\\(dataUser\\b`));
+    }
+  });
+
+  it('the push hook does nothing for nobody: no prompt, no registration, no tap handler', () => {
+    const hook = functionText('src/lib/use-push-notifications.ts', 'usePushNotifications');
+    const first = hook.indexOf('if (!user) return;');
+    expect(first).toBeGreaterThan(-1);
+    for (const later of ['registerThisDevice(', 'addNotificationResponseReceivedListener(']) {
+      expect(hook.indexOf(later), later).toBeGreaterThan(first);
+    }
+    expect(hook).toContain('}, [user]);');
   });
 
   it('the session itself reaches only the hooks that must run at the code screen', () => {
-    // Every use of the session's user in RootGate, in order. Push registration
-    // holds itself (section 5); the revocation listener must reach a phone
-    // sitting on the code screen; dataUser is the gate above.
+    // Every use of the session's user in RootGate, in order. The revocation
+    // listener must reach a phone sitting on the code screen; dataUser is the
+    // gate above.
     expect(gate.match(/[^;{}]*\bsession\??\.user\b[^;]*;/g)?.map((s) => s.trim())).toEqual([
       'const dataUser = session && !mfaRequired ? session.user : null;',
-      'usePushNotifications(session?.user ?? null);',
       'useSessionRevocation(session?.user?.id ?? null, onForcedSignOut, revocationOptions);',
     ]);
     // And every hook RootGate calls is one this test knows about.
@@ -219,19 +252,21 @@ describe('2. RootGate: the code screen before anything else, and no data hook be
 describe('3. the sync and both outbox drains hold on the same answer', () => {
   it('the stored session says whether the code is owed, in the same read as whose it is', () => {
     const storage = code('src/lib/auth-storage.ts');
-    expect(storage).toContain("import { stepUpOwedFromStored } from './mfa-level';");
-    expect(storage).toContain('if (head === null) return { present: false, userId: null, stepUpOwed: false };');
+    expect(storage).toContain("import { readStoredStepUp } from './mfa-level';");
     expect(storage).toContain(
-      'return { present: true, userId: storedSessionUserId(raw), stepUpOwed: stepUpOwedFromStored(raw) };',
+      'if (head === null) return { present: false, userId: null, stepUpOwed: false, level: null };',
+    );
+    expect(storage).toContain(
+      'return { present: true, userId: storedSessionUserId(raw), ...readStoredStepUp(raw) };',
     );
   });
 
   it('the live scope carries it, with the server-backed note, and an unreadable store owes it', () => {
     const scope = code('src/lib/session-scope.ts');
-    expect(scope).toContain('const { userId, stepUpOwed } = await readDeviceAuthSession();');
-    expect(scope).toContain('} catch { return { userId: null, stepUpOwed: true }; }');
+    expect(scope).toContain('const { userId, stepUpOwed, level } = await readDeviceAuthSession();');
+    expect(scope).toContain('} catch { return { userId: null, stepUpOwed: true, level: null }; }');
     expect(scope).toContain(
-      'stepUpOwed: stepUpOwed || (userId !== null && stepUpForcedFor() === userId),',
+      'stepUpOwed: stepUpOwed || stepUpNoteHolds(stepUpForcedFor(), userId, level),',
     );
     // Still never the refreshing getSession() (session-scope.test.ts).
     expect(scope).not.toContain('getSession');
@@ -341,7 +376,7 @@ describe("4. the server's own factor list reaches the gate wherever the app alre
 describe('5. the whole set: every place the phone reads the level, the factors or the gate', () => {
   /** What marks a file as part of the set. Server refusal codes such as aal2_required are not it. */
   const MARK =
-    /getAuthenticatorAssuranceLevel|listFactors|\.mfa\.(?:challenge|verify|enroll|unenroll)\b|\bmfaRequired\b|\bstepUpOwed\w*|\bcodeGateUp\b|\btokenAal\b|\bstepUpForcedFor\b|\bsetStepUpForcedFor\b/;
+    /getAuthenticatorAssuranceLevel|listFactors|\.mfa\.(?:challenge|verify|enroll|unenroll)\b|\bmfaRequired\b|\bstepUpOwed\w*|\bcodeGateUp\b|\btokenAal\b|\bstepUpForcedFor\b|\bsetStepUpForcedFor\b|\bstepUpNoteHolds\b|\breadStoredStepUp\b/;
 
   /** The set, and what each file does with the answer. */
   const KNOWN: Record<string, string> = {
@@ -357,22 +392,8 @@ describe('5. the whole set: every place the phone reads the level, the factors o
     'src/lib/session-scope.ts': 'the live scope carries the answer to both drains and the pull (section 3)',
     'src/lib/sync.ts': 'the snapshot pull holds (section 3)',
     'src/lib/use-push-notifications.ts':
-      'registerThisDevice: writes no push token for a session that owes its code, read right before the write',
+      'registerThisDevice: writes no push token for a session that owes its code, read right before the write (sections 5 and 6)',
   };
-
-  function sourceFiles(dir: string): string[] {
-    const out: string[] = [];
-    for (const entry of readdirSync(path.join(MOBILE_ROOT, dir), { withFileTypes: true })) {
-      const rel = `${dir}/${entry.name}`;
-      if (entry.isDirectory()) {
-        if (entry.name === 'node_modules' || entry.name === '__fixtures__') continue;
-        out.push(...sourceFiles(rel));
-      } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-        out.push(rel);
-      }
-    }
-    return out;
-  }
 
   it('is exactly the listed files', { timeout: 60_000 }, () => {
     const found = [...sourceFiles('app'), ...sourceFiles('src')]
@@ -387,12 +408,18 @@ describe('5. the whole set: every place the phone reads the level, the factors o
     expect(helper).toContain('if (error || !data?.currentLevel) return true;');
     expect(helper).toContain("return data.currentLevel === 'aal1' && data.nextLevel === 'aal2';");
     expect(helper).toContain('} catch { return true; }');
-    const level = push.indexOf('if (await owesAuthenticatorCode()) return;');
+    const level = push.indexOf('if (await owesAuthenticatorCode(user.id)) return;');
     expect(level).toBeGreaterThan(-1);
     expect(push.indexOf("rpc('register_push_token'")).toBeGreaterThan(level);
-    // One write site, behind that one check.
-    expect(push.match(/owesAuthenticatorCode\(\)/g)).toHaveLength(2);
+    // One write site, behind that one check: the helper's definition and its one call.
+    expect(push.match(/owesAuthenticatorCode\(/g)).toHaveLength(2);
     expect(push.match(/rpc\('register_push_token'/g)).toHaveLength(1);
+    // Every caller of the registration goes through it: the hook, and the
+    // sign-out the session survived.
+    const callers = [...sourceFiles('app'), ...sourceFiles('src')].filter((rel) =>
+      /\bregisterThisDevice\(/.test(codeOnly(read(rel))),
+    );
+    expect(callers.sort()).toEqual(['src/lib/push-unbind.ts', 'src/lib/use-push-notifications.ts']);
   });
 
   it('the first-paint appearance read is not made for a session that owes its code', () => {
@@ -411,5 +438,63 @@ describe('5. the whole set: every place the phone reads the level, the factors o
     expect(code('src/components/mfa-challenge-screen.tsx')).toContain(
       'const { error: err } = await verifyMfa(value);',
     );
+  });
+});
+
+describe('6. the server-backed note is read by one rule', () => {
+  it('the gate is the session owing its code, or stepUpNoteHolds at the level of that session', () => {
+    const gate = functionText('src/lib/mfa-level.ts', 'codeGateUp');
+    expect(gate).toContain(
+      'if (stepUpOwedFor(session)) return true; return stepUpNoteHolds(forcedFor, session.user?.id, tokenAal(session.access_token)); }',
+    );
+    const rule = functionText('src/lib/mfa-level.ts', 'stepUpNoteHolds');
+    expect(rule).toContain(
+      "if (!forcedFor || !userId || forcedFor !== userId) return false; return level !== 'aal2'; }",
+    );
+  });
+
+  it('every reader of the note outside the reconcile asks that rule, with a level', { timeout: 60_000 }, () => {
+    const readers: Record<string, string[]> = {};
+    for (const rel of [...sourceFiles('app'), ...sourceFiles('src')]) {
+      if (rel === 'src/lib/mfa-reconcile.ts') continue;
+      const text = flat(codeOnly(read(rel)));
+      // Every mention that is not the name inside an import list.
+      const uses = (text.replace(/import \{[^}]*\} from '[^']*';/g, '').match(/[^;{}]*\bstepUpForcedFor\b[^;]*;/g) ?? []).map(
+        (use) => use.trim(),
+      );
+      if (uses.length) readers[rel] = uses;
+    }
+    expect(readers).toEqual({
+      // The provider subscribes to it and hands it to codeGateUp (section 1).
+      'src/lib/auth-context.tsx': [
+        'const stepUpForced = React.useSyncExternalStore(subscribeStepUpForced, stepUpForcedFor);',
+      ],
+      // The outbox hold: the stored session's level.
+      'src/lib/session-scope.ts': [
+        'orgId: ownSavedWorkspace(saved, userId ?? lastSeenUserId), userId, stepUpOwed: stepUpOwed || stepUpNoteHolds(stepUpForcedFor(), userId, level), };',
+      ],
+      // Push registration: the level it just read.
+      'src/lib/use-push-notifications.ts': [
+        'if (stepUpNoteHolds(stepUpForcedFor(), userId, data.currentLevel)) return true;',
+      ],
+    });
+  });
+
+  it('the reconcile raises the note in one place, then reads the session again and withdraws it at aal2', () => {
+    const reconcile = code('src/lib/mfa-reconcile.ts');
+    expect(reconcile).toContain(
+      "async function raise(userId: string): Promise<StepUpReconcileOutcome> { setStepUpForcedFor(userId); let now: SessionLike | null = null; try { now = await deps.currentSession(); } catch { now = null; } if (now?.user?.id === userId && tokenAal(now.access_token) === 'aal2') { if (forcedFor === userId) setStepUpForcedFor(null); return 'none'; } return 'forced'; }",
+    );
+    // Both ways a run ends with the gate held up go through it.
+    expect(reconcile.match(/return raise\(userId\);/g)).toHaveLength(2);
+    // A run that finds the session at aal2 withdraws the note before anything else.
+    const run = reconcile.slice(reconcile.indexOf('async function run('));
+    const atAal2 = run.indexOf(
+      "if (level === 'aal2') { if (forcedFor === userId) setStepUpForcedFor(null); return 'none'; }",
+    );
+    expect(atAal2).toBeGreaterThan(-1);
+    expect(run.indexOf('deps.refreshSession()')).toBeGreaterThan(atAal2);
+    // Whether to refresh is mfa-level.ts's comparison, not a second copy.
+    expect(run).toContain("if (reconcileStepUp(session, liveUser) === 'none' && !staleNote) return 'none';");
   });
 });

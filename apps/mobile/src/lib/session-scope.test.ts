@@ -22,12 +22,17 @@ import { endSession } from './sign-out-flow';
 const auth = vi.hoisted(() => ({
   /** What readDeviceAuthSession() answers, or throws. */
   stored: { present: true, userId: 'u1' } as
-    | { present: boolean; userId: string | null; stepUpOwed?: boolean }
+    | { present: boolean; userId: string | null; stepUpOwed?: boolean; level?: string | null }
     | Error,
   /** Replaces `stored` for the end-to-end block (a real GoTrueClient's storage). */
   read: null as
     | null
-    | (() => Promise<{ present: boolean; userId: string | null; stepUpOwed?: boolean }>),
+    | (() => Promise<{
+        present: boolean;
+        userId: string | null;
+        stepUpOwed?: boolean;
+        level?: string | null;
+      }>),
   getSession: undefined as unknown as ReturnType<typeof vi.fn>,
 }));
 vi.mock('./supabase', async () => {
@@ -151,6 +156,144 @@ describe('liveOutboxScope says whether the session still owes its authenticator 
     expect((await scope.liveOutboxScope()).stepUpOwed).toBe(false);
     auth.stored = { present: false, userId: null };
     expect((await scope.liveOutboxScope()).stepUpOwed).toBe(false);
+  });
+
+  it('the note holds a stored session below aal2, and one whose level cannot be read', async () => {
+    const reconcile = await import('./mfa-reconcile');
+    reconcile.setStepUpForcedFor('u1');
+    auth.stored = { present: true, userId: 'u1', stepUpOwed: false, level: 'aal1' };
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(true);
+    auth.stored = { present: true, userId: 'u1', stepUpOwed: false, level: null };
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(true);
+    auth.stored = { present: true, userId: 'u1', stepUpOwed: false };
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(true);
+  });
+
+  it('the note never holds a stored session at aal2: the code was entered, the rows go', async () => {
+    const reconcile = await import('./mfa-reconcile');
+    reconcile.setStepUpForcedFor('u1');
+    auth.stored = { present: true, userId: 'u1', stepUpOwed: false, level: 'aal2' };
+    const live = await scope.liveOutboxScope();
+    expect(live).toEqual({ orgId: 'org-a', userId: 'u1', stepUpOwed: false });
+    const { outboxSendDecision } = await import('./outbox-scope');
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, live).send).toBe(true);
+  });
+});
+
+/**
+ * docket S43b: THE GATE AND THE OUTBOX HOLD ARE ONE ANSWER. The code screen
+ * (mfa-level.ts codeGateUp, on the session) and the hold of the pull and both
+ * drains (liveOutboxScope, on the stored session) read the server-backed note
+ * by the same rule, so neither can be up while the other is down. Run through
+ * the real reconciler, the real gate and the real scope, for every state of
+ * the note and both levels, and for a reconcile whose refresh ends after the
+ * code was entered.
+ */
+describe('the code screen and the outbox hold agree, whatever the note says', () => {
+  function jwt(claims: Record<string, unknown>): string {
+    return [{ alg: 'HS256', typ: 'JWT' }, claims, 'signature']
+      .map((part) => Buffer.from(JSON.stringify(part)).toString('base64url'))
+      .join('.');
+  }
+  const TOTP = { id: 'factor-totp', factor_type: 'totp', status: 'verified' };
+  type Held = { access_token: string; user: { id: string; factors?: (typeof TOTP)[] } };
+  const held = (aal: string, factors?: (typeof TOTP)[]): Held => ({
+    access_token: jwt({ sub: 'u1', aal }),
+    user: { id: 'u1', ...(factors ? { factors } : {}) },
+  });
+  /** The stored entry, read by the real reader, for the session auth-js holds. */
+  function store(session: Held) {
+    const raw = JSON.stringify({ ...session, refresh_token: 'r', expires_at: 1 });
+    auth.read = () => readStoredAuthSession({ head: async () => raw, full: async () => raw }, 'k');
+  }
+
+  it('for every note and level, the gate is up exactly when the scope holds', async () => {
+    const level = await import('./mfa-level');
+    const reconcile = await import('./mfa-reconcile');
+    const seen: string[] = [];
+    for (const note of [null, 'u1', 'u9']) {
+      for (const session of [held('aal1'), held('aal1', [TOTP]), held('aal2'), held('aal2', [TOTP])]) {
+        reconcile.setStepUpForcedFor(note);
+        store(session);
+        const gate = level.codeGateUp(session, reconcile.stepUpForcedFor());
+        const hold = (await scope.liveOutboxScope()).stepUpOwed;
+        expect(hold, `note ${note}, ${level.tokenAal(session.access_token)}`).toBe(gate);
+        seen.push(`${note}:${level.tokenAal(session.access_token)}:${session.user.factors ? 'factor' : 'none'}:${gate}`);
+      }
+    }
+    // Up for a factor below aal2 and for this account's note below aal2; never at aal2.
+    expect(seen).toEqual([
+      'null:aal1:none:false',
+      'null:aal1:factor:true',
+      'null:aal2:none:false',
+      'null:aal2:factor:false',
+      'u1:aal1:none:true',
+      'u1:aal1:factor:true',
+      'u1:aal2:none:false',
+      'u1:aal2:factor:false',
+      'u9:aal1:none:false',
+      'u9:aal1:factor:true',
+      'u9:aal2:none:false',
+      'u9:aal2:factor:false',
+    ]);
+  });
+
+  it('a reconcile whose refresh ends after the code was entered leaves no note and no hold', async () => {
+    const level = await import('./mfa-level');
+    const reconcile = await import('./mfa-reconcile');
+    const { outboxSendDecision } = await import('./outbox-scope');
+
+    // The phone's copy lists no factor at aal1; the server lists one.
+    let current = held('aal1');
+    store(current);
+    let failRefresh!: () => void;
+    const refreshPending = new Promise<null>((resolve) => {
+      failRefresh = () => resolve(null);
+    });
+    const run = reconcile.createStepUpReconciler({
+      currentSession: async () => current,
+      refreshSession: () => refreshPending,
+    });
+
+    // The run reads the aal1 session and waits on its refresh.
+    const running = run({ id: 'u1', factors: [TOTP] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Meanwhile the code is entered: the aal2 session is stored, and the
+    // provider clears the note (auth-context.tsx, MFA_CHALLENGE_VERIFIED).
+    current = held('aal2', [TOTP]);
+    store(current);
+    reconcile.setStepUpForcedFor(null);
+
+    // The refresh the run waited on fails, or passes its bound.
+    failRefresh();
+    expect(await running).toBe('none');
+    expect(reconcile.stepUpForcedFor()).toBeNull();
+
+    // No code screen, and the pull and both drains go.
+    expect(level.codeGateUp(current, reconcile.stepUpForcedFor())).toBe(false);
+    const live = await scope.liveOutboxScope();
+    expect(live.stepUpOwed).toBe(false);
+    expect(outboxSendDecision({ organizationId: 'org-a', userId: 'u1' }, live).send).toBe(true);
+  });
+
+  it('a note already on a session at aal2 holds nothing, and the next reconcile withdraws it', async () => {
+    const level = await import('./mfa-level');
+    const reconcile = await import('./mfa-reconcile');
+    const current = held('aal2', [TOTP]);
+    store(current);
+    reconcile.setStepUpForcedFor('u1');
+
+    expect(level.codeGateUp(current, reconcile.stepUpForcedFor())).toBe(false);
+    expect((await scope.liveOutboxScope()).stepUpOwed).toBe(false);
+
+    const run = reconcile.createStepUpReconciler({
+      currentSession: async () => current,
+      refreshSession: async () => null,
+    });
+    expect(await run({ id: 'u1', factors: [TOTP] })).toBe('none');
+    expect(reconcile.stepUpForcedFor()).toBeNull();
   });
 });
 

@@ -318,13 +318,13 @@ describe('root layout: RootGate keeps its order, its hooks and its timing', () =
   });
 
   it('every shell hook is still mounted in RootGate, before the gates', () => {
-    // The three hooks that read or send the account's data take dataUser:
-    // nobody until the session has entered its authenticator code (docket
-    // S43b). Push registration, the account gate and the revocation listener
-    // keep the session.
+    // The four hooks that read, send or register for the account's data take
+    // dataUser: nobody until the session has entered its authenticator code
+    // (docket S43b). The account gate and the revocation listener keep the
+    // session.
     expect(gate).toContain('const dataUser = session && !mfaRequired ? session.user : null;');
     for (const hook of [
-      'usePushNotifications(session?.user ?? null);',
+      'usePushNotifications(dataUser);',
       'useSync(dataUser);',
       'useHeldOrderSubmissions(dataUser?.id ?? null, seeOrders);',
       "useActivityBeacon(dataUser?.id ?? null, segments.join('/'));",

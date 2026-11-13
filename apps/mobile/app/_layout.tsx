@@ -230,21 +230,23 @@ function RootGate() {
 
   // WHO THE DATA HOOKS RUN FOR (docket S43b): nobody, until the session has
   // entered its authenticator code. A session that still owes the code is a
-  // password and nothing more, so the sync, the held order requests and the
-  // "last seen" beacon below are handed no user while `mfaRequired` is true,
-  // and start the moment the code is accepted. mfaRequired is worked out from
-  // the session in the same render it arrives in (auth-context.tsx), so there
-  // is no render in which they see a session that owes its code.
+  // password and nothing more, so push, the sync, the held order requests and
+  // the "last seen" beacon below are handed no user while `mfaRequired` is
+  // true, and start the moment the code is accepted. mfaRequired is worked out
+  // from the session in the same render it arrives in (auth-context.tsx), so
+  // there is no render in which they see a session that owes its code.
   //
   // The account gate and the session revocation listener further down keep
   // the session itself: a disabled or signed-out account must still reach a
   // phone that is sitting on the code screen.
   const dataUser = session && !mfaRequired ? session.user : null;
 
-  // Push registration is handed the session's user and holds itself: it reads
-  // the session's level right before it writes, and writes nothing for a
-  // session that owes its code (use-push-notifications.ts registerThisDevice).
-  usePushNotifications(session?.user ?? null);
+  // Push: no permission prompt, no registration and no tap handler at the
+  // code screen. The registration also reads the session's level itself right
+  // before it writes (use-push-notifications.ts registerThisDevice), which
+  // covers the one caller outside this hook (push-unbind.ts, after a sign-out
+  // the session survived).
+  usePushNotifications(dataUser);
   useSync(dataUser);
   // Order requests held at this account's last sign-out (phone ordering
   // PO-4): checked at sign-in and on foreground, reads only.

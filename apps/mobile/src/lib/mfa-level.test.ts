@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   codeGateUp,
   decodeJwtPayload,
+  readStoredStepUp,
   reconcileStepUp,
+  stepUpNoteHolds,
   stepUpOwedFor,
-  stepUpOwedFromStored,
   tokenAal,
   verifiedTotpFactorId,
 } from './mfa-level';
@@ -164,6 +165,48 @@ describe('codeGateUp: the gate RootGate reads', () => {
   });
 });
 
+describe('stepUpNoteHolds: the one rule every reader of the server-backed note asks', () => {
+  it("holds the noted account's own session below aal2", () => {
+    expect(stepUpNoteHolds('u1', 'u1', 'aal1')).toBe(true);
+  });
+
+  it('a level that is missing or cannot be read is not aal2: held', () => {
+    expect(stepUpNoteHolds('u1', 'u1', null)).toBe(true);
+    expect(stepUpNoteHolds('u1', 'u1', undefined)).toBe(true);
+    expect(stepUpNoteHolds('u1', 'u1', '')).toBe(true);
+    expect(stepUpNoteHolds('u1', 'u1', 'AAL2')).toBe(true);
+  });
+
+  it('never holds a session at aal2: it entered its code, whatever was noted', () => {
+    expect(stepUpNoteHolds('u1', 'u1', 'aal2')).toBe(false);
+  });
+
+  it('no note, or a note about another account, holds nothing', () => {
+    expect(stepUpNoteHolds(null, 'u1', 'aal1')).toBe(false);
+    expect(stepUpNoteHolds(undefined, 'u1', 'aal1')).toBe(false);
+    expect(stepUpNoteHolds('u2', 'u1', 'aal1')).toBe(false);
+  });
+
+  it('nobody signed in is never matched by a note', () => {
+    expect(stepUpNoteHolds('u1', null, 'aal1')).toBe(false);
+    expect(stepUpNoteHolds('u1', undefined, null)).toBe(false);
+    expect(stepUpNoteHolds('', '', 'aal1')).toBe(false);
+  });
+
+  it('the gate is the session owing its code, or this rule: nothing else', () => {
+    for (const note of [null, 'u1', 'u2']) {
+      for (const aal of ['aal1', 'aal2', null]) {
+        for (const factors of [undefined, [TOTP]]) {
+          const s = session(aal, factors);
+          expect(codeGateUp(s, note), JSON.stringify([note, aal, factors])).toBe(
+            stepUpOwedFor(s) || stepUpNoteHolds(note, 'u1', aal),
+          );
+        }
+      }
+    }
+  });
+});
+
 describe('verifiedTotpFactorId: the factor the code screen answers for', () => {
   it('the verified authenticator-app factor', () => {
     expect(verifiedTotpFactorId({ id: 'u1', factors: [TOTP] })).toBe('factor-totp');
@@ -180,7 +223,8 @@ describe('verifiedTotpFactorId: the factor the code screen answers for', () => {
   });
 });
 
-describe('stepUpOwedFromStored: the same answer from the session as stored on the device', () => {
+describe('readStoredStepUp: the same answer from the session as stored on the device', () => {
+  const stepUpOwedFromStored = (raw: string | null | undefined) => readStoredStepUp(raw).stepUpOwed;
   const stored = (s: unknown) => JSON.stringify(s);
   const base = (aal: string | null, factors?: unknown) => ({
     access_token: jwt(aal ? { aal } : {}),
@@ -229,6 +273,39 @@ describe('stepUpOwedFromStored: the same answer from the session as stored on th
     // Factors present but not a list: not read as "none".
     expect(stepUpOwedFromStored(stored(base('aal1', 'totp')))).toBe(true);
     expect(stepUpOwedFromStored(stored(base('aal1', { 0: TOTP })))).toBe(true);
+  });
+});
+
+describe('readStoredStepUp: the stored answer, and the level it was worked out at', () => {
+  const stored = (s: unknown) => JSON.stringify(s);
+  const base = (aal: string | null, factors?: unknown) => ({
+    access_token: jwt(aal ? { aal } : {}),
+    refresh_token: 'r',
+    expires_at: NOW + 3600,
+    user: { id: 'u1', ...(factors === undefined ? {} : { factors }) },
+  });
+
+  it("the level is the stored token's own", () => {
+    expect(readStoredStepUp(stored(base('aal1', [TOTP])))).toEqual({ stepUpOwed: true, level: 'aal1' });
+    expect(readStoredStepUp(stored(base('aal2', [TOTP])))).toEqual({ stepUpOwed: false, level: 'aal2' });
+    expect(readStoredStepUp(stored(base('aal1')))).toEqual({ stepUpOwed: false, level: 'aal1' });
+    expect(readStoredStepUp(stored(base(null)))).toEqual({ stepUpOwed: false, level: null });
+  });
+
+  it('what cannot be read as a session has no level, so a note about it always holds', () => {
+    const unreadable = [
+      null,
+      '',
+      'not json',
+      '[]',
+      stored({ access_token: jwt({ aal: 'aal2' }) }),
+      stored({ ...base('aal2'), user: null }),
+      stored(base('aal2', 'totp')),
+    ];
+    for (const raw of unreadable) {
+      expect(readStoredStepUp(raw), String(raw)).toEqual({ stepUpOwed: true, level: null });
+      expect(stepUpNoteHolds('u1', 'u1', readStoredStepUp(raw).level)).toBe(true);
+    }
   });
 });
 
@@ -343,8 +420,8 @@ describe('against the real auth-js client, offline: the stored session answers t
     expect(data.session).not.toBeNull();
     expect(stepUpOwedFor(data.session)).toBe(owed);
     expect(codeGateUp(data.session, null)).toBe(owed);
-    // The stored entry itself says the same (the outbox reads that).
-    expect(stepUpOwedFromStored(store.get(KEY) ?? null)).toBe(owed);
+    // The stored entry itself says the same, and at which level (the outbox reads that).
+    expect(readStoredStepUp(store.get(KEY) ?? null)).toEqual({ stepUpOwed: owed, level: aal });
     // And so does auth-js's own level read.
     const { data: level } = await client.mfa.getAuthenticatorAssuranceLevel();
     expect(level?.currentLevel === 'aal1' && level?.nextLevel === 'aal2').toBe(owed);

@@ -26,6 +26,11 @@ import { stepUpOwed } from '@stockpilot/core';
  * owesAuthenticatorCode), and so does the first-paint appearance read
  * (appearance/account.ts peekSignedInUser); code-gate-wiring.test.ts lists
  * every place the phone decides this.
+ *
+ * The server-backed note (mfa-reconcile.ts) is read by ONE rule too,
+ * stepUpNoteHolds below: the gate, the outbox hold (session-scope.ts) and
+ * push registration all ask it, so none of them can hold while another lets
+ * through.
  */
 
 /** A factor as GoTrue lists it on a user. Only these three fields are read. */
@@ -88,11 +93,34 @@ export function stepUpOwedFor(session: SessionLike | null | undefined): boolean 
 }
 
 /**
+ * Whether the server-backed note (mfa-reconcile.ts: the account the server's
+ * own factor list says owes a code, while the session's copy could not be
+ * brought up to date) holds a session of `userId` at `level`.
+ *
+ * Only the noted account's own session, and never one at aal2: a session that
+ * entered its code owes nothing, whatever was noted and whenever. A level
+ * that is missing or cannot be read is not aal2.
+ *
+ * THE ONE RULE for the note. The gate (codeGateUp), the outbox hold
+ * (session-scope.ts liveOutboxScope) and push registration
+ * (use-push-notifications.ts owesAuthenticatorCode) all read the note through
+ * here, each with the level of the session it reads.
+ */
+export function stepUpNoteHolds(
+  forcedFor: string | null | undefined,
+  userId: string | null | undefined,
+  level: string | null | undefined,
+): boolean {
+  if (!forcedFor || !userId || forcedFor !== userId) return false;
+  return level !== 'aal2';
+}
+
+/**
  * The gate RootGate reads: the session owes its code by what it carries, or
  * the server's own list said so for this account while the session's copy
  * could not be brought up to date (`forcedFor`, mfa-reconcile.ts). A session
  * already at aal2 is never asked again, whatever was noted: it entered its
- * code.
+ * code (stepUpNoteHolds).
  */
 export function codeGateUp(
   session: SessionLike | null | undefined,
@@ -100,9 +128,7 @@ export function codeGateUp(
 ): boolean {
   if (!session) return false;
   if (stepUpOwedFor(session)) return true;
-  const userId = session.user?.id;
-  if (!forcedFor || !userId || forcedFor !== userId) return false;
-  return tokenAal(session.access_token) !== 'aal2';
+  return stepUpNoteHolds(forcedFor, session.user?.id, tokenAal(session.access_token));
 }
 
 /** The id of the user's verified authenticator-app (TOTP) factor, or null. */
@@ -114,30 +140,41 @@ export function verifiedTotpFactorId(user: UserLike | null | undefined): string 
   return null;
 }
 
+/** What the stored session says about the code: whether it is owed, and the level it reached. */
+export interface StoredStepUp {
+  readonly stepUpOwed: boolean;
+  /** The level the stored access token carries, or null when it cannot be read. */
+  readonly level: string | null;
+}
+
+const STORED_UNREADABLE: StoredStepUp = { stepUpOwed: true, level: null };
+
 /**
  * The same answer for the session as it is stored on the device (the JSON
  * auth-js persists), for code that must not wait on the auth lock: the outbox
  * (auth-storage.ts). A value that cannot be read as a session (missing,
- * mid-rewrite, not JSON) owes it: what cannot be read is not sent on a guess.
+ * mid-rewrite, not JSON) owes it, at no level: what cannot be read is not
+ * sent on a guess. The level goes with the answer so the outbox reads the
+ * server-backed note by the gate's rule (stepUpNoteHolds).
  */
-export function stepUpOwedFromStored(raw: string | null | undefined): boolean {
-  if (!raw) return true;
+export function readStoredStepUp(raw: string | null | undefined): StoredStepUp {
+  if (!raw) return STORED_UNREADABLE;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return true;
+    return STORED_UNREADABLE;
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return true;
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return STORED_UNREADABLE;
   const stored = parsed as Record<string, unknown>;
   const user = stored.user;
-  if (typeof user !== 'object' || user === null || Array.isArray(user)) return true;
+  if (typeof user !== 'object' || user === null || Array.isArray(user)) return STORED_UNREADABLE;
   const factors = (user as Record<string, unknown>).factors;
   // GoTrue leaves `factors` out for an account with none. Anything else in its
   // place cannot be read as a list, so it is not read as "none".
-  if (factors !== undefined && factors !== null && !Array.isArray(factors)) return true;
-  const token = typeof stored.access_token === 'string' ? stored.access_token : null;
-  return stepUpOwed(factors as UserLike['factors'], tokenAal(token));
+  if (factors !== undefined && factors !== null && !Array.isArray(factors)) return STORED_UNREADABLE;
+  const level = tokenAal(typeof stored.access_token === 'string' ? stored.access_token : null);
+  return { stepUpOwed: stepUpOwed(factors as UserLike['factors'], level), level };
 }
 
 /**

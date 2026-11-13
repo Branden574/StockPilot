@@ -80,6 +80,7 @@ describe('readStoredAuthSession', () => {
       present: false,
       userId: null,
       stepUpOwed: false,
+      level: null,
     });
   });
 
@@ -88,6 +89,8 @@ describe('readStoredAuthSession', () => {
       present: true,
       userId: 'u1',
       stepUpOwed: false,
+      // These tokens are not JWTs: no level can be read from them.
+      level: null,
     });
   });
 
@@ -97,11 +100,12 @@ describe('readStoredAuthSession', () => {
       userId: null,
       // Not readable right now: nothing is sent on a guess (docket S43b).
       stepUpOwed: true,
+      level: null,
     });
   });
 
   // docket S43b: the same stored entry says whether the session still owes
-  // its authenticator code (mfa-level.ts stepUpOwedFromStored), so the outbox
+  // its authenticator code (mfa-level.ts readStoredStepUp), so the outbox
   // can hold without the auth lock.
   describe('whether the stored session still owes its authenticator code', () => {
     const jwt = (claims: Record<string, unknown>) =>
@@ -119,7 +123,12 @@ describe('readStoredAuthSession', () => {
     const read = async (raw: string) => readStoredAuthSession(reader(raw, raw), KEY);
 
     it('a verified factor and a password-only token: owed', async () => {
-      expect(await read(stored('aal1', TOTP))).toEqual({ present: true, userId: 'u1', stepUpOwed: true });
+      expect(await read(stored('aal1', TOTP))).toEqual({
+        present: true,
+        userId: 'u1',
+        stepUpOwed: true,
+        level: 'aal1',
+      });
     });
 
     it('a verified factor and a token with no level: owed', async () => {
@@ -127,7 +136,12 @@ describe('readStoredAuthSession', () => {
     });
 
     it('the code was entered (aal2): not owed', async () => {
-      expect(await read(stored('aal2', TOTP))).toEqual({ present: true, userId: 'u1', stepUpOwed: false });
+      expect(await read(stored('aal2', TOTP))).toEqual({
+        present: true,
+        userId: 'u1',
+        stepUpOwed: false,
+        level: 'aal2',
+      });
     });
 
     it('no factor, or only one that was never verified: not owed', async () => {
@@ -141,6 +155,22 @@ describe('readStoredAuthSession', () => {
     it('an entry that is not a readable session: owed', async () => {
       expect((await read('not json')).stepUpOwed).toBe(true);
       expect((await read('"a string"')).stepUpOwed).toBe(true);
+    });
+
+    // The level goes with the answer, so the outbox reads the server-backed
+    // note by the gate's rule (mfa-level.ts stepUpNoteHolds).
+    it('the level the stored token carries is read from the same entry', async () => {
+      expect((await read(stored('aal1', undefined))).level).toBe('aal1');
+      expect((await read(stored('aal2', undefined))).level).toBe('aal2');
+      expect((await read(stored(undefined, TOTP))).level).toBeNull();
+    });
+
+    it('an entry that is not a readable session has no level: never read as aal2', async () => {
+      expect((await read('not json')).level).toBeNull();
+      expect((await read('"a string"')).level).toBeNull();
+      // A session at aal2 whose user cannot be read is still unreadable.
+      const noUser = JSON.stringify({ access_token: jwt({ sub: 'u1', aal: 'aal2' }), refresh_token: 'r', expires_at: 1 });
+      expect(await read(noUser)).toEqual({ present: true, userId: null, stepUpOwed: true, level: null });
     });
 
     it('reads the stored value once for both answers', async () => {
@@ -263,6 +293,8 @@ describe('against the real auth-js client: the stored session is the truth getSe
       present: true,
       userId: 'u1',
       stepUpOwed: false,
+      // These tokens are not JWTs: no level can be read from them.
+      level: null,
     });
   });
 
@@ -304,6 +336,7 @@ describe('against the real auth-js client: the stored session is the truth getSe
       present: false,
       userId: null,
       stepUpOwed: false,
+      level: null,
     });
   });
 
@@ -316,6 +349,7 @@ describe('against the real auth-js client: the stored session is the truth getSe
       present: false,
       userId: null,
       stepUpOwed: false,
+      level: null,
     });
   });
 
