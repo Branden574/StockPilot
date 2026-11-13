@@ -295,7 +295,7 @@ const AAL1_AUTH: Record<string, Listed> = {
   'auth/confirm/route.ts': {
     methods: ['GET', 'POST'],
     reason:
-      'The emailed reset, invite and email-change links: the single-use token makes the session (aal1). Its GET reads the session only to say which account the browser is signed in as.',
+      'The emailed reset, invite and email-change links: the single-use token makes the session (aal1). Its GET reads the session only to say which account the browser is signed in as, beside the account the link itself is for, which it looks up with the service client once the signed account reference the link carries (r, docket S25) checks out.',
   },
   'auth/session-ended/route.ts': {
     methods: ['GET'],

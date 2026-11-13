@@ -1073,6 +1073,16 @@ WEB_TESTS=(
   # (auth/session-ended) or spend the export budget (export-rate-limit, and
   # export-routes.limit-order below holds every export route to it), and a
   # confirmation link lands where its type says (confirm-landing).
+  # Docket S25 adds the navigate-and-press half: every emailed link carries a
+  # signed reference to the account it is for (confirm-recipient, its server
+  # side confirm-link), which the page checks and names before anyone presses,
+  # and the press counts only after a quiet second in front, with every
+  # address the page names on screen (press-gate).
+  # route.recipient-session runs the real session libraries: a press that
+  # GoTrue answers for another account leaves the browser with no session.
+  # route.email-change-replaced runs the real email-change link builder: a
+  # link GoTrue no longer holds (corrected, completed, resent) names no
+  # address.
   src/lib/auth/cross-site-request.test.ts
   src/lib/auth/api-context.cross-site.test.ts
   src/test/cookie-write-routes.guard.test.ts
@@ -1081,6 +1091,11 @@ WEB_TESTS=(
   src/app/auth/session-ended/route.test.ts
   src/lib/export-rate-limit.test.ts
   src/lib/auth/confirm-landing.test.ts
+  src/lib/auth/confirm-recipient.test.ts
+  src/lib/auth/confirm-link.test.ts
+  src/app/auth/confirm/press-gate.test.ts
+  src/app/auth/confirm/route.recipient-session.test.ts
+  src/app/auth/confirm/route.email-change-replaced.test.ts
   src/lib/auth/platform-admin.test.ts
   src/lib/auth/platform-passphrase.test.ts
   src/lib/auth/api-key.test.ts

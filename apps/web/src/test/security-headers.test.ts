@@ -34,6 +34,23 @@ function headerValues(all: HeaderRule[], key: string): string[] {
   );
 }
 
+/** The emailed-link page (app/auth/confirm): three of these headers stand behind its press gate. */
+const EMAILED_LINK_PAGE = '/auth/confirm';
+
+/**
+ * The rules that send `key` to `path`. One is right: with two a browser gets
+ * two values, and with none it gets none.
+ */
+function sending(all: HeaderRule[], key: string, path: string): HeaderRule[] {
+  return all.filter(
+    (r) =>
+      r.headers.some((h) => h.key.toLowerCase() === key.toLowerCase()) &&
+      new RegExp(`^${r.source.replace(/\/:path\+$/, '/.+').replace(/\/:path\*$/, '/.*')}$`).test(
+        path,
+      ),
+  );
+}
+
 async function csp(): Promise<string> {
   const values = headerValues(await rules(), 'Content-Security-Policy');
   expect(values).toHaveLength(1);
@@ -98,6 +115,23 @@ describe('COOP / CORP / COEP (MED-28)', () => {
   it('sets a popup-safe COOP, never bare same-origin', async () => {
     const values = headerValues(await rules(), 'Cross-Origin-Opener-Policy');
     expect(values).toEqual(['same-origin-allow-popups']);
+  });
+
+  // The emailed-link page (app/auth/confirm, docket S25). Its one script,
+  // the press gate, holds a press back until the account the link is for has
+  // been on screen. The page's button is disabled until that script has run,
+  // and POST refuses a press the script did not let through (route.test.ts
+  // and press-gate.test.ts hold both). Three of the app's headers stand
+  // behind that as a second line: this one, and the two that refuse a frame
+  // (pinned to the page's path further down). Each keeps reaching the page,
+  // in one value.
+  it('sends COOP on the emailed-link page, in one value, as a second line behind its press gate', async () => {
+    const covering = sending(await rules(), 'Cross-Origin-Opener-Policy', EMAILED_LINK_PAGE);
+    // Exactly one rule, so the page gets one value: two would not parse.
+    expect(covering).toHaveLength(1);
+    const values = headerValues(covering, 'Cross-Origin-Opener-Policy');
+    expect(values).toHaveLength(1);
+    expect(values[0]).toMatch(/^same-origin(?:-allow-popups)?$/);
   });
 
   it('does not set COEP', async () => {
@@ -174,6 +208,22 @@ describe('the pre-existing header set is not regressed', () => {
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain("object-src 'none'");
   });
+
+  // The two pins above read every rule at once, so they would still pass if
+  // the headers moved to a rule for other paths. Both are part of the second
+  // line behind the emailed-link page's press gate (see the COOP pin for that
+  // page above): no site can show the page in a frame.
+  it('sends the two headers that refuse a frame on the emailed-link page, each in one value', async () => {
+    const all = await rules();
+    const frameOptions = sending(all, 'X-Frame-Options', EMAILED_LINK_PAGE);
+    expect(frameOptions).toHaveLength(1);
+    expect(headerValues(frameOptions, 'X-Frame-Options')).toEqual(['DENY']);
+    const policyRules = sending(all, 'Content-Security-Policy', EMAILED_LINK_PAGE);
+    expect(policyRules).toHaveLength(1);
+    const policies = headerValues(policyRules, 'Content-Security-Policy');
+    expect(policies).toHaveLength(1);
+    expect(policies[0]!.split(';').map((d) => d.trim())).toContain("frame-ancestors 'none'");
+  });
 });
 
 /**
@@ -185,7 +235,9 @@ describe('the pre-existing header set is not regressed', () => {
  * window; connect-src, img-src, media-src, frame-src and form-action cover
  * requests, images, media, frames and form posts only. When a nonce policy
  * replaces 'unsafe-inline', the first test fails: rewrite both documents with
- * it.
+ * it, and give /auth/confirm's inline press gate (app/auth/confirm/press-gate.ts,
+ * docket S25) the nonce, or browsers stop running it and nobody can press the
+ * page's button (it is disabled until that script has run).
  */
 describe('SECURITY.md and the ASVS mapping say what this CSP does not stop (B17)', () => {
   const ROOT = path.resolve(__dirname, '../../../..');

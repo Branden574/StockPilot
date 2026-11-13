@@ -2,6 +2,7 @@ import 'server-only';
 
 import { createHash } from 'node:crypto';
 
+import { confirmLinkUrl } from '@/lib/auth/confirm-link';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import {
   renderEmailChangeCurrentEmail,
@@ -141,12 +142,6 @@ function isoPlus(iso: string, ms: number): string {
   return new Date(new Date(iso).getTime() + ms).toISOString();
 }
 
-/** The /auth/confirm URL for an email-change token. `next` is deliberately
- *  absent: the route hard-codes its destination for this type. */
-export function emailChangeConfirmUrl(tokenHash: string): string {
-  return `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(tokenHash)}&type=email_change`;
-}
-
 async function loadAuthUser(userId: string) {
   const admin = createAdminClient();
   const { data, error } = await admin.auth.admin.getUserById(userId);
@@ -233,10 +228,17 @@ export interface MintedEmailChangeLinks {
 /**
  * Mints both one-time links. Exported for tests: the new-side hash MUST be
  * sha224(newEmail + otp), never the value generateLink returns (see header).
+ *
+ * Both are /auth/confirm links with no `next` (the route fixes where an email
+ * change lands), and both name `userId`, the account whose change it is (`r`,
+ * docket S25), so the page shows its address and the one waiting to replace
+ * it. A link that cannot be signed (no key, or an id that is not a UUID)
+ * fails the request before anything is sent.
  */
 export async function mintEmailChangeLinks(
   currentEmail: string,
   newEmail: string,
+  userId: string,
 ): Promise<MintedEmailChangeLinks> {
   const admin = createAdminClient();
 
@@ -263,11 +265,15 @@ export async function mintEmailChangeLinks(
   // hash computed with the CURRENT email. Compute the stored value ourselves.
   const newHash = sha224Hex(`${newEmail}${otp}`);
 
-  return {
-    currentUrl: emailChangeConfirmUrl(currentHash),
-    newUrl: emailChangeConfirmUrl(newHash),
-    sentAt: new Date().toISOString(),
-  };
+  const currentUrl = confirmLinkUrl({ tokenHash: currentHash, type: 'email_change', userId });
+  const newUrl = confirmLinkUrl({ tokenHash: newHash, type: 'email_change', userId });
+  if (!currentUrl || !newUrl) {
+    throw new ServiceError(
+      'internal_error',
+      'The email change links could not be signed for the account.',
+    );
+  }
+  return { currentUrl, newUrl, sentAt: new Date().toISOString() };
 }
 
 async function deliverEmailChangeLinks(args: {
@@ -415,7 +421,7 @@ export async function requestEmailChange(args: RequestEmailChangeArgs): Promise<
     throw new ServiceError('conflict', 'This email address cannot be used.');
   }
 
-  const links = await mintEmailChangeLinks(currentEmail, newEmail);
+  const links = await mintEmailChangeLinks(currentEmail, newEmail, args.userId);
   await deliverEmailChangeLinks({ currentEmail, newEmail, links, firstName: guard.firstName });
 
   await writeAudit('user.email.change_requested', args.userId, guard.organizationId, {
@@ -457,7 +463,7 @@ export async function resendEmailChange(args: {
     });
   }
 
-  const links = await mintEmailChangeLinks(user.email, pending);
+  const links = await mintEmailChangeLinks(user.email, pending, args.userId);
   await deliverEmailChangeLinks({ currentEmail: user.email, newEmail: pending, links, firstName: guard.firstName });
   await writeAudit('user.email.change_resent', args.userId, guard.organizationId, {
     from: user.email,

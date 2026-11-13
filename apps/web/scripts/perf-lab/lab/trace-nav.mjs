@@ -5,6 +5,9 @@
 // Usage (from apps/web): node scripts/perf-lab/lab/trace-nav.mjs <label-prefix> [iterations]
 // Env: SERVICE_ROLE_KEY (local stack, never printed), EMAIL (lab account).
 import { createRequire } from 'node:module';
+
+import { signConfirmRecipient } from './confirm-recipient.mjs';
+
 const require = createRequire(new URL('../../../package.json', import.meta.url));
 const { chromium } = require('@playwright/test');
 
@@ -20,7 +23,10 @@ if (!['127.0.0.1', 'localhost', '[::1]'].includes(LOCAL_API.hostname)) {
   throw new Error(`trace-nav talks to a local Supabase stack only, not ${LOCAL_API.hostname}`);
 }
 
-async function tokenHash() {
+// A one-time sign-in link's token hash, and `r`, the account it is for: the
+// app checks r (docket S25), so it is signed as the app signs it, with the
+// local stack's service key, which the app under test must read too.
+async function signInLink() {
   const key = process.env.SERVICE_ROLE_KEY;
   const res = await fetch(new URL('/auth/v1/admin/generate_link', LOCAL_API), {
     method: 'POST',
@@ -29,7 +35,15 @@ async function tokenHash() {
     body: JSON.stringify({ type: 'magiclink', email: EMAIL }),
   });
   if (!res.ok) throw new Error(`generate_link ${res.status}`);
-  return (await res.json()).hashed_token;
+  const body = await res.json();
+  const r = signConfirmRecipient(key, {
+    type: 'magiclink',
+    tokenHash: body.hashed_token,
+    userId: body.id ?? '',
+    issued: Math.floor(Date.now() / 1000),
+  });
+  if (!r) throw new Error('the sign-in link could not be signed');
+  return { tokenHash: body.hashed_token, r };
 }
 const mark = (label) => fetch(`${RELAY}/__mark/${encodeURIComponent(label)}`).catch(() => {});
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -39,8 +53,13 @@ const context = await browser.newContext({ viewport: { width: 1440, height: 900 
 const page = await context.newPage();
 const cdp = await context.newCDPSession(page);
 await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 130, downloadThroughput: -1, uploadThroughput: -1 });
-await page.goto(`${BASE}/auth/confirm?token_hash=${encodeURIComponent(await tokenHash())}&type=magiclink&next=%2Fdashboard`);
-// /auth/confirm has a confirm step (an email scanner fetching the link cannot burn it).
+const signIn = await signInLink();
+await page.goto(
+  `${BASE}/auth/confirm?token_hash=${encodeURIComponent(signIn.tokenHash)}&type=magiclink&next=%2Fdashboard&r=${encodeURIComponent(signIn.r)}`,
+);
+// /auth/confirm has a confirm step (an email scanner fetching the link cannot
+// burn it), and its press gate counts a press only after a quiet second (S25).
+await page.locator('button[aria-disabled="false"]').waitFor({ timeout: 15000 });
 await page.getByRole('button', { name: /continue to stockpilot/i }).click({ timeout: 15000 });
 await page.waitForURL(/\/dashboard/, { timeout: 30000 });
 
