@@ -1,0 +1,282 @@
+-- supabase/tests/NNNN_customer_users_server_stamps.test.sql (NNNN = the
+-- migration's number, given in ship order; nothing in this file reads it)
+-- pgTAP proof that a portal user's invitation and acceptance times, and the
+-- customer and account a customer_users row joins, are set by the server.
+--
+-- Personas: mgr, a manager of organization A; acct, acct2 and acct3, portal
+-- accounts (made-up). Customers c1 and c2 belong to organization A.
+--
+-- I.  Insert by a manager: accepted_at is null and invited_at is now(),
+--     whatever the statement names (I1-I4); the app's invite insert writes
+--     what it wrote before (I5, I6).
+-- U.  Update by a manager: a change of accepted_at (set, move, clear),
+--     invited_at, user_id or customer_id is refused with 42501 and the row
+--     keeps its values (U1-U9); an upsert that names accepted_at on a row
+--     that is not accepted leaves it not accepted (U10).
+-- K.  What stays the manager's: the app's re-invite upsert (K1, K2), an
+--     email change (K3) and removing the row (K4).
+-- S.  The service role (the portal's own stamp and the platform) writes the
+--     two times as before (S1a, S1, S2a, S2b, S2).
+-- P.  Posture: one BEFORE INSERT OR UPDATE row trigger, SECURITY INVOKER,
+--     EXECUTE for no API role (P1-P3).
+-- Written to fail before the migration in I1-I4, U1-U10, K2 (the earlier
+-- updates went through there) and P1, after which the file stops (the
+-- function does not exist); U6 fails there on the primary key instead. The
+-- I5, I6, K1, K3, K4 and S lines pass before and after: they hold the paths
+-- that must keep working.
+
+begin;
+
+select plan(33);
+
+\set orga  '\'ab043000-0000-4000-8000-000000000001\''
+\set mgr   '\'ab043000-0000-4000-8000-000000000011\''
+\set acct  '\'ab043000-0000-4000-8000-000000000021\''
+\set acct2 '\'ab043000-0000-4000-8000-000000000022\''
+\set acct3 '\'ab043000-0000-4000-8000-000000000023\''
+\set c1    '\'ab043000-0000-4000-8000-0000000000c1\''
+\set c2    '\'ab043000-0000-4000-8000-0000000000c2\''
+
+insert into auth.users (id, email, raw_user_meta_data) values
+  (:mgr,   'stamps-mgr@test.local',   '{}'::jsonb),
+  (:acct,  'stamps-buyer@test.local', '{}'::jsonb),
+  (:acct2, 'stamps-buyer2@test.local', '{}'::jsonb),
+  (:acct3, 'stamps-buyer3@test.local', '{}'::jsonb)
+  on conflict (id) do nothing;
+insert into public.organizations (id, name, slug) values
+  (:orga, 'Stamps Org A', 'stamps-a-test')
+  on conflict (id) do nothing;
+insert into public.organization_members (organization_id, user_id, role, accepted_at) values
+  (:orga, :mgr, 'manager', now())
+  on conflict do nothing;
+insert into public.customers (id, organization_id, name) values
+  (:c1, :orga, 'Harbor Elementary'),
+  (:c2, :orga, 'Ridge Middle')
+  on conflict (id) do nothing;
+
+-- A row accepted long ago, written as the platform would (postgres here).
+insert into public.customer_users (customer_id, user_id, email, invited_at, accepted_at) values
+  (:c2, :acct, 'stamps-buyer@test.local', '2026-01-01T00:00:00Z', '2026-01-02T00:00:00Z');
+
+-- ═══ I. Insert by a manager ═══════════════════════════════════════════════
+set local "request.jwt.claim.sub" to 'ab043000-0000-4000-8000-000000000011';
+set local "request.jwt.claim.role" to 'authenticated';
+set local role to 'authenticated';
+
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_by, invited_at, accepted_at)
+       values ('ab043000-0000-4000-8000-0000000000c1', 'ab043000-0000-4000-8000-000000000021',
+               'stamps-buyer@test.local', 'ab043000-0000-4000-8000-000000000011',
+               '2099-01-01T00:00:00Z', '2020-01-01T00:00:00Z') $$,
+  'I0: a manager''s insert that names both times goes through');
+reset role;
+select is(
+  (select accepted_at from public.customer_users
+    where customer_id = :c1 and user_id = :acct),
+  null::timestamptz,
+  'I1: the inserted row is not accepted, though the statement named a time');
+select is(
+  (select invited_at from public.customer_users
+    where customer_id = :c1 and user_id = :acct),
+  now(),
+  'I2: the inserted row is invited now, not at the time the statement named');
+
+set local role to 'authenticated';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, accepted_at)
+       values ('ab043000-0000-4000-8000-0000000000c2', 'ab043000-0000-4000-8000-000000000022',
+               'stamps-buyer2@test.local', now()) $$,
+  'I3a: an insert naming only accepted_at goes through');
+reset role;
+select ok(
+  (select accepted_at is null and invited_at = now() from public.customer_users
+    where customer_id = :c2 and user_id = :acct2),
+  'I3: ... and the row is not accepted and invited now');
+
+set local role to 'authenticated';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_at)
+       values ('ab043000-0000-4000-8000-0000000000c1', 'ab043000-0000-4000-8000-000000000023',
+               'stamps-buyer3@test.local', '2000-01-01T00:00:00Z') $$,
+  'I4a: an insert naming only invited_at goes through');
+reset role;
+select is(
+  (select invited_at from public.customer_users
+    where customer_id = :c1 and user_id = :acct3),
+  now(),
+  'I4: ... and the row is invited now');
+
+-- The app's invite (CustomersService.inviteUser): four columns, upserted.
+set local role to 'authenticated';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_by)
+       values ('ab043000-0000-4000-8000-0000000000c1', 'ab043000-0000-4000-8000-000000000022',
+               'stamps-buyer2@test.local', 'ab043000-0000-4000-8000-000000000011')
+     on conflict (customer_id, user_id) do update
+       set customer_id = excluded.customer_id, user_id = excluded.user_id,
+           email = excluded.email, invited_by = excluded.invited_by $$,
+  'I5: the app''s invite inserts a new portal user');
+reset role;
+select ok(
+  (select accepted_at is null and invited_at = now() and invited_by = :mgr
+     from public.customer_users where customer_id = :c1 and user_id = :acct2),
+  'I6: ... invited now, by the manager, not accepted');
+
+-- ═══ U. Update by a manager ═══════════════════════════════════════════════
+set local role to 'authenticated';
+select throws_ok(
+  $$ update public.customer_users set accepted_at = now()
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  '42501', 'A portal user''s invitation and acceptance are recorded by StockPilot.',
+  'U1: a manager cannot mark a portal user accepted');
+select throws_ok(
+  $$ update public.customer_users set accepted_at = '2020-01-01T00:00:00Z'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  '42501', null,
+  'U2: a manager cannot move an accepted row''s acceptance earlier');
+select throws_ok(
+  $$ update public.customer_users set accepted_at = null
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  '42501', null,
+  'U3: a manager cannot clear an acceptance');
+select throws_ok(
+  $$ update public.customer_users set invited_at = '2099-01-01T00:00:00Z'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  '42501', null,
+  'U4: a manager cannot choose an invitation time');
+select throws_ok(
+  $$ update public.customer_users set user_id = 'ab043000-0000-4000-8000-000000000023'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  '42501', null,
+  'U5: a manager cannot move a row to another account');
+select throws_ok(
+  $$ update public.customer_users set customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c2'
+        and user_id = 'ab043000-0000-4000-8000-000000000022' $$,
+  '42501', null,
+  'U6: a manager cannot move a row to another customer');
+select throws_ok(
+  $$ update public.customer_users set email = 'stamps-new@test.local', accepted_at = now()
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000021' $$,
+  '42501', null,
+  'U7: an update that also changes the email is refused whole when it names accepted_at');
+reset role;
+select ok(
+  (select accepted_at is null and invited_at = now() and email = 'stamps-buyer@test.local'
+     from public.customer_users where customer_id = :c1 and user_id = :acct),
+  'U8: the refused updates left the invited row as it was');
+select ok(
+  (select accepted_at = '2026-01-02T00:00:00Z'::timestamptz
+      and invited_at = '2026-01-01T00:00:00Z'::timestamptz
+     from public.customer_users where customer_id = :c2 and user_id = :acct),
+  'U9: the refused updates left the accepted row as it was');
+
+set local role to 'authenticated';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, accepted_at)
+       values ('ab043000-0000-4000-8000-0000000000c1', 'ab043000-0000-4000-8000-000000000021',
+               'stamps-buyer@test.local', now())
+     on conflict (customer_id, user_id) do update set accepted_at = excluded.accepted_at $$,
+  'U10a: an upsert naming accepted_at on a row that is not accepted goes through');
+reset role;
+select is(
+  (select accepted_at from public.customer_users
+    where customer_id = :c1 and user_id = :acct),
+  null::timestamptz,
+  'U10: ... and the row is still not accepted');
+
+-- ═══ K. What stays the manager's ══════════════════════════════════════════
+set local role to 'authenticated';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_by)
+       values ('ab043000-0000-4000-8000-0000000000c2', 'ab043000-0000-4000-8000-000000000021',
+               'stamps-buyer@test.local', 'ab043000-0000-4000-8000-000000000011')
+     on conflict (customer_id, user_id) do update
+       set customer_id = excluded.customer_id, user_id = excluded.user_id,
+           email = excluded.email, invited_by = excluded.invited_by $$,
+  'K1: the app''s re-invite of an accepted portal user goes through');
+reset role;
+select ok(
+  (select accepted_at = '2026-01-02T00:00:00Z'::timestamptz
+      and invited_at = '2026-01-01T00:00:00Z'::timestamptz
+      and invited_by = :mgr
+     from public.customer_users where customer_id = :c2 and user_id = :acct),
+  'K2: ... and keeps both times, with the manager as the inviter');
+
+set local role to 'authenticated';
+select lives_ok(
+  $$ update public.customer_users set email = 'stamps-renamed@test.local'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000023' $$,
+  'K3: a manager still changes a portal user''s email');
+select lives_ok(
+  $$ delete from public.customer_users
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000023' $$,
+  'K4a: a manager still removes a portal user');
+reset role;
+select is(
+  (select count(*)::int from public.customer_users where customer_id = :c1 and user_id = :acct3),
+  0, 'K4: ... and the row is gone');
+
+-- ═══ S. The service role ══════════════════════════════════════════════════
+set local role to 'service_role';
+-- The portal's stamp (resolvePortalContext), as it is written.
+select lives_ok(
+  $$ update public.customer_users set accepted_at = now()
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000021'
+        and accepted_at is null $$,
+  'S1a: the service role stamps an acceptance');
+reset role;
+select is(
+  (select accepted_at from public.customer_users where customer_id = :c1 and user_id = :acct),
+  now(), 'S1: ... and the row is accepted');
+set local role to 'service_role';
+select lives_ok(
+  $$ insert into public.customer_users (customer_id, user_id, email, invited_at, accepted_at)
+       values ('ab043000-0000-4000-8000-0000000000c1', 'ab043000-0000-4000-8000-000000000023',
+               'stamps-buyer3@test.local', '2026-03-01T00:00:00Z', '2026-03-02T00:00:00Z') $$,
+  'S2a: the service role inserts a row with both times');
+select lives_ok(
+  $$ update public.customer_users set invited_at = '2026-02-01T00:00:00Z'
+      where customer_id = 'ab043000-0000-4000-8000-0000000000c1'
+        and user_id = 'ab043000-0000-4000-8000-000000000023' $$,
+  'S2b: the service role changes an invitation time');
+reset role;
+select ok(
+  (select accepted_at = '2026-03-02T00:00:00Z'::timestamptz
+      and invited_at = '2026-02-01T00:00:00Z'::timestamptz
+     from public.customer_users where customer_id = :c1 and user_id = :acct3),
+  'S2: ... and the row holds the times it named');
+
+-- ═══ P. Posture ═══════════════════════════════════════════════════════════
+select ok(
+  (select t.tgenabled = 'O'
+      and (t.tgtype & 1) = 1      -- ROW
+      and (t.tgtype & 2) = 2      -- BEFORE
+      and (t.tgtype & 4) = 4      -- INSERT
+      and (t.tgtype & 16) = 16    -- UPDATE
+      and (t.tgtype & 8) = 0      -- not DELETE
+     from pg_trigger t
+    where t.tgrelid = 'public.customer_users'::regclass
+      and t.tgname = 'trg_customer_users_server_stamps'),
+  'P1: one BEFORE INSERT OR UPDATE row trigger on customer_users, enabled');
+select ok(
+  (select not p.prosecdef from pg_proc p
+    where p.oid = 'public.tg_customer_users_server_stamps()'::regprocedure),
+  'P2: the trigger function is SECURITY INVOKER, so current_user is the writer');
+select ok(
+  not has_function_privilege('anon', 'public.tg_customer_users_server_stamps()', 'execute')
+  and not has_function_privilege('authenticated', 'public.tg_customer_users_server_stamps()', 'execute')
+  and not has_function_privilege('service_role', 'public.tg_customer_users_server_stamps()', 'execute'),
+  'P3: no API role may call the trigger function');
+
+select * from finish();
+rollback;
