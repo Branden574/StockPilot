@@ -27,11 +27,14 @@ beforeEach(() => {
 });
 
 describe('syncOrderScheduleEvent', () => {
-  it('closes only the open entries of the order, and reports nothing when that works', async () => {
+  it("closes only the open entries of the order, in the order's organization, and reports nothing when that works", async () => {
     h.admin = makeSupabaseStub({ 'schedule_events.update': { data: null, error: null } });
     await syncOrderScheduleEvent('order-1', 'completed', 'org-1');
+    // The service-role client is not held by any row rule, so the update names
+    // the organization itself, as the reads of the same entry do.
     expect(h.admin.chainArgs.get('schedule_events.update')).toEqual([
       [{ status: 'completed' }],
+      ['organization_id', 'org-1'],
       ['order_request_id', 'order-1'],
       ['status', ['scheduled', 'in_progress']],
     ]);

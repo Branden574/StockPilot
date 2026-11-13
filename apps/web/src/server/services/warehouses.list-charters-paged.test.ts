@@ -216,7 +216,11 @@ describe('Admin > Warehouses at LOOKUP_ROW_CEILING, and the order of the save', 
     };
     return makeSupabaseStub({
       'warehouses.select': servedLikePostgrest(WAREHOUSES),
-      'warehouses.update': record(writes.rows),
+      // The save asks its changed row back; one row answers it.
+      'warehouses.update': (call) => {
+        writes.rows.push(call);
+        return { data: [{ id: W1 }], error: null };
+      },
       'warehouse_charters.select': countedLikePostgrest(LINKS),
       'warehouse_charters.insert': record(writes.links),
       'warehouse_charters.delete': record(writes.links),

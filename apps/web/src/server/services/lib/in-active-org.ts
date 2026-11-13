@@ -2,7 +2,7 @@ import 'server-only';
 
 import { ServiceError, type ServiceContext } from '../context';
 
-/** The tables a write keyed by a row id reads in the active organization first (S39). */
+/** The tables a write keyed by a row id reads in the active organization first (S39, S41). */
 export type ActiveOrgTable =
   | 'order_requests'
   | 'cycle_counts'
@@ -10,7 +10,9 @@ export type ActiveOrgTable =
   | 'receipts'
   | 'warehouses'
   | 'bundles'
-  | 'stock_movements';
+  | 'stock_movements'
+  | 'price_lists'
+  | 'customers';
 
 /**
  * The row read in the ACTIVE organization, before a write that names it by id

@@ -29,7 +29,25 @@ const state = vi.hoisted(() => ({
   admin: [] as Array<{ call: string; userId: string }>,
   /** How long the limiter takes to answer (a round trip unless a case says otherwise). */
   rateLimitMs: 300,
+  /** Take requireOrgContext()'s own code gate out, leaving the action's checks alone. */
+  codeGateOut: true,
 }));
+// requireOrgContext() now sends a member who owes an authenticator code to
+// /signin/mfa before withContext() returns (docket S43c, lib/auth/
+// step-up-gate). The cases below take that gate out, so they still show the
+// action's own checks holding by themselves; the last block puts it back.
+vi.mock('@/lib/auth/step-up-gate', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/auth/step-up-gate')>();
+  return {
+    ...real,
+    startStepUpReads: () =>
+      state.codeGateOut
+        ? ({} as ReturnType<typeof real.startStepUpReads>)
+        : real.startStepUpReads(),
+    stepUpIsOwed: async (...args: Parameters<typeof real.stepUpIsOwed>) =>
+      state.codeGateOut ? false : real.stepUpIsOwed(...args),
+  };
+});
 
 /** A round trip: answered in a later turn of the event loop, with the clock moved on. */
 const ROUND_TRIP_MS = 300;
@@ -300,6 +318,7 @@ function legacyReads(name: string, url: URL, subject: string | null): Response {
 }
 
 beforeEach(() => {
+  state.codeGateOut = true;
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-11-02T03:00:00.000Z'));
   server = fakeAuthServer(projectKey);
@@ -551,5 +570,37 @@ describe('deleteOwnAccountAction: a membership list that cannot be read', () => 
     // Each session read asked get_request_context() first, for the member.
     expect(contextAs.length).toBeGreaterThan(0);
     expect(new Set(contextAs)).toEqual(new Set([MEMBER]));
+  });
+});
+
+describe("deleteOwnAccountAction with requireOrgContext()'s own gate in front, as in a real request", () => {
+  beforeEach(() => {
+    state.codeGateOut = false;
+  });
+
+  it('a member with an authenticator at aal1 is sent to the code page, and nothing is deleted', async () => {
+    await signedIn(MEMBER, 'aal1', OTHER_REFRESH, NEVER);
+    const { result, thrown } = await run();
+    expect(thrown).toBe('REDIRECT:/signin/mfa');
+    expect(result).toBeUndefined();
+    expect(deleted()).toEqual([]);
+  });
+
+  it('a member with an authenticator at aal2 deletes the account, as before', async () => {
+    await signedIn(MEMBER, 'aal2', OTHER_REFRESH, NEVER);
+    const { result, thrown } = await run();
+    expect(thrown).toBeUndefined();
+    expect(result).toEqual({ ok: true, data: undefined });
+    expect(deleted()).toEqual([MEMBER]);
+  });
+
+  it('a person with no organization and no authenticator deletes the account, as before', async () => {
+    roles.delete(MEMBER);
+    server.unenrolledUsers.add(MEMBER);
+    await signedIn(MEMBER, 'aal1', OTHER_REFRESH, NEVER);
+    const { result, thrown } = await run();
+    expect(thrown).toBeUndefined();
+    expect(result).toEqual({ ok: true, data: undefined });
+    expect(deleted()).toEqual([MEMBER]);
   });
 });

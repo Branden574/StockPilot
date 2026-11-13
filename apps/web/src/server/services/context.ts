@@ -13,6 +13,7 @@ import {
   orgRowFromMembership,
 } from '@/lib/auth/request-context-bundle';
 import { requireOrgContext } from '@/lib/auth/session';
+import { sharingFactorsRead } from '@/lib/auth/step-up-gate';
 import { PLACEMENT_KINDS, PLACEMENT_TYPES, SYSTEM_KINDS } from '@/lib/locations/groups';
 import {
   getMfaFactorsForRequest,
@@ -220,7 +221,12 @@ export const withContext = cache(async (): Promise<ServiceContext> => {
   // it is not a regression.
   const factorsRead = Promise.resolve(getMfaFactorsForRequest());
   factorsRead.catch(() => {});
-  const ctx = await requireOrgContext();
+  // OFFERED TO THE CONTEXT'S OWN GATE. requireOrgContext() sends a member who
+  // still owes an authenticator code to /signin/mfa, and for a session that is
+  // not at aal2 it decides that on this same factor list. Inside a Server
+  // Action cache() does not memoize, so without the offer the gate would make
+  // a second GoTrue round trip for the list this function has under way.
+  const ctx = await sharingFactorsRead(factorsRead, () => requireOrgContext());
   const supabase = await createClient();
   // ONE get_request_context() PER ACTION. The membership that just resolved
   // the context already holds the org row and the module set. Asking the

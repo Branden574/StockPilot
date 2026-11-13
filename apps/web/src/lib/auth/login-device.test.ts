@@ -305,3 +305,92 @@ describe('noteLoginDevice — the webhook event reaches only real memberships (o
     expect(dispatchEvent.mock.calls.map((c) => c[0])).toEqual(['org-real']);
   });
 });
+
+describe('noteLoginDevice — a web sign-in is named by its browser and system, from fixed words (S56)', () => {
+  const FIREFOX_WINDOWS =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0';
+  /** An agent that names no browser or system this app knows, and carries text of its own. */
+  const OTHER_TEXT = '<https://example.com/x|Open> Size <10> [x](https://example.com)';
+
+  const member = () => {
+    db.members = [
+      {
+        user_id: USER,
+        organization_id: 'org-a',
+        accepted_at: '2026-01-01T00:00:00Z',
+        impersonation_expires_at: null,
+      },
+    ];
+  };
+  /** A second web sign-in, from another browser, on an account that has a device. */
+  const secondWebSignIn = async (userAgent: string | null) => {
+    member();
+    await web();
+    await noteLoginDevice({ userId: USER, email: EMAIL, userAgent, ip: '203.0.113.9' });
+    expect(dispatchEvent).toHaveBeenCalledTimes(1);
+    return dispatchEvent.mock.calls[0]![2] as { userId: string; device: string };
+  };
+
+  it('the event names the browser and system, not the agent', async () => {
+    const data = await secondWebSignIn(FIREFOX_WINDOWS);
+    expect(data).toEqual({ userId: USER, device: 'Firefox on Windows' });
+    // The person's own list and email still get the agent.
+    expect(db.devices[1]!.user_agent).toBe(FIREFOX_WINDOWS);
+    expect(sendNewDeviceLoginEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ userAgent: FIREFOX_WINDOWS, deviceLabel: null }),
+    );
+  });
+
+  it('an agent that names neither is "Unknown browser on Unknown OS", with none of its text', async () => {
+    const data = await secondWebSignIn(OTHER_TEXT);
+    expect(data.device).toBe('Unknown browser on Unknown OS');
+    expect(JSON.stringify(dispatchEvent.mock.calls)).not.toContain('example.com');
+    expect(JSON.stringify(dispatchEvent.mock.calls)).not.toContain('<');
+  });
+
+  it('an agent that names a known browser and carries other text gives the fixed words only', async () => {
+    const data = await secondWebSignIn(`${FIREFOX_WINDOWS} ${OTHER_TEXT}`);
+    expect(data.device).toBe('Firefox on Windows');
+  });
+
+  it('a label without a family does not reach the event either', async () => {
+    member();
+    await web();
+    await noteLoginDevice({
+      userId: USER,
+      email: EMAIL,
+      userAgent: APP_UA_1,
+      ip: null,
+      deviceKey: INSTALL_1,
+      deviceLabel: LABEL,
+    });
+    const data = dispatchEvent.mock.calls[0]![2] as { device: string };
+    expect(data.device).toBe('Unknown browser on Unknown OS');
+    expect(db.devices[1]!.user_agent).toBe(LABEL);
+  });
+
+  it('end to end: the Slack and Teams cards built from the event carry the fixed words only', async () => {
+    const data = await secondWebSignIn(`${FIREFOX_WINDOWS} ${OTHER_TEXT}`);
+    const { buildRequest } = await vi.importActual<
+      typeof import('@/server/services/integration-events')
+    >('@/server/services/integration-events');
+    for (const type of ['slack', 'teams'] as const) {
+      const { body } = buildRequest(
+        {
+          id: 'ep-1',
+          organization_id: 'org-a',
+          type,
+          url: 'https://example.com/hook',
+          secret: null,
+        },
+        'security.new_device_login',
+        { id: 'd-1', event: 'security.new_device_login', organization_id: 'org-a', data },
+      );
+      const { text } = JSON.parse(body) as { text: string };
+      expect(text).toContain('(Firefox on Windows)');
+      expect(text).not.toContain('Mozilla');
+      expect(text).not.toContain('example.com');
+      expect(text).not.toMatch(/[<>[\]]/);
+    }
+  });
+});

@@ -740,7 +740,7 @@ select ok(
   (select p.prosrc ~ 'auth\.uid\(\)' and p.prosrc ~ 'is_org_member\(v_org\)'
           and p.prosrc ~ 'caller_can_read_item\(i\.id\)' and p.prosrc ~ 'purchase_order_visible\('
           and p.prosrc ~ 'location_holdings_visible\(' and p.prosrc ~ $re$has_permission\(v_org, 'orders:approve'\)$re$
-          and p.prosrc !~ '40001|40P01' and p.prosrc !~* '\m(insert|update|delete)\M\s'
+          and p.prosrc !~ '40001|40P01' and p.prosrc !~* '\m(insert|update|delete|merge|truncate)\M\s'
      from pg_proc p where p.oid = 'public.order_readiness_facts(uuid)'::regprocedure),
   'G2: its gates are in its own body (signed in, member, readable item, visible PO and holdings, approver-only pending demand), it writes nothing and never raises 40001/40P01');
 select ok(
