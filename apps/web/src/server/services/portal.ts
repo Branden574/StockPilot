@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
 import {
@@ -15,6 +16,7 @@ import {
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient } from '@/lib/supabase/server';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
+import { stepUpIsOwedByUser } from '@/lib/auth/step-up-gate';
 import { reportError } from '@/lib/error-reporter';
 import { ServiceError } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
@@ -136,9 +138,20 @@ export interface PortalOrder {
 }
 
 /**
+ * Where the portal sends a session that still owes its authenticator code:
+ * the code page, which returns to the portal (its one page) after the code.
+ */
+export const PORTAL_CODE_PAGE = `/signin/mfa?${new URLSearchParams({ redirect: '/portal' }).toString()}`;
+
+/**
  * Resolve the signed-in user's portal context, or null when they are not a
  * portal user. First successful resolution stamps accepted_at. A user invited
  * to several customers gets the most recently invited one (switcher = later).
+ *
+ * An account that has a verified authenticator, on a session that has not
+ * entered its code, is sent to the code page before anything is resolved: the
+ * rule requireOrgContext() applies to a member (lib/auth/step-up-gate), here
+ * for the portal page and every portal action, which all build on this.
  */
 export async function resolvePortalContext(): Promise<PortalContext | null> {
   const supabase = await createClient();
@@ -160,6 +173,20 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   // because of a database error, and it is not what happened.
   const status = await loadAccountStatus(supabase, user.id);
   if (accountIsDisabledOrThrow(status)) return null;
+
+  // ═══ THE AUTHENTICATOR CODE COMES FIRST ═══
+  //
+  // Like the account-status gate above, this funnel inherits nothing from
+  // requireOrgContext() or withApiContext, and it reads with the service-role
+  // client, which no database rule narrows. So it asks the one step-up rule
+  // itself, before the service-role client is made and before accepted_at is
+  // stamped: an account with a verified factor is a portal customer only on a
+  // session at aal2. The factors are those of the getUser() answer above and
+  // the level is this account's own verified claims; an account with no
+  // authenticator is not asked and costs no extra Auth call. Every caller
+  // awaits this outside any try, so the redirect gets out (the action-step-up
+  // and page-step-up guards hold that they ask this first).
+  if (await stepUpIsOwedByUser(supabase, user)) redirect(PORTAL_CODE_PAGE);
 
   const admin = createAdminClient();
   const { data: mappings } = await admin

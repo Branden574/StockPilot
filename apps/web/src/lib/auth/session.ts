@@ -22,6 +22,7 @@ import {
   resolveAccountStatus,
   type AccountStatusRow,
 } from '@/lib/auth/account-status';
+import { startStepUpReads, stepUpIsOwed } from '@/lib/auth/step-up-gate';
 
 import { effectivePermissions, type Permission, type Role } from '@stockpilot/core';
 
@@ -394,15 +395,59 @@ async function signInPath(): Promise<string> {
   return `/signin?${new URLSearchParams({ redirect: back }).toString()}`;
 }
 
+/**
+ * The authenticator code page, carrying the page to come back to by the same
+ * rule as signInPath() above; the code form reads it back through
+ * safeRedirectPath too. Never the code page itself, or any other sign-in
+ * page: isAuthPagePath drops those.
+ */
+async function codePagePath(): Promise<string> {
+  const back = safeRedirectPath((await headers()).get(RETURN_PATH_HEADER), '');
+  if (!back || isAuthPagePath(back)) return '/signin/mfa';
+  return `/signin/mfa?${new URLSearchParams({ redirect: back }).toString()}`;
+}
+
 export const requireSession = cache(async (): Promise<ServerSession> => {
   const session = await getServerSession();
   if (!session) redirect(await signInPath());
   return session;
 });
 
+/**
+ * The signed-in member's context in an organization: what every dashboard
+ * page and every Server Action that works for an organization builds on,
+ * directly or through withContext().
+ *
+ * No session goes to sign-in, a disabled account to its own page (the loader),
+ * a member with no organization to /onboarding. And a member who has a
+ * verified authenticator, on a session that has not entered its code, goes to
+ * /signin/mfa before anything else is resolved (lib/auth/step-up-gate): the
+ * rule the dashboard layout applies to a page load, here for every caller, so
+ * a Server Action and a request for one page segment are held to it too.
+ *
+ * requireSession() above does NOT ask for the code, on purpose: the code page
+ * itself, the recovery code, enrolling a first authenticator and signing out
+ * all run on a session that has not entered one.
+ */
 export const requireOrgContext = cache(async (orgId?: string): Promise<OrgContext> => {
+  // Started before the context resolves, so the gate's reads run alongside it.
+  // Not for a request with no identity header: the loader finds no session
+  // there, and nothing is read about one that is not there.
+  const stepUp = (await headers()).get(SESSION_HEADER_USER_ID) ? startStepUpReads() : null;
   const { session, orgRole, orgId: defaultOrgId, orgName, bundle } = await loadSessionAndContext();
   if (!session) redirect(await signInPath());
+
+  // ═══ THE AUTHENTICATOR CODE COMES FIRST ═══
+  //
+  // Before the organization, the role or a permission is resolved. Safe to
+  // redirect from here for the same reason as the account-status gate in the
+  // loader: an /api route has no proxy-set header and is sent to sign-in
+  // above, and a client that sends the header itself gets here only as its
+  // own verified session, so it redirects only its own request. The /api
+  // routes answer such a session themselves (lib/auth/api-context).
+  if (await stepUpIsOwed(stepUp ?? startStepUpReads(), session.userId)) {
+    redirect(await codePagePath());
+  }
 
   // ═══ THE ORG MUST COME FROM A MEMBERSHIP, NEVER FROM A PREFERENCE ═══
   //

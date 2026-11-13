@@ -220,13 +220,19 @@ describe('withContext() in a Server Action', () => {
 
   it('an enrolled user must still step up (HI-6), and does at AAL2', async () => {
     state.factors = [{ status: 'verified' }];
-    const atAal1 = await withContext();
-    expect(atAal1.mfaRequired).toBe(true);
-    expect(atAal1.mfaSatisfied).toBe(false);
+    // At aal1 there is no context (docket S43c): the member is sent to the
+    // code page by requireOrgContext(), on the one factor read withContext()
+    // had already started.
+    await expect(withContext()).rejects.toThrow('REDIRECT:/signin/mfa');
+    expect(calls.rpc).toBe(1);
+    expect(calls.factorReads).toBe(1);
     state.aal = 'aal2';
     const atAal2 = await withContext();
     expect(atAal2.mfaRequired).toBe(true);
     expect(atAal2.mfaSatisfied).toBe(true);
+    // Still one factor read per action, and one RPC.
+    expect(calls.factorReads).toBe(2);
+    expect(calls.rpc).toBe(2);
   });
 
   it('a comped organization gets its modules through the one rule, still in one RPC', async () => {

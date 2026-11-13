@@ -54,6 +54,16 @@ vi.mock('react', async (importOriginal) => {
 });
 const newRequest = () => pass.memo.clear();
 
+// requireOrgContext() also asks whether the session still owes its
+// authenticator code (lib/auth/step-up-gate), on the session's claims and,
+// below aal2, the factor list. That gate has its own suite
+// (lib/auth/session.step-up.test.ts) and is taken out here, so every read
+// counted below is the module gate's and the session loader's alone.
+vi.mock('@/lib/auth/step-up-gate', () => ({
+  startStepUpReads: () => ({}),
+  stepUpIsOwed: async () => false,
+}));
+
 vi.mock('next/headers', () => ({
   headers: vi.fn(
     async () =>
