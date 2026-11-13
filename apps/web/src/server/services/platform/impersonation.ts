@@ -135,23 +135,29 @@ export async function startActingAs(input: StartActingAsInput): Promise<StartAct
     .maybeSingle();
   if (!org) return { ok: false, reason: 'org_not_found' };
 
-  // Already a REAL member? Then they don't need a grant — just switch.
-  const { data: existing } = await admin
+  // Already a REAL member? Then they don't need a grant — just switch. Fail
+  // closed: a read that answers an error is not "not a member"; the grant
+  // below is written only once the membership is known, so a real membership
+  // is never touched.
+  const { data: existing, error: existingErr } = await admin
     .from('organization_members')
     .select('id, impersonation_expires_at')
     .eq('organization_id', input.organizationId)
     .eq('user_id', input.adminUserId)
     .maybeSingle();
+  if (existingErr) throw new Error(`impersonation membership read: ${existingErr.message}`);
   const alreadyRealMember = Boolean(
     existing && (existing as { impersonation_expires_at: string | null }).impersonation_expires_at === null,
   );
 
-  // Capture the admin's current active org to restore on exit.
-  const { data: profile } = await admin
+  // Capture the admin's current active org to restore on exit. Fail closed
+  // too: a read that answers an error is not "no active org".
+  const { data: profile, error: profileErr } = await admin
     .from('user_profiles')
     .select('default_organization_id')
     .eq('id', input.adminUserId)
     .maybeSingle();
+  if (profileErr) throw new Error(`impersonation profile read: ${profileErr.message}`);
   const previousOrgId = (profile as { default_organization_id: string | null } | null)?.default_organization_id ?? null;
 
   const expiresAtIso = new Date(now + IMPERSONATION_TTL_MS).toISOString();
@@ -210,8 +216,10 @@ export async function stopActingAs(input: StopActingAsInput): Promise<{ stopped:
   const now = input.now ?? Date.now();
   const admin = createAdminClient();
 
-  // Find the active session (if any).
-  const { data: session } = await admin
+  // Find the active session (if any). Fail closed, as getActiveImpersonation
+  // does: a read that answers an error is not "no session"; the action reports
+  // it and the Exit button shows an error instead of "Stopped".
+  const { data: session, error: sessionErr } = await admin
     .from('platform_impersonation_sessions')
     .select('id, target_organization_id, previous_organization_id')
     .eq('admin_user_id', input.adminUserId)
@@ -219,6 +227,7 @@ export async function stopActingAs(input: StopActingAsInput): Promise<{ stopped:
     .order('started_at', { ascending: false })
     .limit(1)
     .maybeSingle();
+  if (sessionErr) throw new Error(`impersonation session read: ${sessionErr.message}`);
   if (!session) return { stopped: false };
   const s = session as {
     id: string;
