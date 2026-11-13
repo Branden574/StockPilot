@@ -24,7 +24,6 @@ import { RELEASES } from './registry';
 const ID = 'ai-assistant-plain-words-2026-11';
 const SENTENCES = 'ai-assistant-plain-failure-sentences';
 const REFUSED = 'ai-assistant-says-why-refused';
-const MULTI_FACTOR = 'ai-assistant-search-data-multi-factor';
 const release = () => RELEASES.find((r) => r.id === ID)!;
 const entry = (id: string) => release().entries.find((e) => e.id === id)!;
 
@@ -72,29 +71,24 @@ describe('the AI Assistant release', () => {
     expect(Date.parse(release().publishedAt)).toBeGreaterThan(Date.parse(RELEASES[3]!.publishedAt));
   });
 
-  it('parses under the shared schema, with three AI Assistant entries in plain text only', () => {
+  it('parses under the shared schema, with two AI Assistant entries in plain text only', () => {
     expect(releaseSchema.safeParse(release()).success).toBe(true);
     expect(release().entries.map((e) => [e.id, e.category, e.area])).toEqual([
       [SENTENCES, 'fixed', 'AI Assistant'],
       [REFUSED, 'fixed', 'AI Assistant'],
-      [MULTI_FACTOR, 'improved', 'AI Assistant'],
     ]);
     for (const text of readerText(release())) expect(text).not.toMatch(/[<>]/);
   });
 
-  it('reaches who can open the AI Assistant, and only owners and admins among them for the search data entry', () => {
+  it('reaches who can open the AI Assistant, and nobody else', () => {
     for (const id of [SENTENCES, REFUSED]) {
       expect(entry(id).audience, id).toEqual({ anyPermission: ['items:update'], modules: ['ai'] });
     }
-    expect(entry(MULTI_FACTOR).audience).toEqual({
-      roles: ['owner', 'admin'],
-      anyPermission: ['items:update'],
-      modules: ['ai'],
-    });
     for (const e of release().entries) {
       expect(e.link, e.id).toEqual({ href: '/dashboard/ai', label: 'Open AI Assistant' });
     }
-    expect(told(owner)).toEqual([SENTENCES, REFUSED, MULTI_FACTOR]);
+    expect(told(owner)).toEqual([SENTENCES, REFUSED]);
+    expect(told(viewer('admin', ['items:update'], ['ai']))).toEqual([SENTENCES, REFUSED]);
     expect(told(viewer('staff', ['items:update'], ['ai']))).toEqual([SENTENCES, REFUSED]);
     expect(told(viewer('admin', ['items:update'], []))).toBeUndefined();
     expect(told(viewer('staff', ['items:read'], ['ai']))).toBeUndefined();
@@ -109,7 +103,16 @@ describe('the AI Assistant release', () => {
     );
   });
 
-  it('rests on the fixed sentences, the classifier and the search data gate', () => {
+  it('carries no entry about filling in search data, and no field names the authenticator', () => {
+    expect(release().entries.some((e) => e.id === 'ai-assistant-search-data-multi-factor')).toBe(
+      false,
+    );
+    for (const text of readerText(release())) {
+      expect(text).not.toMatch(/authenticator|re-authenticate/i);
+    }
+  });
+
+  it('rests on the fixed sentences and the classifier', () => {
     const toolErrors = web('lib/ai/tool-errors.ts');
     expect(toolErrors).toContain(
       "export type ToolFailureKind = 'not_set_up' | 'unavailable' | 'failed';",
@@ -128,19 +131,6 @@ describe('the AI Assistant release', () => {
     expect(chat).toContain('if (err instanceof UntrustedWriteRefusedError) {');
     expect(web('server/services/inventory.ts')).toContain(
       "throw new ServiceError('validation_error', 'Insufficient stock for this adjustment');",
-    );
-    const tools = web('lib/ai/tools.ts');
-    const gate = tools.indexOf(
-      'if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);',
-    );
-    const role = tools.indexOf("if (ctx.role !== 'owner' && ctx.role !== 'admin') {");
-    expect(gate).toBeGreaterThan(-1);
-    expect(role).toBeGreaterThan(gate);
-    expect(web('server/actions/embeddings.ts')).toContain(
-      'if (ctx.mfaRequired && !ctx.mfaSatisfied) {',
-    );
-    expect(entry(MULTI_FACTOR).howItAffectsYou).toBe(
-      'If your sign-in has not passed the authenticator code step, the AI Assistant asks you to re-authenticate before it fills in the search data. If your organization requires multi-factor sign-in and you have not set it up, it asks you to set it up.',
     );
   });
 });

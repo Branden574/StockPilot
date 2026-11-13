@@ -259,9 +259,11 @@ export const RELEASES: Release[] = [
     revision: 1,
     // #509 (squash ac6bd3719), live on production 2026-11-13 07:07:42Z, so
     // dated 07:08Z (the integrator's record, not readable from the code).
-    // From the reviewed draft of that change, release 1, entries 1 to 3. Its
+    // From the reviewed draft of that change, release 1, entries 1 and 2. Its
     // second release (the Slack and Teams alert text) is not published here:
     // it waits on a hand check.
+    // Entry 3 of that draft (filling in search data) is left out: almost
+    // nobody would see what it describes.
     // Claims checked against the code at 88c8382f2 (paths under apps/web/src):
     // - Entry 1: a search by meaning, the search data fill and the photo
     //   reading each have three fixed sentences, not set up, not available
@@ -282,22 +284,9 @@ export const RELEASES: Release[] = [
     //   refusal (:124, :140), the multi-factor refusal (:136-139, sentences
     //   :75-78), not found (:132, :56) and a clash with what is saved (:134,
     //   :66-67) each give their own sentence.
-    // - Entry 3: the search data tool asks the multi-factor gate first
-    //   (lib/ai/tools.ts:3049), on the condition Settings, AI uses
-    //   (server/actions/embeddings.ts:19; the panel is on settings/ai/page.tsx:
-    //   68), then allows owners and admins only (tools.ts:3052-3055). The gate
-    //   is required for a member with a verified authenticator or under the
-    //   organization's policy (server/services/context.ts:144-154), and its
-    //   sentence asks to re-authenticate when an authenticator is set up, else
-    //   to set one up (context.ts:322-335). "Every change the AI Assistant
-    //   makes": every other write tool calls assertPermission, which asks the
-    //   same gate first (tools.ts:1050, :1206, :1399, :1577, :1689, :2368,
-    //   :2408, :2450, :3150; context.ts:344-345). Settings, Security is
-    //   components/settings/settings-nav.tsx:100.
-    // Who is told: entries 1 and 2, who can open the AI Assistant, the gate of
-    // the linked page (app/(dashboard)/dashboard/ai/page.tsx:25, :33), as every
-    // sibling AI Assistant entry; entry 3, owners and admins among them, the
-    // only roles the search data tool serves.
+    // Who is told: who can open the AI Assistant, the gate of the linked page
+    // (app/(dashboard)/dashboard/ai/page.tsx:25, :33), as every sibling AI
+    // Assistant entry.
     status: 'published',
     title: 'The AI Assistant says plainly why it could not search or make a change',
     summary:
@@ -334,21 +323,6 @@ export const RELEASES: Release[] = [
         whatToDo: 'When it asks, type the values yourself, then confirm.',
         link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
         audience: { anyPermission: ['items:update'], modules: ['ai'] },
-      },
-      {
-        id: 'ai-assistant-search-data-multi-factor',
-        category: 'improved',
-        area: 'AI Assistant',
-        title: 'Filling in search data from the AI Assistant follows the multi-factor sign-in rule',
-        whatChanged:
-          'The AI Assistant fills in its search data under the same multi-factor rule as Settings, AI. An owner or admin who has set up an authenticator app is asked to re-authenticate with it first. Where your organization requires multi-factor sign-in, an owner or admin who has not set it up is asked to set it up first.',
-        whyItMatters: 'Every change the AI Assistant makes follows the same sign-in rule.',
-        howItAffectsYou:
-          'If your sign-in has not passed the authenticator code step, the AI Assistant asks you to re-authenticate before it fills in the search data. If your organization requires multi-factor sign-in and you have not set it up, it asks you to set it up.',
-        whatToDo:
-          'Re-authenticate with your authenticator app when asked, or set one up in Settings, Security.',
-        link: { href: '/dashboard/ai', label: 'Open AI Assistant' },
-        audience: { roles: ['owner', 'admin'], anyPermission: ['items:update'], modules: ['ai'] },
       },
     ],
   },
