@@ -45,7 +45,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // see cycle counts, and the not-available state leaves out the catching-up sentence). Before
   // S75 the projection was 225237c6...e731e, the pin it had.
   'app/cycle-count/[id].tsx': 'e75dc5d0a99b4b703ab4af4beae1c90454209cd8a8105e7b6048d0945cd709a4',
-  'app/item/[id].tsx': '0e3f35aa258543d2c2beebcab5a0e4bdebe877f0b93226183bc29ac1922da3fa',
+  // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
+  // configured host; a production build opens the same address). Before B124 the projection was
+  // 0e3f35aa...a3fa, the pin it had.
+  'app/item/[id].tsx': '17972ab18674dfa991a69767fbc9bcd924d6682ba7e42ee9457a0d915107d2e7',
   // Re-pinned for F14 (Classic is meant to change: the RETURN REQUEST section
   // under each of the requester's own open requests). Before F14 the
   // projection was fe0632b2…04ce6f, the pin it had; the difference is that
@@ -167,7 +170,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'app/maintenance/[id].tsx': 'e6e53b7e9c5fad8c5943664d05ae6013ca318498aafe7c288fc874887327fc47',
   'app/maintenance/new.tsx': 'e98d670b7b43b465ef0f8498459097af3f8b4e54c0a863b3c75abbb2cc315f67',
   'app/po-import/[id].tsx': 'da091d8135b45a9f1a473a91e0ee5fdb90802e9ab9dce5a333cdf862553edb5d',
-  'app/rentals/[id].tsx': 'a69061a23d69073e18b32c3c0b9d42b599e2fc817c2fe826cbf5e0d292e9b10c',
+  // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
+  // configured host; a production build opens the same address). Before B124 the projection was
+  // a69061a2...b10c, the pin it had.
+  'app/rentals/[id].tsx': '09b2e836f2ff72d824836e5a13fb152b5c2aea671c82be8768b59046bc6e33de',
   'app/rentals/new.tsx': 'e2dca591e7f9432b719cb9b3108d2fde791a675544faa9965addafe3c3056f65',
   'app/reports/book-order-totals/[itemId].tsx':
     'a8aadefce0a01a268c630eed737ba80d36164f256e1fb25175659f99fff7021d',
@@ -210,7 +216,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/screens/purchase-orders.tsx':
     '4430bcc012491aeccacf7dbbb6cc87b912162b73d406ed288417e7e3361f05c6',
   'src/screens/rentals.tsx': 'a9b4f8ac55497379cbcfbdc1dcf11542586119945845d22499019565f2db0559',
-  'src/screens/reports.tsx': 'd0f88aacf47a52b6cccda08c287e3d26ee4ff690e42a52cc19b77fac12b13074',
+  // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
+  // configured host; a production build opens the same address). Before B124 the projection was
+  // d0f88aac...3074, the pin it had.
+  'src/screens/reports.tsx': '4f2902e345f20da0112b9f90db15b38c8431d60251379799bd11a85aefede625',
   'src/screens/suppliers.tsx': 'eb440f4872ee08a3d7639ae4896efb7dc63f23727824b632983fbb3021c46ad6',
   // ---- end native-ops lane ----
   // Stage 4, native-admin lane (admin, AI, notifications, settings, support,
@@ -251,7 +260,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'app/(drawer)/ai.tsx': '1e1f6b6e86817bb952cd00ddaf5cd0eb32273ef8053b99fd32f15fd79e914371',
   'app/(drawer)/notifications.tsx':
     '9d359357d41c32952be12437de57a44ce4fb26da377a900eb1ed7dfe833b439c',
-  'app/(drawer)/settings.tsx': 'ff6897c5b3ab23508af66fd677dc59a3c05d259848a50238b187af36070e9d57',
+  // Re-pinned for B124 (Classic is meant to change: its five web links are built by webLink from
+  // the configured host; a production build opens the same addresses). Before B124 the projection
+  // was ff6897c5...9d57, the pin it had.
+  'app/(drawer)/settings.tsx': '2416d17c02eabe42cc565bdc9f1127514e33b04866e7b6ee7bf3aa73b3c80d97',
   'app/(drawer)/settings/appearance.tsx':
     '5be7c846e7321ca0bb6176b29f9374888e0ae3cc101f13c40c2b5a1ff94bafd8',
   'app/(drawer)/settings/change-email.tsx':

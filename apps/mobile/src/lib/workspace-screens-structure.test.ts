@@ -821,7 +821,7 @@ describe('Schedule (M-WS-04)', () => {
     expect(code).toMatch(
       /canManageSchedule \? \([\s\S]{0,300}?router\.push\('\/schedule\/new'\)[\s\S]{0,80}?accessibilityLabel="New event"/,
     );
-    expect(code).toContain('Linking.openURL(`https://stockpilotusa.com/dashboard/schedule`)');
+    expect(code).toContain("Linking.openURL(webLink('/dashboard/schedule'))");
     const { sf, els } = elements(SCHEDULE, (el, s) => attrText(el, 'onPress', s) === 'openOnWeb');
     expect(els.map(({ el }) => attrText(el, 'accessibilityRole', sf))).toEqual(['link']);
   });

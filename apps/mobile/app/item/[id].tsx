@@ -186,6 +186,7 @@ import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
 import { useTheme } from '@/lib/use-theme';
 import { useHoldUpdatePrompt, whileUpdatePromptHeld } from '@/lib/update-prompt-holds';
+import { webLink } from '@/lib/web-links';
 
 interface Item {
   id: string;
@@ -1638,7 +1639,7 @@ export default function ItemDetail() {
 
   function openEdit() {
     if (!item) return;
-    Linking.openURL(`https://stockpilotusa.com/dashboard/inventory/${item.id}/edit`).catch(
+    Linking.openURL(webLink(`/dashboard/inventory/${item.id}/edit`)).catch(
       () => undefined,
     );
   }

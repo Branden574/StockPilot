@@ -338,7 +338,7 @@ describe('Procedures and Movements keep every word', () => {
   it('a procedure: its title, description, "updated" day and category pill; it opens the web page', () => {
     const code = flatCode(PROCEDURES);
     expect(code).toContain(
-      'Linking.openURL(`https://stockpilotusa.com/dashboard/procedures/${proc.id}`)',
+      'Linking.openURL(webLink(`/dashboard/procedures/${proc.id}`))',
     );
     expect(code).toContain(
       "<Mono size={11.5} tracking={0.04} color={c.ink3} style={{ marginTop: 8 }}> updated{' '} {new Date(proc.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', })} </Mono>",

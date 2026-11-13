@@ -14,6 +14,7 @@ import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
 import { FONT } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+import { webLink } from '@/lib/web-links';
 
 interface ScheduleRow {
   id: string;
@@ -147,7 +148,7 @@ function EventCard({ event }: { event: ScheduleRow }) {
   const isTomorrow = starts.toDateString() === tomorrow.toDateString();
 
   function openOnWeb() {
-    Linking.openURL(`https://stockpilotusa.com/dashboard/schedule`).catch(() => undefined);
+    Linking.openURL(webLink('/dashboard/schedule')).catch(() => undefined);
   }
 
   return (

@@ -579,7 +579,7 @@ describe('Reports hub: the look', () => {
     expect(attr(label.el, 'numberOfLines', sf)).toBeUndefined();
     expect(attr(label.el, 'maxFontSizeMultiplier', sf)).toBeUndefined();
     expect(hub).toContain(
-      "<WebReportLink onPress={() => Linking.openURL('https://stockpilotusa.com/dashboard/reports').catch(() => undefined) } />",
+      "<WebReportLink onPress={() => Linking.openURL(webLink('/dashboard/reports')).catch(() => undefined) } />",
     );
   });
 
@@ -811,13 +811,13 @@ describe('Settings: the account screen', () => {
       'Account<Em>.</Em>',
       'title="Workspaces" detail="View sites"',
       "router.push('/locations?return=/settings')",
-      "Linking.openURL('https://stockpilotusa.com/dashboard/settings/profile')",
+      "Linking.openURL(webLink('/dashboard/settings/profile'))",
       "router.push('/settings/change-email' as never)",
       "router.push('/notifications?return=/settings')",
       'title="Send test push" detail="To this device"',
       "'/api/v1/push/test'",
       "router.push('/settings/integrations' as never)",
-      "Linking.openURL('https://stockpilotusa.com/dashboard/settings/security')",
+      "Linking.openURL(webLink('/dashboard/settings/security'))",
       'title="Customize tab bar" detail="Home + up to 5"',
       "router.push('/settings/customize-tabs' as never)",
       // The Theme row ("Auto", an alert) is Appearance while Liquid Glass is
@@ -832,8 +832,8 @@ describe('Settings: the account screen', () => {
       'title="Delete my account" detail="Permanent"',
       'onPress={() => confirmDeleteAccount(signOut)}',
       "Linking.openURL('mailto:hello@stockpilot.app?subject=StockPilot%20mobile%20support')",
-      "Linking.openURL('https://stockpilotusa.com/privacy')",
-      "Linking.openURL('https://stockpilotusa.com/terms')",
+      "Linking.openURL(webLink('/privacy'))",
+      "Linking.openURL(webLink('/terms'))",
       'title="What\'s new" detail={`v${APP_VERSION}`}',
       "'Type DELETE to confirm'",
       "if ((input ?? '').trim() !== 'DELETE') {",
