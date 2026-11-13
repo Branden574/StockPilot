@@ -71,19 +71,22 @@
      `select plan(58)`, and the two file counts beside it were counted from
      the manifests in `scripts/security-test.sh` on that date.
 
-     AMENDED 2026-11-02 (docket S49, migration 0421): INV-B1, INV-B3 and
-     INV-B4 now say a gate counts only in code. INV-2, INV-25 and INV-31
-     match the four gate names as whole words after removing comments and
-     quoted strings (one shared expression, `_sec_inv_gate_re`); INV-4b and
-     INV-29b were added, and INV-29 and INV-32 plant comment-only and
-     string-only probes. INV-B3's grants paragraph gained the exception 0310
-     and 0421 use, INV-B2 names INV-22's string-literal residual and gives
-     the measured current state (18 policies, 15 gated; the figure it had
-     carried since this document's first version was 19, 16 gated), and
-     section 10 records the second recurrence. The census figures in those
-     entries were read by a scratch pgTAP probe on a local Postgres at main
-     f584141ba with 0421 applied; the counts in section 10 were not
-     re-derived. -->
+     AMENDED 2026-11-02, brought up to date with T23 and T24 on 2026-11-13
+     (docket S49, migration 0421): INV-B1, INV-B3 and INV-B4 now say a gate
+     counts only in code. INV-2, INV-25 and INV-31 match the four gate names
+     as whole words (`_sec_inv_gate_re`) on the code skeleton T23's strip
+     pass makes (`_sec_inv_strip_re`), the pass INV-27b holds every
+     first-party body to; INV-4b and INV-29b were added, and INV-29 and
+     INV-32 plant comment-only and string-only probes. INV-B3's grants
+     paragraph gained the exception 0310 and 0421 use, INV-B2 names INV-22's
+     string-literal residual and gives the measured current state (18
+     policies, 15 gated; the figure it had carried since this document's
+     first version was 19, 16 gated), and section 10 records the second
+     recurrence. The census figures in those entries were read by a scratch
+     pgTAP probe on a local Postgres with migrations 0001-0418 and 0421
+     applied; the assertion count in section 10 was re-derived from
+     `select plan(60)`, and the pgTAP file count beside it was counted from
+     the manifest in `scripts/security-test.sh` on that date. -->
 
 # Security invariants
 
@@ -349,11 +352,12 @@ return type, not an observation about today's catalog — which is precisely why
 **The allowlist cannot be used as a bypass.** INV-2 requires every allowlisted
 function to reference an authorization gate in its own body. Adding a name to
 the allowlist for an ungated function fails INV-2 instead of buying an exemption.
-Since S49 the reference must be code: INV-2 reads each body through
-`_sec_inv_gate_re`, which removes `--` and `/* */` comments and single-quoted
-strings in one left-to-right pass and then looks for the four names as whole
-words, so a gate named only in a comment or an error message buys nothing.
-INV-2 names its offenders in the failure output.
+Since S49 the reference must be code: INV-2 reads each body through the
+test's strip pass (`_sec_inv_strip_re`, which turns `--` and `/* */` comments
+into a space and single-quoted strings into `''` in one left-to-right pass)
+and then looks for the four names as whole words (`_sec_inv_gate_re`), so a
+gate named only in a comment or an error message buys nothing. INV-2 names
+its offenders in the failure output.
 
 Current state: 42 anon-executable `SECURITY DEFINER` functions — 17
 trigger-returning (not RPC-invocable) and 25 RPC-invocable with in-body gates,
@@ -389,8 +393,8 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   unremarkable in a migration diff.
 - **Enforced by**: the predicate on each policy.
 - **Tested at**: INV-22, with INV-23 as the control that the population being
-  judged is non-empty. Current state, measured on 2026-11-02 (main f584141ba
-  with 0421): 18 such policies — 15 gated, 3 explicit denies (the
+  judged is non-empty. Current state, measured on 2026-11-13 (migrations
+  0001-0418 and 0421): 18 such policies — 15 gated, 3 explicit denies (the
   `mfa_recovery_codes_no_*` idiom that makes that table trigger-write-only).
   One residual, named since S49: INV-22 searches the deparsed predicate,
   which carries no comment but can carry a string literal, so an identity
@@ -496,8 +500,9 @@ null ACL — which is itself `PUBLIC`-executable, and is what a
   separately: `EXECUTE` in an entry or in a callee withdraws the exemption),
   an operator, a cast, a trigger or a view; of `pg_catalog`'s functions only
   the side-effect forms are judged.
-  Since S49, INV-25 reads each body through `_sec_inv_gate_re` (comments
-  and quoted strings removed, the four names matched as whole words) and
+  Since S49, INV-25 reads each body through the same strip pass and then
+  `_sec_inv_gate_re` (comments and quoted strings do not count, the four
+  names are matched as whole words) and
   names its offenders; INV-29 also plants probes that name every gate only
   in comments, only in a quoted string and only inside longer names, all of
   which must be caught, and one that calls `has_org_role` after a comment
@@ -535,26 +540,23 @@ now judges it on its body like everything else. "Reading past RLS is the point"
 justifies the `SECURITY DEFINER`; it never justified the missing authorization
 check.
 
-**A gate named in a comment is not a gate, and a predicate that takes its
-subject from the caller is an oracle.** Until S49 the sweep searched the raw
-body, so a gate name anywhere counted, a comment included.
-`user_can_see_item_category` (0310) passed INV-25 on exactly that: its only
-`has_org_role` is in a comment (0310 says so itself), and it takes the user
-it answers about from its caller. Any signed-in account could ask it, by
-POST to its RPC, whether a person (any id) is a member of an organization
-(any id) and which categories a limited viewer holds. 0421 moved
+**A gate named in a comment is not a gate, and a predicate about a user
+belongs in the zero-argument set form.** Since S49 the sweep reads a body's
+code only: a gate name in a comment, a quoted string or a longer name does
+not count. `user_can_see_item_category` (0310) is a predicate about the user
+it is given. 0421 moved
 `categories_select` onto zero-argument sets that read `auth.uid()`
 themselves: the two category sets `inventory_items_select` already read
 (0229) and the membership set `stock_movements_select` reads. It took
 `authenticated`'s `EXECUTE` away from the function under the exception
-above. The lesson for the next helper: a predicate that takes a user id from
-its caller belongs in the zero-argument set form, and a policy should read
-sets that derive the user from the session, not pass `auth.uid()` into a
-function anyone can call with another id. Not modelled by the expression,
-and in no swept body today: a nested comment, an `E''` string with `\'`,
-and a dollar-quoted string inside a body (a gate name in one of those still
-counts). And a name proves a gate is called, not that the call decides
-anything.
+above, so the function left INV-25's population. The lesson for the next
+helper: a policy should read sets that derive the user from the session,
+not pass `auth.uid()` into a function that takes a user id and that
+`authenticated` may execute. The strip pass reads only bodies INV-27b
+accepts: a body with a form the pass does not follow (an `E''` string with
+`\'`, a dollar-quoted literal, a comment inside a comment, a quote left once
+the pass is done) is refused there. And a name proves a gate is called, not
+that the call decides anything.
 
 Reproduce (the `authenticated` twin of the INV-B1 query above; the body is read
 the way INV-25 reads it, comments and quoted strings removed first):
@@ -563,7 +565,8 @@ the way INV-25 reads it, comments and quoted strings removed first):
 select p.proname,
        pg_get_function_identity_arguments(p.oid) as args,
        (regexp_replace(p.prosrc,
-                       $re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$, ' ', 'g')
+                       $re$/\*(?:[^*]|\*+[^*/])*\*+/|--[^\n\r]*|(')(?:[^']|'')*(')|("(?:[^"]|"")*")$re$,
+                       ' \1\2\3 ', 'g')
           ~* $re$\m(auth\.uid|has_org_role|has_permission|is_org_member)\M$re$)
          as gated_in_body
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -593,9 +596,9 @@ select p.proname,
   manager+ or `caller_can_write_location`. The one allowlisted entry,
   `ledger.cycle_count_line_superseded` (0369), returns a boolean, writes
   nothing, and answers only inside a ledger transaction.
-- **Tested at**: INV-31 (the sweep, reading bodies through the same
-  `_sec_inv_gate_re` as INV-25, plus allowlist F's own audit, which is the
-  view INV-26 reads: no stale entry, and no entry that writes, runs
+- **Tested at**: INV-31 (the sweep, reading bodies through the same strip
+  pass and `_sec_inv_gate_re` as INV-25, plus allowlist F's own audit, which
+  is the view INV-26 reads: no stale entry, and no entry that writes, runs
   `EXECUTE` or has a side effect, reaches a function that does, or reaches a
   function with no first-party body that allowlist K does not list) and
   INV-32 (plants an ungated definer probe in `ledger`, two that name the
@@ -2230,12 +2233,13 @@ checked.
   from then on by INV-25/26. It is recorded on its own line rather than folded
   into the one above because it is the counterexample to reading that line as
   permanent: the sweep that would have caught it did not exist on the day the
-  first P0 was declared closed. S49 found a second instance that the sweep
-  itself let through: `user_can_see_item_category` passed INV-25 on a gate
-  named only in a comment, closed by 0421, and INV-25 has read code only since.
+  first P0 was declared closed. S49 found a second instance in the sweep
+  itself: INV-25 counted a gate name in a comment as a gate. Since 0421 it
+  reads code only, and `user_can_see_item_category` is no longer one of the
+  functions it judges.
 - **A high-assurance baseline is implemented and covered by executable
-  invariants**: 58 class-wide assertions in
-  `supabase/tests/security_invariants.test.sql`, plus the 100 other pgTAP
+  invariants**: 60 class-wide assertions in
+  `supabase/tests/security_invariants.test.sql`, plus the 101 other pgTAP
   files and the 341 vitest files on the manifests of
   `scripts/security-test.sh`, gated together as `pnpm security:test` and
   wired into CI.

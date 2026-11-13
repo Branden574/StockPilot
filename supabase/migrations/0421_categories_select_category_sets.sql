@@ -7,23 +7,15 @@
 -- the same categories as before (the equivalence matrix in the 0421 test). No
 -- row of any table changes.
 --
--- ── WHAT WAS WRONG ─────────────────────────────────────────────────────────
+-- ── WHY ───────────────────────────────────────────────────────────────────
 -- user_can_see_item_category(p_user_id, p_org_id, p_category_id) (0310,
--- SECURITY DEFINER) takes the person it answers about from its caller and
--- reads organization_members, user_profiles and user_category_assignments as
--- its owner. authenticated has held EXECUTE since 0129, and the body never
--- looks at the caller (the has_org_role in it is a comment, 0310:52). So any
--- signed-in account, in an organization or not, could call
--- POST /rest/v1/rpc/user_can_see_item_category with any three ids and learn,
--- past row security, whether that person is an accepted member of that
--- organization whose account is not disabled (true for staff and above and
--- for a viewer with no category limit), and which categories a limited
--- viewer holds. It wrote nothing, anon could not call it, and it never
--- widened what anyone reads: categories_select (0140), its one caller, ANDs
--- it with is_org_member and passes auth.uid(). Apart from that policy, no
--- web, phone, edge-function or database code calls it. The security suite's
--- INV-25 counted it as gated because of that comment (the suite now reads
--- code only).
+-- SECURITY DEFINER) is a predicate about the user it is given, read as its
+-- owner. Its one caller was categories_select (0140), which ANDs it with
+-- is_org_member and passes auth.uid(); no web, phone, edge-function or
+-- database code calls it. After this file the policy reads the per-query
+-- sets that take the user from the session, no policy calls the function,
+-- and only service_role may execute it. The security suite's INV-25 reads
+-- a body's code only (comments and quoted strings do not count).
 --
 -- ── WHAT ──────────────────────────────────────────────────────────────────
 -- 0. Preflight: refuse (55000, hint s49_preflight, nothing applied) unless

@@ -254,9 +254,10 @@ select is(
 
 -- S4. Nothing evaluates the function as the user any more, so it needs no
 -- authenticated EXECUTE (INV-C1): no policy names it, nothing depends on it,
--- and no other function's code calls it (bodies read without comments and
--- quoted strings, the security_invariants gate expression; this session's
--- own pg_temp helpers, which call it on purpose, are left out).
+-- and no other function's code calls it (bodies read through the strip pass
+-- security_invariants reads them with, _sec_inv_strip_re: comments and quoted
+-- strings do not count; this session's own pg_temp helpers, which call it on
+-- purpose, are left out).
 select is(
   (select count(*)::int from pg_policies
     where coalesce(qual, '') || ' ' || coalesce(with_check, '') like '%user_can_see_item_category%')::text
@@ -269,7 +270,7 @@ select is(
      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
     where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname !~ '^pg_(temp|toast_temp)_'
       and p.oid <> 'public.user_can_see_item_category(uuid,uuid,uuid)'::regprocedure
-      and regexp_replace(p.prosrc, $re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$, ' ', 'g')
+      and regexp_replace(p.prosrc, $re$/\*(?:[^*]|\*+[^*/])*\*+/|--[^\n\r]*|(')(?:[^']|'')*(')|("(?:[^"]|"")*")$re$, ' \1\2\3 ', 'g')
           ~* '\muser_can_see_item_category\M'),
   '0/0/0',
   'S4: no policy in any schema names user_can_see_item_category, nothing depends on it, and no other function''s code calls it (so nothing needs authenticated to keep EXECUTE, INV-C1)');
@@ -277,7 +278,7 @@ select is(
 select is(
   pg_temp.ask('authenticated', :p03, :p01, :orgA, :catA1) || '/' || pg_temp.ask('authenticated', :p12, :p04, :orgA, :catA2),
   '42501/42501',
-  'S5: a signed-in account can no longer ask about another person: a member of the organization and an outsider are both refused (42501)');
+  'S5: a signed-in account''s call of user_can_see_item_category is refused (42501), for a member of the organization and for an outsider');
 
 select is(
   pg_temp.ask('anon', null, :p01, :orgA, :catA1),
@@ -341,7 +342,7 @@ select is(
                                           ('public.stock_movements'::regclass, 'stock_movements_select')))
   || ' | ' ||
   (select string_agg(p.proname || ':' || p.pronargs::text || ':'
-                     || (regexp_replace(p.prosrc, $re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$, ' ', 'g')
+                     || (regexp_replace(p.prosrc, $re$/\*(?:[^*]|\*+[^*/])*\*+/|--[^\n\r]*|(')(?:[^']|'')*(')|("(?:[^"]|"")*")$re$, ' \1\2\3 ', 'g')
                            ~* $re$\mauth\.uid\M$re$)::text, ', ' order by p.proname)
      from pg_proc p
     where p.oid in ('public.rls_member_org_ids()'::regprocedure,

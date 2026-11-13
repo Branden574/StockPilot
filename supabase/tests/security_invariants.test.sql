@@ -330,22 +330,20 @@ insert into _sec_inv_setting_call_re (any_re, literal_re) values
 -- ── The gate detector INV-2, INV-25 and INV-31 share (S49) ─────────────────
 --
 -- A body counts as gated when one of the four gate names appears as a whole
--- word in its CODE. strip_re removes /* */ comments, -- comments and
--- single-quoted strings ('' escapes included) in ONE left-to-right pass, so
--- the construct that starts first wins: a quote inside a comment, or -- inside
--- a string, is consumed by the construct it sits in. Each alternative stops at
--- its own terminator (a lazy .*? would not: an ARE built from top-level | is
--- greedy). Until S49 the search ran on the raw text, and
--- user_can_see_item_category passed INV-25 on a comment alone (0310:695-696);
--- S49's migration took authenticated's EXECUTE away, so it left INV-25's
--- population. Not modelled, and in no swept body today: a nested comment, an E'' string
--- with \', and a dollar-quoted string inside a body; a gate name in one of
--- those still counts. A name proves the gate is called, not that the call
--- decides anything (an identity comparison passes too).
-create temporary table _sec_inv_gate_re (strip_re text not null, gate_re text not null);
-insert into _sec_inv_gate_re (strip_re, gate_re) values
-  ($re$/\*([^*]|\*+[^*/])*\*+/|--[^\n]*|'([^']|'')*'$re$,
-   $re$\m(auth\.uid|has_org_role|has_permission|is_org_member)\M$re$);
+-- word in its code skeleton: the body read through _sec_inv_strip_re above,
+-- the one pass the text censuses share, which turns each comment into a space
+-- and each single-quoted literal into '' and keeps a double-quoted identifier
+-- whole, so the construct that starts first wins: a quote inside a comment,
+-- or -- inside a string, is consumed by the construct it sits in. INV-27b
+-- refuses a first-party body that pass does not follow (a backslash-escaped
+-- quote in an E'' string, a dollar-quoted literal, a comment inside a
+-- comment, a quote left once the pass is done), so for those bodies the
+-- skeleton is the code that runs. gate_re is matched on that skeleton. A name
+-- proves the gate is called, not that the call decides anything (an identity
+-- comparison passes too).
+create temporary table _sec_inv_gate_re (gate_re text not null);
+insert into _sec_inv_gate_re (gate_re) values
+  ($re$\m(auth\.uid|has_org_role|has_permission|is_org_member)\M$re$);
 
 -- ── F. SECURITY DEFINER functions in `ledger` that `authenticated` may execute
 --       WITHOUT an authorization token in their own body (0371) ──────────────
@@ -531,7 +529,7 @@ select is(
      join pg_proc p on p.proname = a.proname
      join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
     where p.prosecdef
-      and regexp_replace(p.prosrc, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
           !~* (select gate_re from _sec_inv_gate_re)),
   '',
   'INV-2: every anon-EXECUTE allowlist entry gates authorization inside its own body (in code, not a comment or a string)'
@@ -598,7 +596,7 @@ select is(
      join pg_proc p on p.proname = a.proname
      join pg_namespace n on n.oid = p.pronamespace and n.nspname = 'public'
     where p.prosecdef
-      and regexp_replace(p.prosrc, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
           !~* (select gate_re from _sec_inv_gate_re)
       and a.proname like '\_sec\_inv\_probe\_%'),
   '_sec_inv_probe_anon_comment_gate',
@@ -1136,8 +1134,8 @@ select is(
 -- predicate in allowlist E. This is the check that would have failed on the
 -- 0342 head: apply_cycle_count_location_delta wrote stock for any signed-in
 -- caller with none of these tokens in its body. Since S49 the token must be in
--- the CODE (_sec_inv_gate_re): user_can_see_item_category passed until then on
--- a comment that named has_org_role. Offenders are named in the failure output.
+-- the CODE (_sec_inv_strip_re, then _sec_inv_gate_re). Offenders are named in
+-- the failure output.
 select is(
   (select coalesce(string_agg(p.oid::regprocedure::text, ', ' order by p.oid::regprocedure::text), '')
      from pg_proc p
@@ -1146,7 +1144,7 @@ select is(
       and p.prosecdef
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')
-      and regexp_replace(p.prosrc, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
           !~* (select gate_re from _sec_inv_gate_re)
       and p.proname not in (select proname from _sec_inv_auth_secdef_nogate_allow)),
   '',
@@ -1590,11 +1588,12 @@ drop schema _sec_inv_probe_schema;
 -- (T23), the way section 14's controls read its detector views: each plants
 -- probes and expects their exact lines, so a view that stopped discriminating
 -- fails here, and the call walk exists once instead of in copies that drift.
--- The one piece INV-29 shares with INV-25 is the gate expression
--- (_sec_inv_gate_re, S49), read the way INV-26 and INV-30 read
--- _sec_inv_writer_re: an emptied or deleted row turns INV-29 and INV-29b red,
--- because each names the answer it expects. A sweep that stopped reading the
--- row at all would not be noticed here; that is a review matter.
+-- The pieces INV-29 shares with INV-25 are the strip pass (_sec_inv_strip_re,
+-- T23) and the gate expression (_sec_inv_gate_re, S49), read the way INV-26
+-- and INV-30 read _sec_inv_writer_re: an emptied or deleted row of either
+-- turns INV-29 and INV-29b red, because each names the answer it expects. A
+-- sweep that stopped reading the rows at all would not be noticed here; that
+-- is a review matter.
 -- ═══════════════════════════════════════════════════════════════════════════
 
 -- INV-29. VACUITY + MUTATION CONTROL for INV-25, both halves of the detector.
@@ -1680,7 +1679,7 @@ select is(
       and p.prosecdef
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')
-      and regexp_replace(p.prosrc, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
           !~* (select gate_re from _sec_inv_gate_re)
       and p.proname not in (select proname from _sec_inv_auth_secdef_nogate_allow)
       and p.proname like '\_sec\_inv\_probe\_%')
@@ -1703,11 +1702,11 @@ drop function public._sec_inv_probe_real_gate_secdef(uuid);
 
 -- INV-29b. MUTATION CONTROL for the gate detector's lexical rules (S49), the
 -- way INV-30b controls the writer detector: one sample per rule, each read
--- through _sec_inv_gate_re exactly as INV-2, INV-25 and INV-31 read a body. A
--- detector that lost a rule (or a stripper that ran past a terminator and ate
--- the code after it) changes one of these words.
+-- through _sec_inv_strip_re and _sec_inv_gate_re exactly as INV-2, INV-25 and
+-- INV-31 read a body. A detector that lost a rule (or a stripper that ran past
+-- a terminator and ate the code after it) changes one of these words.
 select is(
-  (select string_agg(v.k || '=' || (regexp_replace(v.src, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+  (select string_agg(v.k || '=' || (regexp_replace(v.src, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
                                     ~* (select gate_re from _sec_inv_gate_re))::text, ', ' order by v.n)
      from (values
        (1,  'call',              $s$if not public.has_org_role(p_org, 'manager') then raise exception 'forbidden'; end if;$s$),
@@ -2021,7 +2020,7 @@ select is(
         and p.prosecdef
         and p.prorettype <> 'trigger'::regtype
         and has_function_privilege('authenticated', p.oid, 'execute')
-        and regexp_replace(p.prosrc, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+        and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
             !~* (select gate_re from _sec_inv_gate_re)
         and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
      union all
@@ -2077,7 +2076,7 @@ select ok(
       and p.prosecdef
       and p.prorettype <> 'trigger'::regtype
       and has_function_privilege('authenticated', p.oid, 'execute')
-      and regexp_replace(p.prosrc, (select strip_re from _sec_inv_gate_re), ' ', 'g')
+      and regexp_replace(p.prosrc, (select re from _sec_inv_strip_re), (select rep from _sec_inv_strip_re), 'g')
           !~* (select gate_re from _sec_inv_gate_re)
       and p.proname not in (select proname from _sec_inv_ledger_secdef_nogate_allow)
       and p.proname like '\_sec\_inv\_probe\_%')
