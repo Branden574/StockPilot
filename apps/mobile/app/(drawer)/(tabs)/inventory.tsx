@@ -99,7 +99,7 @@ import { useWarehouseScope, warehouseScopeMessage } from '@/lib/warehouse-scope'
 import { useWorkspace } from '@/lib/use-workspace';
 import { MobileTour } from '@/components/onboarding/mobile-tour';
 import { useTourActive, useTourTarget } from '@/lib/tour-targets';
-import { MOBILE_INVENTORY_TOUR } from '@/lib/onboarding';
+import { inventoryTourFor } from '@/lib/onboarding';
 import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { GlassSubline } from '@/components/ui/glass/parts';
 import {
@@ -1047,7 +1047,7 @@ export default function Inventory() {
             </Display>
           )}
           <View style={{ marginTop: lg ? 0 : 10 }}>
-            <MobileTour tour={MOBILE_INVENTORY_TOUR} />
+            <MobileTour tour={inventoryTourFor(canCreateItems)} />
           </View>
         </View>
 

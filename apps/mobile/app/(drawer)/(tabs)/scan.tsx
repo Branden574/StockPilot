@@ -88,6 +88,8 @@ import {
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
 import { useRole } from '@/lib/use-role';
+import { SCAN_CODE_NOT_FOUND, SCAN_PHOTO_NOT_FOUND } from '@/lib/scan-add-gate';
+import { usePermissionAccess } from '@/lib/use-screen-access';
 import { FONT, TYPE_CEILING, capTo, palette, space, type Palette } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
 import { useTheme } from '@/lib/use-theme';
@@ -218,6 +220,9 @@ export default function Scan() {
   const [item, setItem] = React.useState<FoundItem | null>(null);
   const [addBook, setAddBook] = React.useState<IsbnLookupResult | null>(null);
   const [addItem, setAddItem] = React.useState<UpcLookupResult | null>(null);
+  // The add cards create items: offered only when the saved access answers
+  // 'allowed' for items:create (screen-access.ts), as the server requires.
+  const canCreateItems = usePermissionAccess('items:create') === 'allowed';
   const [busy, setBusy] = React.useState(false);
   const [lastCode, setLastCode] = React.useState<string | null>(null);
   const [signatureToken, setSignatureToken] = React.useState<string | null>(null);
@@ -505,9 +510,16 @@ export default function Scan() {
     }
 
     if (!found) {
-      // Not in inventory yet. If the code looks like an ISBN, try the
-      // book-lookup pipeline and offer one-tap add. Otherwise just
-      // show the standard not-found alert.
+      // Not in inventory yet. A member who cannot create items is told so,
+      // with nothing looked up. Otherwise, if the code looks like an ISBN,
+      // try the book-lookup pipeline and offer one-tap add.
+      if (!canCreateItems) {
+        Alert.alert(SCAN_CODE_NOT_FOUND.title, SCAN_CODE_NOT_FOUND.message, [
+          { text: 'OK', onPress: reset },
+        ]);
+        setBusy(false);
+        return;
+      }
       if (looksLikeIsbn(data)) {
         try {
           const res = await api<IsbnLookupResult>(
@@ -765,6 +777,13 @@ export default function Scan() {
           mimeType: ext === 'jpg' ? 'image/jpeg' : `image/${ext}`,
         },
       });
+
+      // The cards below create items: a member who cannot is told the photo
+      // matches nothing, and no card opens.
+      if (!canCreateItems) {
+        Alert.alert(SCAN_PHOTO_NOT_FOUND.title, SCAN_PHOTO_NOT_FOUND.message);
+        return;
+      }
 
       // GENERAL PRODUCT (not a book): flow into the UPC/new-item pipeline
       // instead of the book one. If Vision read a UPC off the packaging,
@@ -1343,7 +1362,7 @@ export default function Scan() {
             are, and the number pad of Initial qty has no key that puts it
             away; insetting the scroll by the keyboard (iOS) lets the form
             scroll clear of it and brings the focused box into view. */}
-        {addBook && (
+        {addBook && canCreateItems && (
           <View style={styles.addWrap}>
             <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
               <AddBookCard
@@ -1363,7 +1382,7 @@ export default function Scan() {
           </View>
         )}
 
-        {addItem && (
+        {addItem && canCreateItems && (
           <View style={styles.addWrap}>
             <ScrollView contentContainerStyle={styles.addContent} automaticallyAdjustKeyboardInsets>
               <AddItemCard

@@ -133,6 +133,21 @@ export const MOBILE_INVENTORY_TOUR: MobileTourDefinition = {
   ],
 };
 
+/** The Inventory tour without its + step ("Add from anywhere"). */
+const MOBILE_INVENTORY_TOUR_WITHOUT_ADD: MobileTourDefinition = {
+  ...MOBILE_INVENTORY_TOUR,
+  steps: MOBILE_INVENTORY_TOUR.steps.filter((s) => s.targetId !== 'inventory-add'),
+};
+
+/**
+ * The Inventory tour for a member: the + step only for a member Inventory
+ * shows the + to (items:create, B124); for anyone else it would point at a
+ * button they do not have. The same object each time for each answer.
+ */
+export function inventoryTourFor(canCreateItems: boolean): MobileTourDefinition {
+  return canCreateItems ? MOBILE_INVENTORY_TOUR : MOBILE_INVENTORY_TOUR_WITHOUT_ADD;
+}
+
 export const MOBILE_ORDERS_TOUR: MobileTourDefinition = {
   id: 'mobile-orders',
   version: 1,

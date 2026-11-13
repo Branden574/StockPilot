@@ -1128,7 +1128,13 @@ describe('tours: the same targets, the same start rules, the reference buttons',
       });
       expect(hosts.length, id).toBeGreaterThan(0);
     }
-    for (const tour of ['MOBILE_HOME_TOUR', 'MOBILE_INVENTORY_TOUR', 'MOBILE_ORDERS_TOUR']) {
+    // B124: Inventory mounts its tour as inventoryTourFor(canCreateItems), the
+    // same tour less the + step for a member with no + (onboarding.ts).
+    for (const tour of [
+      'MOBILE_HOME_TOUR',
+      'inventoryTourFor(canCreateItems)',
+      'MOBILE_ORDERS_TOUR',
+    ]) {
       expect(
         files.some((f) => readSource(f).includes(`<MobileTour tour={${tour}} />`)),
         tour,

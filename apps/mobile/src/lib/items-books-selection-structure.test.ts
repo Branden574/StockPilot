@@ -603,7 +603,9 @@ describe('both tabs keep every word, label and tour target', () => {
       /<View ref=\{addTargetRef\} collapsable=\{false\}>\s*<IconChip\s+icon=\{Plus\}/,
     );
     expect(code.match(/useTourTarget\('inventory-first-row'\)/g)).toHaveLength(2);
-    expect(code).toContain('<MobileTour tour={MOBILE_INVENTORY_TOUR} />');
+    // B124: the tour leaves out the + step for a member who has no +
+    // (inventory-tour-create-access.test.ts).
+    expect(code).toContain('<MobileTour tour={inventoryTourFor(canCreateItems)} />');
   });
 
   it('no emoji in either tab', () => {
