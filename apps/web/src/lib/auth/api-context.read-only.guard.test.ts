@@ -61,7 +61,7 @@ const ENTRY = 'lib/auth/api-context.ts';
 
 /**
  * The value-import closure of lib/auth/api-context.ts, apps/web/src-relative.
- * Re-derived for docket S26 from the import statements (20 modules). A module
+ * Re-derived for docket S26 from the import statements (21 modules). A module
  * added here must be read for writes before this list is changed.
  *
  * Read when they joined the closure:
@@ -73,6 +73,8 @@ const ENTRY = 'lib/auth/api-context.ts';
  *     path, the phone's, never reaches it: its level is the token's own claim.
  *   lib/error-text.ts  the text of a report (error-reporter-core.ts): strings
  *     in, a string or an Error out. It loads lib/redact-urls.ts, already listed.
+ *   lib/chat-text.ts  the text of a report as a chat channel shows it
+ *     (error-reporter-core.ts): strings in, strings out. It imports nothing.
  */
 const REVIEWED_CLOSURE = [
   'lib/auth/account-status.ts',
@@ -82,6 +84,7 @@ const REVIEWED_CLOSURE = [
   'lib/auth/mfa-policy.ts',
   'lib/auth/request-context-bundle.ts',
   'lib/auth/verified-claims.ts',
+  'lib/chat-text.ts',
   'lib/env.ts',
   'lib/error-reporter-core.ts',
   'lib/error-reporter.ts',
