@@ -19,9 +19,12 @@ import {
   MFA_SESSION_ENDED,
   MFA_SETUP_NOT_OPEN,
   MFA_SETUP_UNREADABLE,
+  signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
+import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa-factors';
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
+import { isSessionEndedError } from '@/lib/auth/session-ended';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
@@ -319,10 +322,20 @@ export async function unenrollFactorAction(input: {
  * 6-digit code to upgrade to AAL2. Also the step-up modal's check
  * (components/auth/step-up-modal.tsx), at AAL1 or AAL2.
  *
+ * Only a VERIFIED authenticator of the session's own account is checked here:
+ * the factor id comes from the page, and the account's factor list must show
+ * it as verified before any code attempt is spent. An unfinished set-up is
+ * completed only by verifyEnrollmentAction, which asks for the account
+ * password.
+ *
  * Each press spends one attempt of the account's code budget (once at this
  * client address, then, only when that allowed it, once for the account at any
  * address), shared with the reset's code step, and a code GoTrue judged wrong
  * writes an mfa.code_refused row (lib/auth/mfa-code-attempts.ts).
+ *
+ * Auth round trips per press: the factor list (one), the challenge and the
+ * verify. The verified claims are a local signature check once the key set is
+ * cached.
  */
 const signInChallengeSchema = z.object({
   factorId: z.string().min(1),
@@ -345,6 +358,40 @@ export async function challengeFactorAction(input: {
     // (lib/auth/mfa-code-attempts).
     const claims = await readVerifiedSessionClaims(supabase);
     if (!claims) return err('unauthenticated', MFA_SESSION_ENDED);
+
+    // The account's own factor list: GoTrue's user answer, which says whose
+    // list it is (lib/auth/mfa-factors). Read before the budget, so a factor
+    // id that is not a verified authenticator of this account spends nothing.
+    let list: MfaFactorList;
+    try {
+      list = await readMfaFactorList(supabase);
+    } catch (e) {
+      if (isSessionEndedError(e)) return err('unauthenticated', MFA_SESSION_ENDED);
+      return unexpectedActionError(e, 'actions.mfa.challenge', {
+        message: MFA_CHALLENGE_NOT_STARTED,
+      });
+    }
+    const factors = factorsOf(list, claims.userId);
+    if (!factors) {
+      // The session now holds another account than the one it verified as:
+      // it does not stay signed in here.
+      await signOutThisSession(supabase);
+      return err('unauthenticated', MFA_SESSION_ENDED);
+    }
+    const factor = factors.find((f) => f.id === parsed.data.factorId);
+    if (factor?.status !== 'verified') {
+      // The same words as a challenge that could not start. Reported with
+      // what the id named (never the id or the code).
+      return unexpectedActionError(
+        new Error('A code press named a factor that is not a verified authenticator of the account'),
+        'actions.mfa.challenge',
+        {
+          message: MFA_CHALLENGE_NOT_STARTED,
+          level: 'warning',
+          extra: { factor: factor ? 'not_verified' : 'not_listed' },
+        },
+      );
+    }
 
     const check = await checkMfaCode(supabase, {
       userId: claims.userId,

@@ -1,3 +1,4 @@
+import { AuthSessionMissingError } from '@supabase/supabase-js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn(), updateTag: vi.fn() }));
@@ -63,8 +64,29 @@ const mfaStub = {
   unenroll: vi.fn(async () => ({ data: null, error: null })),
 };
 
+/**
+ * GoTrue's answer for the session's own account (auth.getUser): its id and its
+ * factor list. The code step reads the list from it, so it knows whose list it
+ * is. Default: user-1 with f1, a verified authenticator.
+ */
+const account: {
+  user: { id: string; factors: Array<{ id: string; status: string; factor_type: string }> } | null;
+  error: unknown;
+} = { user: null, error: null };
+
+function accountWith(factors: Array<{ id: string; status: string }>, id = 'user-1') {
+  account.user = { id, factors: factors.map((f) => ({ ...f, factor_type: 'totp' })) };
+  account.error = null;
+}
+
+const authStub = {
+  mfa: mfaStub,
+  getUser: vi.fn(async () => ({ data: { user: account.user }, error: account.error })),
+  signOut: vi.fn(async () => ({ error: null })),
+};
+
 vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => ({ auth: { mfa: mfaStub } })),
+  createClient: vi.fn(async () => ({ auth: authStub })),
 }));
 
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
@@ -274,6 +296,7 @@ describe('verifyEnrollmentAction — gate shape and audit', () => {
 describe('challengeFactorAction', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
     mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
     mfaStub.verify.mockResolvedValue({ data: null, error: null });
   });
@@ -360,6 +383,7 @@ describe('challengeFactorAction — code budget, words and rows', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
     mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
     mfaStub.verify.mockResolvedValue({ data: null, error: null });
     vi.mocked(checkRateLimit).mockResolvedValue({
@@ -446,6 +470,8 @@ describe('challengeFactorAction — code budget, words and rows', () => {
         amr: [],
         email: null,
       });
+      // The factor list is that account's own (the code step reads it first).
+      accountWith([{ id: 'f1', status: 'verified' }], 'verified-account');
 
       await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
 
@@ -582,6 +608,119 @@ describe('challengeFactorAction — code budget, words and rows', () => {
     expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
     expect(mfaStub.verify).not.toHaveBeenCalled();
     expect(emitAuthAudit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The code step checks a code only against a VERIFIED authenticator of the
+ * account the session verified as. The factor id comes from the page, so the
+ * action reads the account's own factor list (GoTrue's user answer, which
+ * names the account it is the list of) before any code attempt is spent. An
+ * unfinished set-up is completed only by the set-up's own confirm step, which
+ * asks for the account password (verifyEnrollmentAction).
+ */
+describe('challengeFactorAction — only a verified authenticator of the account', () => {
+  const SUBMITTED = '246813';
+  const NOT_STARTED = 'Could not start the authenticator check. Please try again.';
+  const SESSION_ENDED = 'You were signed out on this device. Sign in again to continue.';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    accountWith([{ id: 'f1', status: 'verified' }]);
+    mfaStub.challenge.mockResolvedValue({ data: { id: 'challenge-1' }, error: null });
+    mfaStub.verify.mockResolvedValue({ data: null, error: null });
+    vi.mocked(checkRateLimit).mockResolvedValue({
+      allowed: true,
+      count: 1,
+      resetAt: Date.now() + 1000,
+    });
+    vi.mocked(readVerifiedSessionClaims).mockResolvedValue({
+      userId: 'user-1',
+      sessionId: 'session-1',
+      aal: 'aal1',
+      amr: [],
+      email: null,
+    });
+  });
+
+  function expectNothingSpent() {
+    expect(checkRateLimit).not.toHaveBeenCalled();
+    expect(mfaStub.challenge).not.toHaveBeenCalled();
+    expect(mfaStub.verify).not.toHaveBeenCalled();
+    expect(emitAuthAudit).not.toHaveBeenCalled();
+  }
+
+  it('an unfinished set-up of the account is refused before any code attempt, and reported', async () => {
+    accountWith([{ id: 'f1', status: 'unverified' }]);
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expectNothingSpent();
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(reportError).mock.calls[0]![1]).toEqual(
+      expect.objectContaining({ tag: 'actions.mfa.challenge', level: 'warning' }),
+    );
+    // Never the factor id or the code.
+    const report = JSON.stringify(vi.mocked(reportError).mock.calls);
+    expect(report).not.toContain('f1');
+    expect(report).not.toContain(SUBMITTED);
+  });
+
+  it('an id the account’s list does not show (unknown, or another account’s) is refused the same way', async () => {
+    accountWith([{ id: 'f-own', status: 'verified' }]);
+
+    const res = await challengeFactorAction({ factorId: 'f-elsewhere', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expectNothingSpent();
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'actions.mfa.challenge', level: 'warning' }),
+    );
+  });
+
+  it('reads the account’s list once, before the code budget, and checks a verified authenticator as before', async () => {
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: true, data: undefined });
+    expect(authStub.getUser).toHaveBeenCalledTimes(1);
+    const [listOrder] = authStub.getUser.mock.invocationCallOrder;
+    for (const limiterOrder of vi.mocked(checkRateLimit).mock.invocationCallOrder) {
+      expect(listOrder as number).toBeLessThan(limiterOrder);
+    }
+    expect(mfaStub.challenge).toHaveBeenCalledWith({ factorId: 'f1' });
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
+  it('a list of another account than the verified one is no answer: this session is signed out and nothing is spent', async () => {
+    accountWith([{ id: 'f1', status: 'verified' }], 'user-2');
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: SESSION_ENDED } });
+    expect(authStub.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expectNothingSpent();
+  });
+
+  it('a list that cannot be read refuses with the could-not-start words, and nothing is spent', async () => {
+    account.user = null;
+    account.error = { name: 'AuthRetryableFetchError', status: 503, message: 'fetch failed' };
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'internal_error', message: NOT_STARTED } });
+    expectNothingSpent();
+  });
+
+  it('a session gone at the list read says the person was signed out, and nothing is spent', async () => {
+    account.user = null;
+    account.error = new AuthSessionMissingError();
+
+    const res = await challengeFactorAction({ factorId: 'f1', code: SUBMITTED });
+
+    expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: SESSION_ENDED } });
+    expectNothingSpent();
   });
 });
 

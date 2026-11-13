@@ -142,6 +142,21 @@ export async function recordRefusedMfaCode(params: {
   });
 }
 
+/**
+ * Signs this browser's session out here only (scope 'local': GoTrue ends this
+ * one session and the account's other sessions stay), for a session that
+ * turned out to hold another account than the one a code press was checked
+ * for. auth-js removes the stored session (the auth cookies) even when GoTrue
+ * does not answer. Never throws: the press is refused either way.
+ */
+export async function signOutThisSession(supabase: MfaClient): Promise<void> {
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch {
+    // Refused below whatever happened here.
+  }
+}
+
 /** The result of one code check, for the caller's own words. */
 export type MfaCodeCheck =
   | { kind: 'verified' }

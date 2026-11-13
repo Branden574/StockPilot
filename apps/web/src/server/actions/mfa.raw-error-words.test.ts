@@ -78,7 +78,18 @@ vi.mock('@/lib/supabase/server', () => ({
     };
     q.eq = () => q;
     q.maybeSingle = async () => (op === 'update' ? orgPolicy.update : orgPolicy.read);
-    return { from: () => q, auth: { mfa: mfaStub } };
+    // getUser: the account's own factor list, which the code step reads first
+    // (f1, a verified authenticator of user-1).
+    return {
+      from: () => q,
+      auth: {
+        mfa: mfaStub,
+        getUser: async () => ({
+          data: { user: { id: 'user-1', factors: [{ id: 'f1', status: 'verified' }] } },
+          error: null,
+        }),
+      },
+    };
   }),
 }));
 

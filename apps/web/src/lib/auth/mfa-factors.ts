@@ -5,6 +5,8 @@ import { isAuthSessionMissingError, type SupabaseClient } from '@supabase/supaba
 import { SessionEndedError } from '@/lib/auth/session-ended';
 
 export interface MfaFactor {
+  /** GoTrue's id of the factor (every listed factor has one). */
+  id?: string;
   status: string;
 }
 
