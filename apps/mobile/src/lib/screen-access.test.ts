@@ -1,7 +1,12 @@
 import { DEFAULT_MODULE_IDS, type ModuleId, type Permission, type Role } from '@stockpilot/core';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CYCLE_COUNTS_NOT_AVAILABLE, drawerEntryAccess, type ScreenAccessInputs } from './screen-access';
+import {
+  CYCLE_COUNTS_NOT_AVAILABLE,
+  drawerEntryAccess,
+  permissionAccess,
+  type ScreenAccessInputs,
+} from './screen-access';
 
 // drawer-nav maps icon names to lucide components; the icons are irrelevant
 // here and the native package does not load under node.
@@ -41,7 +46,8 @@ function inputs(over: {
 }
 
 describe('cycle counts: the module on, and cycle_counts:read or stock:adjust', () => {
-  const access = (over: Parameters<typeof inputs>[0]) => drawerEntryAccess('/cycle-counts', inputs(over));
+  const access = (over: Parameters<typeof inputs>[0]) =>
+    drawerEntryAccess('/cycle-counts', inputs(over));
 
   it('is unknown until the saved permissions and the saved modules are read', () => {
     expect(access({ permissions: ['stock:adjust'], permissionsRead: false })).toBe('unknown');
@@ -58,7 +64,10 @@ describe('cycle counts: the module on, and cycle_counts:read or stock:adjust', (
 
   it('the module off denies, whatever is held', () => {
     expect(
-      access({ permissions: ['cycle_counts:read', 'stock:adjust'], modules: withoutModule('cycle_counts') }),
+      access({
+        permissions: ['cycle_counts:read', 'stock:adjust'],
+        modules: withoutModule('cycle_counts'),
+      }),
     ).toBe('denied');
   });
 
@@ -72,20 +81,43 @@ describe('cycle counts: the module on, and cycle_counts:read or stock:adjust', (
 
 describe('what a screen says to a member who may not open it', () => {
   it('names the screen and the workspace, plainly', () => {
-    expect(CYCLE_COUNTS_NOT_AVAILABLE).toBe('Cycle counts are not available to you in this workspace.');
+    expect(CYCLE_COUNTS_NOT_AVAILABLE).toBe(
+      'Cycle counts are not available to you in this workspace.',
+    );
   });
 });
 
 describe('bundles: the module on, and bundles:read or bundles:distribute', () => {
-  const access = (over: Parameters<typeof inputs>[0]) => drawerEntryAccess('/bundles', inputs(over));
+  const access = (over: Parameters<typeof inputs>[0]) =>
+    drawerEntryAccess('/bundles', inputs(over));
 
   it('follows the side menu entry', () => {
     expect(access({ permissions: ['bundles:read'], role: 'viewer' })).toBe('allowed');
     expect(access({ permissions: ['bundles:distribute'] })).toBe('allowed');
     expect(access({ permissions: ['items:read'] })).toBe('denied');
-    expect(access({ permissions: ['bundles:read'], modules: withoutModule('bundles') })).toBe('denied');
+    expect(access({ permissions: ['bundles:read'], modules: withoutModule('bundles') })).toBe(
+      'denied',
+    );
     expect(access({ permissions: undefined, role: 'viewer' })).toBe('denied');
     expect(access({ permissions: undefined, role: 'staff' })).toBe('allowed');
     expect(access({ permissions: ['bundles:read'], modulesRead: false })).toBe('unknown');
+  });
+});
+
+describe('one permission: items:create', () => {
+  const access = (over: Parameters<typeof inputs>[0]) =>
+    permissionAccess('items:create', inputs(over));
+
+  it('is unknown until the saved permissions are read', () => {
+    expect(access({ permissions: ['items:create'], permissionsRead: false })).toBe('unknown');
+  });
+
+  it('a saved set decides; with none, the known role', () => {
+    expect(access({ permissions: ['items:read'] })).toBe('denied');
+    expect(access({ permissions: ['items:create'], role: 'viewer' })).toBe('allowed');
+    expect(access({ permissions: undefined, role: 'viewer' })).toBe('denied');
+    expect(access({ permissions: undefined, role: 'staff' })).toBe('allowed');
+    expect(access({ permissions: undefined, role: null, roleLoading: true })).toBe('unknown');
+    expect(access({ permissions: undefined, role: null, roleLoading: false })).toBe('denied');
   });
 });

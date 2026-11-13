@@ -1,4 +1,4 @@
-import type { ModuleId, Permission, Role } from '@stockpilot/core';
+import { can, type ModuleId, type Permission, type Role } from '@stockpilot/core';
 
 import { drawerOffers } from './drawer-nav';
 
@@ -40,7 +40,9 @@ export interface ScreenAccessInputs {
  * With nothing saved, the role's defaults decide, once the role is known. A
  * role that could not be read decides nothing: denied.
  */
-function roleWhenNothingSaved(input: ScreenAccessInputs): Role | 'unknown' | 'denied' {
+function roleWhenNothingSaved(
+  input: Pick<ScreenAccessInputs, 'role' | 'roleLoading'>,
+): Role | 'unknown' | 'denied' {
   if (input.role !== null) return input.role;
   return input.roleLoading ? 'unknown' : 'denied';
 }
@@ -63,8 +65,32 @@ export function drawerEntryAccess(href: string, input: ScreenAccessInputs): Scre
     : 'denied';
 }
 
+/**
+ * Whether the member holds one permission, decided as drawerEntryAccess is:
+ * 'unknown' until the saved permissions are read, then the saved set, or with
+ * nothing saved the known role's defaults. For a control the server checks
+ * with that permission alone (New item: items:create).
+ */
+export function permissionAccess(
+  permission: Permission,
+  input: Omit<ScreenAccessInputs, 'modules'>,
+): ScreenAccess {
+  if (!input.saved.read) return 'unknown';
+  if (input.saved.permissions !== undefined) {
+    return input.saved.permissions.has(permission) ? 'allowed' : 'denied';
+  }
+  const known = roleWhenNothingSaved(input);
+  if (known === 'unknown' || known === 'denied') return known;
+  return can({ role: known }, permission) ? 'allowed' : 'denied';
+}
+
 /** What the cycle-count screens say to a member who may not see cycle counts. */
-export const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
+export const CYCLE_COUNTS_NOT_AVAILABLE =
+  'Cycle counts are not available to you in this workspace.';
 
 /** What the bundle screens say to a member who may not see bundles. */
 export const BUNDLES_NOT_AVAILABLE = 'Bundles are not available to you in this workspace.';
+
+/** What New item says to a member who cannot create items (the server's items:create). */
+export const ITEMS_CREATE_NOT_ALLOWED =
+  'You do not have permission to add items in this workspace.';

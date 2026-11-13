@@ -85,7 +85,7 @@ describe('a bundle', () => {
       "const state = access === 'denied' ? 'denied' : bundleScreenState(bundle, looked || !id, failedRead === 'bundle');",
     );
     expect(detail).toContain(
-      "{state === 'denied' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} accessibilityRole=\"alert\"> {BUNDLES_NOT_AVAILABLE} </Body>",
+      '{state === \'denied\' ? ( <View style={[styles.body, lg && GLASS_OPS.scroll]}> <Card padding={16}> <Body size={14.5} accessibilityRole="alert"> {BUNDLES_NOT_AVAILABLE} </Body>',
     );
   });
 });

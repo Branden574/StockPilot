@@ -101,6 +101,7 @@ import { supabase } from '@/lib/supabase';
 import { FONT, RADIUS } from '@/lib/theme';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
+import { usePermissionAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 import { useWorkspace } from '@/lib/use-workspace';
 import { inventoryViewPredicate } from '@stockpilot/core';
@@ -247,6 +248,11 @@ export default function BooksScreen() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
+  // New item is offered only to someone who can create items (items:create,
+  // which the server asserts on every create), decided once the saved
+  // permissions are read (screen-access.ts). A viewer was offered the form
+  // and refused on Save.
+  const canCreateItems = usePermissionAccess('items:create') === 'allowed';
   // Select is offered only when the select bar has something to offer (B42):
   // Review to someone who can start a count, Group and Ungroup to someone who
   // can edit items. A viewer was offered Select and a bar whose Review the
@@ -930,12 +936,14 @@ export default function BooksScreen() {
                 minTap
               />
             ) : null}
-            <IconChip
-              icon={Plus}
-              onPress={() => router.push({ pathname: '/item/new', params: { type: 'book' } })}
-              accessibilityLabel="New book"
-              minTap
-            />
+            {canCreateItems ? (
+              <IconChip
+                icon={Plus}
+                onPress={() => router.push({ pathname: '/item/new', params: { type: 'book' } })}
+                accessibilityLabel="New book"
+                minTap
+              />
+            ) : null}
           </View>
         </View>
         <View style={lg ? GLASS_LOOKUP.head : styles.head}>

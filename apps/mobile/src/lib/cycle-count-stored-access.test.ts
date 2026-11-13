@@ -179,7 +179,11 @@ function countLoad(access: ScreenAccess, online: boolean) {
     calls.push('database');
     throw new Error('not stood in for');
   });
-  const state = { readError: undefined as unknown, emptyState: undefined as unknown, loading: true };
+  const state = {
+    readError: undefined as unknown,
+    emptyState: undefined as unknown,
+    loading: true,
+  };
   const hydrated: unknown[] = [];
   const loadOnce = screenCallback<() => Promise<unknown>>(COUNT, 'loadOnce', {
     id: COUNT_ID,

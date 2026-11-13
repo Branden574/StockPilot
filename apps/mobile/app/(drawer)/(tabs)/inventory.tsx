@@ -85,6 +85,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useRole } from '@/lib/use-role';
+import { usePermissionAccess } from '@/lib/use-screen-access';
 import {
   GROUP_COPY,
   countingUnitLabel,
@@ -268,6 +269,11 @@ export default function Inventory() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const canEditItems = showWriteCtaForRole(role, permissions, 'items:update');
+  // New item is offered only to someone who can create items (items:create,
+  // which the server asserts on every create), decided once the saved
+  // permissions are read (screen-access.ts). A viewer was offered the form
+  // and refused on Save.
+  const canCreateItems = usePermissionAccess('items:create') === 'allowed';
   // Select is offered only when the select bar has something to offer (B42):
   // Review to someone who can start a count, Group and Ungroup to someone who
   // can edit items. A viewer was offered Select and a bar whose Review the
@@ -1005,14 +1011,16 @@ export default function Inventory() {
                 minTap
               />
             ) : null}
-            <View ref={addTargetRef} collapsable={false}>
-              <IconChip
-                icon={Plus}
-                onPress={() => router.push('/item/new')}
-                accessibilityLabel="New item"
-                minTap
-              />
-            </View>
+            {canCreateItems ? (
+              <View ref={addTargetRef} collapsable={false}>
+                <IconChip
+                  icon={Plus}
+                  onPress={() => router.push('/item/new')}
+                  accessibilityLabel="New item"
+                  minTap
+                />
+              </View>
+            ) : null}
           </View>
         </View>
         <View style={lg ? GLASS_LOOKUP.head : styles.head}>

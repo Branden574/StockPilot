@@ -1,5 +1,7 @@
+import type { Permission } from '@stockpilot/core';
+
 import { useEnabledModulesState } from './enabled-modules';
-import { drawerEntryAccess, type ScreenAccess } from './screen-access';
+import { drawerEntryAccess, permissionAccess, type ScreenAccess } from './screen-access';
 import { useEffectivePermissionsState } from './use-effective-permissions';
 import { useRole } from './use-role';
 
@@ -13,4 +15,14 @@ export function useDrawerEntryAccess(href: string): ScreenAccess {
   const modules = useEnabledModulesState();
   const { role, loading: roleLoading } = useRole();
   return drawerEntryAccess(href, { saved, modules, role, roleLoading });
+}
+
+/**
+ * Whether the member holds this permission, once the saved permissions (and,
+ * with nothing saved, the role) are known (screen-access.ts permissionAccess).
+ */
+export function usePermissionAccess(permission: Permission): ScreenAccess {
+  const saved = useEffectivePermissionsState();
+  const { role, loading: roleLoading } = useRole();
+  return permissionAccess(permission, { saved, role, roleLoading });
 }

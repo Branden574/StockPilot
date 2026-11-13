@@ -32,8 +32,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // side menu offers Bundles to). Before S75 the projection was c7144f5a...0f51, the pin it had.
   'app/(drawer)/(tabs)/index.tsx':
     '50b1e96fe08be09e95a00998ec1360a3e03bdcd93901dfca044e650e765d3cd7',
+  // Re-pinned for B124 (Classic is meant to change: New item shows only for a member who holds
+  // items:create, once the saved permissions are read). Before B124 the projection was
+  // 42d3d7a1...9750, the pin it had.
   'app/(drawer)/(tabs)/inventory.tsx':
-    '42d3d7a1d8a26a6355eb062ae63537bd64e44208d7facb712190217ccd319750',
+    '3e54e7222e74e013d352fd4766dd744dac441c6fb6ca6020672af33a7b8ecc54',
   'app/(drawer)/(tabs)/receive.tsx':
     '6d32450d4607d50dfe274dc2c06b9fc3d655c40dbe673efa8f546910de3b43f6',
   'app/(drawer)/(tabs)/scan.tsx':
@@ -102,8 +105,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/mfa-challenge-screen.tsx':
     '636e013c36904f03910de06311115558d58471d4d4e77acb75cc07ecce34b49c',
   // The Books and Counts tabs (native-core).
+  // Re-pinned for B124 (Classic is meant to change: New book shows only for a member who holds
+  // items:create, once the saved permissions are read). Before B124 the projection was
+  // 19ccb3b8...c46c, the pin it had.
   'app/(drawer)/(tabs)/books.tsx':
-    '19ccb3b83458d0c9fcbc9400c13050eb870f595888a6a07f7525438ac712c46c',
+    '0355c3b0feb54353f1e14ce6d9834f80e7041be10ee91c7e6e6afbd183e9b67d',
   // Re-pinned for S75 (Classic is meant to change: the counts downloaded to this phone are shown
   // only to a member who may see cycle counts, never in place of the server's refusal). Before
   // S75 the projection was 1c00180e...c412, the pin it had.
@@ -124,7 +130,10 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'app/cycle-count/new.tsx': 'e0f0dcbd01c04afce172de9e1888ab6a482eb3ff1b9b7d332ad8c35000600072',
   'app/cycle-count/scan/[id].tsx':
     '7990871c2db18f31116e0358ce2ac197a5cd1446babf6f3acdd2f523ffb800c2',
-  'app/item/new.tsx': '1869d65fdc462f700a7ba369fbc1874a61728d230f32e1ba59584455dd2a7806',
+  // Re-pinned for B124 (Classic is meant to change: a member without items:create is told so
+  // beside Create and refused before anything is sent). Before B124 the projection was
+  // 1869d65f...7806, the pin it had.
+  'app/item/new.tsx': 'fc818785df3aebffb5f58055084ae3532f4f714fef71f59a569fc967449606b9',
   'app/order/manage-items.tsx': 'b3ce102b118248db26bd598f835ecc7532a00e46e7dcaf16a0812d0cbf427e45',
   'app/scan-po/index.tsx': '30b004eb8c64674aca62d0e528f9156d8175bd96b85a657a40abb3c7c973ee0c',
   // What's New, the scanner tip and the signature pad's frame (native-core).
