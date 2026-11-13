@@ -211,10 +211,10 @@ export const RELEASES: Release[] = [
     // minute.
     // From the plan's release 2 draft (S43 section 8), reworded where the lab
     // and simulator walk of 2026-11-13 (head 0fd0250b3) decided it:
-    // - turning on an authenticator on the web while the phone is signed in
-    //   ends the phone's session, so the phone asks to sign in again (an open
-    //   item screen may first show Not found, app/item/[id].tsx:733, :781);
-    //   the change waiting on the phone was kept and sent after the code;
+    // - the plan's second entry (the phone after an authenticator is turned
+    //   on on the web) is left out: the walk showed the phone is asked to sign
+    //   in again, which is not a change of this update (release 1's note
+    //   below records that outcome from 2026-11-02);
     // - the words never say that nothing at all is read before the code: one
     //   read of the member's own tour state remains (filed as S69). They say
     //   the organization's data.
@@ -231,7 +231,7 @@ export const RELEASES: Release[] = [
     status: 'published',
     title: 'The mobile app waits for your authenticator code',
     summary:
-      "If you use an authenticator app, the mobile app now shows the code screen before your organization's data and waits for your 6-digit code before it loads your items and orders or sends changes waiting on the phone. If you turn on an authenticator on the web while signed in on your phone, the phone asks you to sign in again.",
+      "If you use an authenticator app, the mobile app now shows the code screen before your organization's data and waits for your 6-digit code before it loads your items and orders or sends changes waiting on the phone.",
     // SET AT MERGE (see the note above).
     publishedAt: '2026-11-13T21:30:00Z',
     entries: [
@@ -244,23 +244,10 @@ export const RELEASES: Release[] = [
         whatChanged:
           "If you use an authenticator app, the mobile app now shows the code screen first. It waits for your 6-digit code before it loads your organization's items, orders and other data, before it sends changes waiting on the phone, and before it turns on notifications for the phone. Without a connection, it shows the code screen and waits.",
         whyItMatters:
-          "Your organization's data on the phone stays behind your authenticator code, as it does on the web.",
+          "The mobile app now asks for your code before it shows or loads your organization's data, as the web app does.",
         howItAffectsYou:
           'After you enter your code, the app works as before, and changes that were waiting are sent. Entering the code needs a connection.',
         whatToDo: 'No action needed.',
-      },
-      {
-        id: 'phone-asks-for-code-after-turning-on-authenticator',
-        category: 'improved',
-        area: 'Mobile app',
-        title: 'The mobile app asks you to sign in again after you turn on an authenticator',
-        whatChanged:
-          "If you turn on an authenticator app on the web while you're signed in on your phone, the phone now asks you to sign in again. If an item was open, the phone may show Not found first.",
-        whyItMatters:
-          'Your phone uses your authenticator from the moment you turn it on, as the web does.',
-        howItAffectsYou:
-          'Sign in again and enter the 6-digit code from your authenticator app. Changes waiting on the phone are kept and sent after you enter the code.',
-        whatToDo: 'When the phone asks, sign in again and enter your code.',
       },
     ],
   },
@@ -275,7 +262,7 @@ export const RELEASES: Release[] = [
     // phones have it. SET AT MERGE: publishedAt is the same minute as the
     // authenticator code release above.
     // The words are the plan's draft (S26 section 7), word for word, except
-    // "Settings > Unsent work", written "Settings, Unsent work" because the
+    // "Settings > Unsent work", written "Unsent work in Settings" because the
     // schema allows no markup characters; the plan gave no entry ids or entry
     // titles, so those are chosen here. The integrator decided to publish it
     // (items/S26.json integrator_decision_whats_new).
@@ -316,7 +303,7 @@ export const RELEASES: Release[] = [
         whatChanged:
           'When StockPilot cannot check your access for a moment, a stock adjustment on the phone now says Adjustment not saved and that nothing was changed. An adjustment saved offline stays queued and is sent once the check works again.',
         whyItMatters:
-          'Before, the app said the adjustment may or may not have been saved, and an adjustment saved offline was moved to Settings, Unsent work to be entered again by hand.',
+          'Before, the app said the adjustment may or may not have been saved, and an adjustment saved offline was moved to Unsent work in Settings, to be entered again by hand.',
         howItAffectsYou:
           'This is rare. If you see Adjustment not saved, nothing was changed: try again after a moment.',
         whatToDo: 'No action needed.',
