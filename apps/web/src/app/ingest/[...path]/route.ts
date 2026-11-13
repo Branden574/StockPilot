@@ -58,13 +58,13 @@ export const dynamic = 'force-dynamic';
  *     as the SDK spelled it).
  *   - the body: a POST is an event batch, and only one that names this app's
  *     project and no other, in one of the three ways the SDK packs it,
- *     written as the SDK writes it, no larger than a set size once unpacked,
- *     and nested no deeper and holding no more names than set numbers
- *     (eventBatch, ownBatch, asJsonWritesIt, MOST_BATCH_BYTES, MOST_LEVELS
- *     and MOST_NAMES below). Its bytes go on as they came. A request body
+ *     written as the SDK writes it, no larger than a set size as sent and
+ *     once unpacked, and nested no deeper and holding no more names than set
+ *     numbers (eventBatch, ownBatch, asJsonWritesIt, MOST_BATCH_BYTES,
+ *     MOST_LEVELS and MOST_NAMES below). Its bytes go on as they came. A request body
  *     over the platform's limit (BODY_CAP below) answers 413; a batch that
- *     unpacks to more than MOST_BATCH_BYTES answers 404, and is not unpacked
- *     past it.
+ *     unpacks to more than MOST_BATCH_BYTES, or a gzip body larger than that,
+ *     answers 404, and is not unpacked past it.
  *
  * So every place a request names a PostHog project is held to this app's
  * key: the /array/ path, the query's token, Authorization, and the batch.
@@ -111,24 +111,26 @@ const BODY_CAP = 4.5 * 1024 * 1024;
 
 /**
  * The most bytes an event batch's JSON may be, however it is packed
- * (eventBatch): a gzip body is unpacked no further than this, a base64 body is
- * not decoded when its text would decode to more, and a raw JSON body larger
- * than this is not read. Such a batch answers 404 and is logged (refuse,
- * reason 'size').
+ * (eventBatch), and the most a gzip body may be as sent: a gzip body larger
+ * than this is not unpacked, and a smaller one is unpacked no further than
+ * this; a base64 body is not decoded when its text would decode to more; and
+ * a raw JSON body larger than this is not read. Such a batch answers 404 and
+ * is logged (refuse, reason 'size'). A batch of this size gzips to less.
  *
- * The route reads every batch it passes on (ownBatch), and what reading
- * costs grows with what is read; this bounds it. posthog-js 1.438.15 caps no
- * batch by size and never retries a 4xx (retry-queue.js:110), so a batch past
- * this is lost for good. It sits above what the SDK built with this app's
- * options in a stress test: 100 events at once, the most its client rate
- * limit lets go in one flush (rate-limiter.js:11-12; request-queue.js:54),
- * came to about a third of it, and ten $exception events (the most of one
- * type the exception autocapture lets through at once) of 50 stack frames
- * each (@posthog/core error-tracking parsers STACKTRACE_FRAME_LIMIT) to under
- * a fifth. Exceptions that each carry a long chain of causes can come to
- * more; the refusal log line (reason 'size') shows each one.
+ * The route reads every batch it passes on (ownBatch), and what unpacking
+ * and reading cost grows with what is unpacked and read; this bounds both.
+ * posthog-js 1.438.15 caps no batch by size and never retries a 4xx
+ * (retry-queue.js:110), so a batch past this is lost for good. It sits above
+ * what the SDK built with this app's options in a stress test: 100 events at
+ * once, the most its client rate limit lets go in one flush
+ * (rate-limiter.js:11-12; request-queue.js:54), came to about two thirds of
+ * it, and ten $exception events (the most of one type the exception
+ * autocapture lets through at once) of 50 stack frames each (@posthog/core
+ * error-tracking parsers STACKTRACE_FRAME_LIMIT) to about a third.
+ * Exceptions that each carry a chain of causes can come to more; the refusal
+ * log line (reason 'size') shows each one.
  */
-const MOST_BATCH_BYTES = 1024 * 1024;
+const MOST_BATCH_BYTES = 512 * 1024;
 
 /**
  * A posthog.version, the segment the SDK puts in /static/<version>/. Any
@@ -422,13 +424,20 @@ async function readBody(request: NextRequest): Promise<Uint8Array<ArrayBuffer> |
   return body;
 }
 
-/** The SDK's base64 body: one form field, data, its base64 as encodeURIComponent leaves it. */
-const BASE64_FORM = /^data=((?:[0-9A-Za-z]|%2B|%2F|%3D)*)$/;
+/**
+ * The SDK's base64 body: one form field, data, its base64 as
+ * encodeURIComponent leaves it: letters and digits, and + / = escaped as
+ * %2B %2F %3D (NOT_A_BASE64_ESCAPE finds any other escape). Two plain
+ * patterns, each matched without keeping state for every character.
+ */
+const BASE64_FORM = /^data=[0-9A-Za-z%]*$/;
+const NOT_A_BASE64_ESCAPE = /%(?!2B|2F|3D)/;
 
 /**
  * The JSON of an event batch, unpacked the one way its request says it is
- * packed; 'size' when it would unpack to more than MOST_BATCH_BYTES (it is not
- * unpacked past that); null when it is not packed as the SDK packs one. The three ways posthog-js 1.438.15 sends a
+ * packed; 'size' when it would unpack to more than MOST_BATCH_BYTES, or is a
+ * gzip body larger than that (it is not unpacked past that); null when it is
+ * not packed as the SDK packs one. The three ways posthog-js 1.438.15 sends a
  * batch (request.js:139-171 encodePostData, :533-537 buildRequestURL):
  *
  *   - gzip, its default (posthog-core.js:658, :1100-1105): the gzip bytes
@@ -456,9 +465,8 @@ function eventBatch(
   if (compression === 'base64') {
     if (contentType !== 'application/x-www-form-urlencoded') return null;
     const text = Buffer.from(body.buffer, body.byteOffset, body.byteLength).toString('latin1');
-    const field = BASE64_FORM.exec(text);
-    if (!field) return null;
-    const base64 = decodeURIComponent(field[1]!);
+    if (!BASE64_FORM.test(text) || NOT_A_BASE64_ESCAPE.test(text)) return null;
+    const base64 = decodeURIComponent(text.slice('data='.length));
     // What these characters decode to, counted before they are decoded.
     if (Buffer.byteLength(base64, 'base64') > MOST_BATCH_BYTES) return 'size';
     const decoded = Buffer.from(base64, 'base64');
@@ -472,6 +480,8 @@ function eventBatch(
     return null;
   } else if (body[0] === 0x1f && body[1] === 0x8b) {
     if (contentType !== 'text/plain') return null;
+    // What unpacking costs grows with the body as sent, too.
+    if (body.byteLength > MOST_BATCH_BYTES) return 'size';
     try {
       json = gunzipSync(body, { maxOutputLength: MOST_BATCH_BYTES });
     } catch (err) {
@@ -508,7 +518,10 @@ const KEY_FIELDS = ['api_key', 'token', '$token'] as const;
 /** An event that names no project but this app's: by any of its key fields, and by properties.token. */
 function ownEvent(event: unknown, key: string): boolean {
   if (!isRecord(event)) return false;
-  if (KEY_FIELDS.some((field) => Object.hasOwn(event, field) && event[field] !== key)) return false;
+  // A loop: no function is made for each event of a batch.
+  for (const field of KEY_FIELDS) {
+    if (Object.hasOwn(event, field) && event[field] !== key) return false;
+  }
   if (!Object.hasOwn(event, 'properties')) return true;
   const { properties } = event;
   return isRecord(properties) && (!Object.hasOwn(properties, 'token') || properties.token === key);
@@ -550,10 +563,10 @@ const MOST_LEVELS = 64;
  * The most names a batch's JSON holds, counting every member of every object
  * in it. A batch of posthog-js 1.438.15's ordinary events holds about one
  * name for every 60 bytes, and its $exception events, the densest it builds,
- * one for every 45, so a batch of MOST_BATCH_BYTES holds no more than about a
- * third of this.
+ * one for every 30 or more, so a batch of MOST_BATCH_BYTES holds no more than
+ * about half of this.
  */
-const MOST_NAMES = 65_536;
+const MOST_NAMES = 32_768;
 
 /**
  * Whether a batch's JSON text is nested no deeper than MOST_LEVELS and holds
@@ -661,8 +674,8 @@ function emptyAnswer(status: 400 | 404 | 405 | 413 | 502, allow?: string): Respo
 /**
  * What a refused request had that the list does not: its path, its method
  * (405), its query, its size (413: a request body over BODY_CAP; 404: a batch
- * that unpacks to more than MOST_BATCH_BYTES) or its body (a batch that is not
- * one of this app's).
+ * that unpacks to more than MOST_BATCH_BYTES, or a gzip body larger than that)
+ * or its body (a batch that is not one of this app's).
  */
 type Reason = 'path' | 'method' | 'query' | 'size' | 'body';
 
