@@ -13,9 +13,10 @@ import {
   MFA_CODE_GOTRUE_LIMITED,
   MFA_CODE_NOT_CHECKED,
   MFA_CODE_REFUSED,
+  signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
-import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionClaims, readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
 import { reportError } from '@/lib/error-reporter';
@@ -34,6 +35,7 @@ import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { audit } from '@/server/services/audit';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 
 import {
@@ -444,6 +446,10 @@ export async function completePasswordResetAction(
   const {
     data: { user: preUser },
   } = await supabase.auth.getUser();
+  // The account this press is for: the first read's, else the link session's
+  // verified claims. The code budget and the password update are held to it
+  // below. Null only when nothing names an account (no session).
+  const accountId = preUser?.id ?? (await readVerifiedSessionClaims(supabase))?.userId ?? null;
 
   // MFA STEP-UP. GoTrue refuses `updateUser({ password })` outright when the
   // user has a verified factor and the calling session is not AAL2 — "AAL2
@@ -484,19 +490,29 @@ export async function completePasswordResetAction(
         return err('forbidden', RESET_CODE_ASK, { reason: 'aal2_required' });
       }
       // The account whose code budget this press spends (shared with the
-      // sign-in code and the step-up, lib/auth/mfa-code-attempts.ts): the
-      // first read's, else the link session's verified claims. With neither,
-      // the code is not checked and nothing is spent.
-      const accountId = preUser?.id ?? (await readVerifiedSessionClaims(supabase))?.userId ?? null;
+      // sign-in code and the step-up, lib/auth/mfa-code-attempts.ts). With
+      // none, the code is not checked and nothing is spent.
       if (!accountId) {
         return err('forbidden', MFA_CODE_NOT_CHECKED, { reason: 'aal2_required' });
       }
+      // Keyed on the session as it verifies AFTER the factor list (a read
+      // that can refresh the session into another account's), held to the
+      // account this press is for: anything else is signed out here and
+      // refused, with nothing spent.
+      const held = await readVerifiedSessionClaimsOf(supabase, accountId);
+      if (!held) {
+        await signOutThisSession(supabase);
+        return err('unauthenticated', RESET_LINK_GONE);
+      }
       const check = await checkMfaCode(supabase, {
-        userId: accountId,
+        userId: held.userId,
         factorId: totpFactorId,
         code,
         path: 'password_reset',
       });
+      // GoTrue judged the code while the session held another account: this
+      // session was signed out (checkMfaCode), and no password is set.
+      if (check.kind === 'account_changed') return err('unauthenticated', RESET_LINK_GONE);
       // The two pauses (this account's code budget spent, GoTrue's own limit
       // on code checks) carry `reason` too: an authenticator code changes
       // every 30 seconds, so the one in the box is stale once the wait is
@@ -523,6 +539,14 @@ export async function completePasswordResetAction(
         );
       }
     }
+  }
+
+  // The password is set only for the account this press is for: the session
+  // is read once more right before the update, held to that account, and one
+  // that now holds another account is signed out here and refused.
+  if (accountId && !(await readVerifiedSessionClaimsOf(supabase, accountId))) {
+    await signOutThisSession(supabase);
+    return err('unauthenticated', RESET_LINK_GONE);
   }
 
   const { data: updated, error } = await supabase.auth.updateUser({
@@ -728,6 +752,22 @@ export async function changePasswordAction(
   // the change ends can be named to their devices below: once ended they
   // cannot be listed. Never throws; unreadable is null and nothing is named.
   const listedSessions = await listMySessionIds(supabase);
+
+  // The new password is set only for the account whose current password was
+  // checked above: the reads since then loaded the cookie session again, and
+  // a load can refresh it into another account's (lib/auth/verified-claims).
+  // Read once more right before the update; a session that now verifies as
+  // another account is signed out here and refused. One that cannot be
+  // verified here is left to GoTrue's own answer to the update, as before.
+  const sessionNow = await readVerifiedSessionClaims(supabase);
+  if (sessionNow && sessionNow.userId !== user.id) {
+    // Never the ids: one fixed line, which the runtime logs can count.
+    console.warn(
+      '[changePasswordAction] the session now holds another account than the one this request validated',
+    );
+    await signOutThisSession(supabase);
+    return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+  }
 
   const { error: updateError } = await supabase.auth.updateUser({
     password: parsed.data.newPassword,

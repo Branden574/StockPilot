@@ -345,6 +345,68 @@ describe('changePasswordAction — session revocation + shared password check', 
  * keeps the session id given), only with this tab's VERIFIED session id: with
  * none, the function would end this session too.
  */
+/**
+ * The new password is set only for the account whose current password was
+ * checked (S78): the cookie session is read once more right before the
+ * update, and a session that now verifies as another account (a load
+ * refreshed it into another account's) is signed out here and refused.
+ */
+describe('changePasswordAction — the update acts only as the account it checked', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rpc.mockResolvedValue({ data: [{ id: 'sess-1' }], error: null });
+    getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'u@example.com' } } });
+    checkRateLimit.mockResolvedValue({ allowed: true });
+    signInWithPassword.mockResolvedValue({ error: null });
+    listFactors.mockResolvedValue({ data: { totp: [] } });
+    getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
+    updateUser.mockResolvedValue({ error: null });
+    signOut.mockResolvedValue({ error: null });
+    getSession.mockResolvedValue({ data: { session: { access_token: STORED_ACCESS } } });
+    getClaims.mockResolvedValue({ data: { claims: VERIFIED_CLAIMS }, error: null });
+    maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
+  });
+
+  it('a session that verifies as another account at the update is refused and signed out here, and nothing changes', async () => {
+    // The factor list loads the session; here it comes back as another account's.
+    listFactors.mockImplementation(async () => {
+      getClaims.mockResolvedValue({
+        data: { claims: { sub: 'u-2', session_id: 'sess-9', aal: 'aal1' } },
+        error: null,
+      });
+      return { data: { totp: [] } };
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('control: the same account is read again before the update, and the password changes as before', async () => {
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    const updated = updateUser.mock.invocationCallOrder[0]!;
+    const listed = listFactors.mock.invocationCallOrder[0]!;
+    expect(
+      getClaims.mock.invocationCallOrder.some((order) => order > listed && order < updated),
+    ).toBe(true);
+    expect(signOut).toHaveBeenCalledWith({ scope: 'others' });
+  });
+});
+
 describe('changePasswordAction — when the sign-out of the other sessions returns an error', () => {
   const GOTRUE_DOWN = {
     name: 'AuthRetryableFetchError',

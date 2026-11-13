@@ -9,6 +9,7 @@ import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { audit } from '@/server/services/audit';
 import { assertCurrentAal2, ServiceError, withContext } from '@/server/services/context';
 import { dispatchEvent } from '@/server/services/integration-events';
+import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import {
   checkMfaCode,
   MFA_CHALLENGE_NOT_STARTED,
@@ -25,7 +26,7 @@ import { factorsOf, readMfaFactorList, type MfaFactorList } from '@/lib/auth/mfa
 import { enforcedMfaPolicy } from '@/lib/auth/mfa-policy';
 import { requireOrgContext, requireSession } from '@/lib/auth/session';
 import { isSessionEndedError } from '@/lib/auth/session-ended';
-import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
+import { readVerifiedSessionClaims, readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { reportError } from '@/lib/error-reporter';
 import { checkRateLimit } from '@/lib/rate-limit';
@@ -204,6 +205,15 @@ export async function verifyEnrollmentAction(input: {
     if (!openSetUp) {
       return err('validation_error', MFA_SETUP_NOT_OPEN);
     }
+    // Only for the account whose password was just checked: the factor list
+    // loads the cookie session, and a load can refresh it into another
+    // account's (lib/auth/verified-claims). Read held to that account here
+    // and again after GoTrue's answer; anything else is signed out here and
+    // refused.
+    if (!(await readVerifiedSessionClaimsOf(supabase, session.userId))) {
+      await signOutThisSession(supabase);
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+    }
 
     const { data: challenge, error: chErr } = await supabase.auth.mfa.challenge({
       factorId: parsed.data.factorId,
@@ -218,6 +228,10 @@ export async function verifyEnrollmentAction(input: {
     });
     if (vErr) {
       return mfaCodeFailure('verify', vErr, 'actions.mfa.verify_enrollment');
+    }
+    if (!(await readVerifiedSessionClaimsOf(supabase, session.userId))) {
+      await signOutThisSession(supabase);
+      return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
     }
     await audit({
       event: 'mfa.enrolled',
@@ -333,9 +347,14 @@ export async function unenrollFactorAction(input: {
  * address), shared with the reset's code step, and a code GoTrue judged wrong
  * writes an mfa.code_refused row (lib/auth/mfa-code-attempts.ts).
  *
+ * The answer counts only for the account the budget was spent on: once GoTrue
+ * has judged the code, the session is read again held to that account, and a
+ * session that now holds another account is signed out here and refused
+ * (checkMfaCode).
+ *
  * Auth round trips per press: the factor list (one), the challenge and the
- * verify. The verified claims are a local signature check once the key set is
- * cached.
+ * verify. The verified claims, before and after, are a local signature check
+ * once the key set is cached.
  */
 const signInChallengeSchema = z.object({
   factorId: z.string().min(1),
@@ -402,6 +421,9 @@ export async function challengeFactorAction(input: {
     });
     if (check.kind === 'verified') return ok(undefined);
     if (check.kind === 'budget_spent') return err('rate_limited', MFA_CODE_BUDGET_SPENT);
+    // GoTrue judged the code while the session held another account than the
+    // one the budget was spent on: this session was signed out here.
+    if (check.kind === 'account_changed') return err('unauthenticated', MFA_SESSION_ENDED);
     // Plain words, never GoTrue's: its message can carry factor and challenge
     // identifiers.
     if (check.outcome === 'session_gone') return err('unauthenticated', MFA_SESSION_ENDED);

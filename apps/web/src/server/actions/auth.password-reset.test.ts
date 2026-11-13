@@ -230,6 +230,12 @@ describe('completePasswordResetAction', () => {
   // The stored access token of the link's session. Unsigned: the getClaims
   // stub stands in for auth-js's verified read.
   const STORED_ACCESS = `h.${Buffer.from(JSON.stringify({ sub: 'u2' })).toString('base64url')}.s`;
+  /**
+   * The account the link's session verifies as (the getClaims stub). A test
+   * moves it to another account mid-press: a session that refreshed into
+   * another account's while the press ran.
+   */
+  const linkSession = { sub: 'u1' };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -241,10 +247,11 @@ describe('completePasswordResetAction', () => {
       data: { session: { access_token: STORED_ACCESS } },
       error: null,
     });
-    getClaims.mockResolvedValue({
-      data: { claims: { sub: 'u2', session_id: 's2', aal: 'aal1' } },
+    linkSession.sub = 'u1';
+    getClaims.mockImplementation(async () => ({
+      data: { claims: { sub: linkSession.sub, session_id: 's1', aal: 'aal1' } },
       error: null,
-    });
+    }));
     updateUser.mockResolvedValue({ error: null });
     signOut.mockResolvedValue({ error: null });
     // Default: no MFA enrolled.
@@ -440,6 +447,8 @@ describe('completePasswordResetAction', () => {
         data: { user: null },
         error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
       });
+      // The link's session verifies as the account the update names.
+      linkSession.sub = 'u2';
       if (withAuthenticator) {
         listFactors.mockResolvedValue({
           data: { totp: [{ id: 'f1', status: 'verified' }] },
@@ -750,6 +759,7 @@ describe('completePasswordResetAction', () => {
         data: { user: null },
         error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
       });
+      linkSession.sub = 'u2';
       verify.mockResolvedValue({ error: WRONG_CODE });
 
       await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
@@ -814,6 +824,41 @@ describe('completePasswordResetAction', () => {
       expect(challenge).not.toHaveBeenCalled();
     });
 
+    // S78: the account the budget is spent on, and the row names, is the
+    // account the session verifies as AFTER the factor list (the read that can
+    // move the session to another account), held to the account the press
+    // began with; and the answer counts only while it is still that account.
+    it('a session that moved to another account at the factor list spends nothing, is signed out here, and changes nothing', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.sub = 'u2';
+        return { data: { totp: [{ id: 'f1', status: 'verified' }] }, error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(codeBudgetCalls()).toEqual([]);
+      expect(challenge).not.toHaveBeenCalled();
+      expect(refusedRows()).toEqual([]);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(signOut).not.toHaveBeenCalledWith({ scope: 'global' });
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('a code accepted while the session moved to another account sets no password, and this session is signed out', async () => {
+      verify.mockImplementation(async () => {
+        linkSession.sub = 'u2';
+        return { error: null };
+      });
+
+      const res = await completePasswordResetAction({ ...INPUT, totpCode: SUBMITTED });
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+    });
+
     it("GoTrue's own rate limit is answered as one, and writes nothing", async () => {
       verify.mockResolvedValue({
         error: { name: 'AuthApiError', status: 429, code: 'over_request_rate_limit', message: 'x' },
@@ -830,6 +875,41 @@ describe('completePasswordResetAction', () => {
         },
       });
       expect(refusedRows()).toEqual([]);
+    });
+  });
+
+  // ── S78: the password is set only for the account the press began with ──
+  describe('the account is checked again before the password update', () => {
+    const LINK_GONE =
+      'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
+
+    it('a session that holds another account at the update is refused, signed out here, and nothing changes', async () => {
+      listFactors.mockImplementation(async () => {
+        linkSession.sub = 'u2';
+        return { data: { totp: [] }, error: null };
+      });
+
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: false, error: { code: 'unauthenticated', message: LINK_GONE } });
+      expect(updateUser).not.toHaveBeenCalled();
+      expect(signOut).toHaveBeenCalledTimes(1);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+      expect(broadcastToChannel).not.toHaveBeenCalled();
+      expect(auditInsert).not.toHaveBeenCalled();
+    });
+
+    it('control: the verified session is read after the factor list and before the update', async () => {
+      const res = await completePasswordResetAction(INPUT);
+
+      expect(res).toEqual({ ok: true, data: { next: '/signin?reset=success' } });
+      const listed = listFactors.mock.invocationCallOrder[0]!;
+      const updated = updateUser.mock.invocationCallOrder[0]!;
+      expect(
+        getClaims.mock.invocationCallOrder.some((order) => order > listed && order < updated),
+      ).toBe(true);
+      expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+      expect(signOut).not.toHaveBeenCalledWith({ scope: 'local' });
     });
   });
 

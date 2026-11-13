@@ -52,6 +52,14 @@ vi.mock('@/lib/auth/verified-claims', () => ({
     aal: 'aal1',
     amr: [],
   })),
+  // After GoTrue's answer the session still holds the account the press was
+  // checked for (S78).
+  readVerifiedSessionClaimsOf: vi.fn(async (_client: unknown, userId: string) => ({
+    userId,
+    sessionId: 'session-1',
+    aal: 'aal1',
+    amr: [],
+  })),
 }));
 vi.mock('next/headers', () => ({ headers: vi.fn(async () => new Headers()) }));
 vi.mock('@/server/services/auth-audit', () => ({ emitAuthAudit: vi.fn(async () => {}) }));
