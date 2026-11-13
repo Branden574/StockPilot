@@ -106,8 +106,9 @@ describe.each([
   });
 
   it('a failed load empties the list and sets the flag; a good one clears it', () => {
+    // B124: the rows live in `list` with the workspace they were read for.
     const body = loadBody(src);
-    expect(body).toMatch(/setLoadFailed\(false\);\s*\} catch \(e\) \{[\s\S]*?setRows\(\[\]\);\s*setLoadFailed\(true\);/);
+    expect(body).toMatch(/setLoadFailed\(false\);\s*\} catch \(e\) \{[\s\S]*?setList\(null\);\s*setLoadFailed\(true\);/);
   });
 
   // Mutation caught: a failed load shown with the empty list's words, or the

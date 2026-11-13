@@ -15,6 +15,7 @@ import {
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Pill } from '@/components/ui/pill';
 import { Body, Mono } from '@/components/ui/text';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
 import { useOrg } from '@/lib/use-org';
 import { supabase } from '@/lib/supabase';
@@ -33,6 +34,8 @@ interface MemberRow {
   } | null;
 }
 
+const NO_ROWS: MemberRow[] = [];
+
 const ROLE_PILL: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' | 'default' }> = {
   owner: { label: 'OWNER', status: 'ok' },
   admin: { label: 'ADMIN', status: 'ok' },
@@ -47,7 +50,14 @@ export default function TeamScreen() {
   // Liquid Glass (inferred from Routes-Gallery-2's team rows): the members as
   // one grouped surface, each a monogram, the name, the e-mail and the role.
   const lg = useGlass();
-  const [rows, setRows] = React.useState<MemberRow[]>([]);
+  // The rows with the workspace they were read for, drawn only for the
+  // workspace on screen: after a switch, never the previous workspace's
+  // members while this one's read is out, or after it failed.
+  const [list, setList] = React.useState<{ orgId: string; rows: MemberRow[] } | null>(null);
+  const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;
+  // Only the newest read changes the list: an older one that lands last
+  // (the previous workspace's, or a slow refresh) is dropped.
+  const guard = React.useRef(createSequenceGuard());
   // The member list did not load: an error, not "No team yet.". Set by every
   // load that completes.
   const [loadFailed, setLoadFailed] = React.useState(false);
@@ -55,7 +65,9 @@ export default function TeamScreen() {
   const [refreshing, setRefreshing] = React.useState(false);
 
   const load = React.useCallback(async () => {
+    const token = guard.current.next();
     if (!orgId) return;
+    const forOrg = orgId;
     // Two-step fetch — the embedded `profile:user_profiles!user_id (...)`
     // was returning zero rows because organization_members has two FKs
     // into user_profiles (user_id + invited_by) and PostgREST's hint
@@ -73,8 +85,10 @@ export default function TeamScreen() {
         avatar_url: string | null;
         email: string | null;
       }>(supabase, orgId, { profileColumns: 'id, full_name, avatar_url, email' });
-      setRows(
-        joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
+      if (!guard.current.isCurrent(token)) return;
+      setList({
+        orgId: forOrg,
+        rows: joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
           user_id: m.user_id,
           role: m.role,
           accepted_at: m.accepted_at,
@@ -87,11 +101,12 @@ export default function TeamScreen() {
               }
             : null,
         })),
-      );
+      });
       setLoadFailed(false);
     } catch (e) {
+      if (!guard.current.isCurrent(token)) return;
       console.warn('[team] members load failed:', e instanceof Error ? e.message : e);
-      setRows([]);
+      setList(null);
       setLoadFailed(true);
     }
     setLoading(false);

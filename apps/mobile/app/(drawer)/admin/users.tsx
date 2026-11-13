@@ -37,6 +37,7 @@ import { canChangeMemberRoles, interpretMemberRoleWrite } from '@/lib/member-rol
 import { joinMemberProfiles, loadOrgMembers } from '@/lib/org-members';
 import { useEffectivePermissions } from '@/lib/use-effective-permissions';
 import { useOrg } from '@/lib/use-org';
+import { createSequenceGuard } from '@/lib/debounced-list-load';
 import { useRole } from '@/lib/use-role';
 import { supabase } from '@/lib/supabase';
 import { FONT, SHADOW } from '@/lib/theme';
@@ -61,6 +62,8 @@ interface UserRow {
     disabled_at: string | null;
   } | null;
 }
+
+const NO_ROWS: UserRow[] = [];
 
 const ROLE_PILL: Record<string, { label: string; status: 'ok' | 'warn' | 'crit' | 'default' }> = {
   owner: { label: 'OWNER', status: 'ok' },
@@ -110,7 +113,14 @@ export default function UsersAdmin() {
   // fallback while it loads.
   const permissions = useEffectivePermissions();
   const canChangeRoles = canChangeMemberRoles(role, permissions);
-  const [rows, setRows] = React.useState<UserRow[]>([]);
+  // The rows with the workspace they were read for, drawn only for the
+  // workspace on screen: after a switch, never the previous workspace's
+  // members while this one's read is out, or after it failed.
+  const [list, setList] = React.useState<{ orgId: string; rows: UserRow[] } | null>(null);
+  const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;
+  // Only the newest read changes the list: an older one that lands last
+  // (the previous workspace's, or a slow refresh) is dropped.
+  const guard = React.useRef(createSequenceGuard());
   // The member list did not load. An empty list here is then an error, not
   // "No users yet.", and no row (so no role change) is offered. Set by every
   // load that completes (not cleared at its start, which would flash "No
@@ -118,13 +128,22 @@ export default function UsersAdmin() {
   const [loadFailed, setLoadFailed] = React.useState(false);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
-  const [editing, setEditing] = React.useState<UserRow | null>(null);
+  // The member whose role sheet is open, with the workspace it was opened in:
+  // a switch closes it.
+  const [editingFor, setEditingFor] = React.useState<{ orgId: string; row: UserRow } | null>(
+    null,
+  );
+  const editing = editingFor !== null && editingFor.orgId === orgId ? editingFor.row : null;
+  const setEditing = (row: UserRow | null) =>
+    setEditingFor(row !== null && orgId ? { orgId, row } : null);
 
   const load = React.useCallback(async () => {
+    const token = guard.current.next();
     if (!orgId || !isAdmin) {
       setLoading(false);
       return;
     }
+    const forOrg = orgId;
     // The embed `profile:user_profiles!user_id (...)` previously resolved
     // to zero rows because `organization_members` has TWO foreign keys
     // into `user_profiles` (`user_id` and `invited_by`). PostgREST
@@ -146,8 +165,10 @@ export default function UsersAdmin() {
         email: string | null;
         disabled_at: string | null;
       }>(supabase, orgId, { profileColumns: 'id, full_name, avatar_url, email, disabled_at' });
-      setRows(
-        joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
+      if (!guard.current.isCurrent(token)) return;
+      setList({
+        orgId: forOrg,
+        rows: joinMemberProfiles(members, profiles).map(({ member: m, profile: p }) => ({
           user_id: m.user_id,
           role: m.role,
           accepted_at: m.accepted_at,
@@ -162,11 +183,12 @@ export default function UsersAdmin() {
               }
             : null,
         })),
-      );
+      });
       setLoadFailed(false);
     } catch (e) {
+      if (!guard.current.isCurrent(token)) return;
       console.warn('[admin/users] members load failed:', e instanceof Error ? e.message : e);
-      setRows([]);
+      setList(null);
       setLoadFailed(true);
     }
     setLoading(false);
@@ -257,8 +279,17 @@ export default function UsersAdmin() {
       Alert.alert('Could not change role', result.message);
       return;
     }
-    setRows((prev) =>
-      prev.map((r) => (r.user_id === member.user_id ? { ...r, role: nextRole } : r)),
+    // Only into the list of the workspace the change was made in.
+    const changedIn = orgId;
+    setList((prev) =>
+      prev !== null && prev.orgId === changedIn
+        ? {
+            ...prev,
+            rows: prev.rows.map((r) =>
+              r.user_id === member.user_id ? { ...r, role: nextRole } : r,
+            ),
+          }
+        : prev,
     );
   }
 
