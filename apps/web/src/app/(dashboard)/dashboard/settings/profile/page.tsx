@@ -7,7 +7,7 @@ import { EmailSettingsCard } from '@/components/settings/email-settings-card';
 import { ProfileNameEditor } from '@/components/settings/profile-name-editor';
 import { SettingsPage, SettingsPanel } from '@/components/settings/settings-nav';
 import { liquidGlassRollout } from '@/components/theme/appearance-flag';
-import { requireSession } from '@/lib/auth/session';
+import { requireOrgContext } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
 import {
@@ -26,7 +26,10 @@ export default async function ProfileSettingsPage({
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const session = await requireSession();
+  // The member's context, as on every dashboard page (the layout above asks
+  // for it too): an authenticator code still owed is answered here, by the
+  // page itself, before the profile is read or its email reconciled.
+  const session = await requireOrgContext();
   const params = await searchParams;
   const justChanged = params.emailChanged === '1';
 

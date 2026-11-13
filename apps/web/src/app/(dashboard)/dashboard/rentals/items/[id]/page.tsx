@@ -1,4 +1,5 @@
 import { ItemDetail } from '@/components/inventory/item-detail';
+import { isNextControlFlowError } from '@/lib/error-reporter';
 import { safeReturnPath } from '@/lib/safe-return-path';
 import { notFoundUnlessUuid } from '@/server/lib/path-id';
 import { InventoryService } from '@/server/services/inventory';
@@ -34,7 +35,9 @@ export default async function RentalItemDetailPage({
     const inventorySvc = await InventoryService.forCurrentUser();
     const reservedByItem = await inventorySvc.reservedQuantityByItemIds([id]);
     reservedQuantity = reservedByItem.get(id) ?? 0;
-  } catch {
+  } catch (e) {
+    // A redirect (sign-in, the authenticator code) is not a failed read.
+    if (isNextControlFlowError(e)) throw e;
     reservedQuantity = undefined;
   }
 

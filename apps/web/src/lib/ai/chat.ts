@@ -6,18 +6,23 @@ import {
   type Part,
 } from '@google/generative-ai';
 
+import { ForbiddenError } from '@/lib/auth/warehouse';
 import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { audit } from '@/server/services/audit';
-import type { ServiceContext } from '@/server/services/context';
+import { ServiceError, type ServiceContext } from '@/server/services/context';
 
+import { ToolRefusal, ToolUnavailableError, toolFailureSentence } from './tool-errors';
 import { TOOL_CATALOG, toolDeclarations, type ToolExecutor } from './tools';
 import {
   assertWriteArgsUntainted,
   createUntrustedOriginRegistry,
+  dataTag,
   fenceUntrusted,
   runWithUntrustedOrigins,
   stripDataTagsFromArgs,
+  untrustedWriteRefusalSentence,
+  UntrustedWriteRefusedError,
   type UntrustedOriginRegistry,
 } from './untrusted';
 
@@ -41,21 +46,109 @@ export const MAX_TOOL_CALLS_PER_ROUND = 8;
  */
 export const MAX_HISTORY_TURNS = 40;
 
+/** What the model reads when a tool failed and nothing more exact is known. */
+export const TOOL_FAILED_MESSAGE = 'The tool call failed. Try again or rephrase the request.';
+
+/** What the model reads when the member may not do what the tool was asked to do. */
+export const TOOL_PERMISSION_MESSAGE = 'You do not have permission to run that action.';
+
+/** What the model reads when the record the tool was pointed at is not there. */
+export const TOOL_NOT_FOUND_MESSAGE = 'That record was not found.';
+
 /**
- * Canned, safe user-facing messages for tool failures, keyed by error
- * shape. The actual error message is reported server-side via
- * `reportError` so we can debug; the model only sees the canned text.
- * This stops PII / stack traces / SQL hints from leaking into the
- * model context (which then ends up in the visible assistant reply).
+ * What the model reads when a request ran into what is already saved, or into
+ * a record that was busy (being changed at the same time, or one whose access
+ * could not be checked just then). The order service raises the last one for
+ * a read as well as a write, so the sentence does not say "change". It says
+ * nothing about what was or was not written: one conflict (a SKU that other
+ * records could not follow) is raised after the record itself was saved.
+ */
+export const TOOL_CONFLICT_MESSAGE =
+  'That could not be completed: it conflicts with what is already saved, or the record was busy at that moment. Look the record up again to see what it holds now, then try again if it still applies.';
+
+/**
+ * What the model reads when the multi-factor gate refused the call, chosen by
+ * the refusal's `details.reason` (the two shapes of mfaGateError,
+ * server/services/context.ts). The gate's own two sentences; a test keeps
+ * them equal.
+ */
+export const TOOL_MFA_MESSAGES = {
+  aal2_required: 'Re-authenticate with MFA before performing this action.',
+  mfa_required: 'Multi-factor authentication required. Enroll in MFA before performing this action.',
+} as const;
+
+/** The longest sentence of the app's own that a failed tool hands the model. */
+const TOOL_WORDS_MAX = 200;
+
+function capped(words: string): string {
+  return words.length > TOOL_WORDS_MAX ? `${words.slice(0, TOOL_WORDS_MAX)}…` : words;
+}
+
+/**
+ * The one sentence the model reads for a failed tool call, chosen by the
+ * error's TYPE and, for a service's error, its CODE. The error itself goes to
+ * the report (toolFailureForModel); the model, and so the visible reply, reads
+ * only words the app wrote.
+ *
+ * In order:
+ *   1. ToolUnavailableError: the fixed sentence for its tool and kind
+ *      (tool-errors.ts).
+ *   2. UntrustedWriteRefusedError: its refusal sentence (untrusted.ts).
+ *   3. ToolRefusal: the tool's own words, at most 200 characters.
+ *   4. ForbiddenError: always TOOL_PERMISSION_MESSAGE. Its own words can name
+ *      a warehouse or a record, so they are never read here.
+ *   5. ServiceError, by its code and never by its words:
+ *        validation_error  the service's words about what was asked, at most
+ *                          200 characters, fenced as data because they can
+ *                          quote a typed value or a stored name. It is the one
+ *                          code whose words the model reads (the raw error
+ *                          text guard lists every such message the tools can
+ *                          reach that is not a fixed sentence).
+ *        not_found         TOOL_NOT_FOUND_MESSAGE
+ *        conflict          TOOL_CONFLICT_MESSAGE
+ *        forbidden         TOOL_MFA_MESSAGES when the refusal is the
+ *                          multi-factor gate's (details.reason), otherwise
+ *                          TOOL_PERMISSION_MESSAGE
+ *        any other code    TOOL_FAILED_MESSAGE
+ *   6. Any other error: a fixed sentence picked by words in its text
+ *      (permission, not found, not enough stock, rate limit, address not
+ *      allowed). The text is only tested, never returned.
+ *   7. Anything else: TOOL_FAILED_MESSAGE.
  */
 export function classifyToolErrorMessage(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err ?? '');
-  const text = raw.toLowerCase();
+  if (err instanceof ToolUnavailableError) return toolFailureSentence(err.tool, err.kind);
+  if (err instanceof UntrustedWriteRefusedError) {
+    return untrustedWriteRefusalSentence(err.toolName, err.field);
+  }
+  if (err instanceof ToolRefusal) return capped(err.message);
+  if (err instanceof ForbiddenError) return TOOL_PERMISSION_MESSAGE;
+  if (err instanceof ServiceError) {
+    switch (err.code) {
+      case 'validation_error': {
+        const words = err.message.trim();
+        return words ? String(dataTag(capped(words))) : TOOL_FAILED_MESSAGE;
+      }
+      case 'not_found':
+        return TOOL_NOT_FOUND_MESSAGE;
+      case 'conflict':
+        return TOOL_CONFLICT_MESSAGE;
+      case 'forbidden': {
+        const reason = err.details?.reason;
+        if (reason === 'aal2_required' || reason === 'mfa_required') {
+          return TOOL_MFA_MESSAGES[reason];
+        }
+        return TOOL_PERMISSION_MESSAGE;
+      }
+      default:
+        return TOOL_FAILED_MESSAGE;
+    }
+  }
+  const text = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
   if (text.includes('permission denied') || text.includes('forbidden') || text.includes('missing permission')) {
-    return 'You do not have permission to run that action.';
+    return TOOL_PERMISSION_MESSAGE;
   }
   if (text.includes('not found') || text.includes('no rows') || text.includes('404')) {
-    return 'That record was not found.';
+    return TOOL_NOT_FOUND_MESSAGE;
   }
   if (text.includes('insufficient_stock') || text.includes('would go negative')) {
     return 'Insufficient stock for that adjustment.';
@@ -66,13 +159,45 @@ export function classifyToolErrorMessage(err: unknown): string {
   if (text.includes('ssrf') || text.includes('private ip') || text.includes('disallowed scheme')) {
     return 'That URL is not allowed.';
   }
-  if (text.includes('invalid') || text.includes('required') || text.includes('must be')) {
-    // Validation errors are usually safe to surface verbatim because
-    // they're our own ServiceError messages. But cap length so we
-    // never echo a giant zod tree.
-    return raw.length > 200 ? `${raw.slice(0, 200)}…` : raw;
+  return TOOL_FAILED_MESSAGE;
+}
+
+/**
+ * The one place a failed tool call is reported, for both chat loops (the
+ * Gemini loop below with tag 'ai.tool', the Claude twin with 'ai.tool.claude').
+ * Reports the failure once and returns the sentence for the model.
+ *
+ * A ToolUnavailableError reports what failed underneath (its cause) with the
+ * tool and the kind: a warning when the feature is only unavailable right now
+ * or its key is missing, an error when it could not finish or the AI service
+ * refused the key. Anything else is reported as it is (a ToolRefusal that
+ * kept a cause reports the cause).
+ */
+export function toolFailureForModel(
+  err: unknown,
+  ctx: ServiceContext,
+  toolName: string,
+  tag: 'ai.tool' | 'ai.tool.claude',
+): string {
+  if (err instanceof ToolUnavailableError) {
+    const cause = err.cause;
+    void reportError(cause === undefined ? err : cause, {
+      tag,
+      level: cause === undefined || err.kind === 'unavailable' ? 'warning' : 'error',
+      extra: { tool: toolName, kind: err.kind },
+      organizationId: ctx.organizationId,
+    });
+  } else {
+    // A ToolRefusal that kept what it refused (the address guard's error, an
+    // image host's status) reports that; everything else reports itself.
+    const refused = err instanceof ToolRefusal && err.cause !== undefined ? err.cause : err;
+    void reportError(refused, {
+      tag,
+      extra: { tool: toolName },
+      organizationId: ctx.organizationId,
+    });
   }
-  return 'The tool call failed. Try again or rephrase the request.';
+  return classifyToolErrorMessage(err);
 }
 
 /**
@@ -111,8 +236,14 @@ export function scrubDataTags(s: string): string {
  *      succeeded or threw. A refused or failed write attempt is exactly the
  *      event worth having a row for.
  *
- * Throws on tool failure; both loops already convert a throw into a canned,
- * PII-free message for the model via `classifyToolErrorMessage`.
+ * A tool reports a failure by THROWING (a ToolUnavailableError or a
+ * ToolRefusal, tool-errors.ts; a service's own error), never by returning an
+ * `{ error }` object: a returned object is a result, so it would be counted
+ * and audited as a success. Both loops turn the throw into one report and one
+ * sentence for the model through `toolFailureForModel`. An expected answer
+ * that is not a failure stays a result: exportInventory's answer to a member
+ * without the export permission, and an unknown order status the model can
+ * retry from.
  */
 export async function executeToolCall(
   tool: ToolExecutor,
@@ -233,9 +364,11 @@ Rules:
        you have NOT exhausted the variants — try another query
        yourself: singular, hyphen variations, just the brand, or
        category-based lookup. Do NOT conclude zero yet.
-- If a tool returns an "error" field, say plainly that the lookup
-  failed and what error came back. Do NOT pretend the question is
-  out of scope when the question is in scope but the tool errored.
+- If a tool fails, it returns one sentence that says why (an "error"
+  field, or an error result). Tell the user plainly, in your own
+  words, what it says and what they can do next, unless a rule below
+  says to fall back on your own. Do NOT pretend the question is out
+  of scope when the question is in scope but the tool failed.
 - Keep answers short. 1-3 sentences for simple lookups; bullet lists
   for multi-item results. No filler.
 - Write tools that change the database: adjustStock,
@@ -245,9 +378,9 @@ Rules:
   NEVER call them without an explicit user confirmation in the
   immediately previous turn. Echo the action back, ask "Confirm?",
   wait for yes/confirm/do it. Then act. After the call, restate
-  what changed so the user has a paper trail. Surface tool errors
-  plainly (insufficient_stock, permission denied,
-  invalid_status_transition, etc.) — don't hide them.
+  what changed so the user has a paper trail. Surface a failed write
+  plainly from the sentence it returns (for example not enough stock,
+  no permission, or an order in the wrong status) — don't hide it.
 
   For order actions specifically:
     - approveOrder: requires manager/admin/owner role. Reserves
@@ -355,10 +488,10 @@ Rules:
       not a specific name/SKU. It ranks by meaning, not keywords.
     - Use searchInventory (keyword) when the user gives an exact
       word, partial SKU, barcode, or known name fragment.
-    - If searchInventorySemantic returns 0 rows or an error about
-      missing embeddings, fall back to searchInventory automatically
-      — don't bother the user about it. The user can run a backfill
-      from settings if they want richer results.
+    - If searchInventorySemantic returns 0 rows or an error, fall
+      back to searchInventory automatically — don't bother the user
+      about it. The user can run a backfill from settings if they
+      want richer results.
     - Similarity is 0-1 (1=best); below 0.5 is usually noise. The
       tool filters those out by default.
 
@@ -696,19 +829,13 @@ export async function* streamChat(
             },
           };
         } catch (err) {
-          void reportError(err, {
-            tag: 'ai.tool',
-            extra: { tool: call.name },
-            organizationId: ctx.organizationId,
-          });
-          // Return a CANNED safe message to the model. The full error
-          // is logged via reportError. This stops verbatim leaks of
-          // DB errors, stack traces, and other low-signal/high-risk
-          // strings into the assistant reply.
+          // One report, and one sentence of the app's own for the model: the
+          // error's own text (the database's, a stack, the AI service's)
+          // never reaches the assistant's reply.
           return {
             functionResponse: {
               name: call.name,
-              response: { error: classifyToolErrorMessage(err) },
+              response: { error: toolFailureForModel(err, ctx, call.name, 'ai.tool') },
             },
           };
         }

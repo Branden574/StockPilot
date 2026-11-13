@@ -57,14 +57,9 @@ Never add a wildcard host such as `https://*.vercel.app/auth/callback` for previ
 
 ## 4. Database
 
-The hosted Supabase project should already have migrations 0001–0008 applied. Verify with:
+The database schema comes only from the migrations in `supabase/migrations`, applied in order. The hosted Supabase project gets a new migration with `supabase db push` (`pnpm db:push`) against the linked project, which applies every migration the project does not have yet. `supabase migration list` shows which ones it has.
 
-```sql
-select count(*) from public.warehouse_charters;   -- should not error
-select count(*) from public.user_warehouse_assignments where charter_id is not null;
-```
-
-If you ever need to start from scratch, `supabase/setup/full-schema.sql` is an idempotent bundle of every migration in order.
+If you ever need to start from scratch, apply the migrations: `supabase db reset` (`pnpm db:reset`) for a local database, or `supabase link` and `supabase db push` for a new, empty hosted project. There is no single-file bundle of the schema, so never build a database by pasting SQL from one. See [`supabase/setup/README.md`](./supabase/setup/README.md).
 
 ## 5. First deploy
 
