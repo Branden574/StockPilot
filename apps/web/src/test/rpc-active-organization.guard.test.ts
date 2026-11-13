@@ -1142,9 +1142,9 @@ const TABLE_WRITES: Record<string, ClassifiedWrite> = {
     'read_first:inline',
     "The member is read in the organization first; the warehouses are the organization's own.",
   ],
-  'server/services/team.ts#acceptInviteWithToken::organization_invites.update': [
+  'server/services/team.ts#markInviteUsed::organization_invites.update': [
     'not_org_data',
-    'Invite acceptance: the invite row found by its token; the person is not a member yet.',
+    'Invite acceptance (acceptInviteWithToken): the invite row found by its token, marked used (also when the person is already a member).',
   ],
   'server/services/team.ts#acceptInviteWithToken::user_profiles.update': [
     'own_row',

@@ -14,8 +14,10 @@ import '@/styles/liquid-glass/pages/access.css';
 
 import { AcceptInviteButton } from './accept-button';
 import {
+  INVITE_ALREADY_MEMBER_TITLE,
   INVITE_SIGN_IN_LINK,
   INVITE_SIGN_IN_PROMPT,
+  inviteAlreadyMemberDescription,
   inviteExpiredDescription,
 } from './invite-copy';
 import { InviteSignupForm } from './signup-form';
@@ -92,6 +94,27 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   // The signed-in matching user simply presses Accept (one click, POSTs
   // through the action like every other mutation).
 
+  // The invitee, signed in, who is already a member of this organization: the
+  // invite would not change their access, so the page says so instead of
+  // offering Accept. A failed read shows Accept as before; the acceptance
+  // reads the membership itself and refuses when it cannot.
+  let alreadyMember = false;
+  if (
+    invite &&
+    !accepted &&
+    !expired &&
+    session &&
+    session.email.toLowerCase() === (invite.email as string).toLowerCase()
+  ) {
+    const { data: membership, error: membershipErr } = await admin
+      .from('organization_members')
+      .select('accepted_at')
+      .eq('organization_id', invite.organization_id as string)
+      .eq('user_id', session.userId)
+      .maybeSingle();
+    alreadyMember = !membershipErr && Boolean(membership?.accepted_at);
+  }
+
   const signupOpen = Boolean(invite && !accepted && !expired && !session);
   const body =
     invite && !accepted && !expired ? (
@@ -112,6 +135,13 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         <Link href="/signin">Go to sign in</Link>
       </Button>
     ) : null;
+  const shownBody = alreadyMember ? (
+    <Button asChild variant="outline" className="h-11 w-full text-[14px]">
+      <Link href="/dashboard">Go to dashboard</Link>
+    </Button>
+  ) : (
+    body
+  );
 
   // The redesign draws the invite on the shared external frame and the auth
   // card (P5.1), so the invitee sees the same product as /signin: a flat
@@ -140,11 +170,15 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
               ? 'Already accepted'
               : expired
                 ? 'Invite expired'
-                : `You're invited to ${orgName}`
+                : alreadyMember
+                  ? INVITE_ALREADY_MEMBER_TITLE
+                  : `You're invited to ${orgName}`
         }
         description={
           !invite ? (
             'This link is invalid or no longer active.'
+          ) : alreadyMember ? (
+            inviteAlreadyMemberDescription(orgName)
           ) : accepted ? (
             `This invite was used. Sign in to access ${orgName}.`
           ) : expired ? (
@@ -170,7 +204,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
           ) : undefined
         }
       >
-        {body}
+        {shownBody}
       </AuthCard>
     </ExternalShell>
   );
