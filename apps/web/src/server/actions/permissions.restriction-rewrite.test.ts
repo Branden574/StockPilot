@@ -70,6 +70,8 @@ const LACKED: Permission = 'members:remove';
 const HELD: Permission = 'stock:adjust';
 const MEMBER = '00000000-0000-0000-0000-0000000000a1';
 const SENTENCE = 'You can only change restrictions on permissions you have yourself.';
+/** What a person reads for a database error the app did not expect. */
+const INTERNAL_SENTENCE = 'An internal error occurred. Please try again.';
 
 /** What the database answers an upsert its UPDATE rule refuses. */
 const REFUSED: QueryResult = {
@@ -230,7 +232,11 @@ describe('a restriction re-written over an existing restriction on a permission 
       granted: true,
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('internal_error');
+    if (!result.ok) {
+      expect(result.error.code).toBe('internal_error');
+      // The app's own sentence, never the database's text.
+      expect(result.error.message).toBe(INTERNAL_SENTENCE);
+    }
     expect(stubHolder.stub.chainsAll.get('user_permission_overrides.select')).toBeUndefined();
     nothingAnnounced();
   });
@@ -250,7 +256,11 @@ describe('a restriction re-written over an existing restriction on a permission 
       granted: false,
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe('internal_error');
+    if (!result.ok) {
+      expect(result.error.code).toBe('internal_error');
+      // The app's own sentence, never the database's text.
+      expect(result.error.message).toBe(INTERNAL_SENTENCE);
+    }
     expect(stubHolder.stub.chainsAll.get('user_permission_overrides.select')).toBeUndefined();
     nothingAnnounced();
   });
