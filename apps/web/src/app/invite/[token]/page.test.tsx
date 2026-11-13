@@ -16,22 +16,37 @@ type Invite = {
 } | null;
 
 let invite: Invite = null;
-let session: { email: string } | null = null;
+let session: { email: string; userId?: string } | null = null;
+/** The signed-in person's membership of the invite's organization, or a failed read. */
+let membership: { accepted_at: string | null } | null | 'read-fails' = null;
 
 vi.mock('@/lib/env', () => ({ env: { NEXT_PUBLIC_APP_URL: 'https://app.example.test' } }));
 vi.mock('@/lib/auth/session', () => ({ getServerSession: async () => session }));
 vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => ({
-    from: (table: string) => ({
-      select: () => ({
-        eq: () => ({
-          maybeSingle: async () =>
-            table === 'organization_invites'
-              ? { data: invite }
-              : { data: { name: 'Lab Charter School' } },
-        }),
-      }),
-    }),
+    from: (table: string) => {
+      const filters: Record<string, unknown> = {};
+      const chain = {
+        select: () => chain,
+        eq: (column: string, value: unknown) => {
+          filters[column] = value;
+          return chain;
+        },
+        maybeSingle: async () => {
+          if (table === 'organization_invites') return { data: invite, error: null };
+          if (table === 'organization_members') {
+            if (membership === 'read-fails') return { data: null, error: { message: 'down' } };
+            // Answered only for this organization and this person.
+            const asked =
+              filters.organization_id === invite?.organization_id &&
+              filters.user_id === session?.userId;
+            return { data: asked ? membership : null, error: null };
+          }
+          return { data: { name: 'Lab Charter School' }, error: null };
+        },
+      };
+      return chain;
+    },
   }),
 }));
 vi.mock('@/components/theme/theme-toggle', () => ({
@@ -75,6 +90,7 @@ async function open() {
 beforeEach(() => {
   invite = null;
   session = null;
+  membership = null;
 });
 
 describe('/invite/[token]', () => {
@@ -151,5 +167,43 @@ describe('/invite/[token]', () => {
     await open();
     expect(screen.getByRole('button', { name: 'Accept invite' })).toBeInTheDocument();
     expect(screen.queryByText(/Already have an account\?/)).toBeNull();
+  });
+  it('valid, signed in as the invitee who is already a member: says so, with no accept control', async () => {
+    invite = makeInvite();
+    session = { email: 'new.person@example.test', userId: 'user-1' };
+    membership = { accepted_at: PAST };
+    await open();
+    expect(
+      screen.getByRole('heading', { level: 1, name: "You're already a member" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "You're already a member of Lab Charter School. This invite does not change your access.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to dashboard' })).toHaveAttribute(
+      'href',
+      '/dashboard',
+    );
+    expect(screen.queryByRole('button', { name: 'Accept invite' })).toBeNull();
+  });
+
+  it('valid, signed in as the invitee whose membership is not accepted yet: Accept invite', async () => {
+    invite = makeInvite();
+    session = { email: 'new.person@example.test', userId: 'user-1' };
+    membership = { accepted_at: null };
+    await open();
+    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeInTheDocument();
+  });
+
+  it('valid, signed in as the invitee, membership read fails: Accept invite (the acceptance checks again)', async () => {
+    invite = makeInvite();
+    session = { email: 'new.person@example.test', userId: 'user-1' };
+    membership = 'read-fails';
+    await open();
+    expect(
+      screen.getByRole('heading', { level: 1, name: "You're invited to Lab Charter School" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Accept invite' })).toBeInTheDocument();
   });
 });

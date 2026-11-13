@@ -19,3 +19,15 @@ export const INVITE_SIGN_IN_LINK = 'Sign in';
  * footer's own words; the page has no other sign-in option (B77).
  */
 export const INVITE_ACCOUNT_EXISTS_COPY = `An account already exists for this email. Use "${INVITE_SIGN_IN_PROMPT} ${INVITE_SIGN_IN_LINK}" on this page, then accept the invite.`;
+
+/**
+ * A signed-in person who is already a member of the invite's organization.
+ * The invite does not change their role or access; the page says so before
+ * the press, and the Accept button says it after one.
+ */
+export const INVITE_ALREADY_MEMBER_TITLE = "You're already a member";
+export function inviteAlreadyMemberDescription(orgName: string): string {
+  return `You're already a member of ${orgName}. This invite does not change your access.`;
+}
+export const INVITE_ALREADY_MEMBER_TOAST =
+  "You're already a member of this organization. Your access has not changed.";
