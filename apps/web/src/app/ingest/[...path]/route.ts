@@ -57,9 +57,10 @@ export const dynamic = 'force-dynamic';
  *     skipTrailingSlashRedirect in next.config.ts keeps /e/?compression=...
  *     as the SDK spelled it).
  *   - the body: a POST is an event batch, and only one that names this app's
- *     project and no other, in one of the three ways the SDK packs it and
- *     written as the SDK writes it (eventBatch, ownBatch and asJsonWritesIt
- *     below). Its bytes go on as they came, up to the platform's request
+ *     project and no other, in one of the three ways the SDK packs it,
+ *     written as the SDK writes it and nested no deeper than a set number of
+ *     levels (eventBatch, ownBatch, asJsonWritesIt and MOST_LEVELS below).
+ *     Its bytes go on as they came, up to the platform's request
  *     body limit (BODY_CAP below); a larger one, or one that unpacks to
  *     more, answers 413.
  *
@@ -516,11 +517,52 @@ function asJsonWritesIt(json: string, read: unknown): boolean {
 }
 
 /**
+ * The most levels a batch's JSON is nested, the batch's own among them
+ * ({ batch: [ { properties: { are four). posthog-js 1.438.15 builds none
+ * deeper than nine: an exception, its list, its stack and its frames. The
+ * app's own events carry flat properties (lib/analytics.ts callers,
+ * lib/perf/rum.ts emit). PostHog reads a batch with serde_json
+ * (rust/capture v0_request.rs from_bytes), which stops at 128 levels.
+ *
+ * Writing a value out again (asJsonWritesIt) costs more the deeper it is
+ * nested, so a text past this is refused on the count (nestedAtMost),
+ * before it is read: what one batch costs is then bounded by its size.
+ */
+const MOST_LEVELS = 64;
+
+/**
+ * Whether a JSON text opens no more than `most` lists and objects inside one
+ * another, counted in one pass over its text: a bracket or a brace counts
+ * outside a string only, and a backslash in a string takes the character
+ * after it with it. Exact for a text JSON.parse takes; any other is refused
+ * by JSON.parse after.
+ */
+function nestedAtMost(json: string, most: number): boolean {
+  let levels = 0;
+  let inString = false;
+  for (let at = 0; at < json.length; at++) {
+    const code = json.charCodeAt(at);
+    if (inString) {
+      if (code === 0x5c) at++;
+      else if (code === 0x22) inString = false;
+    } else if (code === 0x22) {
+      inString = true;
+    } else if (code === 0x5b || code === 0x7b) {
+      if (++levels > most) return false;
+    } else if (code === 0x5d || code === 0x7d) {
+      levels--;
+    }
+  }
+  return true;
+}
+
+/**
  * Whether a batch's JSON is one the SDK builds for this app's project: an
  * object of api_key, batch and sent_at and nothing else, whose api_key is
  * this app's key, with at least one event, and no event naming another
- * project, written as the SDK writes it (asJsonWritesIt). With no key set,
- * analytics is off and no batch passes.
+ * project, written as the SDK writes it (asJsonWritesIt), and nested no
+ * deeper than MOST_LEVELS. With no key set, analytics is off and no batch
+ * passes.
  *
  * PostHog files a batch under its api_key, before any key an event carries
  * (rust/capture utils.rs extract_and_verify_token), so that field must be
@@ -535,6 +577,9 @@ function asJsonWritesIt(json: string, read: unknown): boolean {
 function ownBatch(json: string): boolean {
   const key = env.NEXT_PUBLIC_POSTHOG_KEY;
   if (key === '') return false;
+  // First: it is one pass over the text, and bounds what reading it and
+  // writing it again cost.
+  if (!nestedAtMost(json, MOST_LEVELS)) return false;
   let batch: unknown;
   try {
     batch = JSON.parse(json);

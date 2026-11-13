@@ -1252,6 +1252,104 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
     );
   });
 
+  // A batch is nested at most this many levels: { batch: [ { properties: {
+  // are four, and posthog-js 1.438.15 builds none deeper than nine (an
+  // exception with its stack frames).
+  const MOST_LEVELS = 64;
+  /**
+   * Our batch whose one event holds `levels` levels in all, the batch's own
+   * four among them; `before` is written into its properties first.
+   */
+  const nestedTo = (levels: number, before = '') =>
+    withEvent(
+      `{"event":"$pageview","properties":{"token":"${PROJECT_REF}"${before},"deep":${'['.repeat(levels - 4)}0${']'.repeat(levels - 4)}}}`,
+    );
+  /** The same, nested in objects. */
+  const objectsTo = (levels: number) =>
+    withEvent(
+      `{"event":"$pageview","properties":{"token":"${PROJECT_REF}","deep":${'{"a":'.repeat(levels - 4)}0${'}'.repeat(levels - 4)}}}`,
+    );
+  /** Each packing of `json` to both event paths. */
+  const everyWay = (json: string) =>
+    EVENT_PATHS.flatMap((path) =>
+      PACKINGS.map((packing) => {
+        const { query, contentType, body } = packed(packing, json);
+        return incoming(`${path}${query ? `?${query}` : ''}`, {
+          method: 'POST',
+          headers: { 'content-type': contentType },
+          body,
+        });
+      }),
+    );
+
+  it.each([
+    ['one level deeper than the most', nestedTo(MOST_LEVELS + 1)],
+    ['in objects one level deeper than the most', objectsTo(MOST_LEVELS + 1)],
+    [
+      'deeper than the most after text that ends in a backslash',
+      nestedTo(MOST_LEVELS + 1, ',"note":"placeholder \\\\"'),
+    ],
+    [
+      'deeper than the most, many times over, as large as each packing takes',
+      (() => {
+        const unit = `${'['.repeat(MOST_LEVELS)}${']'.repeat(MOST_LEVELS)}`;
+        const one = nestedTo(5);
+        // Its base64 form, the largest packing, is a third larger.
+        const count = Math.floor((CAP * 0.74 - one.length) / (unit.length + 1));
+        return one.replace('"deep":[0]', `"deep":[${Array(count).fill(unit).join(',')}]`);
+      })(),
+    ],
+  ])(
+    'refuses, before reading it, our batch nested %s, however it is packed, on both event paths',
+    async (_, json) => {
+      for (const packing of PACKINGS) {
+        expect(packed(packing, json).body.byteLength).toBeLessThanOrEqual(CAP);
+      }
+      // It is our batch, written as JSON.stringify writes it: only how deep
+      // it is nested sets it apart.
+      expect(JSON.stringify(JSON.parse(json))).toBe(json);
+      const parse = vi.spyOn(JSON, 'parse');
+
+      await expectRefused(everyWay(json));
+      // Refused on the count alone: the text is never read as JSON.
+      expect(parse).not.toHaveBeenCalled();
+    },
+  );
+
+  it('passes on our batch nested to the most levels, one with many events, and one with any number of brackets inside its text', async () => {
+    const atTheMost = [nestedTo(MOST_LEVELS), objectsTo(MOST_LEVELS)];
+    // Each event closes what it opened: levels are counted down again.
+    const manyEvents = batchJson(
+      PROJECT_REF,
+      Array.from({ length: MOST_LEVELS * 2 }, () => ({
+        ...ours,
+        properties: { ...(ours.properties as object), list: [[1], {}] },
+      })),
+    );
+    const marksInText = batchJson(PROJECT_REF, [
+      {
+        ...ours,
+        properties: {
+          ...(ours.properties as Record<string, unknown>),
+          brackets: '['.repeat(MOST_LEVELS * 4) + '{'.repeat(MOST_LEVELS * 4),
+          quoted: `\\" ${'[{'.repeat(MOST_LEVELS * 2)} \\\\`,
+          names: { ['['.repeat(MOST_LEVELS * 2)]: '"]}'.repeat(MOST_LEVELS * 2) },
+        },
+      },
+    ]);
+    for (const json of [...atTheMost, manyEvents, marksInText]) {
+      for (const request of everyWay(json)) {
+        upstream.mockClear();
+        const at = `${request.url} ${json.length}`;
+        const res = await route.POST(request);
+
+        expect(res.status, at).toBe(200);
+        expect(upstream, at).toHaveBeenCalledTimes(1);
+      }
+    }
+    expect(refusals()).toEqual([]);
+  });
+
   it('passes on our batch whatever JSON.stringify wrote into it: marks inside text, every kind of number, names in its own order', async () => {
     const json = batchJson(PROJECT_REF, [
       {
