@@ -28,6 +28,7 @@ vi.mock('@supabase/supabase-js', () => ({ createClient: () => refs.client }));
 vi.mock('@/lib/supabase/server', () => ({ createClient: async () => refs.client }));
 
 import { NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 
 import { withApiContext } from './api-context';
 
@@ -131,13 +132,17 @@ describe.each([
     expect([...ctx!.enabledModules!]).toEqual(['orders']);
   });
 
-  it('an UNREADABLE comp flag grants nothing: it falls back to the rows', async () => {
+  it('an UNREADABLE comp flag grants nothing: the rows that were read answer on, the rest is unknown', async () => {
     state.comped = true;
     state.orgError = { message: 'upstream timeout' };
     state.moduleRows = [{ module_id: 'orders' }];
     const ctx = await withApiContext(request());
     expect(ctx).not.toBeNull();
-    expect([...ctx!.enabledModules!]).toEqual(['orders']);
+    expect(ctx!.enabledModules!.has('orders')).toBe(true);
+    // Not granted, and not "off" either: the comp could have turned it on
+    // (api-context.unreadable-modules.guard.test.ts pins the whole rule).
+    expect(() => ctx!.enabledModules!.has('rentals')).toThrow(ModulesUnavailableError);
+    expect(() => [...ctx!.enabledModules!]).toThrow(ModulesUnavailableError);
   });
 
   it('a failed rows read is not a reason to withhold the comp', async () => {

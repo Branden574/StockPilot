@@ -338,10 +338,26 @@ function isGateFirstStatement(fn: ts.FunctionLikeDeclaration, gate: string): boo
   return (
     ts.isIdentifier(call.expression) &&
     call.expression.text === gate &&
-    call.arguments.length === 1 &&
+    (call.arguments.length === 1 ||
+      (call.arguments.length === 2 && isModulesOption(call.arguments[1]!))) &&
     ts.isIdentifier(call.arguments[0]!) &&
     (call.arguments[0] as ts.Identifier).text === param.name.text
   );
+}
+
+/**
+ * The gate's one option, written so nothing runs before the gate:
+ * `{ modules: ['<id>', ...] }`, an object literal holding one array of string
+ * literals (docket S81). Anything else (a variable, a call, a spread) could do
+ * work before the gate, so it fails the guard.
+ */
+function isModulesOption(arg: ts.Expression): boolean {
+  if (!ts.isObjectLiteralExpression(arg) || arg.properties.length !== 1) return false;
+  const [prop] = arg.properties;
+  if (!prop || !ts.isPropertyAssignment(prop) || !ts.isIdentifier(prop.name)) return false;
+  if (prop.name.text !== 'modules' || !ts.isArrayLiteralExpression(prop.initializer)) return false;
+  const items = prop.initializer.elements;
+  return items.length > 0 && items.every((el) => ts.isStringLiteral(el));
 }
 
 /**
@@ -483,7 +499,9 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       'app/api/v1/other/route.ts',
       `import { apiContextGate as g } from '../../../../server/lib/api-context-gate';
        export const POST = async (req: Request) => { const gate = await g(req); return gate; };
-       export async function DELETE(req: Request) { const gate = await g(new Request(req.url)); return gate; }`,
+       export async function DELETE(req: Request) { const gate = await g(new Request(req.url)); return gate; }
+       export async function PUT(req: Request) { const gate = await g(req, { modules: await pick() }); return gate; }
+       export async function PATCH(req: Request) { const gate = await g(req, { modules: ['rentals'] }); return gate; }`,
     );
     web.set(
       'server/lib/wraps-the-gate.ts',
@@ -493,6 +511,7 @@ describe('a route that uses the gate calls it first, and only the reviewed route
       'the gate is loaded by [app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/other/route.ts, app/api/v1/rentals/route.ts, server/lib/wraps-the-gate.ts], reviewed: [app/api/v1/exceptions/[id]/escalate/route.ts, app/api/v1/items/[id]/adjust/route.ts, app/api/v1/rentals/route.ts]',
       'app/api/v1/items/[id]/adjust/route.ts POST: the first statement is not `const gate = await apiContextGate(<its request>)`',
       'app/api/v1/other/route.ts DELETE: the first statement is not `const gate = await g(<its request>)`',
+      'app/api/v1/other/route.ts PUT: the first statement is not `const gate = await g(<its request>)`',
       "server/lib/wraps-the-gate.ts: loads the gate's module without importing apiContextGate by name",
     ]);
   });

@@ -7,6 +7,7 @@ import { ORDER_WAREHOUSE_ACCESS_UNREADABLE_COPY } from '@stockpilot/core';
 import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { reportError, type ErrorContext } from '@/lib/error-reporter';
 import { asReportableError } from '@/lib/error-text';
@@ -66,7 +67,10 @@ export interface InternalErrorResponseOptions {
  * throws them when its fallback read fails) answers its own fixed sentence,
  * with the route's status and code, and is reported as a warning: the
  * routes answered those sentences before S16, and the failed read is not the
- * route's fault (S31).
+ * route's fault (S31). A module state that could not be read
+ * (ModulesUnavailableError, thrown when a route asks about a module whose
+ * state withApiContext could not read, S81) is answered the same way: a 5xx
+ * the phone retries, never the 403 a module that is off gets.
  *
  * The guard app/api/no-raw-error-text.guard.test.ts fails an API route that
  * answers an error's own text again.
@@ -77,7 +81,11 @@ export function internalErrorResponse(
   opts: InternalErrorResponseOptions = {},
 ): NextResponse {
   rethrowControlFlow(e);
-  if (e instanceof PermissionsUnavailableError || e instanceof AccountStatusUnavailableError) {
+  if (
+    e instanceof PermissionsUnavailableError ||
+    e instanceof AccountStatusUnavailableError ||
+    e instanceof ModulesUnavailableError
+  ) {
     void reportError(e, reportContext(tag, { ...opts, level: 'warning' }));
     return NextResponse.json(
       { ...opts.body, error: opts.code ?? 'internal_error', message: e.message },

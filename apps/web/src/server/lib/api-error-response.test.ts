@@ -7,6 +7,7 @@ import { AccountStatusUnavailableError } from '@/lib/auth/account-status';
 import { PermissionsUnavailableError } from '@/lib/auth/effective-permissions';
 import { ForbiddenError } from '@/lib/auth/warehouse';
 import { reportError } from '@/lib/error-reporter';
+import { ModulesUnavailableError } from '@/lib/modules/module-state';
 
 import {
   forbiddenOrInternalResponse,
@@ -77,6 +78,18 @@ describe('internalErrorResponse', () => {
     expect(await res.json()).toEqual({
       error: 'internal_error',
       message: 'Account status could not be verified. Please try again.',
+    });
+    expect(reportError).toHaveBeenCalledWith(e, { tag: 'api.test.route', level: 'warning' });
+  });
+
+  it('answers a module state that could not be read with its own sentence and the route status, as a warning', async () => {
+    const e = new ModulesUnavailableError();
+    const res = internalErrorResponse(e, 'api.test.route');
+    // A 5xx: the phone's outbox sends it again. Never the 403 an off module gets.
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({
+      error: 'internal_error',
+      message: 'Your access could not be checked. Please try again.',
     });
     expect(reportError).toHaveBeenCalledWith(e, { tag: 'api.test.route', level: 'warning' });
   });

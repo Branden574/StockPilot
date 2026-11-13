@@ -6,7 +6,8 @@ import { env } from '@/lib/env';
 import { createClient } from '@/lib/supabase/server';
 import { guardedServerSupabaseFetch } from '@/lib/supabase/url-length-guard.server';
 import { loadEffectivePermissions } from '@/lib/auth/effective-permissions';
-import { effectiveModules } from '@/lib/modules/effective-modules';
+import { effectiveModules, NON_CORE_MODULE_IDS } from '@/lib/modules/effective-modules';
+import { moduleSetFromReads } from '@/lib/modules/module-state';
 import { accountIsDisabledOrThrow, loadAccountStatus } from '@/lib/auth/account-status';
 import { bearerTokenFrom, refusesCrossSiteCookieWrite } from '@/lib/auth/cross-site-request';
 import { readVerifiedSessionClaimsOf } from '@/lib/auth/verified-claims';
@@ -367,6 +368,11 @@ export async function cookieSessionOwesStepUp(
  * bearer API paths populate ctx.enabledModules and assertModuleEnabled()
  * works inside API route handlers. Core modules are always treated as
  * enabled by assertModuleEnabled even if absent from this set.
+ *
+ * One difference from withContext(), on purpose (docket S81): when a read
+ * fails, the module state that read would have decided is unknown here, not
+ * off (lib/modules/module-state.ts), so a phone is never told a module is off
+ * because a read failed.
  */
 async function resolveApiEnabledModules(
   supabase: any,
@@ -388,19 +394,27 @@ async function resolveApiEnabledModules(
       .eq('id', organizationId)
       .maybeSingle(),
   ]);
+  // A failed read is NOT "off" (docket S81). supabase-js resolves it as
+  // `{ data: null, error }`, and a set built from that alone would be the set
+  // of an organization that switched every module off. So what the reads that
+  // worked say is on stays on (an unreadable flag still grants nothing); any
+  // other module's state is unknown, and asking about it, or listing the set,
+  // throws ModulesUnavailableError (lib/modules/module-state.ts), which the
+  // phone retries. Codes only: the message can quote request details.
   if (mods.error) {
-    // Fail open for core / closed for optional (empty set). Log so a silent
-    // empty set is distinguishable from "org genuinely has no optional modules".
-    console.error('[resolveApiEnabledModules] failed:', mods.error);
+    console.error('[resolveApiEnabledModules] rows unreadable:', mods.error.code || 'unknown');
   }
   if (org.error) {
-    // An unreadable flag grants NOTHING: fall back to the explicit rows.
-    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error);
+    console.error('[resolveApiEnabledModules] comp flag unreadable:', org.error.code || 'unknown');
   }
   const comped = org.error
     ? false
     : (org.data as { all_modules_comp?: boolean | null } | null)?.all_modules_comp === true;
-  return effectiveModules(mods.data as Array<{ module_id: string }> | null, comped);
+  const known = effectiveModules(
+    mods.error ? null : (mods.data as Array<{ module_id: string }> | null),
+    comped,
+  );
+  return moduleSetFromReads(known, Boolean(mods.error || org.error), NON_CORE_MODULE_IDS);
 }
 
 /**
