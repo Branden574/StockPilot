@@ -1011,6 +1011,18 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
       'our batch with an event that names another project as $token',
       batchJson(PROJECT_REF, [{ ...ours, $token: OTHER_PROJECT }]),
     ],
+    [
+      'our batch with an event whose token is a list holding our key',
+      batchJson(PROJECT_REF, [{ ...ours, token: [PROJECT_REF] }]),
+    ],
+    [
+      'our batch with an event whose api_key is a list holding our key',
+      batchJson(PROJECT_REF, [{ ...ours, api_key: [PROJECT_REF] }]),
+    ],
+    [
+      'our batch with an event whose $token is a list holding our key',
+      batchJson(PROJECT_REF, [{ ...ours, $token: [PROJECT_REF] }]),
+    ],
     ['a batch with no key', batchOf({ batch: [ours], sent_at: SENT_AT })],
     ['a batch whose key is empty', batchOf({ api_key: '', batch: [ours], sent_at: SENT_AT })],
     ['a batch whose key is null', batchOf({ api_key: null, batch: [ours], sent_at: SENT_AT })],
@@ -1649,6 +1661,36 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
   const base64Theirs = toBase64(batchJson(OTHER_PROJECT));
   const FORM = 'application/x-www-form-urlencoded';
   const BASE64 = '?compression=base64';
+  // A batch of ours whose base64 form is longer than 64 KiB.
+  const longFormOurs = packed(
+    'base64',
+    batchJson(PROJECT_REF, [{ ...ours, note: 'placeholder '.repeat(6000) }]),
+  ).body;
+  /** The long form with one letter of its base64, past its first 64 KiB, written as an escape. */
+  function longFormWithEscapePast64KiB(): Uint8Array<ArrayBuffer> {
+    const text = Buffer.from(longFormOurs).toString('latin1');
+    let at = 64 * 1024 + 1024;
+    while (!/[A-Za-z]/.test(text[at]!) || text.slice(at - 2, at).includes('%')) at += 1;
+    expect(at).toBeLessThan(text.length);
+    const escape = `%${text.charCodeAt(at).toString(16).toUpperCase()}`;
+    return bytes(`${text.slice(0, at)}${escape}${text.slice(at + 1)}`);
+  }
+
+  it('our batch as a base64 form longer than 64 KiB passes on both event paths', async () => {
+    expect(longFormOurs.byteLength).toBeGreaterThan(64 * 1024 + 1024);
+    for (const path of EVENT_PATHS) {
+      const res = await route.POST(
+        incoming(`${path}${BASE64}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM },
+          body: longFormOurs,
+        }),
+      );
+      expect(res.status, path).toBe(200);
+    }
+    expect(upstream).toHaveBeenCalledTimes(EVENT_PATHS.length);
+    expect(refusals()).toEqual([]);
+  });
 
   it('the three packings these are built from pass, so each refusal below is for the one thing changed', async () => {
     for (const escaped of ['%2B', '%2F', '%3D']) {
@@ -1736,6 +1778,30 @@ describe("/ingest passes on an event batch only for this app's own PostHog proje
       bytes(`data=${encodeURIComponent(base64Ours)}&compression=gzip-js`),
     ],
     ['the base64 form with its + / = not escaped', BASE64, FORM, bytes(`data=${base64Ours}`)],
+    [
+      'the base64 form with only its = not escaped',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(base64Ours).replaceAll('%3D', '=')}`),
+    ],
+    [
+      'the base64 form with only its / not escaped',
+      BASE64,
+      FORM,
+      bytes(`data=${encodeURIComponent(base64Ours).replaceAll('%2F', '/')}`),
+    ],
+    [
+      'the base64 form under another four-letter field name',
+      BASE64,
+      FORM,
+      bytes(`blob=${encodeURIComponent(base64Ours)}`),
+    ],
+    [
+      'a long base64 form with a letter of its base64 written as an escape past its first 64 KiB',
+      BASE64,
+      FORM,
+      longFormWithEscapePast64KiB(),
+    ],
     [
       'the base64 form with its + written as a space',
       BASE64,
