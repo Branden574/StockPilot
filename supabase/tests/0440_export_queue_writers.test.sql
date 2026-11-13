@@ -46,21 +46,29 @@
 --     which reads it for the drain), so any new function that names the
 --     table, a writer through dynamic SQL among them, shows up as a changed
 --     list.
+-- G9. Nothing depends on outbox_events in the catalog as a rewrite rule (a
+--     view over the table, or a rule that writes it) or as a function
+--     (pg_depend; this also covers SQL-standard BEGIN ATOMIC function
+--     bodies, which the prosrc-based checks above cannot read).
 --
 -- Why one level of indirection is enough: after the migration
 -- publish_outbox_service_role_only, a chain of calls that ends in
 -- publish_outbox is refused by that function's own body for every caller
--- but the service role, however many functions sit in between; and a chain
--- that ends in a direct write of the table must contain a function that
--- names the table, which G8 pins. Code that builds the table's name at run
--- time from pieces is left to review, as in the web guard.
--- C1-C3. Controls: planted probes, always undone, that each detector must
---     report (each control reads only its probes' lines, so it stays true on
---     a day the guard itself is red): a definer function granted to authenticated that inserts into
+-- but the service role, however many functions sit in between. Whatever
+-- else writes the table directly must be a function that names it (G8) or
+-- a view or rule on it (G9). A name built at run time from pieces is left
+-- to review, as in the web guard.
+--
+-- Controls: planted probes, always undone, that each detector must report.
+-- Each control reads only its probes' lines, so it stays true on a day the
+-- guard itself is red.
+-- C1-C3. A definer function granted to authenticated that inserts into
 --     outbox_events and an invoker one that deletes from connection_sync_log
 --     (G1), a function that builds its write from the table's name (G2), and
 --     an insert rule for authenticated on outbox_events and an update rule
 --     for PUBLIC on integration_deliveries (G3).
+-- C4. The planted probes left nothing behind (no function, policy or
+--     relation of theirs remains).
 -- C5. Control: a trigger function that inserts into outbox_events and one
 --     that calls publish_outbox, planted and undone, are both reported by
 --     G6.
@@ -68,16 +76,18 @@
 --     built from the table's name, through a quoted identifier, and by
 --     calling a planted helper function that writes it, planted and undone,
 --     are each reported by G6.
--- C7. Control: with that helper planted, G7's list changes.
+-- C7. Control: with that helper planted, G7 reports it.
 -- C8. Control: a planted definer helper that writes the queue through
 --     execute format(...) changes G8's list, and G7's pattern does not see
 --     it (which is why G8 exists).
+-- C9. Control: a planted view over outbox_events with a rule that writes
+--     the table is reported by G9.
 --
 -- Catalog only: no fixtures, no roles switched. begin/rollback.
 
 begin;
 
-select plan(17);
+select plan(19);
 
 -- == The tables, the allowlist, the detectors ===============================
 create temporary table s67_q (tbl text) on commit drop;
@@ -192,6 +202,17 @@ create function pg_temp.q_queue_writers() returns setof text language sql stable
      and p.prosrc ~* '(insert\s+into|update|delete\s+from|merge\s+into)\s+(only\s+)?("?public"?\.)?"?outbox_events\M'
 $$;
 
+-- G9's detector: the rewrite rules (views, and rules on views or tables)
+-- and functions that depend on outbox_events in pg_depend, once each
+-- (pg_depend holds a row per column a view reads).
+create function pg_temp.q_queue_dependents() returns setof text language sql stable as $$
+  select distinct pg_describe_object(d.classid, d.objid, d.objsubid)
+    from pg_depend d
+   where d.refclassid = 'pg_class'::regclass
+     and d.refobjid = 'public.outbox_events'::regclass
+     and d.classid in ('pg_rewrite'::regclass, 'pg_proc'::regclass)
+$$;
+
 -- p_sql (DDL as the superuser) then p_check, ALWAYS undone: p_check's value.
 create function pg_temp.planted(p_sql text, p_check text) returns text language plpgsql as $$
 declare v text;
@@ -249,6 +270,9 @@ select is(pg_temp.list('select sig from pg_temp.q_queue_fns()'),
   'public.connector_drain_candidates(uuid, uuid, text[], timestamp with time zone, integer), '
   'public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
   'G8: the functions that name outbox_events, whoever may execute them, are exactly the drain''s candidate read and publish_outbox');
+
+select is(pg_temp.list('select pg_temp.q_queue_dependents()'), 'none',
+  'G9: no view, rule or function depends on outbox_events in the catalog');
 
 -- == Controls: each detector still reports a planted probe ==================
 select is(
@@ -327,10 +351,12 @@ create function public._s67_probe_helper_write(p_org uuid) returns void
   language sql security definer set search_path = public
   as $f$ insert into public.outbox_events (organization_id, topic, aggregate_type, payload) values (p_org, 'x', 'x', '{}') $f$;
 revoke all on function public._s67_probe_helper_write(uuid) from public, anon, authenticated$p$,
-    $q$select pg_temp.list('select pg_temp.q_queue_writers()')$q$),
-  'public._s67_probe_helper_write(uuid), public.publish_outbox(uuid, text, text, uuid, jsonb, text)',
-  'C7: a new function that writes the queue, even one no API role may execute, changes G7''s list');
+    $q$select pg_temp.list('select pg_temp.q_queue_writers()', '_s67_probe')$q$),
+  'public._s67_probe_helper_write(uuid)',
+  'C7: a new function that writes the queue, even one no API role may execute, is reported by G7');
 
+-- C8's "| none" half is deliberate: it records why G8 exists (G7's pattern
+-- does not read a write built by format). Whoever strengthens G7 updates C8.
 select is(
   pg_temp.planted($p$
 create function public._s67_probe_fmt_writer(p_org uuid) returns void
@@ -343,10 +369,21 @@ revoke all on function public._s67_probe_fmt_writer(uuid) from public, anon, aut
   'public._s67_probe_fmt_writer(uuid) | none',
   'C8: a definer helper that writes the queue through execute format changes G8''s list; G7''s pattern does not see it');
 
+select is(
+  pg_temp.planted($p$
+create view public._s67_probe_v as select * from public.outbox_events;
+create rule _s67_probe_r as on insert to public._s67_probe_v do instead
+  insert into public.outbox_events (organization_id, topic, aggregate_type, payload)
+  values (new.organization_id, 'x', 'x', '{}')$p$,
+    $q$select pg_temp.list('select pg_temp.q_queue_dependents()', '_s67_probe')$q$),
+  'rule _RETURN on view _s67_probe_v, rule _s67_probe_r on view _s67_probe_v',
+  'C9: G9 reports a view over the queue and a rule on it that writes the queue');
+
 -- The controls left nothing behind.
 select is(
   (select count(*)::int from pg_proc where proname like '\_s67\_probe%')
-  + (select count(*)::int from pg_policy where polname like 's67\_probe%'),
+  + (select count(*)::int from pg_policy where polname like 's67\_probe%')
+  + (select count(*)::int from pg_class where relname like '\_s67\_probe%'),
   0,
   'C4: the planted probes are gone');
 
