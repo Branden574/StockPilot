@@ -31,9 +31,14 @@ const rpc = vi.fn();
 // vi.hoisted: this spy is touched INSIDE a vi.mock factory (which vitest hoists
 // above the module body), so a plain `const` would still be in its temporal
 // dead zone when the factory runs.
-const { verifyPasswordSideChannel } = vi.hoisted(() => ({
-  verifyPasswordSideChannel: vi.fn(),
-}));
+const { verifyPasswordSideChannel, cookieGetAll, cookieSet, revokeAllSessionsForUser } = vi.hoisted(
+  () => ({
+    verifyPasswordSideChannel: vi.fn(),
+    cookieGetAll: vi.fn((): Array<{ name: string; value: string }> => []),
+    cookieSet: vi.fn(),
+    revokeAllSessionsForUser: vi.fn(),
+  }),
+);
 
 // The session id the action keeps alive is the VERIFIED one: the `session_id`
 // claim getClaims() returns once the token's signature checks out. The stored
@@ -45,7 +50,12 @@ const STORED_ACCESS = `h.${Buffer.from(JSON.stringify(STORED_PAYLOAD)).toString(
 
 vi.mock('next/headers', () => ({
   headers: vi.fn(async () => new Headers()),
-  cookies: vi.fn(async () => ({ get: () => undefined, set: () => {}, delete: () => {} })),
+  cookies: vi.fn(async () => ({
+    get: () => undefined,
+    getAll: () => cookieGetAll(),
+    set: (...args: unknown[]) => cookieSet(...args),
+    delete: () => {},
+  })),
 }));
 vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('next/server', () => ({ after: vi.fn() }));
@@ -70,6 +80,15 @@ vi.mock('@/lib/auth/verify-password', async (importOriginal) => {
   };
 });
 vi.mock('@/server/services/audit', () => ({ audit: vi.fn() }));
+// The by-user-id revoke behind a failed global sign-out (auth.ts
+// endSessionsAfterFailedGlobalSignOut).
+vi.mock('@/server/services/platform/sessions', () => ({
+  revokeAllSessionsForUser: (...args: unknown[]) => revokeAllSessionsForUser(...args),
+}));
+vi.mock('@/server/services/auth-audit', () => ({
+  emitAuthAudit: vi.fn(async () => {}),
+  resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-9', role: 'member' })),
+}));
 vi.mock('@/lib/env', () => ({
   env: {
     NEXT_PUBLIC_SUPABASE_URL: 'https://sb.example.com',
@@ -109,13 +128,17 @@ vi.mock('@supabase/supabase-js', () => ({
 
 import { reportError } from '@/lib/error-reporter';
 import { audit } from '@/server/services/audit';
+import { emitAuthAudit } from '@/server/services/auth-audit';
 
 import { changePasswordAction } from './auth';
 
+// Dull values under neutral names (src/test/secret-shaped-fixtures.guard.test.ts).
+const OLD_VALUE = 'OldPassw0rd!';
+const NEW_VALUE = 'NewPassw0rd!123';
 const INPUT = {
-  currentPassword: 'OldPassw0rd!',
-  newPassword: 'NewPassw0rd!123',
-  confirmPassword: 'NewPassw0rd!123',
+  currentPassword: OLD_VALUE,
+  newPassword: NEW_VALUE,
+  confirmPassword: NEW_VALUE,
 };
 
 describe('changePasswordAction — account status', () => {
@@ -277,9 +300,14 @@ describe('changePasswordAction — session revocation + shared password check', 
   it('skips the broadcast when the current session id cannot be derived', async () => {
     // A `keepId: null` payload means "evict EVERY session" (signOutAction's
     // semantics) — broadcasting that here would sign the user out of the very
-    // tab they just changed their password in.
-    getClaims.mockResolvedValue({ data: null, error: null });
-    getSession.mockResolvedValue({ data: { session: null } });
+    // tab they just changed their password in. The session stops verifying
+    // only after the update: before it, an unverifiable session changes
+    // nothing (S78).
+    updateUser.mockImplementation(async () => {
+      getClaims.mockResolvedValue({ data: null, error: null });
+      getSession.mockResolvedValue({ data: { session: null } });
+      return { error: null };
+    });
 
     const res = await changePasswordAction(INPUT);
 
@@ -289,10 +317,14 @@ describe('changePasswordAction — session revocation + shared password check', 
 
   it('never aims the broadcast with a session id from a token that does not verify', async () => {
     // getClaims() refuses the stored token and so does GoTrue: the id it names
-    // is not this session's, so nothing is kept and nothing is broadcast.
-    getClaims.mockResolvedValue({
-      data: null,
-      error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+    // is not this session's, so nothing is kept and nothing is broadcast. The
+    // token stops verifying only after the update (S78).
+    updateUser.mockImplementation(async () => {
+      getClaims.mockResolvedValue({
+        data: null,
+        error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+      });
+      return { error: null };
     });
     getUser.mockImplementation(async (jwt?: string) =>
       jwt
@@ -345,6 +377,174 @@ describe('changePasswordAction — session revocation + shared password check', 
  * keeps the session id given), only with this tab's VERIFIED session id: with
  * none, the function would end this session too.
  */
+/**
+ * The new password is set only for the account whose current password was
+ * checked (S78): the cookie session is read once more right before the
+ * update, and a session that now verifies as another account (a load
+ * refreshed it into another account's) is signed out here and refused.
+ */
+describe('changePasswordAction — the update acts only as the account it checked', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rpc.mockResolvedValue({ data: [{ id: 'sess-1' }], error: null });
+    getUser.mockResolvedValue({ data: { user: { id: 'u-1', email: 'u@example.com' } } });
+    checkRateLimit.mockResolvedValue({ allowed: true });
+    signInWithPassword.mockResolvedValue({ error: null });
+    listFactors.mockResolvedValue({ data: { totp: [] } });
+    getAuthenticatorAssuranceLevel.mockResolvedValue({ data: { currentLevel: 'aal1' } });
+    updateUser.mockResolvedValue({ error: null });
+    signOut.mockResolvedValue({ error: null });
+    getSession.mockResolvedValue({ data: { session: { access_token: STORED_ACCESS } } });
+    getClaims.mockResolvedValue({ data: { claims: VERIFIED_CLAIMS }, error: null });
+    maybeSingle.mockResolvedValue({ data: { disabled_at: null }, error: null });
+  });
+
+  it('a session that verifies as another account at the update is refused and signed out here, and nothing changes', async () => {
+    // The factor list loads the session; here it comes back as another account's.
+    listFactors.mockImplementation(async () => {
+      getClaims.mockResolvedValue({
+        data: { claims: { sub: 'u-2', session_id: 'sess-9', aal: 'aal1' } },
+        error: null,
+      });
+      return { data: { totp: [] } };
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(signOut).toHaveBeenCalledTimes(1);
+    expect(signOut).toHaveBeenCalledWith({ scope: 'local' });
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('a sign-in that cannot be verified right before the update changes nothing, and nobody is signed out', async () => {
+    listFactors.mockImplementation(async () => {
+      getClaims.mockResolvedValue({
+        data: null,
+        error: { name: 'AuthInvalidJwtError', message: 'Invalid JWT signature' },
+      });
+      return { data: { totp: [] } };
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'internal_error',
+        message:
+          'Could not confirm your sign-in just now, so your password was not changed. Try again in a moment.',
+      },
+    });
+    expect(updateUser).not.toHaveBeenCalled();
+    expect(signOut).not.toHaveBeenCalled();
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('an update that answers for another account is reported, that account is signed out everywhere, and its row is written', async () => {
+    updateUser.mockResolvedValue({
+      data: { user: { id: 'u-9', email: 'other@example.com' } },
+      error: null,
+    });
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    // The report carries the tag and level only.
+    const reports = vi
+      .mocked(reportError)
+      .mock.calls.filter(
+        (c) => (c[1] as { tag?: string }).tag === 'auth.password_change_account_changed',
+      );
+    expect(reports).toHaveLength(1);
+    expect(reports[0]![1]).toEqual({ tag: 'auth.password_change_account_changed', level: 'error' });
+    expect(signOut).toHaveBeenCalledWith({ scope: 'global' });
+    expect(signOut).not.toHaveBeenCalledWith({ scope: 'others' });
+    expect(broadcastToChannel).toHaveBeenCalledWith('user:u-9:sessions', 'revoked', {
+      keepId: null,
+    });
+    expect(emitAuthAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.password.changed',
+        userId: 'u-9',
+        organizationId: 'org-9',
+        extra: expect.objectContaining({ account_changed: true }),
+      }),
+    );
+    // Not the checked account's row.
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('an update that answers for another account, when the global sign-out fails: that account is ended in the database and this browser loses its auth cookies', async () => {
+    updateUser.mockResolvedValue({
+      data: { user: { id: 'u-9', email: 'other@example.com' } },
+      error: null,
+    });
+    signOut.mockResolvedValue({
+      error: { name: 'AuthRetryableFetchError', message: 'Service Unavailable', status: 503 },
+    });
+    revokeAllSessionsForUser.mockResolvedValue({ ok: true, sessionIds: [] });
+    cookieGetAll.mockReturnValue([
+      { name: 'sb-x-auth-token', value: 'a' },
+      { name: 'stockpilot-theme', value: 'dark' },
+    ]);
+
+    const res = await changePasswordAction(INPUT);
+
+    expect(res).toEqual({
+      ok: false,
+      error: {
+        code: 'unauthenticated',
+        message: 'Sign in again, then try again.',
+        details: { reason: 'session_changed' },
+      },
+    });
+    expect(revokeAllSessionsForUser).toHaveBeenCalledTimes(1);
+    expect(revokeAllSessionsForUser).toHaveBeenCalledWith('u-9');
+    expect(cookieSet.mock.calls.map((c) => c[0])).toEqual(['sb-x-auth-token']);
+    expect(cookieSet.mock.calls[0]!.slice(1)).toEqual(['', { path: '/', maxAge: 0 }]);
+    // The database revoke tells the devices itself when it worked.
+    expect(broadcastToChannel).not.toHaveBeenCalled();
+    expect(emitAuthAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'user.password.changed',
+        userId: 'u-9',
+        extra: expect.objectContaining({ account_changed: true, database_revoke: 'ok' }),
+      }),
+    );
+    expect(audit).not.toHaveBeenCalled();
+  });
+
+  it('control: the same account is read again before the update, and the password changes as before', async () => {
+    const res = await changePasswordAction(INPUT);
+
+    expect(res.ok).toBe(true);
+    const updated = updateUser.mock.invocationCallOrder[0]!;
+    const listed = listFactors.mock.invocationCallOrder[0]!;
+    expect(
+      getClaims.mock.invocationCallOrder.some((order) => order > listed && order < updated),
+    ).toBe(true);
+    expect(signOut).toHaveBeenCalledWith({ scope: 'others' });
+  });
+});
+
 describe('changePasswordAction — when the sign-out of the other sessions returns an error', () => {
   const GOTRUE_DOWN = {
     name: 'AuthRetryableFetchError',
@@ -415,8 +615,12 @@ describe('changePasswordAction — when the sign-out of the other sessions retur
   });
 
   it('never calls the database revoke without a verified session id', async () => {
-    getClaims.mockResolvedValue({ data: null, error: null });
-    getSession.mockResolvedValue({ data: { session: null } });
+    // The session stops verifying only after the update (S78).
+    updateUser.mockImplementation(async () => {
+      getClaims.mockResolvedValue({ data: null, error: null });
+      getSession.mockResolvedValue({ data: { session: null } });
+      return { error: null };
+    });
 
     const res = await changePasswordAction(INPUT);
 
