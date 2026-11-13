@@ -34,7 +34,15 @@ vi.mock('undici', () => ({
 
 import { makeSupabaseStub } from '@/test/supabase-mock';
 
-import { drainIntegrationDeliveries } from './integration-events';
+import { drainIntegrationDeliveries, sendTest } from './integration-events';
+
+// S31: the stored outcome and the Test button's answer carried the guard's
+// or fetch's own words, and the guard's name the address a host resolved to
+// ("hooks.example.test resolves to private IPv4 10.0.0.5"): an admin could
+// map the private network through a webhook URL. They say these now.
+const PRIVATE_ADDRESS = 'That address is not allowed: it points to a private or local network.';
+const NOT_REACHED = 'Could not reach the endpoint.';
+const TIMED_OUT = 'The endpoint did not answer in time.';
 
 const NOW = new Date('2026-11-01T12:00:00Z');
 
@@ -89,7 +97,7 @@ describe('a webhook whose host lookup fails is retried, not marked dead', () => 
     const first = await drainOnce(WEBHOOK);
     expect(undiciFetchMock).not.toHaveBeenCalled();
     expect(first.outcome).toMatchObject({ status: 'pending', attempts: 1 });
-    expect(String(first.outcome?.error)).toContain('DNS resolution failed');
+    expect(first.outcome?.error).toBe(NOT_REACHED);
     // The first backoff step: about a minute.
     const nextAttempt = new Date(String(first.outcome?.next_attempt_at)).getTime();
     expect(nextAttempt).toBeGreaterThanOrEqual(before + 60_000);
@@ -108,7 +116,7 @@ describe('a webhook whose host lookup fails is retried, not marked dead', () => 
     const { outcome } = await drainOnce(WEBHOOK);
     expect(undiciFetchMock).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ status: 'pending', attempts: 1 });
-    expect(String(outcome?.error)).toContain('DNS returned no addresses');
+    expect(outcome?.error).toBe(NOT_REACHED);
   });
 });
 
@@ -118,13 +126,15 @@ describe('a refusal of the URL itself stays final (unchanged)', () => {
     const { outcome } = await drainOnce(WEBHOOK);
     expect(undiciFetchMock).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ status: 'dead', attempts: 1 });
-    expect(String(outcome?.error)).toContain('resolves to private IPv4');
+    expect(outcome?.error).toBe(PRIVATE_ADDRESS);
+    expect(JSON.stringify(outcome)).not.toContain('10.0.0.5');
   });
 
   it('a URL with a scheme other than http(s) is marked dead', async () => {
     const { outcome } = await drainOnce({ ...WEBHOOK, url: 'ftp://hooks.example.test/x' });
     expect(lookupMock).not.toHaveBeenCalled();
     expect(outcome).toMatchObject({ status: 'dead', attempts: 1 });
+    expect(outcome?.error).toBe('That address is not allowed.');
   });
 
   it('a Slack endpoint on a host other than hooks.slack.com is marked dead', async () => {
@@ -138,9 +148,63 @@ describe('a refusal of the URL itself stays final (unchanged)', () => {
       });
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(outcome).toMatchObject({ status: 'dead', attempts: 1 });
-      expect(String(outcome?.error)).toContain('host not allowed for slack');
+      expect(outcome?.error).toBe(
+        'That address is not a Slack webhook address. Use the one Slack gave you, on hooks.slack.com.',
+      );
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("the Test button answers the app's words, never the guard's or fetch's (S31)", () => {
+  const send = (url: string, type: 'webhook' | 'slack' | 'teams' = 'webhook') =>
+    sendTest({ type, url, secret: null });
+
+  it('a private address literal: the address-free sentence', async () => {
+    const res = await send('http://10.0.0.5/hook');
+    expect(res).toEqual({ ok: false, status: null, error: PRIVATE_ADDRESS });
+  });
+
+  it('a host that resolves to a private address: the address-free sentence, never the address', async () => {
+    lookupMock.mockResolvedValueOnce([{ address: '192.168.1.20', family: 4 }]);
+    const res = await send(WEBHOOK.url);
+    expect(res.error).toBe(PRIVATE_ADDRESS);
+    expect(JSON.stringify(res)).not.toContain('192.168');
+  });
+
+  it('a Teams endpoint on another host: the Teams sentence', async () => {
+    const res = await send('https://hooks.example.test/x', 'teams');
+    expect(res.error).toBe(
+      'That address is not a Microsoft Teams webhook address. Use the one Teams gave you, on webhook.office.com.',
+    );
+  });
+
+  it('an endpoint that does not answer in time: the timeout sentence', async () => {
+    lookupMock.mockResolvedValueOnce([{ address: '203.0.113.10', family: 4 }]);
+    undiciFetchMock.mockRejectedValueOnce(
+      new DOMException('The operation was aborted due to timeout', 'TimeoutError'),
+    );
+    expect((await send(WEBHOOK.url)).error).toBe(TIMED_OUT);
+  });
+
+  it('any other failure (a refused connection, a failed lookup): could not reach the endpoint', async () => {
+    lookupMock.mockResolvedValueOnce([{ address: '203.0.113.10', family: 4 }]);
+    undiciFetchMock.mockRejectedValueOnce(
+      Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }),
+    );
+    expect((await send(WEBHOOK.url)).error).toBe(NOT_REACHED);
+    lookupMock.mockRejectedValueOnce(new Error('getaddrinfo ENOTFOUND hooks.example.test'));
+    expect((await send(WEBHOOK.url)).error).toBe(NOT_REACHED);
+  });
+
+  it("an endpoint that answers with an error status keeps 'HTTP <status>' (unchanged)", async () => {
+    lookupMock.mockResolvedValueOnce([{ address: '203.0.113.10', family: 4 }]);
+    undiciFetchMock.mockResolvedValueOnce(new Response('nope', { status: 503 }));
+    expect(await send(WEBHOOK.url)).toEqual({ ok: false, status: 503, error: 'HTTP 503' });
+  });
+
+  it("none of these is reported: it is the admin's own endpoint", () => {
+    expect(reportError).not.toHaveBeenCalled();
   });
 });

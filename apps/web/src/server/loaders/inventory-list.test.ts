@@ -869,21 +869,52 @@ describe('loadInventoryLookups', () => {
   const supplierRows = [{ id: 's1', name: 'Acme' }];
   const tagRows = [{ id: 't1', name: 'fragile', color: '#0f0' }];
   const charterRows = [
-    { id: 'ch1', name: 'North', code: 'N1' },
-    { id: 'ch2', name: 'South', code: null },
+    { id: 'ch1', name: 'North', code: 'N1', status: 'active' },
+    { id: 'ch2', name: 'South', code: null, status: 'active' },
+    // Archived and set inactive: not offered in the Charter filter, but their
+    // records still carry them (B97).
+    { id: 'ch3', name: 'Old Campus', code: 'OC', status: 'archived' },
+    { id: 'ch4', name: 'Summer Site', code: null, status: 'inactive' },
   ];
+  const activeCharterRows = charterRows.filter((c) => c.status === 'active');
+  const unlistedCharterRows = charterRows.filter((c) => c.status !== 'active');
+
+  /** The charters table, answering each read by its own status filter. */
+  function chartersByStatus(rows: Array<Record<string, unknown>>) {
+    const filters: Array<(r: Record<string, unknown>) => boolean> = [];
+    const builder = makeBuilder(null);
+    builder.eq = vi.fn((col: string, v: unknown) => {
+      if (col === 'status') filters.push((r) => r.status === v);
+      return builder;
+    });
+    builder.neq = vi.fn((col: string, v: unknown) => {
+      if (col === 'status') filters.push((r) => r.status !== v);
+      return builder;
+    });
+    builder.then = (onFulfilled?: (value: unknown) => unknown) =>
+      Promise.resolve({ data: rows.filter((r) => filters.every((f) => f(r))), error: null }).then(
+        onFulfilled,
+      );
+    return builder;
+  }
 
   function adminWithLookups(overrides: Record<string, unknown> = {}) {
-    return makeAdmin({
+    const admin = makeAdmin({
       organization_modules: { data: { enabled: true }, error: null },
       organizations: { data: { all_modules_comp: false }, error: null },
       categories: { data: categoryRows, error: null },
       locations: { data: locationRows, error: null },
       suppliers: { data: supplierRows, error: null },
       tags: { data: tagRows, error: null },
-      charters: { data: charterRows, error: null },
       ...overrides,
     });
+    if (!('charters' in overrides)) {
+      const from = admin.from;
+      admin.from = vi.fn((table: string) =>
+        table === 'charters' ? chartersByStatus(charterRows) : from(table),
+      ) as typeof admin.from;
+    }
+    return admin;
   }
 
   it('produces shapes identical to the pages’ live-branch assembly over the same rows (cached-vs-live payload parity)', async () => {
@@ -906,7 +937,13 @@ describe('loadInventoryLookups', () => {
         .map((l) => ({ id: l.id, name: l.name })),
       suppliers: supplierRows.map((s) => ({ id: s.id, name: s.name })),
       tags: tagRows.map((t) => ({ id: t.id, name: t.name, color: t.color })),
-      charters: charterRows.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      charters: activeCharterRows.map((c) => ({ id: c.id, name: c.name, code: c.code ?? null })),
+      unlistedCharters: unlistedCharterRows.map((c) => ({
+        id: c.id,
+        name: c.name,
+        code: c.code ?? null,
+        status: c.status as 'inactive' | 'archived',
+      })),
     };
 
     expect(cached).toEqual(live);
@@ -925,6 +962,18 @@ describe('loadInventoryLookups', () => {
 
     expect(cached.suppliers).toEqual([]);
     expect(cached.categories).toHaveLength(2);
+  });
+
+  it('names the archived and inactive charters for the Charter cell, apart from the active ones the filter offers (B97)', async () => {
+    createAdminClientMock.mockReturnValue(adminWithLookups());
+
+    const cached = await loadInventoryLookups('org-1');
+
+    expect(cached.charters.map((c) => c.id)).toEqual(['ch1', 'ch2']);
+    expect(cached.unlistedCharters).toEqual([
+      { id: 'ch3', name: 'Old Campus', code: 'OC', status: 'archived' },
+      { id: 'ch4', name: 'Summer Site', code: null, status: 'inactive' },
+    ]);
   });
 
   it('throws (never caches) when any lookup query fails', async () => {
@@ -1177,7 +1226,7 @@ describe('sub-loader cache wiring', () => {
       // v7 (Group selected, 2026-10-12) = rows carry their display group and
       // page 1 is planned with explicit groups as units.
       'inventory-list-v7',
-      'inventory-lookups-v1',
+      'inventory-lookups-v2',
       // v2 = cold fill moved to the inventory_trend_buckets SQL
       // aggregate (mig 0223); provenance changed, so the key bumped.
       'inventory-trend-buckets-v2',

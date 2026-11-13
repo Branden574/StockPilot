@@ -15,6 +15,7 @@ import {
   walkJsx,
   type JsxNode,
 } from './__fixtures__/jsx-touch-audit';
+import { printClassic } from './__fixtures__/classic-projection';
 import {
   ITEM_TAB_WIDEST_LABEL_EM,
   itemTabLabelRoom,
@@ -75,6 +76,15 @@ function sourceOf(file: string): string {
 
 function treeOf(file: string): ts.SourceFile {
   return parseTsx(sourceOf(file), file);
+}
+
+/**
+ * The file as Classic runs it: every Liquid Glass branch folded away
+ * (classic-projection.ts). A pin on Classic's exact shape reads this, so a
+ * glass entry beside a Classic value cannot hide or break it.
+ */
+function classicTreeOf(file: string): ts.SourceFile {
+  return parseTsx(printClassic(sourceOf(file), file), file);
 }
 
 /** Source with comments stripped, so a comment can never satisfy a pin. */
@@ -269,7 +279,7 @@ describe('the item screen keeps every word', () => {
     'From PO receipt — change status instead.',
     'Could not load this item',
     'Not found',
-    'This item no longer exists.',
+    'This item is not available to you, or it no longer exists.',
     'Could not restore',
   ])('says "%s"', (word) => {
     expect(words).toContain(word);
@@ -1375,13 +1385,20 @@ describe('Dynamic Type policy unchanged', () => {
   // again), read with a stale scale, or a stacked tab still flex: 1 in a
   // column (each tab would share a height the track does not have).
   it('the tabs stack, one per line, when the widest label is wider than its segment', () => {
-    const screen = flat(codeOnly(functionNamed(treeOf(ITEM), 'ItemDetail').getText(treeOf(ITEM))));
+    const classic = classicTreeOf(ITEM);
+    const screen = flat(codeOnly(functionNamed(classic, 'ItemDetail').getText(classic)));
     expect(screen).toContain('const { width: windowWidth, fontScale } = useWindowDimensions();');
     expect(screen).toContain('const stackTabs = shouldStackItemTabs(windowWidth, fontScale);');
-    expect(screen).toContain(
-      'style={[ styles.tabsRow, stackTabs ? styles.tabsStacked : null, { backgroundColor: c.sunk, borderColor: c.hair }, ]}',
+    expect(screen).toMatch(
+      /style=\{\[\s*styles\.tabsRow,\s*stackTabs \? styles\.tabsStacked : null,\s*\{ backgroundColor: c\.sunk, borderColor: c\.hair \},?\s*\]\}/,
     );
     expect(screen.split('stacked={stackTabs}').length - 1).toBe(3);
+    // Liquid Glass lays the iOS track over the same entries, so the stacked
+    // tabs stay one per line in either look.
+    const glass = flat(codeOnly(functionNamed(treeOf(ITEM), 'ItemDetail').getText(treeOf(ITEM))));
+    expect(glass).toContain(
+      'style={[ styles.tabsRow, stackTabs ? styles.tabsStacked : null, { backgroundColor: c.sunk, borderColor: c.hair }, lg && glassSegTrack(lg), lg && GLASS_ITEM.tabsTrack, ]}',
+    );
     const button = flat(codeOnly(functionNamed(treeOf(ITEM), 'TabButton').getText(treeOf(ITEM))));
     expect(button).toContain('stacked: boolean;');
     expect(button).toContain('styles.tab, stacked ? styles.tabStacked : null,');
@@ -1444,7 +1461,14 @@ describe("the item screen measures its header, its photo tile's words and its ta
       expect(found).toHaveLength(1);
       return attrText(found[0]!.el, 'key', found[0]!.sf);
     };
-    expect(one((el, sf) => attrText(el, 'style', sf) === 'styles.hero')).toBe('`hero-${scaleKey}`');
+    // The hero's style is Classic's, or Liquid Glass's in its branch.
+    expect(
+      one((el, sf) =>
+        ['styles.hero', 'lg ? GLASS_ITEM.hero : styles.hero'].includes(
+          attrText(el, 'style', sf) ?? '',
+        ),
+      ),
+    ).toBe('`hero-${scaleKey}`');
     expect(one((el, sf) => attrText(el, 'accessibilityLabel', sf) === 'Replace photo')).toBe(
       '`replace-${scaleKey}`',
     );

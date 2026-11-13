@@ -1,0 +1,79 @@
+/* Layer 0, the scene (spec/design-system.md 3.1-3.2): the out-of-focus
+   stockroom illustration under a warm or ink veil, over the opaque --bg. It
+   sits on a fixed layer behind the page, so long pages scroll over it and
+   nothing is repainted as they do.
+
+   The illustrations were made for StockPilot by Claude Design during the
+   Liquid Glass design work (confirmed 2026-11-05). They are committed in
+   apps/web/public/liquid-glass, written from the two originals by
+   scripts/liquid-glass/install-scene.mjs and pinned by
+   scripts/liquid-glass/scene-files.sha256, so a missing or altered file fails
+   a test (scene-photo.test.ts).
+
+   Two pictures are named here: --lg-scene-photo-day (the light files) and
+   --lg-scene-photo-night (the dark files), each AVIF, then WebP, at 1x
+   (1200 px) and 2x (2400 px), then the original JPEG for a browser that takes
+   neither. Every address ends in ?v= and the first 12 hex digits of its
+   file's pinned SHA-256, so a changed file is a new address and the files can
+   be cached as immutable (next.config.ts). Naming them fetches nothing; a
+   background that draws them does. The glass material's --lg-scene-img draws
+   the scheme's picture and --lg-scene-img-night the night one, which Day
+   draws only in the landing's Cycle counts band, the board's Night island
+   (tokens.generated.css, pages/landing.css). Reduce Transparency, Increase
+   Contrast, forced colours, browsers without backdrop-filter and the
+   low-power material set both to none, which leaves the opaque ground and
+   fetches nothing. These rules are the only place a scene file is named on
+   the web, every one under the glass root and never preloaded, so Classic
+   never requests it; the opaque --bg paints first, so the first paint is
+   never blank.
+
+   Two conditions keep a picture from the wrong reader:
+   - The @supports test: Safari up to 16.x and Chrome and Edge up to 112,
+     inside Next's default browser targets, cannot parse type() inside
+     image-set(). A custom property keeps a value it cannot parse, so every
+     background that substitutes the picture would become invalid at
+     computed-value time there and lose its fills with it. Those browsers
+     declare neither picture, so both fall back to none and they draw the
+     opaque ground, as the opaque materials do.
+   - .light or .dark: next-themes' inline script, the first thing in <body>,
+     puts one of them on <html>. Firefox works out body::before before that
+     script runs, so a picture named on the bare glass root would start the
+     Day file on a Night visit. Until a scheme is set, neither is named. */
+@layer lg {
+  @media screen {
+    @supports (background-image: image-set(url('data:,') 1x type('image/png'))) {
+      :root[data-appearance='liquid-glass']:is(.light, .dark) {
+        --lg-scene-photo-day: image-set(
+          url('/liquid-glass/scene-light-1x.avif?v=cd22e6a67f77') 1x type('image/avif'),
+          url('/liquid-glass/scene-light-2x.avif?v=71a24c3a76ef') 2x type('image/avif'),
+          url('/liquid-glass/scene-light-1x.webp?v=52bf1fcf6bfc') 1x type('image/webp'),
+          url('/liquid-glass/scene-light-2x.webp?v=be0c15660183') 2x type('image/webp'),
+          url('/liquid-glass/scene-light.jpg?v=023a8ee4de87') 2x type('image/jpeg')
+        );
+        --lg-scene-photo-night: image-set(
+          url('/liquid-glass/scene-dark-1x.avif?v=fb7d6ade803f') 1x type('image/avif'),
+          url('/liquid-glass/scene-dark-2x.avif?v=5d621d295da6') 2x type('image/avif'),
+          url('/liquid-glass/scene-dark-1x.webp?v=3d7f9b60bd9f') 1x type('image/webp'),
+          url('/liquid-glass/scene-dark-2x.webp?v=aa798b04d246') 2x type('image/webp'),
+          url('/liquid-glass/scene-dark.jpg?v=b809c59334ca') 2x type('image/jpeg')
+        );
+      }
+    }
+    :root[data-appearance='liquid-glass'] body {
+      background: var(--lg-bg);
+      color: var(--lg-ink);
+      text-rendering: optimizeLegibility;
+    }
+    :root[data-appearance='liquid-glass'] body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        var(--lg-scene-veil),
+        var(--lg-scene-img) center / cover no-repeat,
+        var(--lg-bg);
+    }
+  }
+}

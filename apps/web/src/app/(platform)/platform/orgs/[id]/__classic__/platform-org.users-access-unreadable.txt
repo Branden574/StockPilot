@@ -1,0 +1,177 @@
+<div>
+  <div class="mx-auto flex w-full min-w-0 flex-col gap-4 px-4 pb-16 pt-7 sm:px-8 max-w-[1320px]" data-slot="platform-page">
+    <div class="flex min-w-0 flex-col" data-slot="page-header">
+      <div class="mb-2">
+        <a class="text-muted-foreground hover:text-foreground inline-flex items-center gap-1 text-[13px] transition-colors" data-prefetch="undefined" href="/platform">
+          "← Organizations"
+      <div class="flex min-w-0 flex-wrap justify-between gap-4 items-center">
+        <div class="min-w-0 max-w-full">
+          <div class="min-w-0">
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[26px] leading-[1.2]">
+                "Example Schools"
+            <div class="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]">
+              <span>
+                <span class="font-mono text-[12px]">
+                  "example-schools"
+                " · Education"
+                " · owner"
+                ␣
+                "owner@example.test"
+        <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+          <div class="text-left sm:text-right" data-slot="org-billing-summary">
+            <div class="text-muted-foreground text-[11px] font-medium uppercase tracking-[0.08em]">
+              "Billing"
+            <div class="text-[13.5px] font-medium">
+              "Business"
+              " · trial"
+            <div class="text-warning text-[12px]">
+              "Trial — "
+              "6"
+              "d left"
+          <button>
+            "Act as this org ("
+            "Example Schools"
+            ")"
+    <div aria-label="Organization" class="border-border border-b" data-slot="tabs" role="tablist">
+      <div class="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+        <div class="flex w-max gap-1 sm:w-auto">
+          <a aria-selected="false" class="relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 text-muted-foreground hover:text-foreground" data-prefetch="false" href="/platform/orgs/11111111-1111-1111-1111-111111111111?tab=overview" role="tab">
+            "Overview"
+            <span aria-hidden="true" class="absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors bg-transparent">
+          <a aria-selected="false" class="relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 text-muted-foreground hover:text-foreground" data-prefetch="false" href="/platform/orgs/11111111-1111-1111-1111-111111111111?tab=inventory" role="tab">
+            "Inventory"
+            <span aria-hidden="true" class="absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors bg-transparent">
+          <a aria-selected="true" class="relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 text-foreground" data-prefetch="false" href="/platform/orgs/11111111-1111-1111-1111-111111111111?tab=users" role="tab">
+            "Users"
+            <span aria-hidden="true" class="absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors bg-foreground">
+          <a aria-selected="false" class="relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 text-muted-foreground hover:text-foreground" data-prefetch="false" href="/platform/orgs/11111111-1111-1111-1111-111111111111?tab=orders" role="tab">
+            "Orders"
+            <span aria-hidden="true" class="absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors bg-transparent">
+          <a aria-selected="false" class="relative inline-flex h-10 items-center gap-1.5 whitespace-nowrap px-3 text-[13.5px] font-medium transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 pointer-coarse:min-h-11 text-muted-foreground hover:text-foreground" data-prefetch="false" href="/platform/orgs/11111111-1111-1111-1111-111111111111?tab=billing" role="tab">
+            "Billing"
+            <span aria-hidden="true" class="absolute inset-x-2 bottom-0 h-0.5 rounded-full transition-colors bg-transparent">
+    <div class="min-w-0">
+      <div class="flex flex-col gap-3">
+        <form class="flex flex-wrap items-center gap-2" method="GET">
+          <input name="tab" type="hidden" value="users">
+          <input aria-label="Search members" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base min-w-0 max-w-sm flex-1 basis-56" name="q" placeholder="Search by name or email…" type="search" value="">
+          <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3 max-sm:h-11" type="submit">
+            "Search"
+        <div class="flex flex-col gap-2">
+          <p class="text-warning text-[12.5px]">
+            "Order items access could not be loaded for this page. Reload to see or change it. Members, status and the other actions are unaffected."
+          <div aria-label="Members" class="border-border bg-card w-full min-w-0 overflow-x-auto rounded-lg border focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" data-slot="platform-table" role="region" tabindex="0">
+            <table class="w-full caption-bottom text-[13.5px]" style="min-width: 880px;">
+              <thead class="[&_tr]:border-b">
+                <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    "User"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    "Role"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0" title="In this organization's time zone (America/Los_Angeles).">
+                    "Joined"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0" title="An estimate: the latest of the app reporting them present here, a sign-in renewal (any device, any organization) and a recorded action in this organization. In this organization's time zone (America/Los_Angeles).">
+                    "Last active"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0" title="Manage order items: whether they can choose which items and books appear in Place an Order. Change it from the row's actions.">
+                    "Order items"
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 bg-card sticky right-0 max-lg:border-l max-lg:border-border text-right">
+                    "Actions"
+              <tbody class="[&_tr:last-child]:border-0">
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors group">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <div class="flex min-w-0 items-center gap-2">
+                      <div class="min-w-0">
+                        <div class="text-foreground font-medium">
+                          "Member 1"
+                        <div class="text-muted-foreground text-[12px]">
+                          "member1@example.test"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+                    "owner"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+                    "31 Dec 2025"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-[12.5px]">
+                    <span class="text-muted-foreground" title="No open sign-ins on any device. Last signed in 2 Nov 2026, 09:00 PST. The sign-in behind this value is no longer open, so they may have kept using the product after it.">
+                      "Signed in"
+                      ␣
+                      "1 hour ago"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-[12.5px]">
+                    <span class="text-muted-foreground" data-testid="order-items-access-cell" title="Order items access could not be loaded for this page.">
+                      "—"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 bg-card sticky right-0 max-lg:border-l max-lg:border-border group-hover:bg-muted text-right">
+                    <button>
+                      "actions "
+                      "u-1"
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors group">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <div class="flex min-w-0 items-center gap-2">
+                      <div class="min-w-0">
+                        <div class="text-foreground font-medium">
+                          "Member 2"
+                        <div class="text-muted-foreground text-[12px]">
+                          "member2@example.test"
+                      <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-destructive-wash text-destructive" title="Disabled 19 Oct 2026, 17:00 PDT">
+                        "Disabled"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+                    "staff"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+                    "31 Dec 2025"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-[12.5px]">
+                    <span class="text-muted-foreground" title="This person has never signed in and has no recorded activity in this organization.">
+                      "Never"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-[12.5px]">
+                    <span class="text-muted-foreground" data-testid="order-items-access-cell" title="Order items access could not be loaded for this page.">
+                      "—"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 bg-card sticky right-0 max-lg:border-l max-lg:border-border group-hover:bg-muted text-right">
+                    <button>
+                      "actions "
+                      "u-2"
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors group">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <div class="flex min-w-0 items-center gap-2">
+                      <div class="min-w-0">
+                        <div class="text-foreground font-medium">
+                          "Member 3"
+                        <div class="text-muted-foreground text-[12px]">
+                          "member3@example.test"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-ink-2">
+                    "staff"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-[12.5px]">
+                    "31 Dec 2025"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-[12.5px]">
+                    <span class="text-muted-foreground" title="This person has never signed in and has no recorded activity in this organization.">
+                      "Never"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-[12.5px]">
+                    <span class="text-muted-foreground" data-testid="order-items-access-cell" title="Order items access could not be loaded for this page.">
+                      "—"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 bg-card sticky right-0 max-lg:border-l max-lg:border-border group-hover:bg-muted text-right">
+                    <span class="text-muted-foreground text-[12px]">
+                      "—"
+          <p class="text-muted-foreground max-w-[760px] text-[12px] leading-relaxed">
+            "Last active is an estimate. A plain value is backed by something live: StockPilot reporting that the person had it open in this organization, or an open sign-in, which is accurate to about an hour and is per person, so it covers every device and every organization they belong to. A value prefixed “Signed in” or “Last action” is only the last evidence on record, so use after it may be missing. Hover a value for the exact times."
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <p class="text-muted-foreground text-[12.5px]">
+            "Showing "
+            "1"
+            "–"
+            "3"
+            " of "
+            "3"
+            " member"
+            "s"
+            " · page "
+            "1"
+            " of"
+            ␣
+            "1"
+    <section class="bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border border-destructive/40 mt-6" data-slot="detail-section">
+      <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b px-[18px] py-2.5" data-slot="detail-section-header">
+        <h2 class="text-foreground min-w-0 text-[13.5px] font-medium leading-5">
+          <span class="text-destructive">
+            "Danger zone"
+      <div class="p-[18px]" data-slot="detail-section-body">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <p class="text-muted-foreground max-w-xl text-[13px]">
+            "Permanently delete this organization and everything in it. Requires a fresh MFA step-up, the global deletion passphrase, and retyping the org name. Irreversible."
+          <button>
+            "Remove organization"

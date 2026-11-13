@@ -15,7 +15,13 @@ jobs:
     name: Lint + Typecheck
     runs-on: ubuntu-latest
     steps:
+      # Full history: the appearance server surface guard (apps/web/src/test/
+      # appearance-server-surface.guard.test.ts) compares the tree with the
+      # merge base of the tip and origin/main, and fails when origin/main is
+      # missing, as it is in a pull request's shallow checkout.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # Reads pnpm version from package.json#packageManager.
       - uses: pnpm/action-setup@v6.1.0

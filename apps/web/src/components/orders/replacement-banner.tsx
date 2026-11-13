@@ -43,6 +43,7 @@ export function ReplacementBanner({
       className="bg-card border-l-accent space-y-1.5 rounded-lg border border-l-[3px] px-[18px] py-3.5 text-[13.5px] leading-5"
       aria-label="Exchange replacement"
       data-testid="replacement-banner"
+      data-glass="order-replacement-banner"
     >
       {lines.map((line) => {
         switch (line.key) {
@@ -50,10 +51,18 @@ export function ReplacementBanner({
             // Core's sentence with the two handles linked; the test pins that
             // the text reads exactly as core builds it.
             return (
-              <p key="title" className="font-medium" data-testid="replacement-banner-title" data-words={line.text}>
+              <p
+                key="title"
+                className="font-medium"
+                data-testid="replacement-banner-title"
+                data-words={line.text}
+              >
                 Exchange replacement for{' '}
                 {replacement.canOpenReturn ? (
-                  <Link href={`/dashboard/returns/${replacement.returnId}`} className="font-mono hover:underline">
+                  <Link
+                    href={`/dashboard/returns/${replacement.returnId}`}
+                    className="font-mono hover:underline"
+                  >
                     {rma}
                   </Link>
                 ) : (
@@ -63,7 +72,10 @@ export function ReplacementBanner({
                   <>
                     {' · Original order '}
                     {replacement.originalOrderId ? (
-                      <Link href={`/dashboard/orders/${replacement.originalOrderId}`} className="font-mono hover:underline">
+                      <Link
+                        href={`/dashboard/orders/${replacement.originalOrderId}`}
+                        className="font-mono hover:underline"
+                      >
                         {so}
                       </Link>
                     ) : (
@@ -75,7 +87,12 @@ export function ReplacementBanner({
             );
           case 'handed_over':
             return (
-              <p key="handed_over" className="text-muted-foreground" role="status" data-testid="replacement-handed-over">
+              <p
+                key="handed_over"
+                className="text-muted-foreground"
+                role="status"
+                data-testid="replacement-handed-over"
+              >
                 {line.text}
               </p>
             );
@@ -87,7 +104,12 @@ export function ReplacementBanner({
             );
           case 'closed':
             return (
-              <p key="closed" className="text-muted-foreground" role="status" data-testid="replacement-return-closed">
+              <p
+                key="closed"
+                className="text-muted-foreground"
+                role="status"
+                data-testid="replacement-return-closed"
+              >
                 {line.text}
               </p>
             );
@@ -102,7 +124,10 @@ export function ReplacementBanner({
             // Someone who can open the RMA: the link alone says where.
             return (
               <p key="rma_link" className="text-[12.5px]">
-                <Link href={`/dashboard/returns/${replacement.returnId}`} className="text-accent hover:text-foreground hover:underline">
+                <Link
+                  href={`/dashboard/returns/${replacement.returnId}`}
+                  className="text-accent hover:text-foreground hover:underline"
+                >
                   {line.text}
                 </Link>
               </p>

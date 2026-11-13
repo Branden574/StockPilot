@@ -27,6 +27,12 @@ import { reportPageGate } from '@/lib/reports/report-page-gate';
 import { costHistoryRows } from '@/lib/reports/row-order';
 import { ReportsService } from '@/server/services/reports';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export const dynamic = 'force-dynamic';
 
 /** The report pages' frame: the redesign's list-page gutters and width. */
@@ -76,7 +82,12 @@ export default async function ItemCostHistoryPage({
     // shown: the picker was simply empty, and an itemId in the URL fell
     // through to "Item not found", which read as a permission problem.
     return (
-      <div className={REPORT_PAGE_CLASS}>
+      <div
+        className={REPORT_PAGE_CLASS}
+        data-glass-page="insights"
+        data-glass-view="report"
+        data-glass-width="wide"
+      >
         <PageHeader back={BACK} title="Item cost history" />
         <StatePanel
           kind="failed"
@@ -97,7 +108,12 @@ export default async function ItemCostHistoryPage({
   // ── No item selected: show the picker ───────────────────────────────────
   if (!itemId) {
     return (
-      <div className={REPORT_PAGE_CLASS}>
+      <div
+        className={REPORT_PAGE_CLASS}
+        data-glass-page="insights"
+        data-glass-view="report"
+        data-glass-width="wide"
+      >
         <PageHeader
           back={BACK}
           title="Item cost history"
@@ -113,7 +129,12 @@ export default async function ItemCostHistoryPage({
 
   if (!selectedItem) {
     return (
-      <div className={REPORT_PAGE_CLASS}>
+      <div
+        className={REPORT_PAGE_CLASS}
+        data-glass-page="insights"
+        data-glass-view="report"
+        data-glass-width="wide"
+      >
         <PageHeader
           back={BACK}
           title="Item cost history"
@@ -147,7 +168,12 @@ export default async function ItemCostHistoryPage({
   const supplierCount = data.series.length;
 
   return (
-    <div className={REPORT_PAGE_CLASS}>
+    <div
+      className={REPORT_PAGE_CLASS}
+      data-glass-page="insights"
+      data-glass-view="report"
+      data-glass-width="wide"
+    >
       <PageHeader
         back={BACK}
         title="Item cost history"

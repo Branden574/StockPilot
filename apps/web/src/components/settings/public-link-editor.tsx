@@ -1086,7 +1086,7 @@ export function PublicLinkEditor({
         }}
       >
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Add items to this link?</DialogTitle>
             <DialogDescription>
               You are about to make {selectedCount} item
@@ -1094,7 +1094,7 @@ export function PublicLinkEditor({
               request them while it is active. Items marked Hidden stay hidden even with an entry.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div data-glass="dialog-body" className="space-y-2">
             <Label htmlFor="bulk-max-qty">Max quantity per request (optional)</Label>
             <Input
               id="bulk-max-qty"
@@ -1115,7 +1115,7 @@ export function PublicLinkEditor({
               </p>
             ) : null}
           </div>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"
@@ -1141,7 +1141,7 @@ export function PublicLinkEditor({
         }}
       >
         <DialogContent className="sm:max-w-md">
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Remove items from this link?</DialogTitle>
             <DialogDescription>
               You are about to remove {selectedCount} item
@@ -1155,7 +1155,7 @@ export function PublicLinkEditor({
               {bulkError}
             </p>
           ) : null}
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="outline"

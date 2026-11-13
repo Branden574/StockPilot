@@ -18,6 +18,10 @@ const listForPurchaseOrder = vi.fn(async () => ({ receipts: [], lines: [] }));
 const attachmentsList = vi.fn(async () => []);
 let role = 'owner';
 
+// The page's own module is on: the page checks it before it reads (B66).
+vi.mock('@/lib/modules/module-gate', () => ({
+  checkModuleAccess: vi.fn(async () => ({ enabled: true, canManage: true })),
+}));
 vi.mock('@/lib/auth/session', () => ({
   requireOrgContext: vi.fn(async () => ({
     organizationId: 'org-1',

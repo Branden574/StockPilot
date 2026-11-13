@@ -49,3 +49,29 @@ describe('push token registration goes through the RPC (SP-073)', () => {
     expect(codeOnly(src)).not.toMatch(/from\('push_tokens'\)\s*\.\s*upsert/);
   });
 });
+
+/**
+ * S5 (plans/S5.md 3.3 step 1): the sign-out hold and the authenticator-code
+ * check are read after the LAST await before the RPC, so nothing that changes
+ * while the phone waits for permissions, the token or the level (a sign-out
+ * starting, a token refresh) is missed. The behaviour is executed in
+ * use-push-notifications.test.ts; this pins the shape it depends on.
+ */
+describe('push registration checks the hold and the code step right before the RPC (S5)', () => {
+  const code = codeOnly(readFileSync(path.join(MOBILE_LIB, 'use-push-notifications.ts'), 'utf8'));
+
+  it('the level is read, then the hold, then the RPC goes out with nothing awaited in between', () => {
+    const level = code.indexOf('if (await owesAuthenticatorCode()) return;');
+    const holdCheck = code.indexOf('if (holds.size > 0 || cancelled()) return;');
+    const rpc = code.indexOf("rpc('register_push_token'");
+    expect(level).toBeGreaterThan(-1);
+    expect(holdCheck).toBeGreaterThan(level);
+    expect(rpc).toBeGreaterThan(holdCheck);
+    // Only the RPC's own await sits between the hold check and the send.
+    expect(code.slice(holdCheck, rpc).match(/\bawait\b/g)).toEqual(['await']);
+  });
+
+  it('the hook runs registerThisDevice and keeps its cancellation', () => {
+    expect(code).toContain('void registerThisDevice(user, { isCancelled: () => cancelled });');
+  });
+});

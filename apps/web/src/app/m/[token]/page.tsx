@@ -4,7 +4,15 @@ import { notFound } from 'next/navigation';
 import { ExternalCard, ExternalEyebrow, ExternalShell } from '@/components/auth/external-shell';
 import { clientIpFromHeaders } from '@/lib/client-ip';
 import { checkRateLimit } from '@/lib/rate-limit';
-import { hashShareToken, resolveMaintenanceShareToken } from '@/server/services/maintenance-share-links';
+import {
+  hashShareToken,
+  resolveMaintenanceShareToken,
+} from '@/server/services/maintenance-share-links';
+// Liquid Glass for the pages people open from a link (stage 4:
+// styles/liquid-glass/pages/links.css): every rule is scoped to the inert
+// data-glass-page="links" root on the external frame (ExternalShell glassPage="links") and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/links.css';
 
 // Never pre-rendered/cached — every request is a fresh, independent token
 // resolution (a static/cached render could otherwise serve one visitor's
@@ -145,10 +153,17 @@ export default async function MaintenanceSharePage({
   const h = await headers();
   const ip = clientIpFromHeaders(h);
   const rateLimitChecks = [
-    checkRateLimit(`maintenance:share:token:${hashShareToken(token)}`, 120, 60 * 60 * 1000, 'closed'),
+    checkRateLimit(
+      `maintenance:share:token:${hashShareToken(token)}`,
+      120,
+      60 * 60 * 1000,
+      'closed',
+    ),
   ];
   if (ip !== 'unknown') {
-    rateLimitChecks.push(checkRateLimit(`maintenance:share:ip:${ip}`, 60, 60 * 60 * 1000, 'closed'));
+    rateLimitChecks.push(
+      checkRateLimit(`maintenance:share:ip:${ip}`, 60, 60 * 60 * 1000, 'closed'),
+    );
   }
   const rateLimitResults = await Promise.all(rateLimitChecks);
   if (rateLimitResults.some((r) => !r.allowed)) notFound();
@@ -166,10 +181,10 @@ export default async function MaintenanceSharePage({
   const resolutionPhotos = indexedPhotos.filter(({ photo }) => photo.kind === 'resolution');
 
   return (
-    <ExternalShell width="xl" className="space-y-4">
+    <ExternalShell glassPage="links" width="xl" className="space-y-4">
       <header className="pb-2">
         <ExternalEyebrow>StockPilot maintenance request</ExternalEyebrow>
-        <h1 className="font-display text-foreground mt-1.5 text-[26px] font-medium leading-[1.2] tracking-[-0.025em] [overflow-wrap:anywhere]">
+        <h1 className="text-foreground mt-1.5 font-display text-[26px] font-medium leading-[1.2] tracking-[-0.025em] [overflow-wrap:anywhere]">
           {shared.requestNumber}
         </h1>
         <p className="text-foreground mt-1 text-[15px] leading-[22px]">{shared.subject}</p>
@@ -183,8 +198,12 @@ export default async function MaintenanceSharePage({
       </ExternalCard>
       {shared.resolution ? (
         <ExternalCard title="Resolution">
-          <p className="text-muted-foreground text-[13.5px]">Marked resolved · {shared.resolution.resolvedAtDisplay}</p>
-          <p className="mt-1 whitespace-pre-line text-[13.5px] leading-[20.25px]">{shared.resolution.note}</p>
+          <p className="text-muted-foreground text-[13.5px]">
+            Marked resolved · {shared.resolution.resolvedAtDisplay}
+          </p>
+          <p className="mt-1 whitespace-pre-line text-[13.5px] leading-[20.25px]">
+            {shared.resolution.note}
+          </p>
         </ExternalCard>
       ) : null}
       <PhotoGrid token={token} heading="Photos" items={requesterPhotos} />
@@ -213,7 +232,8 @@ export default async function MaintenanceSharePage({
         }
       />
       <footer className="border-border text-muted-foreground border-t pt-4 text-xs">
-        This page shows one maintenance request shared from StockPilot. Internal notes are never shown here.
+        This page shows one maintenance request shared from StockPilot. Internal notes are never
+        shown here.
       </footer>
     </ExternalShell>
   );

@@ -952,5 +952,7 @@ describe('list helpers', () => {
     expect(orderNumberFromSearch('RMA-1')).toBeNull();
     expect(sanitizeReturnSearch(' pat@example.com ')).toBe('pat@example.com');
     expect(sanitizeReturnSearch('x,y(z)"%\\')).toBe('x y z');
+    // An email written with a plus sign is searched whole.
+    expect(sanitizeReturnSearch('pat+returns@example.com')).toBe('pat+returns@example.com');
   });
 });

@@ -1,0 +1,31 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <span data-perf="">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]" id="orders-title">
+              "My requests"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            "Track the orders you have placed."
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <span data-tour="orders-page">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/dashboard/orders/manage-items">
+          "Manage order items"
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-accent text-accent-ink hover:bg-accent/90 h-8 px-3.5 text-[13px]" href="/dashboard/orders/new">
+          "+ Place order"
+  <div class="flex w-full min-w-0 flex-col items-center justify-center text-center border-border bg-card rounded-lg border min-h-[320px] gap-3 px-6 py-14" data-slot="state-panel" data-state-kind="empty">
+    <div aria-hidden="true" class="flex items-center justify-center rounded-full size-11 bg-sunk text-muted-foreground" data-slot="state-panel-icon">
+      <svg aria-hidden="true" class="lucide lucide-shopping-cart h-5 w-5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+        <path d="m2.05 2.05 1.099-.028a1 1 0 0 1 1.008.815l2.69 14.347A1 1 0 0 0 7.83 18H18">
+        <path d="M4.563 5h16.435a1 1 0 0 1 .981 1.204l-1.026 6.226A2 2 0 0 1 18.962 14H6.25">
+        <circle cx="18" cy="20" r="2">
+        <circle cx="8" cy="20" r="2">
+    <h2 class="max-w-md text-foreground font-medium text-[14px] leading-5">
+      "No requests yet"
+    <div class="text-muted-foreground max-w-md text-[13.5px] leading-[20.25px]">
+      "Place your first order request and we'll route it to the right approver."
+    <div class="flex flex-wrap items-center justify-center gap-2 mt-2">
+      <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-accent text-accent-ink hover:bg-accent/90 h-8 px-3.5 text-[13px]" href="/dashboard/orders/new">
+        "Place an order"

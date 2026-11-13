@@ -23,6 +23,7 @@ function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: num
   return (
     <div
       className="bg-muted max-w-full shrink-0 animate-pulse"
+      data-glass="skeleton"
       style={{ width: typeof w === 'number' ? `${w}px` : w, height: h, borderRadius: radius }}
     />
   );
@@ -30,15 +31,15 @@ function Bar({ w, h, radius = 4 }: { w: number | string; h: number; radius?: num
 
 export default function MovementsLoading() {
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass="skeleton-page" data-glass-width="wide">
       {/* The header: a 28 px title on its 42 px line, the line under it, and
           Export CSV bottom-aligned on the right. */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex h-[42px] items-center">
+          <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
             <Bar w={230} h={26} />
           </div>
-          <div className="mt-0.5 flex h-5 items-center">
+          <div className="mt-0.5 flex h-5 items-center" data-glass-role="skeleton-subline">
             <Bar w={330} h={12} />
           </div>
         </div>
@@ -69,10 +70,11 @@ export default function MovementsLoading() {
 
       {/* The ledger card: 11 px header labels on a 37 px row, then rows that
           pad by var(--row-py) like the table's, each two lines tall. */}
-      <div className="border-border bg-card overflow-hidden rounded-lg border">
+      <div className="border-border bg-card overflow-hidden rounded-lg border" data-glass="card">
         <div className="min-w-[860px]">
           <div
             className="border-border grid h-[37px] items-center gap-3 border-b px-4"
+            data-glass-role="skeleton-table-head"
             style={{ gridTemplateColumns: COLUMNS }}
           >
             {[40, 36, 36, 12, 36, 20, 36].map((w, i) => (
@@ -85,6 +87,7 @@ export default function MovementsLoading() {
             <div
               key={i}
               className="border-border grid items-center gap-3 border-b px-4 last:border-0"
+              data-glass-role="skeleton-table-row"
               style={{
                 gridTemplateColumns: COLUMNS,
                 paddingTop: 'var(--row-py, 11px)',

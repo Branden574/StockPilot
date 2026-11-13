@@ -116,13 +116,20 @@ function occurrence(o: Record<string, unknown> = {}) {
   };
 }
 
-function ctxWith(categories: unknown = undefined, permissions: string[] = ['maintenance_requests:submit', 'items:read']) {
+function ctxWith(
+  categories: unknown = undefined,
+  permissions: string[] = ['maintenance_requests:submit', 'items:read'],
+  assignment: { charter_id: string | null; warehouse_id: string | null } = {
+    charter_id: null,
+    warehouse_id: null,
+  },
+) {
   const stub = makeSupabaseStub({
     'organization_modules.select': {
       data: categories === undefined ? { settings: {} } : { settings: { categories } },
       error: null,
     },
-    'user_warehouse_assignments.select': { data: { charter_id: null, warehouse_id: null }, error: null },
+    'user_warehouse_assignments.select': { data: assignment, error: null },
   });
   return makeServiceContext(stub.client, { role: 'staff', permissions: new Set(permissions) });
 }
@@ -326,6 +333,51 @@ describe('a plain request', () => {
     await renderPage({ locationId: 'nope' });
     const props = plainProps.mock.calls[0]![0] as { defaults: Record<string, unknown> };
     expect(props.defaults.relatedLocationId).toBeUndefined();
+  });
+});
+
+/**
+ * B97 part 2: the Site defaults to the member's own assignment's charter, and
+ * the select offers active charters only. When that charter was archived (or
+ * set inactive), the select matched no option and showed "Select a site"
+ * while the form still held, and saved, the archived site. A default is now
+ * kept only when the select offers it: else the next hint, else none.
+ */
+describe('the default Site is one the select offers (B97)', () => {
+  const ACTIVE = '66666666-6666-4666-8666-666666666666';
+  const ARCHIVED = '77777777-7777-4777-8777-777777777777';
+  const WH = '88888888-8888-4888-8888-888888888888';
+  const defaultsFor = () =>
+    (plainProps.mock.calls[0]![0] as { defaults: Record<string, unknown> }).defaults;
+
+  beforeEach(() => {
+    listCharters.mockResolvedValue([{ id: ACTIVE, name: 'North Campus' }]);
+  });
+
+  it("the member's own site is the default while it is active", async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      ctxWith(undefined, undefined, { charter_id: ACTIVE, warehouse_id: WH }) as never,
+    );
+    await renderPage({});
+    expect(defaultsFor().charterId).toBe(ACTIVE);
+  });
+
+  it('an archived own site is not the default: the Site starts empty, as it shows', async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      ctxWith(undefined, undefined, { charter_id: ARCHIVED, warehouse_id: WH }) as never,
+    );
+    await renderPage({});
+    expect(defaultsFor().charterId).toBeUndefined();
+    // The warehouse hint is unchanged (create() re-derives it).
+    expect(defaultsFor().warehouseId).toBe(WH);
+  });
+
+  it("a ?charterId= the select does not offer falls back to the member's own active site", async () => {
+    vi.mocked(withContext).mockResolvedValue(
+      ctxWith(undefined, undefined, { charter_id: ACTIVE, warehouse_id: WH }) as never,
+    );
+    await renderPage({ charterId: ARCHIVED });
+    expect(defaultsFor().charterId).toBe(ACTIVE);
   });
 });
 

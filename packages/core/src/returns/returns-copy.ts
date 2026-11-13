@@ -268,6 +268,12 @@ export const RETURNS_COPY = {
   // List
   listEmpty: 'No returns match this view.',
   listSearchPlaceholder: 'Search RMA, SO number or requester',
+  // B117: a search that could not look through the orders people placed for
+  // themselves says so, instead of quietly finding fewer returns.
+  listSearchTooManyPeople:
+    'Too many people match this search to look through the orders they placed for themselves. It matched RMA numbers, SO numbers and names typed on an order only. Type more of the name to find the returns of one person.',
+  listSearchPeopleUnavailable:
+    'Names of people could not be searched just now. This search matched RMA numbers, SO numbers and names typed on an order only. Try again in a moment.',
   waitingDays: (days: number): string => (days === 1 ? 'waiting 1 day' : `waiting ${days} days`),
   moreItems: (n: number): string => `+${n}`,
 

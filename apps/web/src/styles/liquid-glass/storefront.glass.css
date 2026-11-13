@@ -1,0 +1,1392 @@
+/* UNLAYERED companion of components/orders/storefront/storefront.css (Liquid
+   Glass plan 4.1, review finding R22): Place an order (Order-New.dc.html),
+   its quick view and review sheet, the route's loading state, and the
+   delivery-request blocks that borrow .sp-storefront.sf-embedded on an order
+   page. storefront.css is unlayered apart from one @layer base block, and a
+   layered rule always loses to an unlayered one, so these rules live outside
+   every layer. Every file that imports storefront.css for those surfaces
+   imports this file on the next line (orders-storefront.tsx,
+   storefront-skeleton.tsx, send-delivery-request-button.tsx).
+
+   Every selector starts with :root[data-appearance="liquid-glass"], so it is
+   always more specific than the classic rule it restyles, and every rule sits
+   inside @media screen (glass-scope.guard.test.ts), so Classic Dark and Light
+   never match one and printing never gets one. Same DOM as Classic (plan M1):
+   only the sf-* classes the page already has are read.
+
+   The public order page (/r/<token>, .sp-storefront.sf-public) is not this
+   lane's page: every selector skips it, so loading this file there changes
+   nothing until that page is composed.
+
+   Values come from the generated --lg-* tokens; under Reduce Transparency,
+   Increase Contrast and the low-power material the tokens are opaque, and the
+   one blurred surface here (overlays, the sticky toolbar) drops its blur, with
+   the attribute twin of each media block (plans/REVISION-DEFAULT.md R7). */
+@media screen {
+  /* ── Tokens: the storefront reads the glass values ───────────────────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) {
+    /* Words on ink fills (the active category pill, count badges). */
+    --sf-bg: var(--lg-surface);
+    /* Controls sit on the 62% field frost; cards and overlays are set below. */
+    --sf-bg-elev: var(--lg-field-fill);
+    --sf-bg-sunk: var(--lg-surface-3);
+    --sf-ink: var(--lg-ink);
+    --sf-ink-2: var(--lg-ink-2);
+    --sf-ink-3: var(--lg-ink-3);
+    --sf-ink-4: var(--lg-ink-4);
+    --sf-line: var(--lg-line);
+    --sf-line-2: var(--lg-line);
+    --sf-line-strong: var(--lg-line-2);
+    --sf-hover: var(--lg-surface-3);
+    --sf-accent: var(--lg-accent);
+    --sf-on-accent: var(--lg-on-accent);
+    --sf-accent-wash: var(--lg-accent-wash);
+    --sf-warn: var(--lg-warn);
+    --sf-warn-text: var(--lg-warn);
+    --sf-warn-wash: var(--lg-warn-wash);
+    --sf-crit: var(--lg-danger);
+    --sf-crit-text: var(--lg-danger);
+    --sf-crit-wash: var(--lg-danger-wash);
+    /* The board's primary action is the accent button (.btn-primary). */
+    --sf-btn: var(--lg-accent);
+    --sf-btn-ink: var(--lg-on-accent);
+    --sf-shadow-pop: var(--lg-sh-3);
+    --sf-shadow-dialog: var(--lg-sh-3);
+    /* The page sits on the pane's frost. */
+    background: transparent;
+  }
+  /* An embedded block (the delivery-request dialog is itself the shared
+     Dialog's content): the layered glass material underneath applies. */
+  :root[data-appearance='liquid-glass'] .sp-storefront.sf-embedded:not(.sf-public) {
+    background: revert-layer;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) :focus-visible {
+    outline-color: var(--lg-focus);
+  }
+
+  /* ── The page box (.page: max 1480, 6 / 28 / 48, 20 between) ───────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page {
+    max-width: 1480px;
+    padding: 6px 28px 48px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page-head,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-head {
+    margin-bottom: 20px;
+  }
+
+  /* ── The steps (.steps: 20 px numbered dots, 22 px rules) ────────────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow {
+    gap: 6px;
+    counter-reset: lg-step;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-step {
+    counter-increment: lg-step;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-step .fdot {
+    width: 20px;
+    height: 20px;
+    border: 0;
+    background: transparent;
+    box-shadow: inset 0 0 0 1.5px var(--lg-line-3);
+    color: var(--lg-ink-2);
+    font-size: 11px;
+    font-weight: 700;
+    font-style: normal;
+    line-height: 1;
+  }
+  /* The step's number, as drawn; a done step keeps its check. Spoken as
+     nothing (the alternative text after the slash is empty). */
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-flow-step:not([data-state='done'])
+    .fdot::before {
+    content: counter(lg-step) / '';
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-flow-step[data-state='done']
+    .fdot {
+    background: var(--lg-accent-wash);
+    box-shadow: inset 0 0 0 1.5px var(--lg-accent);
+    color: var(--lg-accent-text);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-flow-step[data-state='active']
+    .fdot {
+    background: var(--lg-accent);
+    box-shadow: 0 0 0 4px var(--lg-accent-wash);
+    color: var(--lg-on-accent);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-step .flabel {
+    color: var(--lg-ink-2);
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-flow-step[data-state='active']
+    .flabel {
+    color: var(--lg-ink);
+    font-weight: 650;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-sep {
+    width: 22px;
+    height: 1.5px;
+    margin: 0;
+    background: var(--lg-line-2);
+  }
+
+  /* ── The order setup card (card, 34 px tinted icon tiles, p16) ───────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup {
+    margin-bottom: 20px;
+    border-color: var(--lg-card-line);
+    border-radius: var(--lg-r-lg);
+    background: var(--lg-card-fill);
+    box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-cell,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-seg-wrap {
+    gap: 10px;
+    padding: 16px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-cell:hover {
+    background: var(--lg-card-hover);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-cell.static:hover {
+    background: none;
+  }
+  /* Hover fills follow the card's 20 px corners (19 inside its 1 px line). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :first-child {
+    border-radius: 19px 0 0 19px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :last-child {
+    border-radius: 0 19px 19px 0;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-ic {
+    width: 34px;
+    height: 34px;
+    border: 0;
+    border-radius: var(--lg-r-md);
+    background: var(--lg-surface-3);
+    color: var(--lg-ink-2);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-setup
+    > :nth-child(1)
+    .sf-setup-ic {
+    background: var(--lg-accent-wash);
+    color: var(--lg-accent-text);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-setup
+    > :nth-child(4)
+    .sf-setup-ic {
+    background: var(--lg-info-wash);
+    color: var(--lg-info);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-cell .lb,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-seg-wrap .lb {
+    color: var(--lg-ink-3);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 16px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-cell .vl {
+    color: var(--lg-ink);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 18px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup-cell .hint {
+    color: var(--lg-ink-3);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  /* ── Segmented controls (.seg: 3 px track, 30 px segments, lifted on) ── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-seg,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-viewseg {
+    padding: 3px;
+    gap: 2px;
+    border-color: var(--lg-field-line);
+    border-radius: 11px;
+    background: var(--lg-surface-3);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-seg button {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: var(--lg-r-sm);
+    color: var(--lg-ink-2);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-viewseg button {
+    width: 32px;
+    height: 30px;
+    border-radius: var(--lg-r-sm);
+    color: var(--lg-ink-2);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-seg, .sf-viewseg)
+    button[data-active='true'] {
+    background: rgba(255, 255, 255, 0.9);
+    color: var(--lg-ink);
+    font-weight: 650;
+    box-shadow:
+      0 1px 2px rgba(16, 20, 18, 0.12),
+      0 0 0 0.5px var(--lg-line-2);
+  }
+  :root[data-appearance='liquid-glass'].dark
+    .sp-storefront:not(.sf-public)
+    :is(.sf-seg, .sf-viewseg)
+    button[data-active='true'] {
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  /* ── Popovers (overlay glass: 74%, blur 30, radius 20; .mi rows) ─────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pop {
+    padding: 6px;
+    border-color: transparent;
+    border-radius: var(--lg-r-lg);
+    background: var(--lg-glass-strong);
+    -webkit-backdrop-filter: blur(30px) saturate(160%);
+    backdrop-filter: blur(30px) saturate(160%);
+    box-shadow:
+      var(--lg-glass-inner),
+      0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+      var(--lg-sh-3);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-opt {
+    min-height: 36px;
+    padding: 6px 10px;
+    border-radius: 9px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-opt:hover {
+    background: var(--lg-sel-fill);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-opt .nm {
+    font-size: 14px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pop-label {
+    padding: 6px 10px 4px;
+    color: var(--lg-ink-3);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+
+  /* ── Fields (.input: 36 px, radius 10, the 62% frost, the AA line) ───── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-search input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pop .srch input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pop .plain-input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-needed-by input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-notes textarea,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fallback-text {
+    border-color: var(--lg-input-line);
+    border-radius: var(--lg-r-md);
+    background: var(--lg-field-fill);
+    color: var(--lg-ink);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-search input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pop .srch input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pop .plain-input,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-needed-by input {
+    height: 36px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-search input {
+    padding-left: 35px;
+    font-size: 14px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-search > .icon {
+    left: 11px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-search input:focus,
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-pop
+    :is(.srch input, .plain-input):focus,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-needed-by input:focus,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-notes textarea:focus {
+    border-color: var(--lg-accent);
+    box-shadow: 0 0 0 3px var(--lg-focus-halo);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(
+      .sf-search input,
+      .sf-pop .srch input,
+      .sf-pop .plain-input,
+      .sf-notes textarea
+    )::placeholder {
+    color: var(--lg-ink-3);
+  }
+
+  /* ── The catalog toolbar. It stays sticky (Classic), so at rest it is a
+       floating glass capsule; the drawn toolbar sits on the pane. ──────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sticky {
+    border-radius: 18px;
+    background: var(--lg-glass);
+    -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+    backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+    box-shadow:
+      var(--lg-glass-inner),
+      0 0 0 var(--lg-ring-w) var(--lg-glass-ring);
+  }
+  /* Secondary buttons (.btn-secondary: 36 px, the field frost). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-tool-btn,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-btn-ghost {
+    height: 36px;
+    border-color: var(--lg-field-line);
+    border-radius: var(--lg-r-md);
+    background: var(--lg-field-fill);
+    color: var(--lg-ink);
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      0 1px 2px rgba(60, 44, 26, 0.08);
+  }
+  :root[data-appearance='liquid-glass'].dark
+    .sp-storefront:not(.sf-public)
+    :is(.sf-tool-btn, .sf-btn-ghost) {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-tool-btn {
+    padding: 0 12px;
+    color: var(--lg-ink-2);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-btn-ghost {
+    padding: 0 14px;
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-tool-btn, .sf-btn-ghost):hover {
+    border-color: var(--lg-field-line);
+    background: color-mix(in srgb, var(--lg-field-fill) 70%, #fff);
+    color: var(--lg-ink);
+  }
+  :root[data-appearance='liquid-glass'].dark
+    .sp-storefront:not(.sf-public)
+    :is(.sf-tool-btn, .sf-btn-ghost):hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-tool-btn[data-on='true'] {
+    border-color: var(--lg-accent);
+    color: var(--lg-ink);
+  }
+  /* Category pills (.chip: 32 px round on the frost; on = ink). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pill {
+    height: 32px;
+    border-color: var(--lg-field-line);
+    background: var(--lg-field-fill);
+    color: var(--lg-ink-2);
+    font-weight: 500;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-pill:hover {
+    border-color: var(--lg-line-3);
+    background: var(--lg-field-fill);
+    color: var(--lg-ink);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-pill[data-active='true'] {
+    border-color: var(--lg-ink);
+    background: var(--lg-ink);
+    color: var(--lg-surface);
+    font-weight: 600;
+  }
+  /* Active filter chips (.chip.scope: the selection tint, accent words). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-chip {
+    height: 30px;
+    border-color: transparent;
+    background: var(--lg-sel-fill);
+    color: var(--lg-accent-text);
+    font-weight: 600;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-chip button {
+    color: inherit;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-chip button:hover {
+    background: var(--lg-accent-wash-2);
+    color: inherit;
+  }
+
+  /* ── Section heads (h3: 16 / 22, 600) ────────────────────────────────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sec-head h3,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-result-line .n {
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 22px;
+    letter-spacing: -0.01em;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sec-head .see {
+    color: var(--lg-accent-text);
+    font-weight: 500;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-arrows button,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-qv,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-add-mini {
+    border-color: var(--lg-field-line);
+    border-radius: var(--lg-r-sm);
+    background: var(--lg-field-fill);
+  }
+
+  /* ── Product cards (card, padding 10, radius 18; photo radius 12) ─────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-grid {
+    grid-template-columns: repeat(auto-fill, minmax(212px, 1fr));
+    gap: 14px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-card,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-feat-card,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sk-card {
+    gap: 10px;
+    padding: 10px;
+    border-color: var(--lg-card-line);
+    border-radius: 18px;
+    background: var(--lg-card-fill);
+    box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-card:hover,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-feat-card:hover {
+    border-color: var(--lg-line-3);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-card, .sf-feat-card)[data-in-cart='true'] {
+    border-color: var(--lg-accent);
+    box-shadow:
+      var(--lg-glass-inner),
+      0 0 0 1px var(--lg-accent),
+      var(--lg-card-shadow);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-ph-box,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sk-card .ph {
+    overflow: hidden;
+    border-radius: 12px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-ph {
+    border-bottom: 0;
+    background: var(--lg-surface-3);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sk-card .ph {
+    border-bottom: 0;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-feat-rank,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-kit-tag {
+    border-color: transparent;
+    background: var(--lg-glass-strong);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-card-bd,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-feat-card .bd,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sk-card .bd {
+    padding: 0 4px 2px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-card-nm,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-feat-card .nm {
+    color: var(--lg-ink);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-card-meta {
+    color: var(--lg-ink-3);
+  }
+  /* Availability (.t-ok / .t-warn words on their washes). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-avail,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row .avl {
+    background: var(--lg-ok-wash);
+    color: var(--lg-ok);
+    font-weight: 500;
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-avail, .sf-row .avl).low {
+    background: var(--lg-warn-wash);
+    color: var(--lg-warn);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-avail, .sf-row .avl).out {
+    background: var(--lg-danger-wash);
+    color: var(--lg-danger);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-charter {
+    border-color: var(--lg-line-2);
+    color: var(--lg-ink-3);
+  }
+
+  /* Add (.btn-tinted, 34 px) and the stepper (.stepper: 34 px, radius 10). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-add {
+    height: 34px;
+    border-color: transparent;
+    border-radius: var(--lg-r-sm);
+    background: var(--lg-accent-wash);
+    color: var(--lg-accent-text);
+    font-weight: 600;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-add:hover {
+    background: var(--lg-accent-wash-2);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-add[disabled] {
+    border-color: var(--lg-line-2);
+    background: var(--lg-surface-2);
+    color: var(--lg-ink-4);
+  }
+  /* "Add all" (.sf-add.sf-add-all beside the card's control) draws as the
+     tinted Add above. With everything available already in the cart it is
+     aria-disabled, not disabled (it keeps keyboard focus), so the rule above
+     does not reach it: the same dimmed look. It follows the hover rule and
+     weighs the same, so the pointer does not tint it again. */
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    .sf-add-all[aria-disabled='true'] {
+    border-color: var(--lg-line-2);
+    background: var(--lg-surface-2);
+    color: var(--lg-ink-4);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step {
+    height: 34px;
+    grid-template-columns: 34px 1fr 34px;
+    border-color: var(--lg-field-line);
+    border-radius: var(--lg-r-md);
+    background: var(--lg-field-fill);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step.mini {
+    width: 112px;
+    height: 30px;
+    grid-template-columns: 30px minmax(0, 1fr) 30px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step button {
+    color: var(--lg-ink-2);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step .q {
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step:focus-within {
+    border-color: var(--lg-accent);
+    box-shadow: 0 0 0 3px var(--lg-focus-halo);
+  }
+  /* Beside "Add all" the stepper shows the count alone: Classic's own rules
+     drop the IN CART label there (a list row and a grid card at every width,
+     the quick view at 639.98 px and under), so no glass rule names it. */
+
+  /* ── The list view (the card, .li rows) ──────────────────────────────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rows {
+    border-color: var(--lg-card-line);
+    border-radius: var(--lg-r-lg);
+    background: var(--lg-card-fill);
+    box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row {
+    min-height: 56px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row:hover {
+    background: var(--lg-card-hover);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row .th,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-line .th,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-line .th {
+    border: 0;
+    border-radius: 9px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-row .nm {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  /* ── The two columns (.cols-side: the catalog beside a 300-360 px cart,
+       16 between, Order-New.dc.html:40, sp.css:291). Classic's cart is
+       372 px and stacks under the catalog from a 1280 px window; glass keeps
+       it beside the catalog, sticky, down to a 1101 px window and stacks it
+       at 1100 px and narrower, as the board does (Smaller screens, below). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-shell {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+  }
+
+  /* ── The cart (card, radius 20; glass head; .li lines; card-f) ───────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart {
+    border-color: var(--lg-card-line);
+    border-radius: var(--lg-r-lg);
+    background: var(--lg-card-fill);
+    box-shadow: var(--lg-glass-inner), var(--lg-card-shadow);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-head {
+    min-height: 52px;
+    padding: 12px 16px;
+    gap: 10px;
+    background: var(--lg-glass);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-head .ttl {
+    font-size: 16px;
+    font-weight: 600;
+    line-height: 22px;
+    letter-spacing: -0.01em;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-head .cnt {
+    color: var(--lg-accent-text);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-head .clr {
+    color: var(--lg-ink-3);
+    font-size: 13px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-ctx,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-confirm {
+    padding: 10px 16px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-ctx-chip {
+    border-color: transparent;
+    background: var(--lg-surface-3);
+    color: var(--lg-ink-2);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-line {
+    grid-template-columns: 40px minmax(0, 1fr) auto;
+    min-height: 56px;
+    padding: 12px 16px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-line .th {
+    width: 40px;
+    height: 40px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-line .nm {
+    font-weight: 600;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-line .rm {
+    width: 30px;
+    height: 30px;
+    border-radius: var(--lg-r-sm);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-line-warn {
+    border-radius: var(--lg-r-sm);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-empty {
+    padding: 32px 20px;
+  }
+  /* The empty state's tile (.empty-ic: 56 px, radius 18, accent wash). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-empty .ring {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    background: var(--lg-accent-wash);
+    color: var(--lg-accent-text);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-empty h5 {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 20px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sugg button {
+    border-color: var(--lg-field-line);
+    border-radius: var(--lg-r-md);
+    background: var(--lg-field-fill);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sugg-lbl,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-needed-by label {
+    color: var(--lg-ink-2);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 18px;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-needed-by,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-notes-head {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-notes-head {
+    color: var(--lg-ink);
+    font-weight: 600;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-notes textarea {
+    width: calc(100% - 32px);
+    margin: 0 16px 14px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-cart-foot {
+    gap: 10px;
+    padding: 12px 16px 16px;
+  }
+  /* The review button (.btn-primary .btn-lg .btn-block: 44 px, radius 12). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-submit {
+    height: 44px;
+    border-color: transparent;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+  }
+  :root[data-appearance='liquid-glass']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-submit, .sf-btn-go, .sf-fab):not([disabled]):hover {
+    background: var(--lg-accent-hover);
+    opacity: 1;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-submit[disabled] {
+    border-color: transparent;
+    background: var(--lg-surface-3);
+    color: var(--lg-ink-4);
+    box-shadow: none;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-btn-go {
+    height: 36px;
+    border-color: transparent;
+    border-radius: var(--lg-r-md);
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      0 6px 16px -8px color-mix(in srgb, var(--lg-accent) 70%, transparent);
+  }
+  /* The floating cart button (under 1280 px): the accent pill. */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fab {
+    font-size: 14px;
+    font-weight: 600;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.28),
+      0 10px 24px -10px color-mix(in srgb, var(--lg-accent) 80%, transparent),
+      var(--lg-sh-2);
+  }
+
+  /* ── Overlays: the quick view drawer and the review sheet (.drawer and
+       .dialog: overlay glass, radius 24, the reading area an inset well on
+       the field frost, the scrim tinted and never blurred) ────────────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer-backdrop,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-bk {
+    background: var(--lg-scrim);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal {
+    border: 0;
+    border-radius: 24px;
+    background: var(--lg-glass-strong);
+    -webkit-backdrop-filter: blur(30px) saturate(160%);
+    backdrop-filter: blur(30px) saturate(160%);
+    box-shadow:
+      var(--lg-glass-inner),
+      0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+      var(--lg-sh-3);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer {
+    top: 10px;
+    right: 10px;
+    bottom: 10px;
+    width: min(420px, calc(100vw - 20px));
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal {
+    width: min(620px, 100%);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer-head,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-head {
+    align-items: flex-start;
+    padding: 20px 20px 14px 24px;
+    border-bottom: 0;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer-body,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-body {
+    margin: 0 8px;
+    padding: 18px;
+    border: 1px solid var(--lg-card-line);
+    border-radius: 16px;
+    background: var(--lg-field-fill);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer-foot,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-foot {
+    gap: 10px;
+    padding: 14px 16px 16px 24px;
+    border-top: 0;
+    background: transparent;
+  }
+  /* Inside the delivery-request dialog the shared Dialog draws the frame and
+     its padding; the foot is a plain row there. */
+  :root[data-appearance='liquid-glass'] .sp-storefront.sf-embedded:not(.sf-public) .sf-modal-foot {
+    padding: 14px 0 0;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-foot .sf-btn-go {
+    height: 44px;
+    padding: 0 18px;
+    border-radius: 12px;
+    font-size: 15px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer-title,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-head h3 {
+    font-size: 20px;
+    font-weight: 650;
+    line-height: 26px;
+    letter-spacing: -0.016em;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-modal-head .sub {
+    color: var(--lg-ink-3);
+    font-size: 13px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-icon-btn {
+    border-radius: var(--lg-r-sm);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-icon-btn:hover {
+    background: color-mix(in srgb, var(--lg-ink) 7%, transparent);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-eyebrow,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-spec .k,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-grid .k,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-notes .k {
+    color: var(--lg-ink-3);
+    font-size: 12px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-qv-photo {
+    border: 0;
+    border-radius: 12px;
+  }
+  /* The facts as the board's key-value list (.kv), two to a row. */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-spec,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 16px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-spec > div,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-grid > div {
+    padding: 0;
+    background: transparent;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-grid .v,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-spec .v {
+    color: var(--lg-ink);
+    font-size: 14px;
+    font-weight: 500;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-grid {
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--lg-line);
+    margin-bottom: 6px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-line {
+    grid-template-columns: 28px 1fr auto;
+    gap: 10px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-line .th {
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-line .q {
+    font-family: inherit;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  /* Notes, notices and alerts (.alert: radius 12 on the card frost). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-notes,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-notice,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-kits-error,
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fallback {
+    border-color: var(--lg-card-line);
+    border-radius: 12px;
+    background: var(--lg-card-fill-2);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-alert {
+    border-color: var(--lg-danger-line);
+    border-radius: 12px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rev-unconfirmed {
+    border-color: var(--lg-warn-line);
+    border-radius: 12px;
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-note-warn {
+    border-color: var(--lg-warn-line);
+    border-radius: var(--lg-r-sm);
+    background: var(--lg-warn-wash);
+  }
+  /* The submitted state (.empty: the 56 px tile on the ok wash). */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-success .ok {
+    width: 56px;
+    height: 56px;
+    border-radius: 18px;
+    background: var(--lg-ok-wash);
+    color: var(--lg-ok);
+  }
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-success h3 {
+    font-size: 20px;
+    font-weight: 650;
+    line-height: 26px;
+  }
+
+  /* ── Loading: the shine on glass ─────────────────────────────────────── */
+  :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-sk {
+    background: var(--lg-surface-3);
+  }
+
+  /* ── Smaller screens ─────────────────────────────────────────────────── */
+  /* From a 1101 to a 1280 px window, where Classic stacks the cart, glass
+     keeps the two columns: the cart stays sticky beside the catalog (with
+     Classic's own height, and its room for the What's New notice), so the
+     floating cart button, which only scrolls down to a stacked cart, is not
+     drawn (the board draws none at these widths; declared in
+     tests/e2e/appearance/glass-only-allowlist.json). */
+  @media (min-width: 1100.02px) and (max-width: 1280px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-rail {
+      position: sticky;
+      max-height: calc(100dvh - var(--sf-topbar-h) - 40px);
+    }
+    :root[data-appearance='liquid-glass'][data-sp-update-card]
+      .sp-storefront:not(.sf-public)
+      .sf-rail {
+      max-height: calc(100dvh - var(--sf-topbar-h) - 40px - var(--sp-update-card-offset, 0px));
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fab {
+      display: none;
+    }
+  }
+  /* At 1100 px and narrower the cart stacks below the catalog (sp.css:292)
+     and the floating button returns: the page keeps Classic's room for it. */
+  @media (max-width: 1100px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-shell {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page {
+      padding-bottom: 90px;
+    }
+  }
+  @media (max-width: 1023.98px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :first-child {
+      border-radius: 19px 0 0 0;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :nth-child(2) {
+      border-radius: 0 19px 0 0;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :nth-child(3) {
+      border-radius: 0 0 0 19px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :nth-child(4) {
+      border-radius: 0 0 19px 0;
+    }
+  }
+  /* The phone page box (.page at 760 px: 4 / 16 / 96, 16 between). */
+  @media (max-width: 760px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page {
+      padding: 4px 16px 96px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page-head,
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-head,
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup {
+      margin-bottom: 16px;
+    }
+  }
+  @media (max-width: 639.98px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :first-child {
+      border-radius: 19px 19px 0 0;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-setup
+      > :is(:nth-child(2), :nth-child(3)) {
+      border-radius: 0;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-setup > :last-child {
+      border-radius: 0 0 19px 19px;
+    }
+    /* Classic's 44 px touch rows on a phone stay; only the corners change. */
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step {
+      grid-template-columns: 44px 1fr 44px;
+    }
+    /* A grid card's control beside "Add all": Classic's 128 px base leaves the
+       count 38 px between the 44 px buttons, and the 14 px glass figure needs
+       45 px for 10000, which drew as "1000". The control keeps 136 px (46 px
+       for the count), so the button goes under it 8 px sooner; a wider card
+       draws as before. Add to cart keeps the same width, so "Add all" does
+       not jump when one turns into the other. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-card
+      .sf-ctl
+      > .sf-add:not(.sf-add-all),
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-card
+      .sf-ctl
+      > .sf-step {
+      min-width: 136px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-step.mini {
+      height: 36px;
+      grid-template-columns: 36px 1fr 36px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-drawer {
+      top: 6px;
+      right: 6px;
+      bottom: 6px;
+      width: calc(100vw - 12px);
+    }
+  }
+
+  /* ── The phone (≤ 760 px, Order-New-Mobile.dc.html) ─────────────────────
+     The board's phone draws the steps on one line, the order setup as one
+     line (where it goes and from where, beside the Pickup / Delivery
+     segment as two icons: its .mob-f "Order setup" card) and, at the foot
+     of the screen, the cart bar (.cartbar: a glass bar 12 px from the sides
+     and 14 px up, radius 22: the cart tile, "Cart" and the count, and
+     Review request at the right).
+
+     Same DOM as Classic (plan M1). The setup keeps its four cells and
+     their popovers in Classic's order (Ship from, For, the segment, Pick up
+     at or Deliver to), laid out on the card's two lines with the segment
+     at the right of both: each cell a label over its value, the value
+     wrapping in its column (never cut), with the icon tiles left out on a
+     phone; a popover opens under the whole card, across its width. The
+     segment's words stay its buttons' names (drawn at no size, so a screen
+     reader still reads Pickup and Delivery). Deviation: the board's one
+     sentence summary is drawn as the cells' own labels and values.
+
+     The cart bar is the floating cart button itself (it still scrolls to
+     the cart) drawn across the foot, and the cart's own Review order
+     button, fixed at the bar's right: the one node, so its disabled state
+     and the review it opens are Classic's. Both appear only while the cart
+     holds something (the button's own data-show; the board draws the bar
+     with a disabled Review request on an empty cart). Deviation: the bar
+     reads Classic's "Cart · N" units, not the board's "2 lines · 5 items"
+     (the button has no second line). */
+  @media (max-width: 760px) {
+    /* The steps on one line. */
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow {
+      flex: 1 1 100%;
+      flex-wrap: nowrap;
+      gap: 4px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-step {
+      flex: none;
+      gap: 5px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-step .flabel {
+      font-size: 12px;
+    }
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-flow-sep {
+      flex: 1 1 8px;
+      width: auto;
+      min-width: 6px;
+      max-width: 22px;
+    }
+
+    /* The setup card (.card.mob-f.row: radius 18, 16 px a side), on two
+       lines: Ship from and For on the first, Pick up at or Deliver to
+       across the second, and the Pickup / Delivery segment at the right of
+       both (where the board draws it). A grid, so each value has the room
+       of its own column and wraps there instead of being cut: a long
+       warehouse or site name and its chevron always show. */
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-page > .sf-setup {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      align-items: stretch;
+      border-radius: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > :is(.sf-setup-cell, .sf-seg-wrap) {
+      min-height: 0;
+      padding: 10px 12px;
+      border-top: 0;
+      border-left: 0;
+      border-radius: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > .sf-setup-cell {
+      position: static;
+      align-items: flex-start;
+      min-width: 0;
+    }
+    /* For, beside Ship from. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > .sf-setup-cell
+      + .sf-setup-cell {
+      border-left: 1px solid var(--lg-line);
+    }
+    /* Ship from, and Pick up at or Deliver to under it: 16 px from the
+       card's edge. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > :first-child {
+      padding-left: 16px;
+      border-radius: 17px 0 0 0;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > .sf-seg-wrap
+      ~ .sf-setup-cell {
+      grid-row: 2;
+      grid-column: 1 / span 2;
+      padding-left: 16px;
+      border-top: 1px solid var(--lg-line);
+      border-radius: 0 0 0 17px;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-ic,
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell.static
+      .hint {
+      display: none;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .lb {
+      overflow: hidden;
+      font-size: 11.5px;
+      line-height: 15px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    /* A value wraps in its column (Classic's one clipped flex line drew no
+       ellipsis: text-overflow does not apply to a flex box), its chevron
+       inline after the last word. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .vl {
+      display: block;
+      overflow: visible;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .vl
+      .icon {
+      display: inline-flex;
+      vertical-align: -1px;
+    }
+    /* The hint under For (yourself, or "On behalf · their email") and
+       under Deliver to (the site's code); Pick up at's sentence repeats its
+       value and is left to the review. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-setup-cell
+      .hint {
+      margin-top: 1px;
+      font-size: 11.5px;
+      line-height: 15px;
+    }
+    /* A setup popover opens under the whole card, across its width. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-pop {
+      top: calc(100% + 6px);
+      right: 0;
+      left: 0;
+      min-width: 0;
+    }
+    /* The Pickup / Delivery segment as two 40 px icons, at the right of
+       both lines. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > .sf-seg-wrap {
+      grid-row: 1 / span 2;
+      grid-column: 3;
+      padding: 8px 10px;
+      border-left: 1px solid var(--lg-line);
+      border-radius: 0 17px 17px 0;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > .sf-seg-wrap
+      > div {
+      flex: none;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      > .sf-seg-wrap
+      .lb {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-seg {
+      display: inline-flex;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-seg
+      button {
+      flex: none;
+      width: 40px;
+      height: 36px;
+      gap: 0;
+      padding: 0;
+      font-size: 0;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-page
+      > .sf-setup
+      .sf-seg
+      button
+      svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* The cart bar: the floating cart button across the foot … */
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fab[data-show='true'] {
+      right: 12px;
+      bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+      left: 12px;
+      display: flex;
+      justify-content: flex-start;
+      gap: 12px;
+      height: 60px;
+      padding: 0 8px 0 10px;
+      border-radius: 22px;
+      background: var(--lg-glass);
+      -webkit-backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      backdrop-filter: blur(var(--lg-glass-blur)) saturate(var(--lg-glass-sat));
+      box-shadow:
+        var(--lg-glass-inner),
+        0 0 0 var(--lg-ring-w) var(--lg-glass-ring),
+        var(--lg-glass-shadow);
+      color: var(--lg-ink);
+      font-size: 14px;
+      font-weight: 600;
+      text-align: left;
+    }
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-fab[data-show='true']:not([disabled]):hover {
+      background: var(--lg-glass);
+    }
+    /* … its cart icon as the 40 px tile on the accent wash (.cart-ic) … */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      .sf-fab[data-show='true']
+      > svg {
+      box-sizing: border-box;
+      flex: none;
+      width: 40px;
+      height: 40px;
+      padding: 11px;
+      border-radius: 14px;
+      background: var(--lg-accent-wash);
+      color: var(--lg-accent-text);
+    }
+    /* … and the cart's Review order button at the bar's right. */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public):has(.sf-fab[data-show='true'])
+      .sf-cart-foot
+      .sf-submit {
+      position: fixed;
+      right: 20px;
+      bottom: calc(22px + env(safe-area-inset-bottom, 0px));
+      z-index: 41;
+      width: auto;
+      height: 44px;
+      padding: 0 16px;
+    }
+    /* Room under the last card for the bar (.page.has-cartbar: 108). */
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public):has(.sf-fab[data-show='true'])
+      .sf-page {
+      padding-bottom: 108px;
+    }
+    /* The What's New notice shares the foot: the bar rises above it. */
+    :root[data-appearance='liquid-glass'][data-sp-update-card]
+      .sp-storefront:not(.sf-public)
+      .sf-fab[data-show='true'] {
+      bottom: calc(14px + var(--sp-update-card-offset, 0px));
+    }
+    :root[data-appearance='liquid-glass'][data-sp-update-card]
+      .sp-storefront:not(.sf-public):has(.sf-fab[data-show='true'])
+      .sf-cart-foot
+      .sf-submit {
+      bottom: calc(22px + var(--sp-update-card-offset, 0px));
+    }
+  }
+
+  /* ── Reduce Transparency, Increase Contrast: nothing is blurred (the
+       tokens are already opaque there) ────────────────────────────────── */
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    :root[data-appearance='liquid-glass']
+      .sp-storefront:not(.sf-public)
+      :is(.sf-pop, .sf-sticky, .sf-drawer, .sf-modal, .sf-fab[data-show='true']) {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+  /* The same on weak Chromium browsers (data-lg-material="reduced"). */
+  :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+    .sp-storefront:not(.sf-public)
+    :is(.sf-pop, .sf-sticky, .sf-drawer, .sf-modal, .sf-fab[data-show='true']) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+  /* Forced colours: the phone's cart bar keeps an edge (its shadow and
+     fill are dropped there). */
+  @media (forced-colors: active) and (max-width: 760px) {
+    :root[data-appearance='liquid-glass'] .sp-storefront:not(.sf-public) .sf-fab[data-show='true'] {
+      border: 1px solid CanvasText;
+    }
+  }
+}

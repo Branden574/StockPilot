@@ -11,18 +11,23 @@ export default function TeamLoading() {
     <div
       aria-busy="true"
       className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass="skeleton-page"
+      data-glass-width="wide"
     >
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex h-[42px] items-center">
+          <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
             <Skeleton className="h-[26px] w-32" />
           </div>
           <Skeleton className="mt-1 h-3 w-72 max-w-full" />
         </div>
         <Skeleton className="h-8 w-32" />
       </div>
-      <div className="border-border bg-card overflow-hidden rounded-lg border">
-        <div className="border-border flex min-h-[49px] items-center border-b px-[18px]">
+      <div className="border-border bg-card overflow-hidden rounded-lg border" data-glass="card">
+        <div
+          className="border-border flex min-h-[49px] items-center border-b px-[18px]"
+          data-glass-role="skeleton-card-head"
+        >
           <Skeleton className="h-3.5 w-28" />
         </div>
         <TableBodySkeleton rows={6} className="rounded-none border-0" />

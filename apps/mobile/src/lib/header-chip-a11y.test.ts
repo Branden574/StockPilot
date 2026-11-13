@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
+import { printClassic } from './__fixtures__/classic-projection';
 import {
   TOUCHABLE_TAG,
   attr,
@@ -170,7 +171,12 @@ describe('the Home avatar is named too, and a 44pt target', () => {
   // from the menu chip's frame takes the 3pt: the picture stays where it was
   // (12 + 38 + 8 from the left edge). Mutation caught: the gap left at 5.
   it('Home gives the 3pt back, so the picture does not move', () => {
-    expect(home).toMatch(/<View style=\{\{ flexDirection: 'row', alignItems: 'center', gap: 2 \}\}>\s*<IconChip icon=\{Menu\}/);
+    // Classic's shape, read from Home's Classic projection (every Liquid Glass
+    // branch folded to Classic: lib/__fixtures__/classic-projection.ts).
+    const classic = printClassic(home, 'app/(drawer)/(tabs)/index.tsx');
+    expect(classic).toMatch(
+      /<View style=\{\{ flexDirection: 'row', alignItems: 'center', gap: 2 \}\}>\s*<IconChip icon=\{Menu\}/,
+    );
   });
 });
 

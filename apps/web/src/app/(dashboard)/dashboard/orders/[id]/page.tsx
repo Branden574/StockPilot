@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import * as React from 'react';
 
+import { ModuleUnavailable } from '@/components/dashboard/module-unavailable';
 import { AddItemsDialog } from '@/components/orders/add-items-dialog';
 import type { DriverOption } from '@/components/orders/assign-delivery-dialog';
 import { CancelOrderButton } from '@/components/orders/cancel-order-button';
@@ -17,10 +18,14 @@ import { MemberReturnDialog } from '@/components/returns/member-return-dialog';
 import { RequesterTracking } from '@/components/returns/requester-tracking';
 import { ReturnStatusBadge, returnReasonLabel } from '@/components/returns/return-status-badge';
 import { OrderAttachmentsPanel } from '@/components/orders/order-attachments-panel';
+import { OrderFulfilmentBadge } from '@/components/orders/order-fulfilment-badge';
+import { OrderRequesterNoteAside } from '@/components/orders/order-requester-note-aside';
 import { OrderRealtimeRefresh } from '@/components/orders/order-realtime-refresh';
 import { OrderTimeline } from '@/components/orders/order-timeline';
 import { ReplacementBanner } from '@/components/orders/replacement-banner';
 import { exchangeCreateEnabled } from '@/lib/returns/exchange-switch';
+import { returnRequestOrderLink } from '@/lib/returns/return-request-link';
+import { returnRequestRecipientsDto } from '@/server/services/return-request-email';
 import { ReadinessLineCell } from '@/components/orders/readiness-line-cell';
 import { ReadinessStrip } from '@/components/orders/readiness-strip';
 import {
@@ -60,6 +65,7 @@ import {
   BOOK_REPORT_BACK_TO_REPORT,
   can,
   canDraftShortfallPo,
+  canSendReturnRequest,
   deliveryRecipientsForRouting,
   describeCompletionConfirm,
   describeLineReturnRefs,
@@ -141,6 +147,7 @@ import {
   type ReturnStatus,
 } from '@/server/services/returns';
 import { trackingForOrder } from '@/server/services/returns-requester';
+import { actionsPanelOffersReads } from '@/lib/orders/actions-panel-reads';
 import { formatNeededBy } from '@/lib/orders/needed-by-format';
 import { neededByChangeView } from '@/lib/orders/needed-by-change';
 import type { ShortfallPoOffer } from '@/lib/orders/shortfall-po';
@@ -148,6 +155,9 @@ import { cn, formatNumber, formatRelative } from '@/lib/utils';
 import { PageTour } from '@/components/onboarding/page-tour';
 import { ORDER_DETAIL_TOUR } from '@/lib/onboarding/tours';
 import { HelpTip } from '@/components/onboarding/help-tip';
+// Liquid Glass's composition of this page (Order-Detail.dc.html), scoped to
+// the glass root and this page's data-glass-page root; inert in Classic.
+import '@/styles/liquid-glass/pages/order-detail.css';
 
 /** The record page's frame, as the purchase order's (DESIGN-SPEC 5.3). */
 const ORDER_PAGE =
@@ -201,6 +211,14 @@ export default async function OrderDetailPage({
   // the error boundary. The service context above still starts first, so a
   // real order opens exactly as before.
   notFoundUnlessUuid(id);
+  // Orders off (a stale link) is the module-off panel, before the order is
+  // read: that read refuses with module_disabled, which was the error page
+  // (B66). The module set came with the request context above, so this
+  // waits on no read of its own.
+  const moduleAccess = await checkModuleAccess('orders');
+  if (!moduleAccess.enabled) {
+    return <ModuleUnavailable moduleId="orders" access={moduleAccess} />;
+  }
   const canApprove = can(ctx, 'orders:approve');
 
   // ORDER READINESS (F2-1) starts HERE, beside the order read, not after it.
@@ -237,6 +255,8 @@ export default async function OrderDetailPage({
   // page's longest chain. It is the request-cached read the picking statuses
   // already pay (getWarehouseAccess is React.cache'd), so a picking order
   // reads it once. Observed at once: an order the viewer cannot see drops it.
+  // Security slice E reads the same answer for every approver control on the
+  // page (approverWritesHere, below the order read).
   const approverWarehouseAccess =
     canApprove && !roleSeesEveryWarehouse(ctx.role) ? getWarehouseAccess(ctx) : null;
   approverWarehouseAccess?.catch(() => {});
@@ -270,6 +290,35 @@ export default async function OrderDetailPage({
   const replacement = detail.replacement ?? null;
   const isReplacement = Boolean(request.replacement_for_return_id);
 
+  // SECURITY SLICE E (migration 0416): an approver acts on an order only in a
+  // warehouse they may write to. Every approval function asks it in the
+  // database and the service asks it first, so an approver outside this
+  // order's warehouse is offered none of an approver's controls (the actions
+  // panel's steps and its internal notes, Cancel, Hold available stock, the
+  // line controls and Add items) rather than each one refused after the tap
+  // with "This order is in a warehouse you don't work in". A manager or above
+  // works in every warehouse by role (roleSeesEveryWarehouse) and nothing is
+  // read; anyone else who approves has the read started beside the order read
+  // (approverWarehouseAccess), joined here after it, so it adds no level to
+  // the page. A failed read is no access (it answers empty lists), as for the
+  // needed-by Change and the hand-over link.
+  //   - approverWritesHere: write access, as assertWarehouseAccess 'write'
+  //     decides it (never a viewer): every approver action and Cancel.
+  //   - approverReadsHere: read access, the rule the line edits ask
+  //     (loadEditableOrderHeader: assertWarehouseAccess 'read'), so a viewer
+  //     granted orders:approve keeps the lines, and the actions panel, of
+  //     their own warehouse.
+  const approverAccess = approverWarehouseAccess
+    ? await approverWarehouseAccess.catch(() => null)
+    : null;
+  const approverAccessHas = (ids: string[] | undefined): boolean =>
+    roleSeesEveryWarehouse(ctx.role) ||
+    (approverAccess !== null &&
+      (approverAccess.hasAllAccess || (ids ?? []).includes(request.warehouse_id)));
+  const approverWritesHere =
+    canApprove && ctx.role !== 'viewer' && approverAccessHas(approverAccess?.writableIds);
+  const approverReadsHere = canApprove && approverAccessHas(approverAccess?.readableIds);
+
   // ---- Sync gates (no I/O). Every boolean the Tier-2 batch below needs to
   // decide WHICH round trips to fire is derived here, purely from ctx +
   // request/lines — none of it depends on anything async, so computing it
@@ -288,12 +337,19 @@ export default async function OrderDetailPage({
   // requester-or-approver, and only before the order ships or dies. Gating here
   // rather than letting the server 409 means nobody opens the picker, stages
   // five items and only then learns the order already left the building.
-  // Not mirrored: the service's assertWarehouseAccess(warehouse_id,'read').
-  // order_requests are readable org-wide, so a warehouse-scoped member can open
-  // an order for a warehouse they aren't assigned to and would still see the
-  // button; paying getWarehouseAccess on EVERY render (today it is paid only on
-  // picking statuses) to pre-empt that rare case isn't worth it — the action
-  // returns a clean forbidden with the dialog left open.
+  // The service's assertWarehouseAccess(warehouse_id, 'read') is asked of
+  // EVERYONE, the person who placed the order included
+  // (loadEditableOrderHeader; the line insert policy also refuses a raw
+  // insert of any item of that warehouse they cannot read, since it reads
+  // the item under their own access). So for an approver the page asks it
+  // too (security slice E: approverReadsHere, from the access read already
+  // in flight for them), and being the requester never stands in for it: an
+  // approver whose own order sits in a warehouse they don't work in is
+  // offered no line control either (slice E review). For anyone else the
+  // read is not paid (the requester placed the order in a warehouse they
+  // read; one whose assignment was removed since gets the service's one
+  // sentence).
+  const viewerMayChangeLines = canApprove ? approverReadsHere : isOwnRequest;
   const ADD_LINES_BLOCKED: OrderRequestStatus[] = [
     'in_transit',
     'completed',
@@ -301,7 +357,7 @@ export default async function OrderDetailPage({
     'cancelled',
   ];
   const canAddLines =
-    (canApprove || isOwnRequest) && !ADD_LINES_BLOCKED.includes(request.status) && !isReplacement;
+    viewerMayChangeLines && !ADD_LINES_BLOCKED.includes(request.status) && !isReplacement;
   // Correcting a line is the same act as adding one — addLines,
   // updateLineQuantity and removeLine all run the SAME
   // loadEditableOrderHeader gate (ship gate + requester-or-approver +
@@ -333,9 +389,23 @@ export default async function OrderDetailPage({
   // manager+ → pick/complete/reassign/release).
   const isPickingStatus =
     request.status === 'pick_slip_generated' || request.status === 'picking_in_progress';
+  // Slice E: an approver outside the order's warehouse is offered none of the
+  // panel's steps (every approval step and the notes ask write access; the
+  // hand-over follows the same rule), so the panel is not shown to them for
+  // being an approver, except where it carries a READ (slice E review,
+  // lib/orders/actions-panel-reads): Print pick slip at picking complete,
+  // and from the packing slips on Print customer slip and View signature,
+  // which ask no warehouse (the signature route admits any approver, and the
+  // phone offers View signature to them too). There they see the panel with
+  // no step in it and without Print warehouse slip (canPrintWarehouseSlip,
+  // the hand-over rule). The picking phase and the driver's own steps still
+  // show it. Inside the warehouse the steps follow approverWritesHere (the
+  // panel's canApprove, below); a viewer granted orders:approve keeps the
+  // panel of their own warehouse as before, with no step in it.
   const showActionsPanel =
     request.status !== 'pending_confirmation' &&
-    (canApprove ||
+    (approverReadsHere ||
+      (canApprove && actionsPanelOffersReads(request.status)) ||
       isPickingStatus ||
       (isAssignedDriver && ['staged_for_delivery', 'in_transit'].includes(request.status)));
 
@@ -369,7 +439,10 @@ export default async function OrderDetailPage({
   // staged_for_delivery order. Every other status skips the round-trip.
   // 0390: assigning needs orders:assign_delivery as well as orders:approve.
   const canAssignDelivery = can(ctx, 'orders:assign_delivery');
-  const driversGate = canApprove && canAssignDelivery && request.status === 'staged_for_delivery';
+  // Slice E: the dialog is the panel's, offered only where the viewer writes
+  // (assign_order_delivery asks it too), so an approver elsewhere pays no read.
+  const driversGate =
+    approverWritesHere && canAssignDelivery && request.status === 'staged_for_delivery';
 
   // Carrier shipping (EasyPost). The panel renders (and self-hides via its own
   // GET when no shipment exists) for anyone on a shippable delivery order, but
@@ -403,6 +476,13 @@ export default async function OrderDetailPage({
     request.status === 'completed' || (request.status as string) === 'delivered';
   const canReadReturns = can(ctx, 'returns:read') || can(ctx, 'returns:manage');
   const returnsModuleGate = orderIsReturnable && (canReadReturns || isOwnRequest);
+  // F14, "Send return request" on the requester's own requests: the viewer
+  // who gets "Your requests on this order" below (requesterTrackingEligible,
+  // decided once the module answer is in). Known here so the two reads the
+  // draft needs (the delivery site and the delivery-request mailboxes) go out
+  // with the others. A returnable order is completed, so this and
+  // showDeliveryRequest below are never both true.
+  const returnRequestGate = isOwnRequest && !can(ctx, 'returns:manage') && returnsModuleGate;
 
   // "Report a problem" launch point (Task 17, master brief §8) — always
   // available regardless of order status; the module RPC is only paid for a
@@ -440,7 +520,7 @@ export default async function OrderDetailPage({
   const printsOrgTime =
     Boolean(neededBy) ||
     (showActionsPanel &&
-      canApprove &&
+      approverWritesHere &&
       request.status === 'pending_approval' &&
       Boolean(request.notes?.trim()));
 
@@ -547,7 +627,9 @@ export default async function OrderDetailPage({
     isPickingStatus
       ? (async () => {
           const supabase = await createClient();
-          if (canApprove) {
+          // Slice E: Reassign is offered only where the viewer writes
+          // (assign_picking asks it too); elsewhere only the chip's name.
+          if (approverWritesHere) {
             // Only offer pickers who can actually pick at THIS warehouse: managers+
             // (all-warehouse access) OR members explicitly assigned to
             // request.warehouse_id. Without this filter AssignPickerDialog could
@@ -629,7 +711,7 @@ export default async function OrderDetailPage({
     // actually render for an order that HAS a charter. A missing/failed row
     // degrades to null — the assistant already tolerates the 5 legacy
     // delivery rows with no charter.
-    showDeliveryRequest && request.delivery_charter_id
+    (showDeliveryRequest || returnRequestGate) && request.delivery_charter_id
       ? (async (): Promise<StorefrontCharter | null> => {
           const supabase = await createClient();
           const { data } = await supabase
@@ -668,7 +750,10 @@ export default async function OrderDetailPage({
     // button renders only when this resolves to a routable pair — unset or
     // invalid routing HIDES it (fail closed; never the compiled
     // constants, which only the pre-migration 'fallback' state may supply).
-    showDeliveryRequest
+    // F14: the return request draft goes to the same mailboxes, so the same
+    // read (and the same fail-closed rule) serves the requester's own
+    // requests on a completed order.
+    showDeliveryRequest || returnRequestGate
       ? getOrgEmailRouting(ctx.organizationId, 'delivery_request')
       : Promise.resolve<OrgEmailRoutingReadState | null>(null),
 
@@ -745,6 +830,13 @@ export default async function OrderDetailPage({
         ccName: deliveryRequestRecipientsValue.ccName,
       }
     : null;
+
+  // F14: the return request draft goes to the same saved mailboxes, by a
+  // stricter rule (services/return-request-email.ts): only a pair this
+  // organization saved, never the compiled pair the pre-migration 'fallback'
+  // state gives the delivery request above.
+  const returnRequestRecipients =
+    returnRequestGate && deliveryRequestRouting ? returnRequestRecipientsDto(deliveryRequestRouting) : null;
 
   // Readiness, as the page shows it. The stock-dependent actions come from
   // the same result (core readinessStockFlags + orderStockGates, the phone's
@@ -916,7 +1008,9 @@ export default async function OrderDetailPage({
         ? ('resume' as const)
         : null;
   const partialPreview: PartialPreview | null =
-    canApprove && partialAction ? previewPartialFulfilment(readinessNow, partialAction) : null;
+    approverWritesHere && partialAction
+      ? previewPartialFulfilment(readinessNow, partialAction)
+      : null;
 
   // ── F2-2: held, and caught before it leaves. Everything below is computed
   // from what the page already read (the order, its lines, the readiness
@@ -925,9 +1019,11 @@ export default async function OrderDetailPage({
   // "Hold available stock" on the strip (core shouldOfferHoldStock): an
   // approver, a hold status, some line not held or partly held. For lines
   // added before holds were topped up, or by someone who may not approve.
+  // An approver in the order's warehouse only (slice E: hold_order_stock
+  // asks write access to it, as every approver action does).
   const holdOrderId = shouldOfferHoldStock({
     assessment: readinessAssessment,
-    canApproveOrders: canApprove,
+    canApproveOrders: approverWritesHere,
   })
     ? id
     : null;
@@ -970,7 +1066,7 @@ export default async function OrderDetailPage({
   // people who could have edited them before.
   const pickedPhase = isPickingSettled(request.status);
   const showShortLineFixes =
-    canEditLines || (request.status === 'in_transit' && (canApprove || isOwnRequest));
+    canEditLines || (request.status === 'in_transit' && viewerMayChangeLines);
   const shortFixesFor = (lineId: string, rowIndex: number): ShortLineActions | null => {
     if (!showShortLineFixes) return null;
     const isOnlyLine = lines.length === 1;
@@ -1122,8 +1218,10 @@ export default async function OrderDetailPage({
     approverWarehouseAccess && !isAssignedDriver
       ? await approverWarehouseAccess.catch(() => null)
       : null;
-  // The panel hears it too: its deleted-driver line (B23) names the hand-over
-  // buttons, so it is said only to a viewer this rule lets press one.
+  // The same answer decides the panel's Print warehouse slip: its QR hands
+  // the order over, and its route asks this rule (mayHandOverOrder). The panel
+  // hears it too: its deleted-driver line (B23) names the hand-over buttons,
+  // so it is said only to a viewer this rule lets press one.
   const viewerMayHandOver = handOverAllowed(ctx, request, handOverWarehouseAccess);
   const wantsHandOverLink = handOverLinkWanted({
     showActionsPanel,
@@ -1169,6 +1267,14 @@ export default async function OrderDetailPage({
     showTracking: requesterTrackingEligible,
     viewerCanReadReturns: returnsLinkable,
   });
+  // F14: the mailboxes reach the browser only when at least one card will
+  // draw "Send return request" (the button's own rule, core
+  // canSendReturnRequest). RequesterTracking is a client component, so every
+  // prop it is handed is written into the page's HTML even where it renders
+  // no button: a requester with no request, or only closed ones, gets none.
+  const returnRequestSendable = returnsShown.tracking.some((r) =>
+    canSendReturnRequest(r.returnStatus, r.returnNumber),
+  );
   const returnsAnchor =
     returnsShown.orderReturns.length > 0
       ? '#order-returns'
@@ -1246,7 +1352,7 @@ export default async function OrderDetailPage({
   // squeezed); then the lines and the pipeline in the main column beside an
   // aside of facts (Dates, Details), one column below about 856 px of content.
   return (
-    <div className={ORDER_PAGE}>
+    <div data-glass-page="order-detail" className={ORDER_PAGE}>
       <OrderRealtimeRefresh orderId={id} />
       <ReviseNeededByDialog change={neededByChange} trigger={false} />
       <DraftShortfallPoDialog offer={shortfallPoOffer} />
@@ -1267,10 +1373,20 @@ export default async function OrderDetailPage({
           </>
         }
         titleAside={
-          <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
-            <OrderStatusBadge status={request.status} fulfillmentType={request.fulfillment_type} />
-            {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
-          </span>
+          <>
+            {/* Liquid Glass draws the fulfilment beside the status (glass-only
+                words; nothing under the off rollout). Between the title and
+                the status in the DOM, where it moves no Classic element among
+                its siblings; glass shows it after the status. */}
+            <OrderFulfilmentBadge fulfillmentType={request.fulfillment_type} />
+            <span className="flex flex-wrap items-center gap-2" data-testid="order-title-aside">
+              <OrderStatusBadge
+                status={request.status}
+                fulfillmentType={request.fulfillment_type}
+              />
+              {request.source === 'public_link' && <Badge variant="outline">Public</Badge>}
+            </span>
+          </>
         }
         subline={
           <>
@@ -1324,13 +1440,15 @@ export default async function OrderDetailPage({
             )}
             {/* L85: the service lets the requester cancel only while the
                 order waits for approval; an approver may cancel any open
-                order; and every cancel needs orders:request (desk check F3).
-                core's orderCancelOffer is that rule, shared with the phone.
+                order in a warehouse they write to (slice E, 0416); and
+                every cancel needs orders:request (desk check F3). core's
+                orderCancelOffer is that rule, shared with the phone.
                 Returns RX-2: a replacement is cancelled only from its RMA. */}
             {!isReplacement &&
               orderCancelOffer({
                 status: request.status,
                 canApprove,
+                canWriteOrderWarehouse: approverWritesHere,
                 isOwnRequest,
                 canRequest: can(ctx, 'orders:request'),
               }) !== null && <CancelOrderButton orderId={id} status={request.status} />}
@@ -1350,13 +1468,17 @@ export default async function OrderDetailPage({
       />
 
       <div className="@container min-w-0">
-        <div className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4">
+        <div
+          data-glass="order-detail-columns"
+          className="@min-[856px]:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] grid items-start gap-4"
+        >
           <div className="flex min-w-0 flex-col gap-4">
             <DetailSection
               headingId="order-lines-heading"
               title={`Lines (${lines.length})`}
               flush
               data-testid="order-lines"
+              data-glass-role="order-lines"
               aside={
                 <div className="flex items-center gap-3">
                   <p className="text-muted-foreground text-[12.5px] tabular-nums">
@@ -1767,11 +1889,40 @@ export default async function OrderDetailPage({
               number is a link only when the returns page would open for this
               viewer. Nothing renders when the order has no returns. */}
             {/* Returns RX-3: the requester's own requests, in their words. */}
+            {/* F14: each open request carries "Send return request" for the
+                viewer this section is for (requesterTrackingEligible), when
+                the organization's delivery-request mailboxes resolved; unset
+                or invalid routing adds nothing, as for the delivery request.
+                The draft says what this card says, plus the order's own
+                facts read above for this viewer. */}
             <RequesterTracking
               requests={returnsShown.tracking}
               id="your-requests"
               density="compact"
               className="bg-card rounded-lg border p-[18px]"
+              returnRequest={
+                requesterTrackingEligible && returnRequestSendable && returnRequestRecipients
+                  ? {
+                      orderId: id,
+                      recipients: returnRequestRecipients,
+                      order: {
+                        orderNumber: orderNumberLabel,
+                        requestedBy: detail.requesterName ?? requesterDisplay,
+                        requesterEmail: detail.requesterEmail,
+                        // Name, code and address: the draft prints no id.
+                        site: deliveryRequestCharter
+                          ? {
+                              name: deliveryRequestCharter.name,
+                              code: deliveryRequestCharter.code,
+                              address: deliveryRequestCharter.address,
+                            }
+                          : null,
+                        warehouseName: warehouseName ?? null,
+                        link: returnRequestOrderLink(id),
+                      },
+                    }
+                  : null
+              }
             />
 
             {returnsShown.orderReturns.length > 0 && (
@@ -1870,8 +2021,16 @@ export default async function OrderDetailPage({
               </DetailSection>
             )}
 
+            {/* Liquid Glass shows the note in the side column instead
+                (OrderRequesterNoteAside, a glass-only copy: the note is words
+                only), so this one is Classic-only. */}
             {request.notes && (
-              <DetailSection title="Requester note" data-testid="order-requester-note">
+              <DetailSection
+                title="Requester note"
+                data-testid="order-requester-note"
+                data-glass-role="order-requester-note"
+                data-classic-only=""
+              >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.notes}</p>
               </DetailSection>
             )}
@@ -1881,9 +2040,14 @@ export default async function OrderDetailPage({
               // panel (Approve/Deny, AssignDelivery, Internal notes).
               // A staff driver who only sees the panel for in-transit
               // actions still gets MarkInTransit + CollectSignature but
-              // none of the manager-only controls.
+              // none of the manager-only controls. Slice E: an approver
+              // only in a warehouse they write to (approverWritesHere); one
+              // outside it sees in the picking phase what any other member
+              // sees there, from picking complete on only the panel's reads
+              // (no Print warehouse slip: canPrintWarehouseSlip), and none
+              // of the approver's steps.
               <ManagerActionsPanel
-                canApprove={canApprove}
+                canApprove={approverWritesHere}
                 canAssignDelivery={canAssignDelivery}
                 stockGates={stockGates}
                 approveNotice={approveNotice}
@@ -1909,6 +2073,7 @@ export default async function OrderDetailPage({
                   handOverMfa ? handOverMfaPanelMessage(handOverMfa.reason) : null
                 }
                 hasSignature={hasCapturedSignature(request)}
+                canPrintWarehouseSlip={viewerMayHandOver}
                 signedByName={request.signed_by_name}
                 signedAt={request.signed_at}
                 drivers={drivers}
@@ -1965,12 +2130,17 @@ export default async function OrderDetailPage({
                 title={<span className="text-destructive">Denied</span>}
                 className="border-destructive/40"
                 data-testid="order-denied"
+                data-glass-role="order-denied"
               >
                 <p className="whitespace-pre-wrap text-[13.5px]">{request.denied_reason}</p>
               </DetailSection>
             )}
 
-            <DetailSection title="Timeline" data-testid="order-timeline">
+            <DetailSection
+              title="Timeline"
+              data-testid="order-timeline"
+              data-glass-role="order-timeline"
+            >
               {/* Async RSC (audit_logs + user_profiles) — Suspense lets the rest
                 of the order page flush immediately and the timeline stream in,
                 instead of its queries blocking every render (including each
@@ -1997,7 +2167,7 @@ export default async function OrderDetailPage({
           {/* The facts rail (the tour's `main aside`): label and value rows
             (DESIGN-SPEC 6.7). Below the two-column width it follows the main
             column, as before. */}
-          <aside className="flex min-w-0 flex-col gap-4">
+          <aside data-glass="order-detail-aside" className="flex min-w-0 flex-col gap-4">
             <DetailSection title="Dates" flush>
               <KeyValueList>
                 {(neededBy || neededByChangeInDates) && (
@@ -2032,6 +2202,12 @@ export default async function OrderDetailPage({
                 })}
               </KeyValueList>
             </DetailSection>
+
+            {/* Liquid Glass draws the requester note here, after Details
+                (glass-only; order-detail.css orders it last). Between Dates
+                and Details in the DOM, so no Classic element moves among its
+                siblings. */}
+            <OrderRequesterNoteAside notes={request.notes} />
 
             <DetailSection title="Details" flush>
               <KeyValueList>

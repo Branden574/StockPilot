@@ -3,10 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { revalidateInventoryListForCurrentOrg } from '@/server/loaders/inventory-list';
-import { ServiceError } from '@/server/services/context';
 import { BinsService, type BinType } from '@/server/services/bins';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -48,9 +47,7 @@ export async function createBinAction(input: {
     await revalidateInventoryListForCurrentOrg();
     return ok(result);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.bins.create_bin');
   }
 }
 
@@ -66,8 +63,6 @@ export async function archiveBinAction(id: string): Promise<ActionResult<void>> 
     await revalidateInventoryListForCurrentOrg();
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.bins.archive_bin');
   }
 }

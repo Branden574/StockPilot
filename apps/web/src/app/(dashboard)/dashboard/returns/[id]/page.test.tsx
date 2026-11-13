@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * The RMA workbench page (returns RX-1): returns:read or returns:manage
@@ -31,9 +31,22 @@ vi.mock('next/link', async () => {
     default: ({ href, children }: { href: string; children: React.ReactNode }) => React.createElement('a', { href }, children),
   };
 });
+const modulesOn = vi.hoisted(() => ({ value: new Set(['returns']) }));
 vi.mock('@/lib/modules/module-gate', () => ({
-  checkModuleAccess: vi.fn(async (m: string) => ({ enabled: m === 'returns', canManage: false })),
+  checkModuleAccess: vi.fn(async (m: string) => ({ enabled: modulesOn.value.has(m), canManage: false })),
 }));
+// F14: the organization's delivery-request mailboxes (the return request
+// draft goes there). Not set by default, as for an organization that never
+// filled the card in; reserved test domains where a test sets them.
+const routing = vi.hoisted(() => ({ value: { state: 'unset' } as unknown, calls: [] as unknown[][] }));
+vi.mock('@/lib/dashboard/cached-org', () => ({
+  getOrgEmailRouting: async (...a: unknown[]) => {
+    routing.calls.push(a);
+    if (routing.value === 'throw') throw new Error('read failed');
+    return routing.value;
+  },
+}));
+vi.mock('@/server/actions/return-request', () => ({ recordReturnRequestDraftedAction: vi.fn(async () => undefined) }));
 const orgCtx = vi.hoisted(() => ({ value: { organizationId: 'org-1', userId: 'u1', role: 'viewer', permissions: new Set(['returns:read']) } }));
 vi.mock('@/lib/auth/session', () => ({ requireOrgContext: vi.fn(async () => orgCtx.value) }));
 vi.mock('@/server/services/returns', () => ({ RMAService: { forCurrentUser: vi.fn(async () => ({ workbench })) } }));
@@ -46,6 +59,9 @@ vi.mock('@/server/actions/returns', () => ({
   buyReturnLabelAction: vi.fn(),
 }));
 
+import * as React from 'react';
+
+import { ReturnWorkbench } from '@/components/returns/return-workbench';
 import { ServiceError } from '@/server/services/context';
 
 import ReturnDetailPage from './page';
@@ -107,7 +123,12 @@ function bench(over: Record<string, unknown> = {}) {
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  modulesOn.value = new Set(['returns']);
+  routing.value = { state: 'unset' };
+  routing.calls = [];
+});
 
 describe('the RMA workbench page', () => {
   it('renders the workbench for a returns:read viewer, read-only', async () => {
@@ -157,5 +178,128 @@ describe('the RMA workbench page: a return id that is not a uuid', () => {
     expect(requireOrgContext).not.toHaveBeenCalled();
     expect(workbench).not.toHaveBeenCalled();
     expect(ShippingService.forCurrentUser).not.toHaveBeenCalled();
+  });
+});
+
+// F14: "Send return request" and "Report a problem" in the page header, both
+// decided on the server for this viewer.
+describe('the RMA workbench page: Send return request and Report a problem (F14)', () => {
+  const VALID = { state: 'valid', recipients: { to: 'intake@warehouse.test', cc: 'copy@warehouse.test' } };
+  const viewer = (perms: string[], role = 'viewer') => {
+    orgCtx.value = { organizationId: 'org-1', userId: 'u1', role, permissions: new Set(perms) };
+  };
+  const send = () => screen.queryByRole('button', { name: 'Send return request' });
+  const report = () => screen.queryByRole('link', { name: 'Report a problem' });
+  const hint = () => screen.queryByTestId('return-request-routing-hint');
+  afterEach(() => viewer(['returns:read']));
+
+  it('a returns:read viewer with the mailboxes saved gets Send return request, read for their own organization', async () => {
+    routing.value = VALID;
+    workbench.mockResolvedValueOnce(bench());
+    const { container } = render(await ReturnDetailPage(args));
+    expect(send()).toBeInTheDocument();
+    expect(routing.calls).toEqual([['org-1', 'delivery_request']]);
+    // In the header's actions row, where Liquid Glass sizes header buttons
+    // (styles/liquid-glass/pages/ops.css), as a glass-hooked outline button.
+    const row = container.querySelector('[data-slot="page-header-actions"]')!;
+    expect(row.contains(send())).toBe(true);
+    expect(send()).toHaveAttribute('data-glass', 'button');
+    expect(send()).toHaveAttribute('data-glass-variant', 'outline');
+    // No maintenance permission, so no Report a problem; and no hint.
+    expect(report()).not.toBeInTheDocument();
+    expect(hint()).not.toBeInTheDocument();
+  });
+
+  it('mailboxes not set, invalid, unreadable or only the compiled fallback pair: no button; the page still opens', async () => {
+    for (const state of [{ state: 'unset' }, { state: 'invalid', reason: 'x' }, { state: 'fallback' }, 'throw']) {
+      routing.value = state;
+      workbench.mockResolvedValueOnce(bench());
+      const { container, unmount } = render(await ReturnDetailPage(args));
+      expect(screen.getByRole('heading', { name: 'RMA-1' })).toBeInTheDocument();
+      expect(send()).not.toBeInTheDocument();
+      expect(container.querySelector('[data-slot="page-header-actions"]')).toBeNull();
+      expect(hint()).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('only a member who can change the organization settings is told why, with the link to the settings page', async () => {
+    viewer(['returns:read', 'organization:update']);
+    workbench.mockResolvedValueOnce(bench());
+    render(await ReturnDetailPage(args));
+    expect(hint()).toHaveTextContent(
+      'Email routing for delivery requests is not configured for this organization, so the return request email is hidden. Set it in Settings → Email routing.',
+    );
+    expect(hint()!.querySelector('a')).toHaveAttribute('href', '/dashboard/settings/email-routing');
+  });
+
+  it('the mailboxes reach the client only while the button can show: none for a closed, denied or cancelled return', async () => {
+    // ReturnWorkbench is a client component, so its props are written into
+    // the page's HTML whether or not it draws the button; read them off the
+    // element the page returns.
+    const workbenchProps = (node: unknown): { returnRequest: { recipients: unknown } } => {
+      if (!React.isValidElement(node)) throw new Error('no element');
+      if (node.type === ReturnWorkbench) return node.props as never;
+      const children = React.Children.toArray((node.props as { children?: React.ReactNode }).children);
+      for (const child of children) {
+        try {
+          return workbenchProps(child);
+        } catch {
+          // not under this child
+        }
+      }
+      throw new Error('no ReturnWorkbench');
+    };
+    routing.value = VALID;
+    for (const status of ['closed', 'denied', 'cancelled']) {
+      workbench.mockResolvedValueOnce(bench({ return: { ...bench().return, status } }));
+      const props = workbenchProps(await ReturnDetailPage(args));
+      expect(props.returnRequest.recipients, status).toBeNull();
+      expect(JSON.stringify(props.returnRequest), status).not.toContain('intake@warehouse.test');
+    }
+    workbench.mockResolvedValueOnce(bench({ return: { ...bench().return, returnNumber: null } }));
+    expect(workbenchProps(await ReturnDetailPage(args)).returnRequest.recipients).toBeNull();
+    // Control: an open, numbered return hands them over.
+    workbench.mockResolvedValueOnce(bench());
+    expect(workbenchProps(await ReturnDetailPage(args)).returnRequest.recipients).toEqual(
+      expect.objectContaining({ to: 'intake@warehouse.test', cc: 'copy@warehouse.test' }),
+    );
+  });
+
+  it('a closed, denied or cancelled return has no Send return request and no hint', async () => {
+    routing.value = VALID;
+    viewer(['returns:read', 'organization:update']);
+    for (const status of ['closed', 'denied', 'cancelled']) {
+      workbench.mockResolvedValueOnce(bench({ return: { ...bench().return, status } }));
+      const { unmount } = render(await ReturnDetailPage(args));
+      expect(send(), status).not.toBeInTheDocument();
+      unmount();
+    }
+    routing.value = { state: 'unset' };
+    workbench.mockResolvedValueOnce(bench({ return: { ...bench().return, status: 'closed' } }));
+    render(await ReturnDetailPage(args));
+    expect(hint()).not.toBeInTheDocument();
+  });
+
+  it('Report a problem needs the maintenance module on and maintenance_requests:submit, and carries the order and the return number', async () => {
+    viewer(['returns:read', 'maintenance_requests:submit']);
+    workbench.mockResolvedValueOnce(bench());
+    const { unmount } = render(await ReturnDetailPage(args));
+    expect(report()).not.toBeInTheDocument(); // the module is off
+    unmount();
+
+    modulesOn.value = new Set(['returns', 'maintenance_requests']);
+    workbench.mockResolvedValueOnce(bench());
+    const second = render(await ReturnDetailPage(args));
+    expect(report()).toHaveAttribute(
+      'href',
+      `/dashboard/maintenance/new?orderRequestId=o1&subject=${encodeURIComponent('Return RMA-1: ').replace(/%20/g, '+')}`,
+    );
+    second.unmount();
+
+    viewer(['returns:read']); // the module is on, the permission is missing
+    workbench.mockResolvedValueOnce(bench());
+    render(await ReturnDetailPage(args));
+    expect(report()).not.toBeInTheDocument();
   });
 });

@@ -1,0 +1,220 @@
+<div class="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+  <div class="flex min-w-0 flex-col" data-slot="page-header">
+    <div class="mb-2">
+      <nav aria-label="Breadcrumb" class="text-muted-foreground flex min-w-0 items-center gap-1.5 text-[13px]">
+        <a class="hover:text-foreground shrink-0 transition-colors" href="/dashboard/cycle-counts">
+          "← Back to cycle counts"
+        <span aria-hidden="true" class="text-ink-4">
+          "/"
+        <span aria-current="page" class="text-foreground truncate font-mono tabular-nums">
+          "Cycle count"
+    <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+      <div class="min-w-0 max-w-full">
+        <div class="min-w-0">
+          <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+            <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]" id="cycle-count-title">
+              "Cycle count"
+          <div class="text-muted-foreground mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[12.5px]">
+            <span>
+              "Reference unavailable"
+          <div class="text-muted-foreground text-[13.5px] mt-0.5">
+            "North DC"
+            " · Full count"
+          <p class="text-muted-foreground mt-1 text-[12.5px]">
+            "Started "
+            "3 days ago"
+            " ·"
+            ␣
+            <time datetime="2026-10-30T15:05:00Z">
+              "Oct 30, 2026, 8:05 AM"
+      <div class="flex flex-wrap items-center gap-2" data-slot="page-header-actions">
+        <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3" href="/api/cycle-counts/00000000-0000-4000-8000-000000000042/pdf" rel="noopener noreferrer" target="_blank">
+          <svg aria-hidden="true" class="lucide lucide-download h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 15V3">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4">
+            <path d="m7 10 5 5 5-5">
+          ␣
+          "Print count sheet"
+  <div class="@container flex min-w-0 flex-col gap-4">
+    <div class="border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip" data-slot="stat-strip" data-variant="detail">
+      <div class="[&>*]:border-border -mb-px -mr-px grid [&>*:last-child]:border-r-0 [&>*]:border-b [&>*]:border-r grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))]">
+        <div class="min-w-0 px-[18px] py-3.5" data-slot="stat-strip-item" data-testid="count-stat-in-scope">
+          <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+            "Items in scope"
+          <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">
+            "140"
+        <div class="min-w-0 px-[18px] py-3.5" data-slot="stat-strip-item" data-testid="count-stat-counted">
+          <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+            "Counted"
+          <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-foreground">
+            "96"
+          <div class="text-[12px] leading-[18px] text-muted-foreground">
+            <span aria-hidden="true" class="bg-line-strong block h-1 overflow-hidden rounded-[2px] mb-1 mt-2 max-w-[180px]" data-slot="count-progress">
+              <span class="bg-accent block h-full rounded-[2px]" style="width: 68.57142857142857%;">
+        <div class="min-w-0 px-[18px] py-3.5" data-slot="stat-strip-item" data-testid="count-stat-uncounted">
+          <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+            "Uncounted"
+          <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-warning">
+            "44"
+        <div class="min-w-0 px-[18px] py-3.5" data-slot="stat-strip-item" data-testid="count-stat-net-variance">
+          <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+            "Net variance"
+          <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[22px] leading-[33px] text-warning">
+            "-8"
+    <div class="@min-[1100px]:grid-cols-[minmax(0,1fr)_300px] grid min-w-0 grid-cols-1 items-start gap-4">
+      <div class="@min-[640px]:grid-cols-2 @min-[1100px]:col-start-2 @min-[1100px]:row-start-1 @min-[1100px]:grid-cols-1 grid min-w-0 grid-cols-1 items-start gap-4">
+        <div class="border-border bg-card flex flex-wrap items-center gap-2 rounded-lg border px-[18px] py-3 text-[13px]">
+          <svg aria-hidden="true" class="lucide lucide-circle-user-round lucide-user-circle-2 text-muted-foreground h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="M17.925 20.056a6 6 0 0 0-11.851.001">
+            <circle cx="12" cy="11" r="4">
+            <circle cx="12" cy="12" r="10">
+          <span class="text-muted-foreground" id="«id1»">
+            "Assigned to:"
+          <div class="flex min-w-[180px] flex-1 items-center gap-2">
+            <button aria-autocomplete="none" aria-expanded="false" aria-labelledby="«id1»" class="bg-card flex h-8 w-full items-center justify-between gap-2 rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-left text-[13px] transition-colors data-[placeholder]:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 [&>span]:line-clamp-1 max-sm:h-11 max-sm:text-base" data-state="closed" dir="ltr" role="combobox" type="button">
+              <span style="pointer-events: none;">
+                "Avery Example"
+              <svg aria-hidden="true" class="lucide lucide-chevron-down text-muted-foreground h-4 w-4 shrink-0" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m6 9 6 6 6-6">
+        <div data-testid="linked-exceptions">
+      <div class="@min-[1100px]:col-start-1 @min-[1100px]:row-start-1 flex min-w-0 flex-col gap-4">
+        <div class="border-border bg-card @container min-w-0 overflow-hidden rounded-lg border">
+          <div class="border-border flex min-h-[49px] flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-[18px] py-2.5">
+            <div class="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
+              <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning border-0 py-0">
+                "In progress"
+              <span class="text-muted-foreground text-[12.5px] tabular-nums">
+                "96"
+                " of "
+                "140"
+                " counted ·"
+                ␣
+                "6"
+                " with variance"
+            <div class="flex flex-wrap items-center gap-2">
+              <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px]">
+                "Cancel count"
+              <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-7 px-2.5 text-[12.5px]">
+                "Review & post"
+          <div class="border-border flex flex-wrap items-center justify-between gap-2 border-b px-[18px] py-2.5">
+            <div class="relative w-full sm:w-[280px]">
+              <svg aria-hidden="true" class="lucide lucide-search text-muted-foreground pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="m21 21-4.34-4.34">
+                <circle cx="11" cy="11" r="8">
+              <input class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base pl-8" placeholder="Search by name, SKU, barcode…" value="">
+            <div aria-label="Filter lines" class="border-border bg-sunk inline-flex w-fit max-w-full items-center overflow-x-auto border [scrollbar-width:thin] gap-0.5 rounded-md p-0.5" data-slot="segmented-tabs" role="group">
+              <button aria-pressed="true" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5 bg-card text-foreground shadow-[0_0_0_1px_var(--ed-line-strong)]" data-state="active" type="button">
+                <span>
+                  "All"
+              <button aria-pressed="false" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5 text-muted-foreground hover:text-foreground" data-state="inactive" type="button">
+                <span>
+                  "Uncounted"
+              <button aria-pressed="false" class="relative inline-flex shrink-0 items-center whitespace-nowrap font-medium transition-colors before:absolute before:inset-x-0 before:content-[''] focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:min-h-11 [&_svg]:shrink-0 h-[26px] gap-1.5 rounded px-2 text-[12.5px] before:-inset-y-0.5 [&_svg]:h-3.5 [&_svg]:w-3.5 text-muted-foreground hover:text-foreground" data-state="inactive" type="button">
+                <span>
+                  "Variance"
+          <div aria-labelledby="cycle-count-title" class="focus-visible:outline-ring focus-visible:outline-solid relative w-full overflow-auto first:rounded-t-[inherit] last:rounded-b-[inherit] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:ring-0 focus-visible:ring-offset-0" role="region">
+            <table class="w-full caption-bottom text-[13.5px] @min-[640px]:min-w-[600px]">
+              <thead class="[&_tr]:border-b">
+                <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px]">
+                    "Item"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell">
+                    "SKU"
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-right">
+                    <span class="inline-flex items-center gap-1.5">
+                      "Expected"
+                      <button aria-expanded="false" aria-haspopup="dialog" aria-label="What is the Expected quantity?" class="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex shrink-0 rounded-full align-middle transition-colors focus-visible:outline-none focus-visible:ring-2" data-state="closed" type="button">
+                        <svg aria-hidden="true" class="lucide lucide-circle-question-mark lucide-help-circle lucide-circle-help size-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                          <circle cx="12" cy="12" r="10">
+                          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3">
+                          <path d="M12 17h.01">
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                    <span class="inline-flex items-center gap-1.5">
+                      "Counted"
+                      <span class="@min-[640px]:hidden inline-flex">
+                        <button aria-expanded="false" aria-haspopup="dialog" aria-label="What is the Expected quantity?" class="text-muted-foreground hover:text-foreground focus-visible:ring-ring inline-flex shrink-0 rounded-full align-middle transition-colors focus-visible:outline-none focus-visible:ring-2" data-state="closed" type="button">
+                          <svg aria-hidden="true" class="lucide lucide-circle-question-mark lucide-help-circle lucide-circle-help size-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="12" cy="12" r="10">
+                            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3">
+                            <path d="M12 17h.01">
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-right">
+                    "Variance"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] w-12">
+              <tbody class="[&_tr:last-child]:border-0">
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+                  <td class="px-3 py-[var(--row-py)] align-middle [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] @min-[640px]:min-w-[160px] min-w-28 max-w-[320px]">
+                    <div class="font-medium [overflow-wrap:anywhere]">
+                      "Example item 1"
+                    <div class="text-ink-2 @min-[640px]:hidden font-mono text-[12px] [overflow-wrap:anywhere]">
+                      "EX-1"
+                    <div class="text-muted-foreground @min-[640px]:hidden mt-0.5 text-[12px] tabular-nums" data-testid="count-line-folded-numbers">
+                      "Expected "
+                      <span class="font-mono">
+                        "75"
+                      " · Variance"
+                      ␣
+                      <span class="font-mono text-destructive">
+                        "-3"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
+                    "EX-1"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-muted-foreground text-right font-mono text-[13.5px] tabular-nums">
+                    "75"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                    <input class="flex h-8 rounded-md border border-[var(--ed-line-strong)] py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base bg-sunk ml-auto w-[90px] px-2 text-right font-mono tabular-nums" inputmode="decimal" placeholder="—" value="72">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-right font-mono text-[13.5px] tabular-nums text-destructive">
+                    "-3"
+                  <td class="px-3 py-[var(--row-py)] align-middle [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] w-12">
+                    <button aria-label="Clear count" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground text-muted-foreground h-7 w-7" title="Clear count" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-x h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M18 6 6 18">
+                        <path d="m6 6 12 12">
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+                  <td class="px-3 py-[var(--row-py)] align-middle [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] @min-[640px]:min-w-[160px] min-w-28 max-w-[320px]">
+                    <div class="font-medium [overflow-wrap:anywhere]">
+                      "Example item 2"
+                    <div class="text-ink-2 @min-[640px]:hidden font-mono text-[12px] [overflow-wrap:anywhere]">
+                      "EX-2"
+                    <div class="text-muted-foreground @min-[640px]:hidden mt-0.5 text-[12px] tabular-nums" data-testid="count-line-folded-numbers">
+                      "Expected "
+                      <span class="font-mono">
+                        "140"
+                      " · Variance"
+                      ␣
+                      <span class="font-mono text-destructive">
+                        "-4"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
+                    "EX-2"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-muted-foreground text-right font-mono text-[13.5px] tabular-nums">
+                    "140"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                    <input class="flex h-8 rounded-md border border-[var(--ed-line-strong)] py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base bg-sunk ml-auto w-[90px] px-2 text-right font-mono tabular-nums" inputmode="decimal" placeholder="—" value="136">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-right font-mono text-[13.5px] tabular-nums text-destructive">
+                    "-4"
+                  <td class="px-3 py-[var(--row-py)] align-middle [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] w-12">
+                    <button aria-label="Clear count" class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] hover:bg-muted hover:text-foreground text-muted-foreground h-7 w-7" title="Clear count" type="button">
+                      <svg aria-hidden="true" class="lucide lucide-x h-3.5 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M18 6 6 18">
+                        <path d="m6 6 12 12">
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+                  <td class="px-3 py-[var(--row-py)] align-middle [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] @min-[640px]:min-w-[160px] min-w-28 max-w-[320px]">
+                    <div class="font-medium [overflow-wrap:anywhere]">
+                      "Example item 3"
+                    <div class="text-ink-2 @min-[640px]:hidden font-mono text-[12px] [overflow-wrap:anywhere]">
+                      "EX-3"
+                    <div class="text-muted-foreground @min-[640px]:hidden mt-0.5 text-[12px] tabular-nums" data-testid="count-line-folded-numbers">
+                      "Expected "
+                      <span class="font-mono">
+                        "64"
+                      " · Variance"
+                      ␣
+                      <span class="font-mono text-muted-foreground">
+                        "—"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-ink-2 whitespace-nowrap font-mono text-[12.5px]">
+                    "EX-3"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-muted-foreground text-right font-mono text-[13.5px] tabular-nums">
+                    "64"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                    <input class="flex h-8 rounded-md border border-[var(--ed-line-strong)] py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base bg-sunk ml-auto w-[90px] px-2 text-right font-mono tabular-nums" inputmode="decimal" placeholder="—" value="">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 hidden @min-[640px]:table-cell text-right font-mono text-[13.5px] tabular-nums text-muted-foreground">
+                    "—"
+                  <td class="px-3 py-[var(--row-py)] align-middle [&:has([role=checkbox])]:pr-0 first:pl-[18px] last:pr-[18px] w-12">

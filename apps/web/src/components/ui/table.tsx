@@ -34,6 +34,7 @@ export const Table = React.forwardRef<HTMLTableElement, TableProps>(
     <TableScroll label={scrollLabel} labelledBy={scrollLabelledBy}>
       <table
         ref={ref}
+        data-glass="table"
         className={cn('w-full caption-bottom text-[13.5px]', className)}
         {...props}
       />

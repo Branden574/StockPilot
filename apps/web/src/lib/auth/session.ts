@@ -68,6 +68,14 @@ interface LoadedContext {
   orgName: string | null;
   memberships: SessionMembership[];
   /**
+   * True when the legacy membership read failed. `memberships` is then empty
+   * because nothing could be read, not because the person belongs to no
+   * organization (readSessionMemberships tells the two apart). Never set from
+   * the bundle, and false with no session: a signed-out or refuted session
+   * has no memberships to read.
+   */
+  membershipsUnreadable: boolean;
+  /**
    * The bundle this context was resolved from, or null when the legacy reads
    * ran. THREADED to the permission resolver instead of asking again: React
    * `cache()` does not memoize inside a Server Action, so a second ask there
@@ -125,7 +133,15 @@ function loadProfileAndMemberships(
 }
 
 function noSession(): LoadedContext {
-  return { session: null, orgRole: null, orgId: null, orgName: null, memberships: [], bundle: null };
+  return {
+    session: null,
+    orgRole: null,
+    orgId: null,
+    orgName: null,
+    memberships: [],
+    membershipsUnreadable: false,
+    bundle: null,
+  };
 }
 
 /**
@@ -285,6 +301,15 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
     role: Role;
     organizations: MemberOrg | MemberOrg[] | null;
   }>;
+  // A failed read answers { data: null, error }, which the line above turns
+  // into no rows. Every page still redirects to /onboarding on that (no org
+  // below), and /onboarding reads again with its own error check; code that
+  // must tell a failed read from no membership asks readSessionMemberships.
+  // The code only, never the message, which can quote request details.
+  const membershipsUnreadable = membersRes.error != null;
+  if (membershipsUnreadable) {
+    console.warn('[session] membership read failed:', membersRes.error?.code || 'unknown');
+  }
 
   // Same selection semantics as the old two-query shape: prefer the
   // membership matching the profile's default org; otherwise fall back to
@@ -318,6 +343,7 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
     orgId: memberRow?.organization_id ?? null,
     orgName: memberRow ? pickOrgName(memberRow.organizations) : null,
     memberships,
+    membershipsUnreadable,
     bundle,
   };
 });
@@ -330,6 +356,22 @@ const loadSessionAndContext = cache(async (): Promise<LoadedContext> => {
 export const getSessionMemberships = cache(async (): Promise<SessionMembership[]> => {
   const { memberships } = await loadSessionAndContext();
   return memberships;
+});
+
+export type SessionMembershipsRead = { ok: true; memberships: SessionMembership[] } | { ok: false };
+
+/**
+ * The current user's accepted memberships, or `{ ok: false }` when they could
+ * not be read. A list that cannot be read is not "no organization":
+ * getSessionMemberships() answers both with an empty array, which is right for
+ * the org switcher (it renders only after requireOrgContext() resolved a
+ * membership). Code that must tell the two apart uses this reader. Signed out
+ * is `{ ok: true, memberships: [] }`.
+ */
+export const readSessionMemberships = cache(async (): Promise<SessionMembershipsRead> => {
+  const { memberships, membershipsUnreadable } = await loadSessionAndContext();
+  if (membershipsUnreadable) return { ok: false };
+  return { ok: true, memberships };
 });
 
 export const getServerSession = cache(async (): Promise<ServerSession | null> => {

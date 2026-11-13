@@ -27,40 +27,1510 @@ import type { Release } from '@stockpilot/core';
  * change. docs/releases/PUBLISHING.md is the workflow.
  */
 export const RELEASES: Release[] = [
+  // DRAFT: the Liquid Glass release (RELEASE.md section 2 item 4), from
+  // docket-2026-10-24/whatsnew-lg/registry-release.ts, written 2026-11-09
+  // against feat/liquid-glass b64bd37cc and added here at cb4f4949d. A draft
+  // never leaves the server (logic.ts visibleReleases and registryFingerprint;
+  // registry.liquid-glass-draft.test.ts). Publish at G5 only, after the G3
+  // phone update shows iOS launches: status 'published', publishedAt the whole
+  // minute at or after both the web default deployment going live and the
+  // first iOS launch, the re-pins of RELEASE.md R-6, and every line marked
+  // RECHECK below read again at the release head and the marker removed
+  // (RECHECK is deliberately not a word the publish guard looks for, so grep
+  // this block for it before publishing).
   {
-    id: 'mobile-app-asks-before-restarting',
+    id: 'liquid-glass-2026-11',
     revision: 1,
-    // B44 (fix/b44-update-restart-prompt; no migration, phone only: one
-    // over-the-air update, runtime 1.4.0). Held as a DRAFT until phones have
-    // the update (update:insights shows iOS launches of its group); the
-    // docs(releases) follow-up that publishes it sets the real publishedAt,
-    // and adds its tests: the title, the entry, and the quoted message equal
-    // to UPDATE_PROMPT_MESSAGE in apps/mobile/src/lib/ota-update-prompt.ts. A
-    // draft at the top, dated after every release (newest first).
-    //
-    // Every "waits" claim is the design: the work routes (scan, count and new
-    // records), the photo and file flows, the keyboard and a focused field,
-    // the draft holds (a note, a pick, a receipt), and every sheet and alert.
-    // No link and no audience: every member with the phone app sees it.
+    // Liquid Glass: web G2b (NEXT_PUBLIC_LIQUID_GLASS=default) and phone G3 (OTA for runtime 1.4.0 with
+    // EXPO_PUBLIC_LIQUID_GLASS=default). Claims checked against b64bd37cc:
+    // - Design and Theme words: apps/web/src/components/theme/appearance-select.tsx:51-77 (Liquid Glass, Classic;
+    //   Light, Dark, System); phone apps/mobile/src/lib/appearance/labels.ts:31-44.
+    // - Day/Night by Theme: appearance-select.tsx:55 ("Day or Night follows your Theme"); plan D3 (revised R1, R2).
+    // - Account menu: components/dashboard/user-menu.tsx:182-204 (Design above Theme, only when the build has glass);
+    //   trigger named "Account menu for ..." (:104). Header menu: components/theme/theme-toggle.tsx:79-94; in the
+    //   dashboard top bar only from 680 px of bar width (components/dashboard/topbar.tsx:329-331); on the sign-in pages
+    //   ((auth)/layout.tsx:72,80), invite, onboarding, marketing headers, external pages (external-shell.tsx:132:
+    //   RECHECK until stage 4 lane L2a is merged and walked; README RECHECK 3).
+    // - Settings > Profile > Appearance: settings/profile/page.tsx:101-110, components/settings/appearance-panel.tsx
+    //   (status lines appearance-select.tsx:135-150).
+    // - Intro notice: appearance-provider.tsx:207-211 (web), phone labels.ts:108-114 (Home card).
+    // - Crash fallback and recovery: appearance-provider.tsx:207 ("Liquid Glass hit a problem, so StockPilot opened in
+    //   the classic look."), the error boundaries' Use classic design (app/error.tsx:57, (dashboard)/error.tsx:101,
+    //   global-error.tsx:253).
+    // - Account sync: server/actions/appearance.ts (self row only); the web reads the row when the dashboard names the
+    //   person (appearance-provider.tsx:166-171); the phone reads it at the first start of the new JS within the 4 s
+    //   cap and later at a calm moment (REVISION-DEFAULT R9). RECHECK on the lab walk: a Theme chosen on the phone is
+    //   adopted by the web, and the reverse.
+    // - Print and documents never glass: EXEMPT_PATHS (appearance-flag.ts:47) for the order print page; the signature
+    //   pad and label sheet carry data-appearance-exempt; emails and server PDFs are not rendered by the web app's CSS
+    //   (plan Q15, 4.8). RECHECK stage 4 kept every print, PDF, export and signature output unchanged.
+    // - Accessibility (web): styles/liquid-glass/materials.css:73-91 (prefers-reduced-transparency or
+    //   prefers-contrast: more: no blur, opaque materials), :92-107 (the same under data-lg-material="reduced"),
+    //   :109 on (forced-colors: system colours); the reduced attribute is set only on browsers that report
+    //   deviceMemory, at 2 GB or less or 2 cores or less (appearance-script.ts:80-84), i.e. Chromium browsers.
+    //   Safari and Firefox do not report Reduce transparency (REVISION-DEFAULT R11, verified there).
+    // - Phone material: apps/mobile/src/lib/appearance/material.ts selectMaterial (glass on iOS 26+ with the module;
+    //   blur below; opaque with Reduce Transparency, a low-end device: year class before 2019 or under 3 GB, Android).
+    //   RECHECK until the REAL iOS 26 iPhone walk after G3 (RELEASE.md section 6 step 6; DECISIONS "RELEASE PREP
+    //   REVIEW" item 3): "On iOS 26 and later the bars use Apple's Liquid Glass" rests on build 54 linking
+    //   expo-glass-effect, which is inferred (expo-router's native stack needs it), not yet seen on a real device. If
+    //   the walk shows frosted bars on iOS 26, drop the sentence here and in appstore-whats-new.txt (README RECHECK 10).
+    // - "Chrome and Edge ... little memory or few processor cores": isLowPowerBrowser (appearance-script.ts:80-84):
+    //   deviceMemory reported AND (2 GB or less OR 2 cores or less).
+    //   Tab bar capsule and round Scan button: plan 5.2 / IosTabBar board, built in stage 4 lane native-core: RECHECK.
+    // - Phone Theme now forces Light or Dark: labels.ts:41-43 and os-scheme.ts (REVISION-DEFAULT R9, "Dark or Light
+    //   fixes the OS scheme in both designs"): RECHECK on the simulator.
+    // - Phone footnote: labels.ts:88-89.
+    // - Phones before 1.4.0: runtimeVersion appVersion (app.config.ts:51-53), the OTA targets 1.4.0 only (R9).
+    // - "Every page ... still there": BRIEF (every feature stays) and the stage 5 parity and coverage checks: RECHECK
+    //   when stage 4 and 5 are done.
+    // - The stockroom picture: the scene illustrations (stage3/scene-assets.md), shipped once lg/scene-assets is
+    //   merged: RECHECK.
+    // Who is told: every entry has no audience (every member sees the look); the one link is
+    // /dashboard/settings/profile, which registry.test.ts:561-570 lists as open to every member.
     status: 'draft',
-    title: 'The mobile app asks before it restarts for an update',
+    title:
+      'StockPilot opens in a new look, Liquid Glass, and the previous design is one choice away',
     summary:
-      'In the mobile app, after the latest update, the app opens once and no longer restarts by itself a moment later. A new update now downloads while you use the app, and a message says when it is ready. The app restarts only when you tap Restart now.',
-    publishedAt: '2026-11-02T17:00:00Z',
+      'StockPilot now opens in Liquid Glass, a new look on the web and, after the latest update, in the mobile app. Day glass goes with your Light theme and Night glass with Dark, and System follows your device. Every page and button is still there under the same name. To use the previous look, choose Design, Classic in your account menu on the web, or in Settings, Appearance in the mobile app. Your choice is saved to your account.',
+    // RECHECK at publish: the instant (see the header). This placeholder keeps the registry newest-first.
+    // Moved when main was merged in after #493 and #494 (2026-11-10; was: '2026-11-09T12:00:00Z'): the Add all
+    // release below is dated 2026-11-10T21:50:00Z, and dates must not increase going down, so the placeholder is
+    // that same minute. Move it again whenever a release is published below this draft.
+    // Moved again by docs/whatsnew-returns-1112 (2026-11-12; was: '2026-11-10T21:50:00Z'): the returns release
+    // below is dated 2026-11-12T08:42:00Z, so the placeholder is that same minute.
+    // Moved again by docs/whatsnew-phone-1112 (2026-11-12; was: '2026-11-12T08:42:00Z'): the phone appearance and
+    // returns release below is dated 2026-11-12T19:30:00Z, so the placeholder is that same minute. If the
+    // integrator moves that release's minute, move this one with it.
+    publishedAt: '2026-11-12T19:30:00Z',
     entries: [
       {
-        id: 'update-ready-message',
+        id: 'liquid-glass-web',
+        category: 'new',
+        area: 'Web app',
+        title: 'The web app and the website open in Liquid Glass',
+        // RECHECK until stage 4 is merged and walked (lane L2a): "the pages people open from a link" have the glass look
+        // and show the appearance menu in their corner (external-shell.tsx:132 at b64bd37cc; README RECHECK 3).
+        whatChanged:
+          "The web app, the sign-in pages, the pages people open from a link and the public website now open in Liquid Glass: frosted panels over a soft picture of a stockroom, with a green accent. Day glass goes with the Light theme and Night glass with Dark. With System, StockPilot follows your device's light or dark setting, as before.",
+        whyItMatters:
+          'Liquid Glass is the new standard StockPilot design. The previous design stays available, unchanged, for anyone who prefers it.',
+        howItAffectsYou:
+          'Some pages are laid out differently, but every page, tab, filter, button, export and setting is still there under the same name, and what each member can do has not changed. Printed pages, PDFs, labels and emails keep their current look. Your Light, Dark or System choice is kept and now picks Day or Night glass.',
+        whatToDo:
+          'No action needed. To use the previous look, open your account menu at the top right and choose Design, Classic.',
+      },
+      {
+        id: 'liquid-glass-design-choice',
+        category: 'new',
+        area: 'Appearance',
+        title: 'Choose Liquid Glass or Classic in your account menu or in Settings',
+        whatChanged:
+          'A Design choice, Liquid Glass or Classic, now sits above Theme in your account menu at the top right, in the appearance menu at the top of the sign-in and public pages (and of the app on wider screens), and in Settings, Profile, under Appearance. Classic is the previous design. The first time you see Liquid Glass after signing in, a message offers Use classic design and Keep Liquid Glass.',
+        whyItMatters:
+          'Some people prefer the previous design, and switching back should take one choice, not a search through Settings.',
+        howItAffectsYou:
+          'A choice applies at once, without reloading the page. When you are signed in it is saved to your account, so StockPilot uses it when you sign in on another computer, and Settings, Profile says whether it was saved. If Liquid Glass ever fails to show a page, StockPilot opens it in Classic once and says so, and error pages offer Use classic design.',
+        whatToDo:
+          'No action needed. To switch, open your account menu and choose Design, then Classic or Liquid Glass.',
+        link: { href: '/dashboard/settings/profile', label: 'Open Profile settings' },
+      },
+      {
+        id: 'liquid-glass-accessibility',
+        category: 'new',
+        area: 'Accessibility',
+        title: 'Liquid Glass follows your accessibility settings',
+        whatChanged:
+          'With Increase contrast turned on, or Reduce transparency in Chrome or Edge, Liquid Glass shows solid panels with nothing blurred behind them, and with a Windows contrast theme it uses your system colours. Chrome and Edge also show the solid panels on their own on computers with little memory or few processor cores.',
+        whyItMatters:
+          'Frosted panels can be harder to read for some people, and they take more work for older computers to draw.',
+        howItAffectsYou:
+          "Safari and Firefox do not tell websites when Reduce transparency is on. If you use one of them and want solid panels, turn on Increase contrast in your computer's accessibility settings, or choose Classic.",
+        whatToDo: 'No action needed.',
+      },
+      // The two phone entries are true only once phones have the G3 update: publish this release after the iOS
+      // launches show (G5). For a web-first publish use registry-release-web-only.ts instead.
+      // RECHECK at G5: partly announced in 'phone-appearance-returns-2026-11' on 2026-11-12 (the opt-in phone
+      // update: Liquid Glass is in the app as a choice, Classic unless chosen, and a Design chosen on the website
+      // is used by the app). Reword this entry at G5 so it tells only what the default rollout changes (the app
+      // opens in Liquid Glass for people who chose nothing, the Home card), and does not announce again what
+      // that release already told.
+      {
+        id: 'liquid-glass-mobile-app',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'The mobile app opens in Liquid Glass after the latest update',
+        // RECHECK until the real iOS 26 walk after G3: the sentence "On iOS 26 and later the bars use Apple's Liquid
+        // Glass" (see the Phone material note in the header; README RECHECK 10).
+        whatChanged:
+          "After the latest update, the mobile app on iPhone and iPad opens in Liquid Glass too, with the tab bar floating above the screen and Scan as a round button beside it when Scan is one of your tabs. On iOS 26 and later the bars use Apple's Liquid Glass, and on earlier versions they are frosted. With Reduce Transparency on, and on older iPhones and iPads with less memory, they are solid.",
+        whyItMatters:
+          'The mobile app and the web now share one look, and the previous design stays available in the app too.',
+        howItAffectsYou:
+          'The look changes when the app restarts for the update, never in the middle of a scan or a count. Your tabs, screens and steps are the same. If you chose Classic on the web, the app uses it once it has read your account, usually as it opens. Home shows a one-time card with Use classic design and Keep Liquid Glass. Phones on app versions before 1.4.0 keep the previous look until they update from the App Store.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To use the previous look, open Settings, Appearance and choose Classic.',
+      },
+      // RECHECK at G5: partly announced in 'phone-appearance-returns-2026-11' on 2026-11-12 (its entry
+      // app-appearance-design-theme told every member that Settings, Appearance replaces the Theme row, with
+      // Design and Theme, saved to the account and shared with the website). Reword this entry at G5 (or fold it
+      // into liquid-glass-mobile-app) so it does not announce that page as new a second time.
+      {
+        id: 'mobile-appearance-settings',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Settings in the mobile app has an Appearance page with Design and Theme',
+        whatChanged:
+          'In the mobile app, Settings, Appearance replaces the Theme row. It has Design (Liquid Glass or Classic) and Theme (Light, Dark or System). Light and Dark now keep the app light or dark whatever your phone is set to, and System follows your phone, as the app always did.',
+        whyItMatters:
+          "Before, the app always followed your phone's light or dark setting, with no way to choose.",
+        howItAffectsYou:
+          'Your choices are saved to your account and used on the web too. The line under them says whether they reached your account or are saved on this phone only, with Try again when a save did not go through. Liquid Glass follows Reduce Transparency and Reduce Motion in iOS Settings, Accessibility.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'phone-appearance-returns-2026-11',
+    revision: 1,
+    // The phone update of 2026-11-12 and two web fixes live the same day.
+    // - Phone: one over-the-air update for runtime 1.4.0 (app.config.ts:38
+    //   version '1.4.0', runtimeVersion policy appVersion :51-53), EAS update
+    //   group 181611cd, published about 19:22Z from main dd2c349b8 with
+    //   EXPO_PUBLIC_LIQUID_GLASS=opt-in. The group, the minute and the flag
+    //   value are the integrator's facts, not readable from the code. It
+    //   carries #498's phone half (Send return request), which the release
+    //   'returns-request-email-names-2026-11' said the mobile app gets with
+    //   its next update: announced here, that release's revision is not
+    //   bumped. It also turns on the phone's Settings, Appearance (#486,
+    //   switched off until now: every earlier phone bundle was built without
+    //   the flag, so 'off').
+    // - Web, live since 19:18Z: #504 (Liquid Glass toasts bottom right) and
+    //   #502 (one draft per double click on Email return request).
+    // DATED 19:30Z: the update group (181611cd, opt-in, published about
+    // 19:22Z) had its first iOS launch, 0 failures, in EAS insights, and the
+    // owner's phone showed it running at 19:29Z; 19:30Z is the whole minute
+    // after both. The Liquid Glass draft's placeholder above moved with it.
+    // If the phone update is rolled back while the web stays, the phone
+    // entries are no longer true: withdraw this release or correct it.
+    // Claims checked against the code at dd2c349b8 (web paths under
+    // apps/web/src, phone paths under apps/mobile, core under
+    // packages/core/src):
+    // - Phone button words: the section's button is RETURN_REQUEST_COPY.primary
+    //   "Email return request" (core returns/return-request-email.ts:147;
+    //   src/components/return-request-section.tsx:134-144) under the heading
+    //   "RETURN REQUEST" (core :169). The website's "Send return request" is
+    //   RETURN_REQUEST_COPY.title (core :144), the button that opens its
+    //   dialog, whose own button is also "Email return request"
+    //   (components/returns/return-request-action.tsx:214-216). So the phone
+    //   is said to have Email return request, "as Send return request does on
+    //   the website".
+    // - Own order: app/order/[id].tsx:3841-3862, under each request of
+    //   "Your requests on this order" (RETURNS_COPY.requesterYourRequests,
+    //   :3843); the requester gate is the web order page's rule (own order,
+    //   Returns on, no returns:manage: requesterReturnGate :808-815, with
+    //   canManageReturns :757-758), so "If you manage returns, use the button
+    //   on the return screen". Mailboxes and facts from the server
+    //   (:846-865, getReturnRequestEmailForOrder).
+    // - "while the return is still open", "only when your organization has
+    //   set its delivery request mailboxes": returnRequestContentForTracking
+    //   and returnRequestContentForWorkbench return null unless
+    //   canSendReturnRequest (src/lib/return-request-actions.ts:156-172), and
+    //   the section renders only with recipients (order/[id].tsx:3852,
+    //   src/components/return-workbench-view.tsx:673).
+    // - Return screen: return-workbench-view.tsx:667-705, Email return
+    //   request (:673-687) and Report a problem (:688-705, RETURN_PROBLEM_LABEL
+    //   return-request-actions.ts:257) for maintenance_requests:submit where
+    //   Maintenance is on (:152-158); the order attached and "Return <number>: "
+    //   as the subject (returnProblemLaunchParams :260-267; app/maintenance/
+    //   new.tsx:245, :257). The phone's return screens open for returns:read
+    //   or returns:manage where Returns is on (app/(drawer)/returns.tsx:65-66,
+    //   :113). The phone shows no mailbox note for admins (no noRoutingAdmin
+    //   in apps/mobile), so the words say only where the mailboxes are set
+    //   (the website's Settings, Email routing,
+    //   /dashboard/settings/email-routing).
+    // - "Outlook or your email app": openReturnRequestDraft opens through
+    //   openMeasuredDraft('outlook', ...) (return-request-actions.ts:196-202),
+    //   native Outlook when installed, else the mail link
+    //   (src/lib/outlook-transport.ts:217-258); the success line names which
+    //   opened (return-request-actions.ts:229-231).
+    // - "StockPilot does not send it ... press Send yourself", no ticket:
+    //   RETURN_REQUEST_COPY.honesty (core :150-151), shown in the section
+    //   (return-request-section.tsx:150-152).
+    // - "Copy details shows the whole message to select and copy": the copy
+    //   button opens a read-only box of prepared.clipboardText with "Press and
+    //   hold inside the box to select and copy." (return-request-section.tsx:
+    //   185-206; core :148, :167). No clipboard module on the phone.
+    // - Settings, Appearance replaces the Theme row: app/(drawer)/settings.tsx
+    //   :478-503 (Appearance row when glassEnabled, else the old "Theme /
+    //   Auto" alert); glassEnabled is rollout !== 'off'
+    //   (src/lib/appearance/controller.ts:162, :209), and opt-in is not 'off'
+    //   (src/lib/appearance/flag.ts:11-12; core appearance/parse.ts:48-50).
+    // - Design and Theme words: src/lib/appearance/labels.ts:31-44 (Liquid
+    //   Glass, Classic; Light, Dark, System); the screen
+    //   app/(drawer)/settings/appearance.tsx:114-153.
+    // - "Classic unless you choose Liquid Glass": defaultStyle is Classic for
+    //   every rollout but 'default' (core appearance/types.ts:45-47), the
+    //   checked Design (appearance.tsx:73) and what is drawn (core
+    //   parse.ts:60-67).
+    // - No Home card under opt-in: introVisible needs rollout === 'default'
+    //   (controller.ts:210-215), so the card (src/components/
+    //   appearance-intro-notice.tsx; INTRO_NOTICE labels.ts:108) is not
+    //   mentioned.
+    // - "Light and Dark keep the app light or dark whatever your phone is set
+    //   to ... System follows your phone": labels.ts:41-43; src/lib/
+    //   use-theme.ts:17-24, :35; src/lib/appearance/os-scheme.ts:26-28.
+    // - Saved to the account and shared with the website: the phone reads and
+    //   upserts public.user_appearance, style and theme
+    //   (src/lib/appearance/account.ts:42-80); the website's Theme and Design
+    //   menus save through the provider's chooseTheme and chooseStyle
+    //   (web components/theme/theme-toggle.tsx:58, :89-97;
+    //   components/dashboard/user-menu.tsx:103), the same row
+    //   (server/actions/appearance.ts). A row value is adopted on a device that
+    //   never synced with this person (core appearance/reconcile.ts:61-62,
+    //   rule 4c), which every phone is at its first start of this update (the
+    //   layer was 'off' before and wrote nothing, controller.ts:41-43). The
+    //   first start waits for the row within the 4 s cap (controller.ts:50-58),
+    //   hence "usually as it opens"; a Design adopted later waits for a calm
+    //   moment (controller.ts:60-66).
+    // - "since 11 November": the website saves a Theme to the account only
+    //   while its rollout is not 'off' (web appearance-provider.tsx, inert
+    //   under 'off', :395-396), and the web opt-in went live 2026-11-11
+    //   21:01Z (integrator's record, not readable from the code). A Theme
+    //   chosen on the website before then stayed in that browser (rule 4d,
+    //   reconcile.ts:63-64), so the words name the date instead of "if you
+    //   chose Light or Dark on the website".
+    // - The line under the choices and Try again: syncLine (labels.ts:63-84;
+    //   appearance.tsx:155-169).
+    // - Reduce Transparency: the provider reads it (src/lib/appearance/
+    //   provider.tsx:51) and selectMaterial returns opaque with it
+    //   (src/lib/appearance/material.ts:47). Reduce Motion is NOT said: the
+    //   Appearance footnote names it (labels.ts:88-89), but no glass component
+    //   reads the shared useReduceMotion hook (src/lib/appearance/
+    //   use-reduce-motion.ts has no caller at dd2c349b8).
+    // - Update words: the B44 Update ready message with Restart now, the
+    //   words every phone release since 2026-11-02 uses.
+    // - Web toasts: styles/liquid-glass/globals.glass.css:33-50 at dd2c349b8
+    //   (#504): the rule that centred the toaster from 601 px wide is gone, so
+    //   sonner's bottom right placement holds in both looks; Classic unchanged
+    //   (glass CSS only).
+    // - Web one draft: components/returns/return-request-action.tsx:51-62
+    //   (RETURN_REQUEST_PRESS_BURST_MS = 1000), :128 (a second click in that
+    //   time opens nothing), :214 (the button disabled meanwhile) (#502). The
+    //   duplicate warning still shows after one draft (RETURN_REQUEST_COPY.
+    //   duplicate, core :154-155).
+    // Left out: #503's five Liquid Glass phone fixes (the Scan tab bar,
+    // VoiceOver buttons, the typeface on switch, "1 item", the Appearance
+    // re-measure): no phone had Liquid Glass before this update, so nobody
+    // saw what they fix. #502's mailbox HTML and lower-case order id changes
+    // (nothing a member sees). Not said: any look of Liquid Glass on the
+    // phone beyond its name (the draft release holds those words, with
+    // RECHECKs), any speed, any number of people.
+    // Who is told: the two phone returns entries as the model release's two
+    // (own order: orders:request where Returns is on; return screen:
+    // returns:read or returns:manage where Returns is on, the gate of the
+    // linked page, returns/page.tsx:75, :80); the Appearance entry and the
+    // toast fix have no audience (a personal setting every member has, and a
+    // look any member may choose); the one-draft fix reaches whoever sees
+    // either button (the union of the two returns audiences).
+    status: 'published',
+    title:
+      'In the mobile app, email a return request, and choose your Design and Theme in Settings, Appearance',
+    summary:
+      'In the mobile app, after the latest update, an open return has an Email return request button on your own order and on the return screen. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. Settings, Appearance now has Design (Classic, or Liquid Glass if you choose it) and Theme, saved to your account and shared with the website. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-12T19:30:00Z',
+    entries: [
+      {
+        id: 'app-return-request-own-order',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'In the mobile app, email a return request from your own order',
+        whatChanged:
+          'In the mobile app, after the latest update, on an order you placed, each open request under Your requests on this order has an Email return request button, as Send return request does on the website. It opens an email to the mailboxes your organization set for delivery requests, already filled in with the return number, the order and the items.',
+        whyItMatters:
+          'The button was on the website only, so on a phone you had to write the email yourself and copy the details in.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, you check it and press Send yourself, and StockPilot does not create a ticket. If the email does not open, Copy details shows the whole message to select and copy. The button shows while the return is still open, and only when your organization has set its delivery request mailboxes. If you manage returns, use the button on the return screen.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'app-return-request-return-screen',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'In the mobile app, Email return request and Report a problem on a return',
+        whatChanged:
+          'In the mobile app, after the latest update, the return screen has Email return request while the return is still open. It opens the same prefilled email about that return. Report a problem is there too if you can send maintenance requests: it opens a new maintenance request with the order attached and the return number in its subject.',
+        whyItMatters:
+          'Writing to another team about a return from a phone meant starting an email or a request from nothing.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, and you press Send yourself. If your organization has not set its delivery request mailboxes, the button is not shown; they are set on the website in Settings, Email routing.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'app-appearance-design-theme',
+        category: 'new',
+        area: 'Mobile app',
+        title: 'Settings in the mobile app has an Appearance page with Design and Theme',
+        whatChanged:
+          'In the mobile app, after the latest update, Settings, Appearance replaces the Theme row. It has Design, Liquid Glass or Classic, and Theme, Light, Dark or System. The app stays in Classic unless you choose Liquid Glass, as on the website. Light and Dark keep the app light or dark whatever your phone is set to, and System follows your phone, as the app did before.',
+        whyItMatters:
+          "Before, the app followed your phone's light or dark setting with no way to choose, and Liquid Glass was on the website only.",
+        howItAffectsYou:
+          'Your choices are saved to your account and shared with the website: a Design or Theme chosen on one is used on the other. If you chose Liquid Glass, Light or Dark on the website since 11 November, the app now uses that choice too, once it has read your account, usually as it opens. The line under the choices says whether they were saved to your account or on this phone only, with Try again when a save did not go through. With Reduce Transparency on in iOS Settings, Accessibility, Liquid Glass is solid.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. To change your Design or Theme in the app, open Settings, Appearance.',
+      },
+      {
+        id: 'web-return-request-one-draft',
+        category: 'fixed',
+        area: 'Returns',
+        title: 'A double click on Email return request opens one email, not two',
+        whatChanged:
+          'On the website, a double click on Email return request now opens one email draft, not two. After a press, the button is unavailable for a second.',
+        whyItMatters:
+          'A double click opened two drafts, and sending both would give the warehouse the same request twice.',
+        howItAffectsYou:
+          'To open another draft on purpose, press the button again after a moment. The note that you have already opened a draft for this return still shows.',
+        whatToDo: 'No action needed.',
+        audience: {
+          anyPermission: ['orders:request', 'returns:read', 'returns:manage'],
+          modules: ['returns'],
+        },
+      },
+      {
+        id: 'web-glass-messages-bottom-right',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'In Liquid Glass on the website, pop-up messages are back in the bottom right corner',
+        whatChanged:
+          'On the website, in Liquid Glass, the short messages that pop up after an action now appear in the bottom right corner, where Classic shows them. In wider windows they had appeared near the bottom center of the page.',
+        whyItMatters: 'Messages should appear in the same place whichever design you use.',
+        howItAffectsYou: 'Nothing changes in Classic.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'returns-request-email-names-2026-11',
+    revision: 1,
+    // Two web changes, live on production since 2026-11-12:
+    // - #498 (squash 8d0b832fd, live 08:38Z): "Send return request". The
+    //   phone's half is in the same merge but reaches phones only with the
+    //   next phone update, so the words say "on the website" and that the
+    //   mobile app gets the button with its next update. When that update is
+    //   out, say so in a new release; do not bump this revision for it.
+    // - #499 (squash fcce4e66f, live 08:42Z): the Returns list and the return
+    //   page name the person the order was for; Returns search finds them by
+    //   name or email. Server only for the names and the search: the phone's
+    //   list and return screen already show the server's requesterName (see
+    //   below), so the phone is named for the names and the search, and not
+    //   for the new no-name words, which are phone code (returns-view.ts).
+    // Dated 08:42Z, the minute the later of the two went live.
+    // Claims checked against the code at a772f898e (paths under apps/web/src
+    // unless named):
+    // - "each open request under Your requests on this order": the order page
+    //   passes returnRequest to RequesterTracking only for
+    //   requesterTrackingEligible (app/(dashboard)/dashboard/orders/[id]/
+    //   page.tsx:1186-1187: own order, no returns:manage, returnable, Returns
+    //   on) with resolved mailboxes (:484, :837-838, :1894-1916); the heading is
+    //   RETURNS_COPY.requesterYourRequests (packages/core/src/returns/
+    //   returns-copy.ts:333); the button sits in each request
+    //   (components/returns/requester-tracking.tsx:142-150).
+    // - "while the return is still open": SendReturnRequestButton draws
+    //   nothing unless canSendReturnRequest (send-return-request-button.tsx:
+    //   49-50): status requested, approved or received, with a number
+    //   (packages/core/src/returns/return-request-email.ts:44, :48-54).
+    // - "the mailboxes your organization set for delivery requests", "not
+    //   shown when they are not set": the delivery_request routing, and only
+    //   a pair the organization saved (server/services/
+    //   return-request-email.ts returnRequestRecipientsDto); a null pair draws
+    //   no button (send-return-request-button.tsx:49).
+    // - "the return number, the order and the items": the draft's content
+    //   type (core return-request-email.ts:89-105).
+    // - "in Outlook or in your email app", "Copy details": the dialog's three
+    //   buttons (components/returns/return-request-action.tsx:184-197;
+    //   RETURN_REQUEST_COPY.primary/copy/defaultApp, core :147-149), Outlook
+    //   by window.open(outlookUrl) (:109), the email app by mailtoUrl
+    //   (:148, :157).
+    // - "StockPilot does not send it ... press Send yourself": core
+    //   RETURN_REQUEST_COPY.honesty (:150-151); nothing in #498 sends mail or
+    //   creates a ticket (PUBLISHING.md: it prepares an email the person
+    //   reviews and sends).
+    // - Return page: "Send return request" in the header for every viewer the
+    //   page opens for (returns/[id]/page.tsx:52, :102; return-workbench.tsx:
+    //   943-970, :976 PageHeader actions); "Report a problem" for who may submit maintenance requests
+    //   where Maintenance is on (page.tsx:63, return-workbench.tsx:948), with
+    //   the order attached and the return in the subject (:961-966).
+    // - "people who can change your organization's settings see a note with
+    //   a link to Settings, Email routing": showRoutingHint is
+    //   organization:update (returns/[id]/page.tsx:122), drawn only without
+    //   mailboxes on an open return (return-workbench.tsx:949, :1012-1025).
+    // - "If you manage returns ... on the return page": the order page leaves
+    //   returns:manage out (orders/[id]/page.tsx:484, :1187), and the return
+    //   page opens for returns:read or returns:manage (returns/[id]/page.tsx:52).
+    // - Names: requesterLabelOf (server/services/returns-workbench.ts:406-430):
+    //   the typed name, else the profile name of the member who placed the
+    //   order for themselves, else that profile's email (readNames :351); used
+    //   by the list (:1190) and the return page (:896), which shows it in the
+    //   "Against order" line (components/returns/return-workbench.tsx:991-1001)
+    //   and the list's Requester column (returns/page.tsx:214, :265).
+    // - "Opened by staff or Opened by the requester": returns/page.tsx:265-268
+    //   (website list only).
+    // - Search: searchRequesterMembers matches profile name or email
+    //   (returns-workbench.ts:990-1015) beside the RMA, typed name, email and
+    //   SO number terms (:1102-1117); placeholder "Search RMA, SO number or
+    //   requester" (core returns-copy.ts:270). Over RETURN_SEARCH_MAX_MEMBERS
+    //   (:974, 500) people, or a failed read, the list says so (returns/
+    //   page.tsx:163-169; core returns-copy.ts:273-276: "Type more of the name").
+    // - The mobile app: the Returns list shows requesterName ?? requesterEmail
+    //   (apps/mobile/src/lib/returns-view.ts:112-116) and the return screen
+    //   too (apps/mobile/src/components/return-workbench-view.tsx:405), both
+    //   since #322 (dab3a07d2, 2026-10-05) and so in the phone bundle that is
+    //   live; both read GET /api/v1/returns and /api/v1/returns/[id]
+    //   (apps/mobile/src/lib/returns-api.ts:247-262), whose answers come from
+    //   the same two loaders (server/services/returns.ts:682-712), and the
+    //   phone's search sends q to the list route ((drawer)/returns.tsx:150).
+    // Not said: the order timeline line (audit readers only), the one-per-hour
+    // limit, any number of people, any speed.
+    // Who is told: entry 1, who places orders where Returns is on (the
+    // pattern of returns-requester-exchange, which this section belongs to;
+    // no link: the button is on one order's page). Entries 2 and 3, returns
+    // readers where Returns is on, the gate of the linked page
+    // (returns/page.tsx:75, :80).
+    status: 'published',
+    title: 'Send a return request by email, and see who each return is for',
+    summary:
+      'On the website, an open return now has a Send return request button, on your own order and on the return page. It opens a prefilled email in Outlook or your email app; StockPilot does not send it, you press Send yourself. The mobile app gets the button with its next update. Returns now name the person each order was for, and Returns search finds returns by that person’s name or email.',
+    publishedAt: '2026-11-12T08:42:00Z',
+    entries: [
+      {
+        id: 'returns-send-request-own-order',
+        category: 'new',
+        area: 'Orders',
+        title: 'Send a return request by email from your own order',
+        whatChanged:
+          'On the website, on an order you placed, each open request under Your requests on this order now has a Send return request button. It opens an email to the mailboxes your organization set for delivery requests, already filled in with the return number, the order and the items.',
+        whyItMatters:
+          'To ask the warehouse about a return, you had to write the email yourself and copy the details in.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, you check it and press Send yourself, and StockPilot does not create a ticket. Copy details copies the same text if the email does not open. The button shows while the return is still open, and only when your organization has set its delivery request mailboxes. If you manage returns, use the button on the return page. The mobile app gets the button with its next update.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['orders:request'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-send-request-return-page',
+        category: 'new',
+        area: 'Returns',
+        title: 'Send return request and Report a problem on a return',
+        whatChanged:
+          'On the website, the return page now has Send return request at the top while the return is still open. It opens the same prefilled email about that return. Report a problem is there too if you can send maintenance requests: it opens a new maintenance request with the order attached and the return number in its subject.',
+        whyItMatters:
+          'Writing to another team about a return meant starting an email or a request from nothing.',
+        howItAffectsYou:
+          'Nothing is sent for you: the email opens in Outlook or your email app, and you press Send yourself. If your organization has not set its delivery request mailboxes, the button is not shown, and people who can change your organization’s settings see a note with a link to Settings, Email routing. The mobile app gets the button with its next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+      {
+        id: 'returns-requester-names',
+        category: 'improved',
+        area: 'Returns',
+        title: 'Returns name the person each order was for, and search finds them by name or email',
+        whatChanged:
+          'The Returns list and the return page now name the person the order was for, also when they placed the order themselves. A person with no name on their profile shows as their email. Typing part of a person’s name or email into the Returns search now finds their returns, as well as RMA and SO numbers.',
+        whyItMatters:
+          'Returns on orders people placed themselves said Staff or Requester instead of a name, and searching for the person did not find them.',
+        howItAffectsYou:
+          'The Returns list and return screen in the mobile app show the same names, and its search finds the same returns. On the website, a return with no name or email to show now says Opened by staff or Opened by the requester. If a search matches too many people, the list says so: type more of the name.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/returns', label: 'Open Returns' },
+        audience: { anyPermission: ['returns:read', 'returns:manage'], modules: ['returns'] },
+      },
+    ],
+  },
+  {
+    id: 'order-add-all-2026-11',
+    revision: 1,
+    // "Add all" on Place an order (owner request 2026-11-10). Published with
+    // the pull request that ships it: the release is announced by the
+    // deployment that holds it, so never before the button is live.
+    // Platform: the website. The phone's code is in the same pull request
+    // (the item details sheet and the quantity sheet) but reaches phones only
+    // with the next phone update, so the words say "on the website" and that
+    // the mobile app gets it with its next update. When that update is out,
+    // say so in a new release; do not bump this revision for it.
+    // Claims checked against the code:
+    // - "each item and book with 2 or more available": SfAddControl
+    //   (components/orders/storefront/storefront-cards.tsx) draws the button
+    //   unless core's addAllState is 'hidden', which is fewer than 2
+    //   (packages/core/src/orders/storefront/logic.ts); a book is the same
+    //   catalog row and card.
+    // - "on the cards, in Compact view and in Quick view": SfAddControl's
+    //   three call sites (ProductCard, CompactRow, QuickViewDrawer).
+    // - "the line becomes everything available; it does not add on top": a
+    //   press calls onSetQty(item.id, addAllTarget(available)), the cart's
+    //   set-qty.
+    // - "Available": on hand minus what open orders already hold
+    //   (availableOf), the number the card already shows.
+    // - "Add 10,000 ... the most one order can hold": addAllTarget stops at
+    //   ORDER_MAX_UNITS_PER_LINE (core orders/place-order.ts), and the words
+    //   are addAllButtonCopy's.
+    // - "dimmed once everything available is in your cart": the 'full' state,
+    //   aria-disabled.
+    // - "Each size is its own item": the catalog has one row per item and no
+    //   size picker.
+    // - "Stock is held when the order is approved, as before": nothing in
+    //   placing changed; the button asks for what the stepper already allows.
+    // Not said: any speed, and nothing about the public order link, the
+    // customer portal, kits or Frequently ordered, which do not have it.
+    // Who is told: who may place orders where Orders is on, the page's own
+    // gate (orders/new/page.tsx: can(ctx, 'orders:request') and
+    // checkModuleAccess('orders')).
+    status: 'published',
+    title: 'Place an order has an Add all button for each item and book',
+    summary:
+      'On the website, Place an order now has an Add all button beside Add to cart on each item and book with 2 or more available. One press puts everything available in your cart, so you no longer type the number. The mobile app gets the button with its next update.',
+    publishedAt: '2026-11-10T21:50:00Z',
+    entries: [
+      {
+        id: 'order-add-all',
+        category: 'new',
+        area: 'Orders',
+        title: 'Add all puts everything available of an item or book in your cart in one press',
+        whatChanged:
+          'On the website, in Place an order, each item and book with 2 or more available has an Add all button beside Add to cart: on the cards, in Compact view and in Quick view. One press sets that item in your cart to everything available, the number its card shows. If your cart already holds some of it, the line becomes everything available; it does not add on top. Each size is its own item, so each has its own button. An item with more than 10,000 available shows Add 10,000 in its place, the most one order can hold.',
+        whyItMatters:
+          'To order all of an item you had to add it and then type the number shown on its card.',
+        howItAffectsYou:
+          'Press Add all to take everything available of an item. The button is dimmed once everything available is in your cart. You can still type a number or use plus and minus to change it. Stock is held when the order is approved, as before. The mobile app does not have the button yet; it comes with the app’s next update.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/orders/new', label: 'Place an order' },
+        audience: { anyPermission: ['orders:request'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'count-sheet-long-names-2026-11',
+    revision: 1,
+    // #492 (squash 80c3bf114; web only, no phone code, no migration), live on
+    // production since 2026-11-10 19:41Z; the owner confirmed the printed
+    // sheet. This release needs a web deploy only. From #492's draft, with
+    // the second fix added (below).
+    // Claims checked against the code at 80c3bf114 (lib/pdf/cycle-count.tsx):
+    // - "wraps ... with space before the Location column": every row cell
+    //   takes ccCell() (:202-208), a gutter of 0.25pt per CC_COLS share
+    //   (:201): Description 7.75pt, SKU 4.5pt, Location 3.5pt.
+    // - "broken onto lines that fit": breakOverwideWords on the Description
+    //   (:444), the Location (:451) and the group name (:389), and
+    //   breakIdentifierLines on the SKU (:436) (lib/pdf/identifier-lines.ts);
+    //   cycle-count.render.test.tsx reads the printed text back.
+    // - "kept on one page unless it is extremely long": wrap is false unless
+    //   the row's description, SKU and location hold more than 400 characters
+    //   (CC_KEEP_ROW_TOGETHER_MAX_CHARS :236, :421-424), so not "never".
+    // - "keep the same columns": cycle-count.render.test.tsx, "does not move
+    //   any column on a sheet of short titles".
+    // - The buttons: Print count sheet and Variance report PDF
+    //   (app/(dashboard)/dashboard/cycle-counts/[id]/page.tsx:193).
+    // The second fix, found by #492's review and reproduced for this release
+    // (2026-11-10) with the component as it was at 7dacbd7aa and the
+    // installed @react-pdf/renderer: with one-line rows only, every sheet and
+    // every variance report of 27 to 70 rows, and of 85, 100, 150, 250 and
+    // 400 rows, printed row 1 on page 1, placed rows 2 to 26 far below the
+    // page (so they were on no page) and printed the rest from page 2 on. A
+    // sheet of 1 to 26 such rows printed every row. A 40-row sheet with one
+    // two-line row among its first 26 printed every row; with the two-line
+    // row at 27 or 35 it lost rows 2 to 26. At 80c3bf114 each of these
+    // prints every row, 26 on page 1. Rows kept whole (wrap false) is what
+    // fixed it; cycle-count.rows-across-pages.render.test.tsx pins it and
+    // fails on the old component. The review of this release rendered the
+    // same old component three more ways: a count with a one-line note lost
+    // rows 2 to 25 from 25 rows on, one with a three-line note rows 2 to 24
+    // from 24 rows on, and sheets of 27, 30 and 41 one-line rows in product
+    // groups of 6 (size runs) lost no row; an organisation logo changed
+    // nothing. So the words give no row count: "longer than one page",
+    // "every item on the first page took a single line", "about 25", "could",
+    // and "not grouped by product". Not said: how long this lasted (not
+    // measured).
+    // "those items now print", "they now print" and "the first page no
+    // longer leaves items out" speak of the first page only, so they stay
+    // true for a count over 10,000 lines, which is cut at PDF_MAX_LINES with
+    // a banner on its first page saying so (lib/pdf/count-sheet-cap.ts:18);
+    // nothing here says every item of a count prints.
+    // Changed from the draft: the sentence on the missing rows in the
+    // summary and whatChanged, its reprint in whatToDo, "the first page no
+    // longer leaves items out" in howItAffectsYou, and "look exactly as
+    // before" is now "keep the same columns", since a long sheet of short
+    // names now prints rows it used to leave out.
+    // Who is told: whoever can open the PDF, where Cycle Counts is on: the
+    // route asks cycle_counts:read, else stock:adjust
+    // (app/api/cycle-counts/[id]/pdf/route.tsx:48-51), and the linked page
+    // asks the module and the same two (cycle-counts/page.tsx:74, :83).
+    status: 'published',
+    title:
+      'Printed cycle count sheets keep long item names in their column and no longer leave items off the first page',
+    summary:
+      'On a printed cycle count sheet or variance report, a long item name now wraps inside its own column instead of running into the location or the next column. A sheet or report longer than one page, not grouped by product, where every item on the first page took a single line, could print only the first item on page 1 and leave out the rest of that page’s items (about 25); those items now print.',
+    publishedAt: '2026-11-10T20:02:00Z',
+    entries: [
+      {
+        id: 'count-sheet-long-names',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title:
+          'Long item names no longer run into the next column on printed count sheets, and page 1 no longer leaves items out',
+        whatChanged:
+          'On the printed cycle count sheet and the variance report (Print count sheet and Variance report PDF on a cycle count), a long item name now wraps onto more lines inside the Description column, with space before the Location column. A name or SKU with a long run of letters and numbers and no spaces is broken onto lines that fit. A row is kept on one page unless it is extremely long. A sheet longer than one page, not grouped by product, where every item on the first page took one line, could print only the first item on page 1 and leave out the rest of that page (about 25 items); they now print.',
+        whyItMatters:
+          'A long name used to print right up against the location, or straight over it, so the sheet was hard to read on the warehouse floor. On a long sheet of short names, about 25 items could be missing from the paper to be counted.',
+        howItAffectsYou:
+          'Every name, SKU and location prints in full and stays in its own column, and the first page no longer leaves items out. Sheets of short names keep the same columns as before.',
+        whatToDo:
+          'No action needed. Print the sheet again if you printed one with a long name, or one whose first page showed a single item.',
+        link: { href: '/dashboard/cycle-counts', label: 'Open Cycle counts' },
+        audience: {
+          anyPermission: ['cycle_counts:read', 'stock:adjust'],
+          modules: ['cycle_counts'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'approver-controls-own-warehouses-2026-11',
+    revision: 1,
+    // S2, security slice E, both halves in one release:
+    // - #378 (squash bae51d8e6; web and migration 0416, on the web and in the
+    //   database since 2026-11-03 01:47Z);
+    // - #487 (squash ebabb2772; the phone order screen waits for the saved
+    //   permissions and shows only its newest load, so a fresh open offers
+    //   nothing on another warehouse's order).
+    // Web build 82033659d53a (main ebabb2772) is live. The phone halves reached
+    // phones in EAS update group b0ba5d7e-e17a-4a1b-ba7e-84476c1f2a1c (runtime
+    // 1.4.0, published 2026-11-05 07:35Z from ebabb2772); the integrator
+    // merges this only after iOS launches of that group show in EAS insights.
+    // This release needs a web deploy only. If the phone update is rolled back
+    // (to group 9cf9ecf7) while the web stays, the phone clauses are no longer
+    // true: withdraw this release or correct it.
+    // No What's New for S2 was published before: at ebabb2772 no release
+    // names #378, #487 or 0416, and #487 has none of its own (its description:
+    // #378's draft covers it). From #378's draft, corrected below.
+    // Walks (lab, synthetic users and orders, a staff approver and a staff
+    // picker who work in one warehouse, and a manager):
+    // - walk-s2-phone-1103 (2026-11-03), web half: on the other warehouse's
+    //   orders no Manager actions card before picking, Print pick slip only in
+    //   picking and at picking complete, Print customer slip (and View
+    //   signature on a signed order) from the packing slips on, no Print
+    //   warehouse slip, internal notes, Hold, needed-by Change, Add items or
+    //   line control; an own pending request offers Cancel request only; the
+    //   manager's set unchanged. Direct call PASS: the route answered 403 and
+    //   the function 42501, each with the sentence quoted below.
+    // - walk-s2b-phone-1105 (2026-11-05), phone at ebabb2772, iPhone and iPad,
+    //   Large and AX5: 145 fresh opens of the other warehouse's orders, 0 with
+    //   a control; picking statuses: no Claim picking, pick or Release for the
+    //   approver or the picker; own pending request: Cancel request only, and
+    //   cancelled; View signature shown; in their own warehouse Approve, Claim
+    //   picking and Release done; the manager's set unchanged. Independent
+    //   check PASS.
+    // Claims checked against the code at ebabb2772:
+    // - Who: staff work in their assigned warehouses (lib/auth/warehouse.ts
+    //   :221-229); owners, admins and managers in every one by role
+    //   (roleSeesEveryWarehouse :76-78; the phone's seesEveryHolding,
+    //   apps/mobile/src/lib/holdings-elsewhere.ts:80-84).
+    // - Web (app/(dashboard)/dashboard/orders/[id]/page.tsx): approverWritesHere
+    //   and approverReadsHere :310-312; the panel's steps follow
+    //   approverWritesHere (:1966; components/orders/manager-actions-panel.tsx
+    //   :341, Approve and Deny :780, internal notes :1210); Cancel through core
+    //   orderCancelOffer (:1408; packages/core/src/orders/order-cancel.ts
+    //   :48-49); Hold available stock :1001; Add items and the line controls
+    //   viewerMayChangeLines :344 and :351. The panel shows for such an
+    //   approver only where it carries a read (:397-402,
+    //   lib/orders/actions-panel-reads.ts:38): Print pick slip (panel :902,
+    //   :957), Print customer slip :976 and View signature :987; Print
+    //   warehouse slip only with canPrintWarehouseSlip (:978), which the page
+    //   passes as viewerMayHandOver (:1200, :1992), mayHandOverOrder's rule.
+    //   Not changed on the web by #378, so told for the phone only: the
+    //   needed-by Change already asked write access to the order's warehouse
+    //   (lib/orders/needed-by-change.ts:92-96, F2-4), and so did Claim picking
+    //   and Release (page.tsx:793-796).
+    // - Phone (apps/mobile/app/order/[id].tsx): orderWarehouseAccessAsShown
+    //   :946 (src/lib/order-warehouse-scope.ts:112-124 and :142-161);
+    //   Approve, Deny and every step through orderManagerActions
+    //   (src/lib/order-manager-actions.ts:124, writesOrderWarehouse :2462);
+    //   Cancel :2505-2508; Hold :2285-2289; the needed-by Change :2318-2323;
+    //   Add items and the line edits :970-976; Claim picking and Release
+    //   :960, :2411 and :2441; the wait for the saved permissions :697-705
+    //   (#487); the View signature card :3816. The phone has no internal notes.
+    // - The sentence: core ORDER_WAREHOUSE_WRITE_REFUSED_COPY
+    //   (packages/core/src/guards/db-guard-copy.ts:37-38), said by the order
+    //   service (server/services/order-requests.ts:5151) and by 0416's six
+    //   functions (supabase/migrations/0416_order_functions_warehouse_scope.sql
+    //   :164, :265, :353, :421, :539, :736), returned by the routes
+    //   (app/api/v1/orders/[id]/transition/route.ts:227-228). "for most of
+    //   them": the hand-over and Print warehouse slip refuse in their own
+    //   words (app/api/orders/[id]/packing-slip-warehouse.pdf/route.tsx:56).
+    // - An own pending request: the service asks no warehouse for that cancel
+    //   (order-requests.ts:3186-3188), nor does 0416's cancel_order_request;
+    //   the line edits ask read access of everyone (loadEditableOrderHeader,
+    //   order-requests.ts:2108).
+    // - A delivery's driver: the hand-over rule lets the assigned driver
+    //   through first (server/lib/order-secrets.ts:266), the web card keeps
+    //   their hand-over (page.tsx:402, panel :1095-1096) and Print warehouse
+    //   slip (viewerMayHandOver), and the phone theirs (driverHere,
+    //   order-manager-actions.ts:126), so the card is not "only the prints"
+    //   for them: said in howItAffectsYou.
+    // Changed from the draft: the internal notes are named for the web and
+    // the needed-by Change for the phone only (above); the card is said to
+    // show only when the order has a print or a signature to offer; "each of
+    // these was refused" is "for most of them"; the other steps that move an
+    // order on are named; a delivery's driver keeps the hand-over; the
+    // update words are the current ones; whyItMatters ends on "these
+    // controls", not "only what you can do on it"; and the audience leaves
+    // out viewers (below).
+    // Left out: #487's Orders list and Returns list changes (a read started
+    // before a permission change or a workspace switch no longer lands after
+    // it): only seen while a permission or the workspace changes during a
+    // read, so there is nothing a member will notice to tell. The database
+    // refusing what the app already refused is not visible to anyone using
+    // the app, so it has no entry. A phone whose warehouse read fails offers
+    // as before, and the server refuses.
+    // Not every control follows the warehouse, so whyItMatters says "these
+    // controls", not every one: Create return on a completed order asks no
+    // warehouse on the web (page.tsx:1105-1113; returnableLinesForOrder,
+    // server/services/returns.ts:729) or the phone (showCreateReturn
+    // :759-760), and create_return_request refuses it there
+    // (0394_returns_lifecycle_original_rack.sql:1293-1295).
+    // Who is told: owners, admins, managers and staff who approve orders or
+    // pick (orders:approve or items:update) where Orders is on, the people the
+    // entry speaks of; owners, admins and managers are told that nothing
+    // changes for them. Not a viewer, even one granted orders:approve or
+    // items:update: neither app offered a viewer Approve, Deny or the other
+    // steps, before #378 or after (panel :341, order-manager-actions.ts:124),
+    // and the warehouse write that Cancel, Hold and Claim picking now ask is
+    // never a viewer's on any order (page.tsx:310-311 approverWritesHere,
+    // lib/auth/warehouse.ts:222; order-warehouse-scope.ts:118), so the words
+    // would be wrong for them. The 2026-10-06 entry on the same subject
+    // (order-other-warehouse-words) limits its audience by role too.
+    status: 'published',
+    title:
+      'Approve, Cancel and the other order steps show only on orders of your warehouses, on the web and in the mobile app',
+    summary:
+      'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, changes to its items or the other steps that move it on, on the web or in the mobile app. In the mobile app, Claim picking and Release show only on orders of your warehouses, as on the web. Owners, admins and managers see no change. In the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-05T13:54:00Z',
+    entries: [
+      {
+        id: 'approver-controls-own-warehouses',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'Approve, Cancel and the other order steps show only on orders of your warehouses',
+        whatChanged:
+          'If you approve orders but work in only some warehouses, an order of another warehouse no longer offers you Approve, Deny, Cancel, Hold available stock, Add items, changes to its items or the other steps that move it on, on the web or in the mobile app. On the web, its internal notes are hidden too, and its Manager actions card, when it shows, offers only Print pick slip, Print customer slip and View signature. In the mobile app, Change beside its needed-by date is hidden too, and Claim picking and Release show only on orders of your warehouses, as on the web, for everyone who picks.',
+        whyItMatters:
+          "Before, these controls were offered on such an order and every tap was refused, for most of them with “This order is in a warehouse you don't work in, so you can't change it. Ask a manager.” Now these controls show only on orders of the warehouses you work in.",
+        howItAffectsYou:
+          'Owners, admins and managers work in every warehouse, so nothing changes for them. A request you placed yourself can still be cancelled while it waits for approval, wherever it is, but its items can be changed only in a warehouse you work in. As the driver of a delivery, you can still hand it over, wherever it is. When an order of another warehouse needs a change, ask a manager.',
+        whatToDo:
+          'No action needed on the web. To load the latest update in the mobile app, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: {
+          roles: ['owner', 'admin', 'manager', 'staff'],
+          anyPermission: ['orders:approve', 'items:update'],
+          modules: ['orders'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'export-items-permission-2026-11',
+    revision: 1,
+    // B68, #446 (squash 22e52f1ea, live 2026-11-02 23:45:39Z, web build
+    // ea10ffc12e7f; web only, no migration, no phone code), from the draft in
+    // #446's description. The newest release, at the top. Its production check
+    // (postdeploy-1102/b68) was running when this was written: as the Demo Co
+    // admin, Items and Books show Export in the toolbar and the selection bar,
+    // and Rentals items shows it in neither. The integrator merges this only
+    // after that check passes.
+    // Claims checked against the code at 22e52f1ea:
+    // - export-items-permission-name: packages/core/src/constants/
+    //   permissions.ts:595-596 (label Export items, description "Download
+    //   Items and Books as PDF, Excel or CSV files."); who holds it is
+    //   unchanged (ROLE_PERMISSIONS untouched by #446). Export shows only with
+    //   items:export: apps/web/src/app/(dashboard)/dashboard/inventory/
+    //   page.tsx:496 and books/page.tsx:369 compute canExport, passed at
+    //   inventory/page.tsx:671 and :1030 and books/page.tsx:484 and :758; the
+    //   toolbar draws Export only with it (components/inventory/
+    //   inventory-table.tsx:3096), and so does the selection bar
+    //   (bulk-actions.tsx:617, its dialog :868). Before, both were drawn for
+    //   everyone and the server refused the export (api/inventory/export/
+    //   route.tsx, can(ctx, 'items:export')). The phone shows no permission
+    //   names (no PERMISSION_META in apps/mobile) and has no Items export.
+    // - rentals-export-removed: rentals/items/page.tsx:260 passes no
+    //   canExport, so the toolbar and the bar draw no Export. Before, Export
+    //   filtered and Export all saved Items rows (the toolbar sent no rentals
+    //   flag; list() keeps is_rental = false, server/services/inventory.ts),
+    //   and Export selected read listByIdsForExport, which keeps
+    //   is_rental = false, so a selection of rental items gave no rows.
+    // Who is told: export-items-permission-name has no audience (every member
+    // can read the permission names in Settings, Roles & permissions, as the
+    // draft says); rentals-export-removed reaches who can export where Rentals
+    // is on. Left out (the draft's reasons): the refusal and ended-session
+    // words in the export dialog and the AI assistant's answer.
+    status: 'published',
+    title: 'The export permission is now called Export items',
+    summary:
+      'On the web, the permission that lets a member export Items and Books is now called Export items, and Export shows only to members who hold it. Rentals no longer shows Export.',
+    publishedAt: '2026-11-02T23:46:00Z',
+    entries: [
+      {
+        id: 'export-items-permission-name',
+        category: 'improved',
+        area: 'Settings',
+        title: 'The permission to export Items and Books is now called Export items',
+        whatChanged:
+          'In Settings, Roles & permissions, the permission that lets a member export Items and Books is now called Export items instead of Export CSV, and its description says it covers PDF, Excel and CSV files. On the web, Export on Items and Books, in the toolbar and in the bar for selected rows, now shows only to members who hold it.',
+        whyItMatters:
+          'The old name said CSV, but the same permission also covers PDF and Excel exports. Members without it were shown Export, and their export was then refused.',
+        howItAffectsYou:
+          'Who holds the permission has not changed: owners, admins and managers by default, and anyone an admin gave it to. If you need to export and do not see Export, ask an admin for the Export items permission.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'rentals-export-removed',
+        category: 'fixed',
+        area: 'Rentals',
+        title: 'Rentals no longer shows Export',
+        whatChanged:
+          'On the web, the Rentals items list no longer shows Export, in its toolbar or when rental items are selected.',
+        whyItMatters:
+          'Export on Rentals saved items from your Items list instead of your rental items, and exporting selected rental items saved a file with no rows.',
+        howItAffectsYou:
+          'There is no export of rental items for now. Export on Items and Books works as before.',
+        whatToDo: 'No action needed.',
+        audience: { anyPermission: ['items:export'], modules: ['rentals'] },
+      },
+    ],
+  },
+  {
+    id: 'mobile-app-fixes-2026-11-02',
+    revision: 1,
+    // The phone halves of five changes, in one over-the-air update for
+    // runtime 1.4.0: EAS update group 9cf9ecf7-6715-4f35-82fb-99a83427c9c1,
+    // published 2026-11-02 about 23:05Z from main a34543b81
+    // (docket-2026-10-24/ota-1102b/release.log). iOS phones launched it at
+    // 23:09Z (update:insights: 1 install, 0 failed), so this is dated 23:10Z.
+    // No apps/mobile file changed between a34543b81 and 22e52f1ea, so each
+    // phone line below was read at 22e52f1ea. This release needs a web deploy
+    // only. If the phone update is rolled back (to group c5b4d663) while the
+    // web stays, these lines are no longer true: withdraw this release.
+    // Web halves already told, so not told again here:
+    // - B42 #423 and B23 #406 in lists-delivery-sites-and-fixes-2026-11
+    //   (count-start-managers-only, delivery-sites-by-name-and-deleted-driver);
+    // - B75 #435's route part (E) in phone-ai-long-chats-keep-answering: long
+    //   chats keep answering and each chat is one conversation on the web.
+    // B65 #476 (squash f0d44b53d) and S5a #450 (squash b5c94df42) are phone
+    // changes first told here.
+    // Walks:
+    // - simwalk-1102b w1, 2026-11-02 20:33Z to 21:10Z, EAS simulator build
+    //   7a500b4e of f0d44b53d, Demo Co, iPhone 17 Pro and Pro Max: B65 W1-W9
+    //   (each malformed link says not found, no Try again; real records and
+    //   upper-case ids open), B42 as an admin (the + button, Review, New count
+    //   with no sentence), B75 W1-W7 (23 messages answered in one chat, New
+    //   chat, a 2,001-character message refused with the plain sentence, the
+    //   web lists the chat once), and the S5a smoke (sign-in, no alert).
+    // - simwalk-1102b/ipad, 22:40Z to 22:52Z, iPad Pro 13-inch: B75 New chat
+    //   at default and AX5 text sizes, portrait and landscape.
+    // - walk-lpw-1102 (lab, synthetic users, 21:20Z to 22:31Z, main
+    //   3549b480d): B42 for staff, a viewer, Cycle Counts off, an empty list
+    //   and offline; B23 on iPhone and iPad for a manager, a staff approver
+    //   and staff without orders:approve.
+    // - walk-s5a (lab, 18:36Z to 19:53Z, PR head 6f2565fea): sign-out removes
+    //   the phone's token row, ends the other sessions (the web tab on
+    //   /signin, the other phone's alert), clears Notification Center, an
+    //   offline Sign out keeps the session; the sign-in and sign-out rows; the
+    //   new-device email line for a known account. The owner's iPhone check
+    //   (#450 release step 4) is not recorded in the docket; no line rests on
+    //   it.
+    // Left out: C20 (also in this update) was not asked for here; B65's
+    // Scan tab change (nothing a person sees); S5a's sessions channel words,
+    // its webhook filter, registration waiting for the authenticator code,
+    // and a phone signed out from another device (each in #450's "Not
+    // announced"); B75's book-list photo limits.
+    // Who is told: every member (the S5a and B65 entries have no audience);
+    // the summary starts "In the mobile app", as a phone shows only the title
+    // and the summary.
+    status: 'published',
+    title:
+      'In the mobile app, signing out stops notifications, broken links say not found, and AI chats have New chat',
+    summary:
+      'In the mobile app, after the latest update, signing out stops that phone getting your notifications and signs your other devices out, and phone sign-ins and sign-outs are in the Audit log. A mistyped link to a record says it was not found, AI Assistant chats have New chat and plain error messages, and Start a cycle count is offered only to managers who can start one. Tap Restart now when the app says Update ready, or close the app completely and open it again.',
+    publishedAt: '2026-11-02T23:10:00Z',
+    entries: [
+      {
+        // platform: phone. From: S5a #450, its draft entry. Checked at
+        // 22e52f1ea: Sign out deletes this phone's push token row while the
+        // session still exists (apps/mobile/src/lib/push-unbind.ts:63, called
+        // from deviceSignOutSteps :133-160, before the session ends,
+        // sign-out-flow.ts:316), then the global logout (:318), and clears
+        // Notification Center once signed out (auth-context.tsx:532,
+        // push-unbind.ts:175-180). The note to the server ends every other
+        // session and names them on the account's channel
+        // (apps/web/src/app/api/v1/auth/signed-out/route.ts:66-84), as the
+        // web's Sign out signs them out. Use password instead and Use a
+        // different account delete the row too (auth-context.tsx:545-580,
+        // signOutToFallback). Offline: the session stays and the phone
+        // registers again (push-unbind.ts:158-160; walk-s5a W5). Walked:
+        // walk-s5a W4 (the web tab on /signin in under a second, the other
+        // phone's alert at once), step 5 (another person on the same phone),
+        // W5, W8.2. "an open web tab or a running app": a phone whose app is
+        // closed is signed out at its next token refresh, as before (#450).
+        id: 'app-sign-out-stops-notifications',
         category: 'improved',
         area: 'Mobile app',
-        title: 'A message says when an update is ready',
+        title: 'In the mobile app, signing out stops that phone getting your notifications',
         whatChanged:
-          'In the mobile app, after the latest update, opening the app shows the launch screen once. Before, the app could open, restart by itself a moment later and show the launch screen again. Now a new update downloads while you use the app. When it is ready, a message says “An update for StockPilot is ready. The app will restart to finish installing it.” with two buttons, Restart now and Later.',
+          'In the mobile app, after the latest update, Sign out stops that phone getting your notifications and clears the ones it still shows. Your other devices are signed out too, an open web tab or a running app within seconds, as when you sign out on the web. Use password instead and Use a different account also stop that phone getting your notifications.',
         whyItMatters:
-          'The second launch screen came with no reason, so it could look like the app had crashed. Now you know when an update is ready, and the app restarts only when you choose.',
+          'Before, a phone kept getting your order, purchase order and stock notifications after you signed out of it, until someone else signed in on it, and your other devices stayed signed in for up to an hour. On a shared or handed-on phone, the next person no longer sees your notifications.',
         howItAffectsYou:
-          'Tap Restart now and the app restarts once and opens the new version. Tap Later to carry on: the message comes back the next time you return to the app, and the update finishes by itself the next time you close the app completely and open it again. The message waits while you scan, count, add a photo or a file, or type, while you create an item, a request or an order, while a note, a pick or a receipt is not saved yet, and while another message or sheet is open.',
+          'Notifications start again on a phone when you sign in on it. If the phone is offline when you press Sign out, you stay signed in, as before, and it keeps getting your notifications.',
         whatToDo:
-          'Close the app completely and open it again to load the latest update. This one time the app may restart by itself once. After that, when the message appears, tap Restart now, or Later if you are busy.',
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+      },
+      {
+        // platform: phone, through the server. From: S5a #450, its draft
+        // entry. Checked at 22e52f1ea: the phone sends its sign-in and
+        // sign-out notes (apps/mobile/src/lib/auth-notes.ts:27-60); the
+        // sign-in note writes user.signed_in in the organization
+        // (apps/web/src/app/api/v1/auth/signed-in/route.ts:169-176) and calls
+        // noteLoginDevice with the phone's name (:200-207); the sign-out note
+        // writes user.signed_out (signed-out/route.ts:99-102). The email goes
+        // only for a device the account has not used, and only when the
+        // account already has a known device (lib/auth/login-device.ts:94-118),
+        // as for a web sign-in (server/actions/auth.ts:223). The phone's name,
+        // "StockPilot app on iPhone 15 Pro (iOS 18.1)" (signed-in/route.ts
+        // :121-126). Change password signs out the other devices (#470,
+        // server/actions/auth.ts). Walked: walk-s5a W1, W2 and W3 (the rows
+        // and the email's dry-run line in the lab).
+        id: 'app-sign-ins-in-audit-log',
+        category: 'improved',
+        area: 'Account',
+        title:
+          'Signing in and out in the mobile app shows in the Audit log, and a new phone sends you an email',
+        whatChanged:
+          "In the mobile app, after the latest update, signing in and signing out are recorded in your organization's Audit log, as they are on the web. When your account signs in on a phone it has not used before, we email you, as the web does for a new browser, and the email names the phone, for example StockPilot app on iPhone 15 Pro (iOS 18.1).",
+        whyItMatters:
+          'Before, phone sign-ins and sign-outs were not in the Audit log, and signing in on a new phone never sent the email the web sends. If someone signs in to your account on a phone you do not recognize, you now hear about it.',
+        howItAffectsYou:
+          'The first time you sign in on each of your phones after the update, you may get one email about a new device. If it was you, there is nothing to do.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again. If an email names a phone you do not recognize, change your password in Settings, Security on the web: changing it also signs out your other devices.',
+      },
+      {
+        // platform: phone. From: B65 #476, its draft entry. Checked at
+        // 22e52f1ea: each screen checks the link id with core isUuid before
+        // any read: apps/mobile/app/order/[id].tsx:1412 (and :550 offline),
+        // app/item/[id].tsx:707 (the alert :710, ITEM_NOT_FOUND_COPY :507,
+        // leaveItemScreen :517-518, back or Home), app/po/[id].tsx:324 (the
+        // words :740), app/po-import/[id].tsx:301 (:578),
+        // app/exceptions/[id].tsx:270 (EXCEPTION_NOT_AVAILABLE_COPY :159-160,
+        // Try again only for a well-formed id :360). Walked: simwalk-1102b w1
+        // step 6 (W1-W9) and step 14 (upper-case ids). No audience: anyone can
+        // open a broken link. The count screen is not in #476.
+        id: 'app-mistyped-record-link-not-found',
+        category: 'fixed',
+        area: 'Mobile app',
+        title: 'In the mobile app, a mistyped or cut-off link to a record says it was not found',
+        whatChanged:
+          'In the mobile app, after the latest update, opening a link to an order, an item or book, a purchase order, a PO import or an exception whose id was mistyped or cut short shows that screen’s not-found message, such as “Order not found.”, as a link to a record that does not exist does. Before, the order, purchase order and PO import screens showed the database’s own error text with Try again, the item screen said “Check your connection and try again.”, and the exception screen said “The server sent an unexpected answer.”',
+        whyItMatters:
+          'Those messages blamed the connection, the server or the database for a broken link, and Try again could never work.',
+        howItAffectsYou:
+          'Links in notifications and inside the app carry whole ids and open as before. When the app cannot show an item, the message now reads “This item is not available to you, or it no longer exists.” instead of “This item no longer exists.”, and OK goes back to the screen before, or to Home when there is none. Back on an item opened from a link with no screen before it now goes to Home.',
+        whatToDo:
+          'If a link says the record was not found, check that the whole link was copied, or open the record from its list. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+      },
+      {
+        // platform: phone. From: B75 #435, its phone part (A); its route part
+        // (E) is told in phone-ai-long-chats-keep-answering. Checked at
+        // 22e52f1ea: New chat, apps/mobile/app/ai/chat.tsx:297-298 (shown once
+        // the chat has turns, hidden while an answer or a photo is pending)
+        // and startNewChat :179-184 (empties the chat and the box, forgets the
+        // session; nothing deleted); Chat error shows the route's own sentence
+        // or the status sentence (src/lib/ai-chat.ts:172-174, chat.tsx:157),
+        // else CONNECTION_FAILURE_COPY (src/lib/connection-copy.ts:17-18); the
+        // route's sentences, apps/web/src/app/api/ai/chat/route.ts:79 and
+        // :191; the body sends no history while a chat is held
+        // (ai-chat.ts:96-107). Walked: simwalk-1102b w1 steps 11-13 (W1-W7)
+        // and ipad. Audience: the route checks the AI module and items:update.
+        id: 'app-ai-new-chat-and-plain-errors',
+        category: 'improved',
+        area: 'AI Assistant',
+        title:
+          'The AI Assistant in the mobile app has New chat and says plainly why a message failed',
+        whatChanged:
+          'In the mobile app, after the latest update, a + button (New chat) at the top right of an AI Assistant chat clears it and starts a new one. It shows once the chat has started and is hidden while an answer is on its way. When a message cannot be sent, Chat error now says why in a sentence, such as “Your message is too long. Keep it under 2,000 characters.” or “Could not reach the server. Check your connection and try again.”',
+        whyItMatters:
+          'The only way to start over was to leave the chat and open it again, and a refused message showed technical text, such as AI chat 400 and the server’s raw answer.',
+        howItAffectsYou:
+          'The chat you leave with New chat is not deleted: it stays in the AI Assistant on the web, in the same workspace. The app also no longer sends the whole conversation with every message.',
+        whatToDo:
+          'To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // platform: phone. From: B42 #423, its phone half (the web half is
+        // count-start-managers-only). Checked at 22e52f1ea: the + button
+        // (Start a cycle count) and the empty list's words,
+        // apps/mobile/app/(drawer)/(tabs)/cycle-counts.tsx:190-194, :566-568
+        // and :618-621, by core countStartAllowed (packages/core/src/
+        // warehouse/exception-recount.ts:450-458: the manager role or above,
+        // cycle_counts:assign and stock:adjust, the module on, never while the
+        // role is unknown); Review, src/components/count-select-bar.tsx:67 and
+        // :175 with src/lib/count-select-offers.ts:35-51; Select on Items and
+        // Books only when the bar offers Review or Group selected
+        // (items:update), (tabs)/inventory.tsx:251 and :945,
+        // (tabs)/books.tsx:244 and :905; New count's sentence above a disabled
+        // Start count, app/cycle-count/new.tsx:80, :196-204, with
+        // COUNT_START_MANAGER_ONLY_COPY (exception-recount.ts:84-85). Walked:
+        // walk-lpw-1102 (staff, viewer, module off, empty list on the iPad,
+        // offline cold start) and simwalk-1102b w1 step 7 (admin). Audience:
+        // as count-start-managers-only.
+        id: 'app-count-start-managers-only',
+        category: 'fixed',
+        area: 'Cycle counts',
+        title: 'In the mobile app, counts are started only by people who can start one',
+        whatChanged:
+          'In the mobile app, after the latest update, the + button on Cycle counts and Review in the Items and Books select bar show only for managers who can assign counts and adjust stock, where Cycle Counts is turned on. Select on Items and Books shows only when the bar has something for you, such as Group selected, so viewers no longer see it. Anyone who is not a manager able to assign counts and adjust stock and opens New count, for example from a link, reads “Only a manager with permission to assign counts and adjust stock can start a count.” above Start count, which stays off.',
+        whyItMatters:
+          'Staff and viewers could pick items and press Start count, and the start was always refused. Where Cycle Counts is turned off, Review could not start a count for anyone.',
+        howItAffectsYou:
+          'If you cannot start a count, an empty Cycle counts list says “Counts a manager starts appear here.” Counts you are given to enter work as before. When the app is opened without a connection, the + button and Review may not show until it is back online.',
+        whatToDo:
+          'No action needed. Ask a manager when a count needs starting. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['items:read', 'cycle_counts:read', 'stock:adjust'] },
+      },
+      {
+        // platform: phone. From: B23 #406, its phone half (the web half is in
+        // delivery-sites-by-name-and-deleted-driver). Checked at 22e52f1ea:
+        // apps/mobile/src/lib/order-manager-actions.ts:113-116 (approvers:
+        // orders:approve and not a viewer) and :164-167 (in transit, the
+        // driver deleted, Collect signature offered), the words from core
+        // deletedDriverHandOverLine (packages/core/src/orders/
+        // delivery-driver.ts:75-80), shown above the buttons
+        // (app/order/[id].tsx:3309-3315). Walked: walk-lpw-1102 B23 on iPhone
+        // and iPad, Large and AX5: a manager reads both buttons, a staff
+        // approver Collect signature only, staff without orders:approve no
+        // line. Audience: who approves orders where Orders is on.
+        id: 'app-deleted-driver-hand-over-line',
+        category: 'improved',
+        area: 'Orders',
+        title:
+          'In the mobile app, a delivery whose driver deleted their account says how to finish it',
+        whatChanged:
+          'In the mobile app, after the latest update, an order out for delivery whose driver deleted their StockPilot account now tells approvers, above the hand-over buttons: “The driver of this delivery deleted their account. Record the hand-over here with Collect signature or Physical signature.” Approvers who are not managers read Collect signature only.',
+        whyItMatters:
+          'When a driver deleted their account, the order lost its driver and nothing on it said why, so a delivery on its way looked unassigned.',
+        howItAffectsYou:
+          'Nothing is blocked: hand the order over with Collect signature as for any delivery, or Physical signature if you are a manager. The web already shows this line.',
+        whatToDo:
+          'No action needed. To load the latest update, tap Restart now when the app says Update ready, or close the app completely and open it again.',
+        audience: { anyPermission: ['orders:approve'], modules: ['orders'] },
+      },
+    ],
+  },
+  {
+    id: 'clearer-web-messages-2026-11',
+    revision: 1,
+    // Two web changes, from their drafts, in one release:
+    // - S31, #481 (squash a34543b81, live 2026-11-02 22:55:57Z, web build
+    //   ccd6388e778d): web-unexpected-failure-sentence, from #481's draft;
+    // - S29, #470 (squash 5cc3e778e, live 21:37:13Z, web build 107f86fd7cc8):
+    //   authenticator-code-plain-words, from #470's draft ("published with
+    //   the next web small-fixes release"). #481's second drafted entry
+    //   (authenticator-code-words, set-up) is published "only if #470's entry
+    //   has not already said it": it is folded into #470's entry as its last
+    //   sentence instead, so the reader gets one entry about codes.
+    // S32 (#470) has no entry: nothing a person normally sees changes.
+    // No phone update ships with either: the phone never calls these actions.
+    // Checks: postdeploy-1102/s31 (PASS: one sign-in, Settings, Team, Orders
+    // and Items read-only, 0 5xx, every S31 log tag 0) and postdeploy-1102/s29
+    // (PASS: sign-in with no code asked for an account without an
+    // authenticator, Security and Profile read, 0 5xx; the audit-anomalies
+    // run's summary). The failure paths cannot be brought about on production:
+    // they rest on the code and the tests of each PR.
+    // Claims checked against the code at 22e52f1ea (apps/web/src):
+    // - web-unexpected-failure-sentence: server/lib/action-error-result.ts
+    //   :47-54 (unexpectedActionError reports the failure and answers
+    //   UNEXPECTED_ERROR_MESSAGE, server/lib/api-error-response.ts:19, or the
+    //   feature's own sentence, action-error-result.ts:15-21, such as
+    //   ROW_NOT_IMPORTED_MESSAGE); actionErrorResult :80-110 keeps a
+    //   ServiceError's code and words (a refusal StockPilot writes itself);
+    //   72 server action files use it. This is Server Actions (forms); S16's
+    //   web-unexpected-failure-plain-sentence told the export and PO scan
+    //   routes, so this entry names saving, sending and importing.
+    // - authenticator-code-plain-words: lib/auth/mfa-code-attempts.ts:71-79
+    //   (the words), :96-118 (10 code presses per 15 minutes for one account
+    //   at one address, then 20 per hour for the account); the sign-in code
+    //   and the step-up modal, server/actions/mfa.ts:332-364
+    //   (challengeFactorAction); the reset's code step, server/actions/
+    //   auth.ts:492-544; set-up, mfa.ts:152-205 (verifyEnrollmentAction,
+    //   answered by mfaCodeFailure :49-72: a wrong code MFA_CODE_REFUSED, the
+    //   Auth server's limit MFA_CODE_GOTRUE_LIMITED, "Wait a minute").
+    // Changed from the drafts: S31's howItAffectsYou ("Try again. If it keeps
+    // happening, tell your administrator.") moves to whatToDo, with "contact
+    // support" for "tell your administrator" (an administrator cannot fix a
+    // server failure); its howItAffectsYou says what stays the same. S29's
+    // whyItMatters says the pause protects the account instead of who it
+    // slows down.
+    // Who is told: every member (no audience: anyone can meet a failed form,
+    // and anyone can use an authenticator app).
+    status: 'published',
+    title: 'Plain words when a web form fails, and clear messages for authenticator codes',
+    summary:
+      'On the web, a form that fails for a reason we did not expect now shows one plain sentence and reports the problem to us. When an authenticator code is not accepted, or codes were entered too many times, the web now says so in plain words.',
+    publishedAt: '2026-11-02T22:56:00Z',
+    entries: [
+      {
+        id: 'web-unexpected-failure-sentence',
+        category: 'improved',
+        area: 'Web app',
+        title: 'One plain sentence when a web form fails unexpectedly',
+        whatChanged:
+          'On the web, when saving, sending or importing something fails for a reason we did not expect, StockPilot now says “Something went wrong. Please try again.”, or a sentence written for that task, such as “Could not import this row.”, instead of technical text from the database, an outside service or the server.',
+        whyItMatters:
+          'The old text was technical, did not say what to do, and the failure was not reported to us. Each of these failures now reaches us.',
+        howItAffectsYou:
+          'Messages StockPilot writes itself, such as a duplicate tag name or a missing permission, keep their exact words.',
+        whatToDo:
+          'If you see “Something went wrong. Please try again.”, try again. If it keeps happening, contact support.',
+      },
+      {
+        id: 'authenticator-code-plain-words',
+        category: 'improved',
+        area: 'Account',
+        title: 'Clearer messages when an authenticator code is not accepted',
+        whatChanged:
+          'On the web, when you sign in or confirm an action with a code from your authenticator app and the code is not accepted, the page now says: That code is not valid. Check your authenticator app and try again. If codes are entered many times, the web pauses code checks for a few minutes (up to an hour after many tries in one hour), also when you finish a password reset, and says: Too many code attempts. Wait a few minutes and try again. Setting up an authenticator app in Settings, Security says the same when a code is not valid.',
+        whyItMatters:
+          'The old message used the sign-in service’s technical words. The pause protects your account from repeated guesses.',
+        howItAffectsYou:
+          'If you see the pause message, wait a few minutes, then enter the code your app shows at that moment; after many tries in one hour the pause can last until that hour is over. Code checks in the mobile app are unchanged.',
+        whatToDo: 'No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'invites-calendar-record-pages-2026-11',
+    revision: 1,
+    // QW1, #483 (squash c7d6cc625, live 2026-11-02 22:28:58Z, web build
+    // 6d49594da622; web only, no migration, no phone code), from the draft
+    // in #483's description (one release, five entries; T25 has none). The
+    // draft gave some entries only a title, whatChanged and whatToDo: the
+    // other answers are written here from #483's "What people will see" and
+    // checked against the code. The draft's title said "tidier" and
+    // "honest": the title now says what changed.
+    // Check: postdeploy-1102/qw1 (PASS): a bundle, an order, its print view,
+    // a PO and an event opened as before; the month grid at 390 and 1280 px
+    // ends at Saturday (scrollWidth equal to clientWidth on the page, the
+    // grid 640 px wide at 390 px, scrolling inside its card); Billing with
+    // ?status=cancelled and ?status=success shows only its own line.
+    // Claims checked against the code at 22e52f1ea (apps/web/src):
+    // - invite-sign-in-link: app/invite/[token]/invite-copy.ts:12-21, drawn
+    //   by app/invite/[token]/page.tsx:159-164, answered by
+    //   server/actions/team.ts:587 and :607. No audience: the reader is
+    //   someone who already has an account.
+    // - team-calendar-seven-days: components/schedule/schedule-calendar.tsx
+    //   :464 (the chip is relative, so its clip cuts the hidden status word
+    //   that widened the grid), :140 (time and space in one text node),
+    //   :418 (the last row's padding on phones and touch screens).
+    // - record-pages-could-not-load: app/(dashboard)/dashboard/bundles/[id]/
+    //   page.tsx:43-45 and :69, bundles/[id]/edit/page.tsx:23-25 and :40,
+    //   orders/[id]/pick/page.tsx:29-31 and :60, orders/[id]/print/page.tsx
+    //   :69-71 and :83 (notFound only for not_found; anything else goes to
+    //   app/(dashboard)/error.tsx, which reports it, :53, and says "Something
+    //   broke loading this page", :71, with Try again, :91); the module check
+    //   also on orders/[id]/page.tsx:209-211, purchase-orders/[id]/page.tsx
+    //   :60-62 and schedule/[id]/page.tsx:72-74 (and their edit pages).
+    //   The order page itself is not named for the failed read: it already
+    //   sent only not_found to Page not found before #483 (c7d6cc625^,
+    //   orders/[id]/page.tsx:253-262); #483 added only its module check.
+    // - distribute-own-events: bundles/[id]/page.tsx:76 and :309-319 (the
+    //   events read filters organization_id); Distribute is offered by
+    //   canDistributeBundles (:59): bundles:distribute and the manager role or
+    //   above.
+    // - billing-checkout-result: settings/billing/page.tsx:27-40 and :73
+    //   (the two lines, only for ?status=success or cancelled); checkout
+    //   needs billing:manage (server/services/billing.ts:43).
+    status: 'published',
+    title:
+      'Invites point to Sign in, the team calendar stops at Saturday, and record pages say when they could not be loaded',
+    summary:
+      'On the web, an invite for an address that already has an account now points to the page’s Sign in link, and the team calendar no longer scrolls into blank space past Saturday. Bundle pages and an order’s pick and print views that cannot be loaded say so with Try again, instead of saying the record does not exist. Distribute offers only your organization’s events, and Billing says whether a checkout went through.',
+    publishedAt: '2026-11-02T22:29:00Z',
+    entries: [
+      {
+        id: 'invite-sign-in-link',
+        category: 'fixed',
+        area: 'Team',
+        title: 'Invites point to the right Sign in link',
+        whatChanged:
+          'If you open an invite for an email that already has an account, the message now says to use “Already have an account? Sign in” on the invite page, then accept the invite.',
+        whyItMatters:
+          'It used to name an “I already have an account” option the page does not have.',
+        howItAffectsYou:
+          'The link is at the bottom of the invite page. Sign in there with your existing account to accept the invite.',
+        whatToDo: 'No action needed.',
+      },
+      {
+        id: 'team-calendar-seven-days',
+        category: 'fixed',
+        area: 'Schedule',
+        title: 'The team calendar fits its seven days',
+        whatChanged:
+          'On the web, the team calendar’s month grid no longer scrolls sideways into blank space past Saturday on a phone, and no longer scrolls sideways at all on a wide screen. Screen readers now read each event’s time and title with a space between them, such as “9:00 AM Delivery run”.',
+        whyItMatters:
+          'Each event’s hidden status word made the grid wider than the week, and a screen reader ran the time into the title.',
+        howItAffectsYou:
+          'On a phone, the grid still scrolls sideways to show the whole week, and it stops at Saturday.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/schedule', label: 'Open the team calendar' },
+        audience: { anyPermission: ['schedule:read', 'schedule:manage'], modules: ['schedule'] },
+      },
+      {
+        id: 'record-pages-could-not-load',
+        category: 'fixed',
+        area: 'Bundles and Orders',
+        title: 'Bundle pages and order pick and print views that cannot be loaded say so',
+        whatChanged:
+          'On the web, when a bundle, or an order’s pick or print view, cannot be loaded, for example after a timeout, the page now says “Something broke loading this page” and offers Try again, instead of “Page not found”. A record that does not exist still shows Page not found. A link to a bundle, order, purchase order or Schedule event whose module is turned off now says the module is off.',
+        whyItMatters:
+          '“Page not found” made a passing problem look like a deleted record, and the failure was not reported to us.',
+        howItAffectsYou: 'Try again loads the page again. Pages that load work as before.',
+        whatToDo: 'If you see the error, press Try again.',
+        audience: { modules: ['bundles', 'orders', 'purchase_orders', 'schedule'] },
+      },
+      {
+        id: 'distribute-own-events',
+        category: 'fixed',
+        area: 'Bundles',
+        title: 'Distribute lists only your organization’s events',
+        whatChanged:
+          'If you belong to more than one organization, the event list in a bundle’s Distribute now shows only the events of the organization you are working in.',
+        whyItMatters:
+          'It also listed the other organization’s events, and handing kits out for one of them was refused.',
+        howItAffectsYou: 'The events of the organization you are in are listed as before.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager'],
+          anyPermission: ['bundles:distribute'],
+          modules: ['bundles'],
+        },
+      },
+      {
+        id: 'billing-checkout-result',
+        category: 'improved',
+        area: 'Billing',
+        title: 'Billing says how your checkout ended',
+        whatChanged:
+          'After a Stripe checkout, Billing now says “Checkout complete. Your plan shows here once Stripe confirms the payment; reload the page if it has not changed yet.” or “Checkout cancelled. Nothing was charged, and your plan has not changed.”',
+        whyItMatters:
+          'Billing said nothing when you came back from Stripe, so it was not clear whether the checkout had gone through.',
+        howItAffectsYou: 'Your plan changes once Stripe confirms the payment, as before.',
+        whatToDo:
+          'No action needed. If your plan has not changed after a completed checkout, reload the page.',
+        audience: { anyPermission: ['billing:manage'] },
+      },
+    ],
+  },
+  {
+    id: 'web-fixes-2026-11-02',
+    revision: 1,
+    // Two web fixes, published together at the top, the newest release:
+    // - B20a, #455 (squash 1ce98c290, live 2026-11-02 18:23:56Z; no phone
+    //   change, no migration), the entry from #455's What's New section;
+    // - S45, #468 (squash 3549b480d, live 20:20:50Z, web build b38578d2d81b;
+    //   no phone update, no migration), the entry from #468's draft.
+    // Claims checked against the code at 3549b480d (apps/web/src):
+    // - rental-cart-per-person: New rental's cart is saved under
+    //   rentalDraftPrefixFor(viewerUserId), 'rental-draft:v2:<user>:'
+    //   (components/orders/v2/cart-context.tsx:49-51; the form,
+    //   components/rentals/rental-create-form.tsx:544-549; the viewer,
+    //   app/(dashboard)/dashboard/rentals/new/page.tsx:363); before, the key
+    //   was 'rental-draft:<warehouse>' for whoever used the browser
+    //   (cart-context.tsx:33-35). The cart is restored from its own key when
+    //   New rental opens (cart-context.tsx:151-158). The old key is removed,
+    //   unread, each time New rental opens for a warehouse
+    //   (rental-create-form.tsx:532-538), so a cart started before #455 is
+    //   cleared. Only items and quantities were ever saved: the borrower,
+    //   return date and notes are the form's own state
+    //   (rental-create-form.tsx:159-166). Audience: New rental checks
+    //   rentals:create, then the Rentals module (rentals/new/page.tsx:69-71,
+    //   :81-84).
+    // - logo-too-large-to-print: setOrgLogoUrlAction refuses a PNG, JPEG or
+    //   WebP logo over DECODE_MAX_INPUT_PIXELS (50 million, lib/image-decode.ts
+    //   :54-60), removes the object and returns before the organization row
+    //   is changed, with the sentence the production check saw
+    //   (server/actions/profile.ts:488-508); owners and admins only
+    //   (profile.ts:424-426; settings/organization/page.tsx:17-19). The PDF
+    //   side refuses the same files (image-decode.ts:647-651), and
+    //   prefetchPdfLogo then gives no logo (lib/pdf/image-prefetch.ts:416-428),
+    //   so the header shows the organization name alone
+    //   (lib/pdf/branding.tsx:52-58). The six branded PDFs that print the logo
+    //   include purchase orders, cycle count sheets and reports
+    //   (app/api/purchase-orders/[id]/pdf, cycle-counts/[id]/pdf,
+    //   reports/[slug]/pdf).
+    // Checks: production check batch-1830 (New rental: the cart saved under
+    // the v2 per-person key and removed cleanly); production checks s45-logo
+    // and s45-pdf (a 10000 by 6000 PNG refused with the sentence; a 6000 by
+    // 1200 wordmark accepted and printed at 512 by 102 on a purchase order).
+    // Changed from the drafts: logo-too-large-to-print's howItAffectsYou said
+    // ordinary logos "upload and print as before": a logo over 1024 px now
+    // prints from a 512 px copy (image-prefetch.ts:226-247), so it says they
+    // are accepted as before and print. The summary is new.
+    // Changed in the review of this publish: howItAffectsYou said "Logos
+    // under that size ... are accepted as before and print", which covered
+    // every format. Only a PNG, JPEG or WebP is sized at upload
+    // (profile.ts:494); an AVIF is held to 4096 by 4096 on the PDF side
+    // (DECODE_MAX_INPUT_PIXELS.avif, image-decode.ts:59), so a 5000 by 5000
+    // AVIF is accepted and prints no logo, and an AVIF logo never printed
+    // before #468 (image-prefetch.ts:404-407). The sentence now names PNG, JPG
+    // and WebP. An SVG logo, possible only for one uploaded from 2026-05-05 to
+    // 2026-05-09, prints no logo; it stays out, as the export fixes release
+    // records for #414 (its "an SVG logo no longer prints" note).
+    // Not announced (each PR's own reasons): #455's tracking-key rule, photo
+    // route gate and retired route; #468's photo and export changes, and the
+    // WebP and AVIF logos that now print (B48's entry, the integrator's call).
+    // No phone update ships with this release.
+    status: 'published',
+    title: "New rental keeps each person's cart, and Settings refuses a logo too large to print",
+    summary:
+      'On the web, the items you add on New rental are now saved for your account only, so the next person to sign in on the same computer no longer sees them. Under Settings, Organization, a logo too large to print is now refused with its size, and your current logo stays.',
+    publishedAt: '2026-11-02T20:42:00Z',
+    entries: [
+      {
+        id: 'rental-cart-per-person',
+        category: 'fixed',
+        area: 'Rentals',
+        title: "New rental keeps each person's cart to themselves",
+        whatChanged:
+          'On the web, the items you add on New rental are now saved for your account only. Before, someone else who signed in on the same computer and opened New rental for the same warehouse saw the items and quantities you had added.',
+        whyItMatters:
+          "On a shared computer, the next person could check out a rental with someone else's items without noticing.",
+        howItAffectsYou:
+          'Items you added and did not check out are still there when you come back to New rental on the same computer. A cart started before this change is not kept: it is cleared the first time New rental opens for its warehouse, so add those items again.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/rentals/new', label: 'Open New rental' },
+        audience: { anyPermission: ['rentals:create'], modules: ['rentals'] },
+      },
+      {
+        id: 'logo-too-large-to-print',
+        category: 'improved',
+        area: 'Settings',
+        title: 'Settings tells you when a logo is too large to print',
+        whatChanged:
+          'Under Settings, Organization, Logo, a PNG, JPG or WebP image of more than 50 million pixels, such as one 8000 by 8000 pixels, is no longer accepted. Settings says the image is too large to print and gives its size, removes the file, and keeps your current logo.',
+        whyItMatters:
+          'Your logo prints at the top of PDFs such as purchase orders, cycle count sheets and reports. A logo that large is now left out of those PDFs, because preparing it takes too much time and memory. Settings tells you when you upload it, instead of the PDFs quietly showing only your organization name.',
+        howItAffectsYou:
+          'PNG, JPG and WebP logos under that size, including wide wordmarks, are accepted as before and print at the top of those PDFs. If the logo you have now is larger than this, your PDFs show only your organization name until you upload a smaller copy.',
+        whatToDo:
+          'No action needed. If Settings says your logo is too large, save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.',
+        audience: { roles: ['owner', 'admin'] },
+      },
+    ],
+  },
+  {
+    id: 'archived-charters-2026-11',
+    revision: 1,
+    // S44, #467 (squash c4323b76a, live 2026-11-02 18:29:46Z, web build
+    // 34b6ea9ad5d0; web only, no migration, no phone code), from the draft
+    // release in #467's description, published as its own release below the
+    // web fixes release, which is dated later.
+    // Claims checked against the code at 3549b480d (apps/web/src):
+    // - team-charters-archived-kept: the member Charters dialog lists every
+    //   charter the member holds that the active list lacks, named
+    //   '(archived)' or '(inactive)' (components/team/team-manager.tsx
+    //   :884-906, listed after the active rows at :947), and seeds its ticks
+    //   from every held id, never pruned (:908-914), so a Save with no change
+    //   sends the same set (:921-923). Before, the ticks were only the active
+    //   charters the warehouse links (team-manager.tsx at c4323b76a^,
+    //   :853-857), and Save sent those (:866). The dialog shows to owners and
+    //   admins (canManage, team-manager.tsx:310-311, :327); the Team page
+    //   checks members:invite (team/page.tsx:31-32).
+    // - item-form-archived-charter-named: new picks are the linked active
+    //   charters only (components/inventory/item-form.tsx:1130-1146); the
+    //   record's own charter is kept on its own warehouse and on any warehouse
+    //   that links it (:1149-1181), named '(archived)' or '(inactive)'
+    //   (:1186-1222), read by id on the edit pages
+    //   (inventory/[id]/edit/page.tsx:132-143, books/[id]/edit/page.tsx
+    //   :139-150). Before, every linked charter was offered, named
+    //   `charterById.get(id) ?? id` (item-form.tsx at c4323b76a^, :1123).
+    //   Restore: Admin, Charters, Archived view (components/admin/
+    //   charters-manager.tsx:301-316, :346-348). Duplicate keeps the
+    //   original's charter (server/services/inventory.ts:3826), and Add sizes
+    //   sends the source's (components/inventory/add-sized-variants-button.tsx
+    //   :121). The edit pages check items:update, the new pages items:create.
+    // Checks: the lab walk (walk-s44, synthetic data, PASS) for the archived
+    // and inactive cases; the production check batch-1830 (names only, never
+    // an id, in the Team dialog, New item and Edit; the demo workspace has no
+    // archived charter). The read-only production counts were not run, so no
+    // line says who was affected before this change.
+    // Changed from the draft: the summary said "instead of a long code" for
+    // both places: the Team dialog did not list such a charter at all, so the
+    // summary names each. item-form-archived-charter-named's whyItMatters
+    // said "picking it put new stock under the archived charter": it now
+    // says it could be picked for an item or book (the form offered it,
+    // item-form.tsx at c4323b76a^:1123). Its whatChanged last sentence says
+    // "as a new choice", as the record's own charter is still offered back.
+    // Its whatChanged also says "shows that charter by name, marked
+    // (archived)" for "shows that charter's name marked (archived)", "move the
+    // item or book" for "move it", and its whyItMatters "while a warehouse
+    // still served it" for "while its warehouse still served it"; none
+    // changes the meaning.
+    // Changed in the review of this publish: the summary and whatChanged said
+    // "saving keeps it" for the item and book forms as if that were new.
+    // Before #467 the form offered every charter the warehouse links,
+    // archived ones included, by id (item-form.tsx at c4323b76a^:1109-1126),
+    // so a save, or a move to a warehouse that links it, already kept it.
+    // They now say saving still keeps it there; keeping it on a save is new
+    // only in the Team dialog.
+    status: 'published',
+    title: 'On the web, archived charters show by name and are kept when you save',
+    summary:
+      "On the web, a charter that has been archived now shows by its name, marked (archived): on the item and book forms, where it showed as a long code and saving still keeps it, and for owners and admins in a member's Charters dialog on Team, where it was not listed and saving now keeps it. The web no longer offers an archived charter as a new choice.",
+    publishedAt: '2026-11-02T19:00:00Z',
+    entries: [
+      {
+        id: 'team-charters-archived-kept',
+        category: 'fixed',
+        area: 'Team',
+        title: "Saving a member's charter access keeps their archived charters",
+        whatChanged:
+          "On Team, the Charters dialog in a member's menu now also lists any of their charters that has been archived, ticked and marked (archived). Saving keeps it unless you untick it.",
+        whyItMatters:
+          'An archived charter was not listed in the dialog, so a save did not keep it.',
+        howItAffectsYou: 'Saving changes only the charters you tick or untick.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/team', label: 'Open Team' },
+        audience: { roles: ['owner', 'admin'], anyPermission: ['members:invite'] },
+      },
+      {
+        id: 'item-form-archived-charter-named',
+        category: 'fixed',
+        area: 'Inventory',
+        title: 'Item and book forms name an archived charter instead of showing a long code',
+        whatChanged:
+          'On the web, when you edit an item or book whose charter has been archived, the Charter list now shows that charter by name, marked (archived). Saving still keeps it, as before, also when you move the item or book to another warehouse that still serves that charter. The web no longer offers an archived charter as a new choice for an item or book.',
+        whyItMatters:
+          'A charter archived while a warehouse still served it showed in the Charter list as a long code, and it could be picked for an item or book.',
+        howItAffectsYou:
+          "To use an archived charter for new stock again, an admin restores it from the Archived view in Admin, Charters. A copy or a new size made from a record keeps that record's charter.",
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/inventory', label: 'Open Items' },
+        audience: { anyPermission: ['items:create', 'items:update'] },
       },
     ],
   },
@@ -70,9 +1540,11 @@ export const RELEASES: Release[] = [
     // S43a, #447 (squash dd7cc1458, merged 2026-11-02 06:49Z; web only, no
     // migration), release 1 of S43, from the draft in #447's description. Live
     // in production web build 2f1ae1d0e877. It is the newest published
-    // release and sits directly below the B44 phone update draft, which is
-    // left as it is for its own release: that draft is dated later, and
-    // releaseRegistrySchema keeps dates from increasing down the list.
+    // release, at the top. It was written directly below the B44 phone update
+    // draft; docs/whats-new-2026-11-02 folded that draft into
+    // update-ready-and-fixes-2026-11, published at 04:21Z and so placed below
+    // lists-delivery-sites-and-fixes-2026-11, as releaseRegistrySchema keeps
+    // dates from increasing down the list.
     // Phone: NO phone update ships with this release, and no line says the
     // app was or needs to be updated. Every phone sentence is how the app
     // already installed answers the server's new 401 (read at 472fca631):
@@ -314,10 +1786,12 @@ export const RELEASES: Release[] = [
     id: 'lists-delivery-sites-and-fixes-2026-11',
     revision: 1,
     // The web changes merged on 2026-11-02 from 04:12Z to 05:28Z, and S4
-    // (merged 02:00Z), in one release, the newest published one. It sits
-    // directly below the B44 phone update draft, which is left as it is for
-    // its own release: that draft is dated later, and releaseRegistrySchema
-    // keeps dates from increasing down the list. Every line is live in
+    // (merged 02:00Z), in one release, the newest published one when it was
+    // written, directly below the B44 phone update draft. The S43a and
+    // integration retries releases are above it now, and the B44 draft is
+    // folded into update-ready-and-fixes-2026-11, published at 04:21Z and so
+    // directly below this one: releaseRegistrySchema keeps dates from
+    // increasing down the list. Every line is live in
     // production web build a16bcfe6d994 (90f4f354b, #437's squash, answering
     // /api/version from 05:29:49Z), the main this release was written and
     // checked against:
@@ -779,6 +2253,577 @@ export const RELEASES: Release[] = [
         audience: {
           anyPermission: ['maintenance_requests:submit'],
           modules: ['maintenance_requests'],
+        },
+      },
+    ],
+  },
+  {
+    id: 'update-ready-and-fixes-2026-11',
+    revision: 1,
+    // Tonight's phone update and the web changes live since the last What's
+    // New, all on main at f584141ba, live in production web build
+    // 66b26fd665c1 (2026-11-02 02:52:02Z). This release needs a web deploy
+    // only.
+    // Phone: ONE over-the-air update for runtime 1.4.0, EAS update group
+    // c5b4d663-7c84-4ad2-bbfd-b3a0307b6eff, published 2026-11-02 04:02Z from
+    // f584141ba. Its served iOS bundle hashes the same as the local export,
+    // and its source map holds the B44, B60, B10 and S17 code. It carries:
+    // - B10 #403, c0700f80d (2026-10-31 08:55:49Z): six of the phone entries
+    //   below. Its web part (the two v1 Integrations routes send the MFA
+    //   gate's details, api/v1/integrations/connections/[provider]/route.ts:48
+    //   and account-mapping/route.ts:82) went live with that merge and shows
+    //   nothing on the web; app-integrations-access-denied tells what it gives
+    //   the phone;
+    // - B60 #420, 3cdf5a633 (2026-10-31 11:36:31Z): an open item's header and
+    //   tabs after a live text size change, and the Deny and Reopen picking
+    //   box after a refusal;
+    // - B44 #418, 9e667ca99 (2026-11-02 02:43:12Z; phone code as at its head
+    //   8bfd5dd2b): update-ready-message. Its draft release,
+    //   mobile-app-asks-before-restarting, is folded into this one and
+    //   removed: a draft never leaves the server, so no reader's state names
+    //   it, and its id is not reused;
+    // - S17 #416, 984eb320b: example words only (left out, below).
+    // Phones have it: the integrator merges this release only once EAS
+    // update:insights shows iOS launches of the group. Opened from closed, a
+    // phone still on the older bundle checks for the update, loads it and
+    // restarts by itself once (64054fb3d use-ota-updates.ts:18-28,
+    // useOtaAutoReload), so B44's message is first shown with the update
+    // after this one, and each phone entry says to close the app completely
+    // and open it again.
+    // Web:
+    // - B11 Part 1 #422, 8126072fe (2026-10-31 12:58:42Z, build 02ec7854bf68):
+    //   overview-approvals-follow-permission;
+    // - S16 #421, 7c28c3a9c (2026-11-01 03:16:46Z, build 8de1f2ee2828):
+    //   web-unexpected-failure-plain-sentence, bulk-isbn-unreadable-file and
+    //   ai-assistant-web-message-too-long, each on the web only;
+    // - S27a #431, f584141ba (2026-11-02 02:50:14Z, build 66b26fd665c1):
+    //   integrations-unsaved-changes-say-so, #431's fallback entry. #431's
+    //   body and its plan (section 7) publish it "if part b has not deployed
+    //   by the next What's New batch after this deploy or within 7 days".
+    //   This is that batch, and part b is not built, so it is here; part b's
+    //   release tells the rest. Its sentences were checked at f584141ba
+    //   before publishing (its comment).
+    // Every other entry is the 2026-11-01 fact-check's, with every finding
+    // and every skeptic's fix applied: the B44 summary note and the "crashed"
+    // clause gone; the tabs "when they do not fit" (a full-screen iPad never
+    // stacks them) and only the lists named, each back at its top; Release
+    // before return is received, the button's own words; a refused Create
+    // return's cap; the workspace refusal only when the previous account did
+    // not use Sign out, and the offline advice; the Integrations why and its
+    // audience (the screen's own check, owner or admin); Viewers on Overview;
+    // S16 split in two (Bulk ISBN import's readers differ), Separate POs, and
+    // the AI line's "on the web", "after typing" and its note's own words.
+    // Added: the count scanner keeps a typed number it could not save (the
+    // phone skeptic's miss), and "or pull down to refresh" for the open tab's
+    // rows (tonight's walk). "Settings > Integrations" is "Integrations in
+    // Settings": the schema refuses < and >.
+    // Review of 2026-11-02, before the merge: the release title and the
+    // Overview line's title say the web, as the phone has an Overview screen
+    // of its own with no approvals row (core modules/registry.ts:115,
+    // apps/mobile/app/(drawer)/(tabs)/index.tsx); the Separate POs clause is
+    // gone, as B80 (#436, b3abc74be, live 2026-11-02 04:27:19Z, before this
+    // release can deploy) changed what that mode says for a page that is not
+    // a purchase order; and #431's fallback entry was added (above).
+    // Walks:
+    // - c11-simwalk-1102, 2026-11-02 to 03:59Z, on EAS simulator build
+    //   9711b737 of f584141ba, in Demo Co, PASS. w1 (iPhone 17 Pro and Pro
+    //   Max): B44's launch smoke signed in and signed out; B60 walk 2, a Deny
+    //   refused on a stale screen closes its box and the order shows
+    //   Approved; S17 walks 1-3. B60 walk 3 (Reopen picking) was skipped by
+    //   rule, as it has no clean reversal; it runs walk 2's code path, and its
+    //   unit tests. w2 (iPhone SE and iPad): B44 cold launches; B60 walk 1, a
+    //   live text size change from Large to AX5 with an item open keeps its
+    //   header and tabs whole, the open tab and the scroll kept; B10 walks 7
+    //   and 9. No new finding (B61, known, below).
+    // - A plain simulator build has no update channel, so it shows no pop-up:
+    //   B44's message, Later and Restart now were proven on 2026-10-31 on a
+    //   test-channel simulator build of 1c98e7289 (iPhone and iPad), which
+    //   holds no B60. The holds on the merged item and order screens are code
+    //   only: update-prompt-wiring.test.ts.
+    // - simwalk-1031, on a simulator build of c0700f80d, in Demo Co: B10 walks
+    //   1 (Access denied on Integrations), 3 (the purchase order words), 5 (a
+    //   refused Deny read again), 7 (the tabs on fresh opens) and 9 (the list
+    //   rows after a live change), PASS.
+    // - walk-422, 2026-10-31 14:08Z, Demo Co as its admin, read-only: the
+    //   Needs attention row with #422's note, and its link to the same list.
+    // Code only, as each entry says: B10's save refusals and the workspace
+    // sentence (walks 13-18 need two accounts in different organizations),
+    // the cache clear tried again, the Integrations authenticator sentences
+    // (no QuickBooks connection there), the Release and Create return
+    // refusals, the three S16 lines, and the Integrations page's refusal and
+    // its opening for a member who can manage only shipping (Demo Co has both
+    // modules off, so #431's read-only check after its deploy saw only the
+    // module-off notice).
+    // Left out:
+    // - S4 #379 (3d458cff4, migration 0415; live): its entry
+    //   (bundle-required-component) is HELD until the lab walk proves its
+    //   Schedule completion claim. When it is published it also needs the
+    //   2026-11-01 skeptic's fixes: "Completing an event that names a bundle
+    //   hands it out once, as before" is false after 0415 for a bundle with
+    //   no required component and too few pre-assembled kits (the event is
+    //   saved Completed, then distribute_bundle refuses: schedule.ts,
+    //   autoDistFailed), and its audience adds roles owner, admin and manager
+    //   (every action in it needs the manager role in the database, while
+    //   staff hold bundles:distribute by default).
+    // - S16's phone side, live since 2026-11-01 03:17Z through the server's
+    //   answers with no phone code: a queued count line refused for its
+    //   warehouse moves to Unsent work, "Something went wrong. Please try
+    //   again." on screens that show the server's message and on Scan PO, and
+    //   Photo ID's new sentence. Both 2026-11-01 checks ask for a simulator
+    //   walk before a phone line, and tonight's walk did not cover it, so it is
+    //   told after one. The phone's AI chat shows the sentences inside the raw
+    //   answer until B75.
+    // - S20 #424 (af3445211), S22 #428 (8517b8518) and S34 #432 (8ac9f4862):
+    //   no member sees a change (S20 and S22 by owner decision; for S22 the
+    //   owner reported no PostHog surveys, tours or flags, and the code draws
+    //   nothing on screen; S34 changes only what leaves our server).
+    // - S27a's other parts change nothing while the database answers normally
+    //   (the S19 precedent): the readers that now refuse an answer that is not
+    //   a list, and the export retried after a failed supplier mapping read.
+    // - S19 #419 (5c6b4074b) and S17 #416: recorded exceptions (nothing
+    //   changes while the database answers; example text only). Their
+    //   packages/core changes, and #379's, show nothing on the phone.
+    // - #403's invisible parts: the order screen's shipping read where Shipping
+    //   is off, the refused requests just after a sign-in, the workspace named
+    //   by PO scan, AI shelf scan and chat, the team's error reports, the AI
+    //   shelf scan's recorded count, and the review rounds' fixes to B10's own
+    //   unshipped regressions; the edit order steppers were already fixed.
+    // - B61, not fixed: an item's open tab can keep its rows at the old text
+    //   size until another tab is opened or the screen is pulled to refresh;
+    //   app-text-size-tabs-lists-buttons says so as a limit.
+    // - Merged after f584141ba (from 2026-11-02 04:12Z), so not here: #423
+    //   (B41, B42, B45), #406 (B23), #426 (B50), #425 (B62), #427 (B63), #436
+    //   (B80) and the other section 4 PRs, whose entries go in the next web
+    //   batch, and #435 (B75), whose phone part is in no phone update yet.
+    // The summary says "In the app" and "On the web", as a phone shows only
+    // the title and the summary; it carries B44's first message with the next
+    // update, and the load step with a connection (B10's refusal at a first
+    // open offline). One entry links, integrations-unsaved-changes-say-so, so
+    // the old phone builds' list (logic.ts legacyAnnouncementsFor) carries
+    // Open Integrations only for a reader that entry reaches, and every phone
+    // build with What's New hides it: a /dashboard/settings path opens no
+    // screen of its own there (apps/mobile/src/components/onboarding/
+    // whats-new.tsx:158, and web-path-rewrite.ts:176 sends it home).
+    // Who is told: every member, as update-ready-message and
+    // app-text-size-tabs-lists-buttons have no audience: it is each member's
+    // notice once the newer releases that reach them are read, and stays
+    // unread until it is read. Where it sits: merged with main after #461 and
+    // #471, it is dated 04:21Z, so it is fourth, below
+    // authenticator-code-requests-2026-11 (15:43Z),
+    // integration-retries-2026-11 (15:42Z) and
+    // lists-delivery-sites-and-fixes-2026-11 (05:53Z), and directly above
+    // export-fixes-2026-10: releaseRegistrySchema keeps dates from increasing
+    // down the list. Each other entry names the
+    // permission, role or module its screen or action checks, quoted in its
+    // comment. If the phone update is rolled back while the web stays, the
+    // phone entries are no longer true: withdraw this release (status
+    // 'withdrawn' and a withdrawnNote).
+    status: 'published',
+    title:
+      'The mobile app asks before restarting for an update and stacks item tabs that do not fit; web Overview counts approvals',
+    summary:
+      'After the latest update, the mobile app opens once instead of restarting by itself, and from the next update on a message says when one is ready. In the app, item tabs stack when they do not fit at larger text sizes, an order shows its current status after a refused action, and the app says why a count was not saved. On the web, Overview counts the order requests you can approve. Close the app completely and open it again with a connection to load the update; it may restart by itself once.',
+    publishedAt: '2026-11-02T04:21:00Z',
+    entries: [
+      {
+        // platform: phone. From: B44 #418. Checked at f584141ba: the words,
+        // apps/mobile/src/lib/ota-update-prompt.ts:31-36 (UPDATE_PROMPT_TITLE
+        // Update ready, the message, Later, Restart now), shown by
+        // use-ota-updates.ts:146-148, with the only reload at :90; Later,
+        // ota-update-prompt.ts:707 and :715, until the next return to the app
+        // (:863); the holds, WORK_ROUTES (:93: the scan, count and new record
+        // screens), app/item/[id].tsx:573, :1633-1634 and :2904,
+        // app/order/[id].tsx:505, app/po/[id].tsx:150,
+        // app/maintenance/[id].tsx:475, src/components/ui/modal.tsx:19 and
+        // src/lib/alert-holds.ts:6. Before, on phones: 64054fb3d
+        // use-ota-updates.ts:18-28 reloaded by itself at every open from
+        // closed with an update waiting. "Could confuse people" is the owner's
+        // report; the draft's "look like the app had crashed" rested on
+        // nothing (2026-11-01 check). The quoted message is pinned to
+        // UPDATE_PROMPT_MESSAGE by registry.update-ready-and-fixes.test.ts.
+        // Walked: one launch screen at cold launches, signed in and out, on
+        // the merged code (c11-simwalk-1102); the message, Later and Restart
+        // now on the 1c98e7289 test channel. No audience: every member.
+        id: 'update-ready-message',
+        category: 'improved',
+        area: 'Mobile app',
+        title: 'The mobile app opens once and asks before it restarts for an update',
+        whatChanged:
+          'In the mobile app, after the latest update, opening the app shows the launch screen once. Before, the app could open, restart by itself a moment later and show the launch screen again. Now a new update downloads while you use the app. When it is ready, a message titled Update ready says “An update for StockPilot is ready. The app will restart to finish installing it.” with two buttons, Restart now and Later.',
+        whyItMatters:
+          'The app restarted with no reason given and showed its launch screen twice, which could confuse people. Now you know when an update is ready, and the app restarts for it only when you choose.',
+        howItAffectsYou:
+          'Tap Restart now and the app restarts once and opens the new version. Tap Later to carry on: the message comes back the next time you return to the app, and the update finishes by itself the next time you close the app completely and open it again. The message waits while you scan, count, add a photo or a file, or type, while you create an item, a request or an order, while a note, a pick or a receipt is not saved yet, and while another message or sheet is open. You first see it with the update after this one.',
+        whatToDo:
+          'Close the app completely and open it again to load the latest update. This one time the app may restart by itself once. From then on, when Update ready appears, tap Restart now, or Later if you are busy.',
+      },
+      {
+        // platform: phone. From: B10 #403 and B60 #420. Checked at f584141ba:
+        // apps/mobile/app/item/[id].tsx:509 (shouldStackItemTabs,
+        // src/lib/dynamic-type-layout.ts:201-206: at the largest sizes they
+        // stack on every phone and stay side by side on a full-screen iPad;
+        // the rule reads the window's width, and an iPad window in Split View
+        // or Slide Over can be narrow (app.config.ts:65 supportsTablet, with
+        // no requireFullScreen), hence "when Movements does not fit"); :518
+        // with :1737, :1860, :1905 and :1939 (the header, Tap to add photo,
+        // Replace and the tabs laid out again at a new text size);
+        // src/components/data-list-screen.tsx:108, :123
+        // and :142 (the head and the rows, so each list goes back to its top),
+        // used by the lists named; src/components/ui/button.tsx:136 (wrap),
+        // used by the four returns components, and core
+        // returns/return-actions.ts:371 (the RMA's Release replacement before
+        // return is received). Before, on phones: 64054fb3d shrank the tab
+        // labels to fit (adjustsFontSizeToFit, TAB_MIN_FONT_SCALE 0.55). The
+        // open tab's rows are not laid out again (B61), said as a limit.
+        // Walked: tonight's B60 walk 1 on the SE and the iPad, and B10 walks 7
+        // and 9. No audience: every member.
+        id: 'app-text-size-tabs-lists-buttons',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          'In the mobile app, item tabs stack when they do not fit, and returns buttons and many list rows are no longer cut short',
+        whatChanged:
+          "In the mobile app, at larger text sizes an item's Overview, Movements and Activity tabs now stack one per line when Movements does not fit beside the others. When you change the text size with an item open, its SKU, name, category, Replace or Tap to add photo and its tabs are laid out again at the new size. After a text size change, the rows of the lists named below are laid out again too. Long returns buttons, such as Release replacement before return is received, now wrap onto more lines.",
+        whyItMatters:
+          "Before, Movements was shrunk to fit beside the other tabs, below the text size you chose. After a text size change, an item's header and these lists' rows could stay cut off at the old size until you opened the screen again, and long returns buttons were cut short.",
+        howItAffectsYou:
+          'The lists are Notifications, Orders, Movements, Purchase orders, PO imports, Recurring POs, Rentals, Categories, Tags, Locations, Suppliers, Procedures, Accounts, Team, Schedule and the lists under Admin; each goes back to its top after a text size change. On an item, the open tab and your place stay, but the rows in that tab may keep the old size until you open another tab or pull down to refresh.',
+        whatToDo: 'Close the app completely and open it again to load the latest update.',
+      },
+      {
+        // platform: web. From: B11 Part 1 #422. Checked at f584141ba:
+        // (dashboard)/dashboard/page.tsx:212 and :220 (orders:approve, never a
+        // viewer), :296 (approvablePendingCount), :469-471 (the row, its note
+        // and its link); server/services/order-requests.ts:1360-1377 (0 for a
+        // viewer or without the permission; a role that does not see every
+        // warehouse counts the warehouses it works in). Before (98f6e8128):
+        // page.tsx:205 and :453 (isManagerOrAbove). The link opens Order
+        // requests (orders/page.tsx:156) on Needs approval (:92), which lists
+        // every warehouse. Walked: walk-422. Audience: page.tsx:212 and :220
+        // (the permission, every role but viewer) and the Orders module the
+        // row's link checks (orders/page.tsx:85-87). The title says the web:
+        // the phone's menu has an Overview screen too, with no approvals row
+        // (core modules/registry.ts:115; apps/mobile/app/(drawer)/(tabs)/
+        // index.tsx).
+        id: 'overview-approvals-follow-permission',
+        category: 'fixed',
+        area: 'Orders',
+        title: 'On the web, Overview counts the order requests you can approve',
+        whatChanged:
+          "On the web, the Needs attention card on Overview has a row for the order requests awaiting your approval. It used to show to owners, admins and managers by role. It now follows the Approve / fulfill orders permission: a staff member who has it now gets the row, which counts the requests waiting in the warehouses they work in, and an admin or manager who had it removed no longer gets it. Viewers do not get it. The row's note now reads “Requests are blocked until someone who can approve orders moves them forward.”",
+        whyItMatters:
+          'A staff member who could approve requests was not told on Overview that any were waiting, and an admin or manager who could not approve them saw a count whose link opened only their own requests.',
+        howItAffectsYou:
+          'Owners, and admins and managers who keep the permission, see the same count as before. Selecting the row opens Order requests on the Needs approval tab. If you work in only some warehouses, that tab can list more requests than the row counts.',
+        whatToDo: 'No action needed.',
+        audience: {
+          roles: ['owner', 'admin', 'manager', 'staff'],
+          anyPermission: ['orders:approve'],
+          modules: ['orders'],
+        },
+      },
+      {
+        // platform: phone. From: B10 #403. Checked at f584141ba:
+        // apps/mobile/app/po/[id].tsx:736 with src/lib/po-status.ts:15-16 (the
+        // web badge's words, held to them by po-status.test.ts). Before, on
+        // phones, the header named four statuses and printed the rest as
+        // stored. Walked: simwalk-1031 walk 3. Audience: the phone's Purchase
+        // orders, core modules/registry.ts:466 (purchase_orders:read), in its
+        // module (:452).
+        id: 'app-po-received-cancelled-words',
+        category: 'fixed',
+        area: 'Purchase orders',
+        title:
+          'In the mobile app, a received or cancelled purchase order says Received or Cancelled',
+        whatChanged:
+          "In the mobile app, the top of a purchase order's screen now reads Received beside its supplier when it has been received, and Cancelled when it was cancelled, the words the web uses.",
+        whyItMatters:
+          'Those two statuses showed as they are stored, in lower case: received and cancelled.',
+        howItAffectsYou: 'Draft, Expected, Ordered and Partial read as before.',
+        whatToDo:
+          'No action needed. Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['purchase_orders:read'], modules: ['purchase_orders'] },
+      },
+      {
+        // platform: phone. From: B10 #403 and B60 #420. Checked at f584141ba:
+        // apps/mobile/app/order/[id].tsx:1884 (runAction reads the order again
+        // after a refusal), :1240 (Release before return is received) and
+        // :1346 (Create return), with src/lib/order-action-refusal.ts:21-22
+        // (only an answer: never a timeout or a dropped connection); the Deny
+        // and Reopen picking boxes, order/[id].tsx:1931 and :1956, settled at
+        // :2275-2289 by src/lib/order-reason-dialog.ts:24-25 (kept while the
+        // order still offers the action or could not be read), closed with
+        // the reason cleared (:1905-1908, :1936-1939). The order's button and
+        // the sheet's confirm read Release before return is received (core
+        // returns/returns-copy.ts:171), as the published returns release names
+        // it; the Create return caps follow the order read again. Walked:
+        // tonight's B60 walk 2 and simwalk-1031 walk 5 (a refused Deny). Code
+        // only: Reopen picking (B60 walk 3, skipped by rule) and the two
+        // return sheets (order-action-refusal.test.ts). Audience: the Orders
+        // module (core modules/registry.ts:407 and :418).
+        id: 'app-order-current-after-refusal',
+        category: 'fixed',
+        area: 'Orders',
+        title:
+          'In the mobile app, an order shows its current status after an action on it is refused',
+        whatChanged:
+          'In the mobile app, when an action on an order is refused because the order has changed, for example someone else approved it a moment ago, the order screen now reads the order again, so behind the message it shows the current status and buttons. When Release before return is received or Create return is refused, the sheet still says why, and the order behind it is read again. When Deny or Reopen picking is refused because the order has moved on, its box closes by itself and clears your reason.',
+        whyItMatters:
+          'Before, the screen kept the old status and buttons until you pulled to refresh, so the next tap was refused the same way, and the Deny box stayed open over an order that could no longer be denied.',
+        howItAffectsYou:
+          'Close the message to see the order as it is now. If the order still offers Deny or Reopen picking, or could not be read again, the box stays open with your reason so you can try again. After a refused Create return, its quantities stop at what can still be returned now. A timeout or a lost connection leaves the order as it was shown.',
+        whatToDo:
+          'No action needed. Close the app completely and open it again to load the latest update.',
+        audience: { modules: ['orders'] },
+      },
+      {
+        // platform: phone. From: B10 #403. Checked at f584141ba: the titles,
+        // apps/mobile/src/lib/count-save-refusal.ts:30 and :41, and
+        // bundle-distribute-attempt.ts:64, only after the server could not be
+        // reached (app/bundles/[id].tsx:254-279); Try again,
+        // app/cycle-count/[id].tsx:327 and :360; the scanner's one alert,
+        // app/cycle-count/scan/[id].tsx:150, and the typed number kept,
+        // :221-223; the workspace sentence, src/lib/outbox-scope.ts:151,
+        // refused while the previous account's workspace is saved
+        // (src/lib/session-scope.ts:107-109), which Sign out removes
+        // (src/lib/auth-context.tsx:491-492), so a change made after it waits
+        // instead; the same request again, app/bundles/[id].tsx:229. At a
+        // first offline open after the update the older app's saved workspace
+        // refuses until a load records its owner, and an offline load saves
+        // nothing (src/lib/use-workspace.ts:274-285), hence the advice to
+        // load the update with a connection. Code only: walks 13-18 were not
+        // run (they need two accounts in different organizations), so
+        // count-save-refusal.test.ts, bundle-distribute-attempt.test.ts and
+        // use-workspace.owner.test.ts. Audience: the count screen's
+        // showWriteCta(perms, 'stock:adjust') (app/cycle-count/[id].tsx:207)
+        // and Distribute's canDistributeBundles (core permissions.ts:276).
+        id: 'app-says-why-a-save-failed',
+        category: 'fixed',
+        area: 'Counts and offline changes',
+        title: 'In the mobile app, a count or distribution the phone could not save now says why',
+        whatChanged:
+          'In the mobile app, when the phone cannot save a count, clear an emptied count box, or save a distribution while the server cannot be reached, it now says why, in a message titled Count not saved, Count not cleared or Could not save offline. The count screen offers Try again, and the count scanner shows one message, in Burst too, and takes the next scan once you answer it. Right after a different account signs in, unless the previous account used Sign out, these and offline stock changes are refused with “Your workspace is still loading. Try again in a moment.” until its workspace loads.',
+        whyItMatters:
+          "Before, the count screen showed the number as if it were saved, the scanner stopped taking scans, and Distribute said nothing. A change made right after another account signed in was sent under the previous account's organization, where it was refused and lost, or landed in a workspace you had not chosen.",
+        howItAffectsYou:
+          'If you open the app without a connection right after this update, counts, offline stock changes and distributions are refused with that sentence until the app has been online once; enter them again then. Changes already waiting to be sent are kept. A change saved on a phone that had never loaded your workspace now waits and goes to your own workspace, not your default organization. After Could not save offline, distributing the same quantity again from the same screen sends the same request, so the kits are handed out once. A number typed in the count scanner stays until it is saved.',
+        whatToDo:
+          'Close the app completely and open it again, with a connection, to load the latest update before you count offline. If a message says your workspace is still loading, wait a moment and try again; without a connection, try again once you are back online.',
+        audience: { anyPermission: ['stock:adjust', 'bundles:distribute'] },
+      },
+      {
+        // platform: web. From: S16 #421. Checked at f584141ba: the sentence,
+        // server/lib/api-error-response.ts:16; the export,
+        // app/api/inventory/export/route.tsx:303 (a ServiceError keeps its own
+        // words, :300), shown inside the Customize export dialog
+        // (export-builder-dialog.tsx:406); the scan,
+        // app/api/po-imports/scan/route.ts:348, for one file or files
+        // combined. Separate POs, the form's default for two or more files
+        // (components/po-imports/po-scan-form.tsx:47 and :133), is not quoted:
+        // at f584141ba it kept "Could not read this file as a purchase order."
+        // (route.ts:293-296), but B80 (#436, b3abc74be, live 2026-11-02
+        // 04:27:19Z, before this release can deploy) makes a page that is not
+        // a purchase order say the extractor's own sentence in both modes
+        // (lib/po-scan/extract.ts), and B80's entry tells that. The last
+        // sentence says what this change leaves alone, so it holds with B80
+        // (2026-11-02 review). Before (98f6e8128) each showed the error's own
+        // text, and each was reported then too, hence "still recorded". Code
+        // only: an unexpected failure cannot be brought about safely on
+        // production (the route tests). Audience: the export's items:export
+        // (route.tsx:77) and the scan's purchase_orders:manage
+        // (services/po-imports.ts:985); Bulk ISBN import has its own entry, as
+        // its readers differ (2026-11-01 skeptic).
+        id: 'web-unexpected-failure-plain-sentence',
+        category: 'fixed',
+        area: 'Web app',
+        title: 'Plain words on the web when an export or a PO scan fails unexpectedly',
+        whatChanged:
+          'On the web, when an export from the Customize export dialog fails in a way that used to show technical text, the message now reads “Something went wrong. Please try again.” So does Scan with AI on the New PO import page, for one file or for files combined as pages of a single PO.',
+        whyItMatters:
+          "These messages showed the error's own technical text, which was written for developers and did not say what to do.",
+        howItAffectsYou:
+          'You see a plain sentence, and the details are still recorded for us to look into. This does not change the messages about problems StockPilot expects, such as a missing permission or a file type it does not accept.',
+        whatToDo: 'If you see the message, try again.',
+        audience: { anyPermission: ['items:export', 'purchase_orders:manage'] },
+      },
+      {
+        // platform: web. From: S16 #421. Checked at f584141ba:
+        // app/api/books/extract-isbns/route.ts:90-94 (a file reader's failure
+        // is reported and answered with the sentence) and :86-87 (an
+        // unsupported type keeps its own sentence, lib/books/isbn-extract.ts:139,
+        // as before), shown by components/books/bulk-isbn-import.tsx:115,
+        // beside its box for pasted ISBNs. Before (98f6e8128): the file
+        // library's own text. Code only (no damaged file was walked).
+        // Audience: the import page's items:import
+        // ((dashboard)/dashboard/books/import/page.tsx:28) and the Books
+        // module of the Books page that links to it (books/page.tsx:154 and
+        // :225), as the published Books entries carry it.
+        id: 'bulk-isbn-unreadable-file',
+        category: 'fixed',
+        area: 'Books',
+        title: 'Bulk ISBN import says plainly when it cannot read a file',
+        whatChanged:
+          'On the web, in Bulk ISBN import, a file that Extract from file cannot read now says “Could not read this file. Try a different file.”',
+        whyItMatters:
+          "The message showed the file reader's own technical text, which was written for developers and did not say what to do.",
+        howItAffectsYou:
+          'A file type it does not accept still names the types it accepts, as before. The details of a file it cannot read are still recorded for us to look into.',
+        whatToDo: 'If you see the message, choose a different file, or paste the ISBNs instead.',
+        audience: { anyPermission: ['items:import'], modules: ['books'] },
+      },
+      {
+        // platform: web. From: S16 #421. Checked at f584141ba:
+        // app/api/ai/chat/route.ts:55 (the limit, unchanged), :72-76 and
+        // :197-201 (the sentence), shown by components/ai/chat-panel.tsx:474-479
+        // in a passing notice and in the reply; the attached file's note,
+        // lib/books/isbn-ai-extract.ts:86-87 with :343-355, sent at
+        // chat-panel.tsx:387-390 for a Word, Excel, CSV or text file with ISBNs
+        // found. Before (98f6e8128): zod's issue list as JSON. On the phone
+        // the same refusal shows inside the raw answer (apps/mobile/app/ai/
+        // chat.tsx), so the title, whatChanged and howItAffectsYou say on the
+        // web; B75 changes the phone's chat later. An attached file's ISBN
+        // list can pass the limit too, which the person did not type, hence
+        // "after typing" (B76 changes that, not merged). The 2,000 is left to
+        // the app's own sentence.
+        // Code only: route.refusals.test.ts:90-94; no walk was recorded, and
+        // the AI module is never switched on in Demo Co for one. Audience: the
+        // AI Assistant page's checks ((dashboard)/dashboard/ai/page.tsx:19 and
+        // :27), as the published AI entries carry them.
+        id: 'ai-assistant-web-message-too-long',
+        category: 'fixed',
+        area: 'AI Assistant',
+        title: 'The AI Assistant on the web says in plain words when a message is too long',
+        whatChanged:
+          "In the AI Assistant on the web, a message that is too long now gets a plain sentence saying so and how long a message can be, shown in the reply and in a passing notice. Before, both showed a block of technical text. When you attach a Word, Excel, CSV or text file there and the AI service fails, the message sent with the ISBNs found in the file now says only that AI extraction was unavailable and that the ISBNs were found without it, instead of the AI service's own error.",
+        whyItMatters:
+          "The reason was buried in technical text written for developers, and a failed file could put the AI service's own error into your chat.",
+        howItAffectsYou:
+          'Messages are refused at the same length as before. On the web, the reply now says to shorten them.',
+        whatToDo: 'If you see the message after typing, shorten your message and send it again.',
+        audience: { anyPermission: ['items:update'], modules: ['ai'] },
+      },
+      {
+        // platform: phone; its web part went live with #403's merge. From:
+        // B10 #403. Checked at f584141ba:
+        // apps/mobile/app/(drawer)/settings/integrations.tsx:69 (owners and
+        // admins, where Integrations is on), :103, :154 and :181 (a refusal of
+        // access is the Access denied state, :236), :159 and :186 (the
+        // authenticator sentences, src/lib/integrations-api.ts:90-93, told
+        // apart by the 403's details, :125-131); the buttons, :273 and :437;
+        // Admins only, :223. Before: the phone tested the message for "API
+        // 403" and never matched, so the server's sentence showed
+        // ("Re-authenticate with MFA before performing this action.", which
+        // does not say how in the app). Walked: simwalk-1031 walk 1 (Access
+        // denied after Integrations was turned off on the web). Code only:
+        // the authenticator sentences, which need a QuickBooks connection
+        // (integrations-api.test.ts). Audience: the screen's own check,
+        // integrations.tsx:69 (owner or admin, and the module), so an admin
+        // whose Manage integrations was removed, who is the one now shown
+        // Access denied, is told, and a manager given it, who still sees
+        // Admins only, is not (2026-11-01 skeptic).
+        id: 'app-integrations-access-denied',
+        category: 'fixed',
+        area: 'Settings',
+        title: 'In the mobile app, Integrations says Access denied when the server refuses it',
+        whatChanged:
+          "In the mobile app, when the server refuses Integrations in Settings for an owner or admin, for example because Integrations was turned off on the web while the screen was open, the screen now shows Access denied instead of the server's own message. When Save mapping or Disconnect QuickBooks needs you to sign in again with your authenticator code, or to set one up first, a message now says so and the screen stays open.",
+        whyItMatters:
+          "Before, the screen showed the server's own wording instead, which did not say how to sign in again in the mobile app, and its Access denied state never appeared.",
+        howItAffectsYou:
+          'Nothing is changed when either message appears. Members who are not owners or admins still see Admins only, as before.',
+        whatToDo:
+          'If the message asks for your authenticator code, sign out and sign back in with it, then try again. If it asks you to set one up, do that on the web, then sign in again. Close the app completely and open it again to load the latest update.',
+        audience: { roles: ['owner', 'admin'], modules: ['integrations'] },
+      },
+      {
+        // platform: phone. From: B10 #403 (its round c10). Checked at
+        // f584141ba: apps/mobile/src/lib/use-workspace.ts:348 (the clear
+        // recorded as owed before the save), :403-410 (a failed clear stays
+        // owed for the next load: any screen that opens, the next launch) and
+        // :427 (recorded done only once a clear worked);
+        // src/lib/workspace-keys.ts:173. Before (64054fb3d) the save came
+        // first and a failed clear only warned. The list is Bundles
+        // (app/bundles/index.tsx), and Clear under Offline cache is in
+        // Settings ((drawer)/settings.tsx:489 and :499). Code only: a failed
+        // clear cannot be brought about on a phone
+        // (use-workspace.owner.test.ts, cache-owner.sqlite.test.ts).
+        // Audience: the phone's Bundles, core modules/registry.ts:403
+        // (bundles:read or bundles:distribute), in its module (:392).
+        id: 'app-clears-other-workspace-again',
+        category: 'fixed',
+        area: 'Mobile app',
+        title:
+          "In the mobile app, another workspace's offline lists are cleared even when the first try fails",
+        whatChanged:
+          'In the mobile app, when the app changes workspace, for example when you switch workspace or a different account signs in on the phone, it clears what it keeps offline for the previous workspace and loads the new one in full. If that clear failed, or the app was closed before it ran, the app now clears again the next time you open a screen or the app.',
+        whyItMatters:
+          "Before, the app forgot that it still had to clear, so the previous workspace's kits could stay in your Bundles list until you switched workspace again or chose Clear under Offline cache in Settings.",
+        howItAffectsYou: 'Nothing changes when the clear works the first time.',
+        whatToDo:
+          'No action needed. Close the app completely and open it again to load the latest update.',
+        audience: { anyPermission: ['bundles:read', 'bundles:distribute'], modules: ['bundles'] },
+      },
+      {
+        // platform: web. From: S27a #431, its fallback entry (#431's body and
+        // its plan, section 7: published with the next What's New batch after
+        // S27a's deploy if part b has not deployed; part b is not built).
+        // Checked at f584141ba: the sentence,
+        // server/services/integration-events.ts:649-650
+        // (INTEGRATION_WRITE_REFUSED), thrown for a disconnect the row rule
+        // refused (services/connections.ts:770: QuickBooks Online, Sage
+        // Intacct and EasyPost) and for the QuickBooks account mapping and the
+        // Sage Intacct settings (:835 and :895), passed on as written by
+        // server/actions/connections.ts:53-58 and shown by the page's cards
+        // (components/settings/integrations-panel.tsx:160, :178 and :486;
+        // sage-intacct-card.tsx:121 and :140). The row rule is admin-only
+        // (migration 0146_connector_framework.sql:115-119), while the services
+        // check Manage integrations or Manage shipping, so a member given one
+        // who is not an admin is refused. Before (8ac9f4862 connections.ts:
+        // 703-708 with :714-716, :764-769 and :820-825) those updates asked for
+        // no row: a refused one changed 0 rows with no error, the card said
+        // QuickBooks disconnected, Account mapping saved, EasyPost
+        // disconnected, Sage Intacct disconnected or Sage Intacct settings
+        // saved (integrations-panel.tsx:158, :176 and :484;
+        // sage-intacct-card.tsx:119 and :138; neither card changed in #431),
+        // and a disconnect deleted the stored secret anyway, hence "a
+        // connection that no longer worked". The plan's sentence ("if a change
+        // on the Integrations page is not saved, for example disconnecting
+        // QuickBooks Online or rotating a webhook secret") is narrowed to the
+        // changes checked: no page offers a webhook secret rotation (its
+        // server action in server/actions/integration-endpoints.ts has no
+        // caller: actions-are-reachable.test.ts:79-82 lists it, and the action
+        // is not named here, as that guard counts any mention in a source file
+        // as a caller), and a refused connect, webhook or replay, which now
+        // says the same sentence, showed an error before, not a change done.
+        // The title says the web, as the phone's Integrations screen
+        // (app-integrations-access-denied) is for owners and admins, whom the
+        // row rule does not refuse. The page opening: connections.ts:200-205
+        // takes the manage key of each module that is on; 8ac9f4862
+        // connections.ts:186-208 picked it by the
+        // static role, so with both modules on the page's failed-sync list
+        // (settings/integrations/page.tsx:98) failed for a manager given
+        // Manage shipping and for an admin whose Manage integrations was
+        // removed (page.test.tsx:141-166); with only Shipping on, such a
+        // member could already open it (#431's review, finding 5). Code only:
+        // connections.test.ts:782 on, and page.test.tsx; Demo Co has both
+        // modules off. Audience: the page's checks, settings/integrations/
+        // page.tsx:61-63 (Manage integrations or Manage shipping) and :71-73
+        // (the integrations or the shipping module, else the module-off
+        // notice), as #431's body gives it.
+        id: 'integrations-unsaved-changes-say-so',
+        category: 'fixed',
+        area: 'Integrations',
+        title: 'On the web, Integrations says when a change was not saved',
+        whatChanged:
+          'On the web, when disconnecting QuickBooks Online, Sage Intacct or EasyPost, or saving the QuickBooks account mapping or the Sage Intacct settings, is refused because your access does not allow it, the Integrations page now says “This change was not saved: your access does not allow it. Ask an owner or an admin.” Before, it showed as done. A member who can manage only shipping can now open the Integrations page when Integrations is also switched on.',
+        whyItMatters:
+          'A change that only looked saved could leave a connection that no longer worked.',
+        howItAffectsYou: 'If a change is not saved, ask an owner or an admin to make it.',
+        whatToDo: 'No action needed.',
+        link: { href: '/dashboard/settings/integrations', label: 'Open Integrations' },
+        audience: {
+          anyPermission: ['integrations:manage', 'shipping:manage'],
+          modules: ['integrations', 'shipping'],
         },
       },
     ],

@@ -83,6 +83,7 @@ export function EdgeSwipeOpener({ onOpen, disabled }: EdgeSwipeOpenerProps) {
       aria-hidden="true"
       // Mobile-only — desktop has a persistent sidebar at md+.
       className="md:hidden"
+      data-glass="edge-swipe"
       style={{
         position: 'fixed',
         top: 0,

@@ -454,3 +454,32 @@ describe('OrderTimeline — a paper hand-over and the legacy status change (B22)
     expect(screen.queryByText('Physical signature recorded')).toBeNull();
   });
 });
+
+describe('OrderTimeline — return request drafted (F14)', () => {
+  function drafted(id: string, md: Record<string, unknown>) {
+    return {
+      id,
+      event: 'order.return_request_drafted',
+      created_at: '2026-11-10T17:00:00Z',
+      user_id: 'u1',
+      metadata: { entity_type: 'order_request', entity_id: 'order-1', ...md },
+    };
+  }
+
+  it('says a draft was opened for the return, and that StockPilot did not send it', async () => {
+    await renderTimeline([
+      drafted('a', { return_number: 'RMA-20261110-AB12CD', is_condensed: false, surface: 'order' }),
+    ]);
+    expect(screen.getByText('Return request drafted')).toBeInTheDocument();
+    expect(
+      screen.getByText('A prefilled draft was opened for RMA-20261110-AB12CD — StockPilot did not send it.'),
+    ).toBeInTheDocument();
+    // Never the raw metadata, and never a claim that anything was sent.
+    expect(document.body.textContent).not.toMatch(/is_condensed|surface|\{|ticket/i);
+  });
+
+  it('an entry with no return number says only that a draft was opened', async () => {
+    await renderTimeline([drafted('a', {})]);
+    expect(screen.getByText('A prefilled draft was opened — StockPilot did not send it.')).toBeInTheDocument();
+  });
+});

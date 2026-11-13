@@ -16,6 +16,8 @@ import { checkPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { reportError } from '@/lib/error-reporter';
 import { createClient } from '@/lib/supabase/server';
+// Liquid Glass's card on this page (styles/liquid-glass/pages/access.css): inert in Classic.
+import '@/styles/liquid-glass/pages/access.css';
 
 export const metadata: Metadata = {
   title: 'Workspace access',
@@ -82,6 +84,7 @@ export default async function OnboardingPage() {
 function OnboardingFrame({ children }: { children: ReactNode }) {
   return (
     <ExternalShell
+      glassPage="access"
       width="lg"
       topBar={
         <>

@@ -1,0 +1,456 @@
+/* Liquid Glass, the platform console (stage 4, admin lane): the console's own
+   frame from Platform-Console.dc.html (exact: the staff bar, the ground, the
+   frosted cards, the organization page's tabs, members table and danger zone),
+   on top of pages/admin.css, which every console page imports first (the page
+   head, tables, badges, states, fields and dialogs it shares with the settings
+   and admin pages).
+
+   Same DOM as Classic (plan M1): the rules restyle today's markup through the
+   console's inert hooks (data-glass-page="platform" on the layout's root,
+   data-glass="plat-brand" and "plat-account" in its bar, data-glass-width on
+   the page body, data-glass="card" and "table" on the console table,
+   data-glass-role="danger-zone" on an organization's danger zone) and the
+   data-slot attributes the console's components already carry; nothing here
+   is glass-only. Every rule is scoped to
+   :root[data-appearance="liquid-glass"] inside @media screen and names the
+   console's root, so Classic never matches one, printing never gets one, and
+   no other page does (glass-scope.guard.test.ts).
+
+   sp.css values (artifact): .plat-root (674, 1092-1093), .plat-bar (675,
+   1094), .plat-chip (676), .plat-nav (677-679), .plat-main (680),
+   .danger-zone (681), .btn-danger-soft (144), .plat-root .card (1095), the
+   reduced and contrast materials (1096-1098).
+
+   Imported only by the console's route pages, after pages/admin.css. */
+@layer theme, base, components, utilities, lg;
+
+@layer lg {
+  @media screen {
+    /* ── The ground (.plat-root): the scene under a 50% paper veil (Night:
+       ink), drawn over the body's fixed scene layer (scene.css). ───────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='platform'] {
+      background: linear-gradient(rgba(248, 244, 238, 0.5), rgba(248, 244, 238, 0.5));
+    }
+    :root[data-appearance='liquid-glass'].dark [data-glass-page='platform'] {
+      background: linear-gradient(rgba(8, 11, 10, 0.5), rgba(8, 11, 10, 0.5));
+    }
+
+    /* ── The staff bar (.plat-bar: 56 px, 0 20 px, 20 between, the dark
+       glass in Day and Night alike so an operator always knows which console
+       this is). The bar row drops Classic's 1320 px column: the board's bar
+       runs edge to edge. ──────────────────────────────────────────────── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      > [data-slot='platform-topbar'] {
+      border-bottom-color: transparent;
+      background: rgba(16, 19, 26, 0.82);
+      color: #f3f5f8;
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      backdrop-filter: blur(24px) saturate(160%);
+      box-shadow:
+        inset 0 -1px 0 rgba(255, 255, 255, 0.08),
+        0 10px 30px -18px rgba(0, 0, 0, 0.5);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-topbar-row'] {
+      max-width: none;
+      column-gap: 20px;
+      padding-right: 20px;
+      padding-left: 20px;
+    }
+    /* The mark and the wordmark: 15 px at 600, "Platform" at 500 and 70%. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='platform'] [data-glass='plat-brand'] {
+      color: #f3f5f8;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='plat-brand']
+      > span:first-child {
+      border-radius: 6px;
+      background-color: #f3f5f8;
+      color: #14171f;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='plat-brand']
+      > span:last-child
+      > span {
+      color: rgba(243, 245, 248, 0.7);
+      font-weight: 500;
+    }
+    /* The console's sections (.plat-nav a: 34 px, 0 12 px, radius 9,
+       13.5 px at 500 in 72% white; the page you are on in white at 600 on
+       12% white). The board draws words only, so the link icons (decorative,
+       aria-hidden) are not drawn. Phones keep Classic's 44 px links. */
+    :root[data-appearance='liquid-glass'] [data-glass-page='platform'] [data-slot='platform-nav'] {
+      gap: 4px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-nav']
+      > a {
+      padding: 0 12px;
+      border-radius: 9px;
+      background-color: transparent;
+      color: rgba(243, 245, 248, 0.72);
+      font-size: 13.5px;
+      font-weight: 500;
+    }
+    @media (min-width: 640px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        [data-slot='platform-nav']
+        > a {
+        height: 34px;
+      }
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-nav']
+      > a:hover {
+      background-color: rgba(255, 255, 255, 0.06);
+      color: #ffffff;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-nav']
+      > a[aria-current='page'] {
+      background-color: rgba(255, 255, 255, 0.12);
+      color: #ffffff;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-nav']
+      > a
+      > svg {
+      display: none;
+    }
+    /* The "Platform admin" marker as the board's Staff only chip
+       (.plat-chip: 22 px, radius 6, the amber wash, 11.5 px at 650), next to
+       the wordmark: first in the nav's row (it holds no link, so the
+       keyboard order is unchanged), 10 px from the wordmark and 20 px before
+       the first section, as drawn. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-admin-marker'] {
+      order: -1;
+      height: 22px;
+      gap: 5px;
+      margin-left: 0;
+      padding: 0 8px;
+      border-color: transparent;
+      border-radius: 6px;
+      background-color: rgba(255, 184, 77, 0.16);
+      color: #ffc977;
+      font-size: 11.5px;
+      font-weight: 650;
+      letter-spacing: 0.02em;
+      text-transform: none;
+    }
+    @media (min-width: 1024px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        [data-slot='platform-admin-marker'] {
+        margin-right: 16px;
+        margin-left: -10px;
+      }
+    }
+    /* The operator's address (.xs at 75%) and the way back to the
+       workspace as a button on the dark glass. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='plat-account']
+      > span:first-child {
+      color: rgba(243, 245, 248, 0.75);
+      font-size: 12px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='plat-account']
+      > a {
+      border-color: rgba(255, 255, 255, 0.16);
+      border-radius: 8px;
+      background-color: rgba(255, 255, 255, 0.08);
+      color: #f3f5f8;
+      box-shadow: none;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='plat-account']
+      > a:hover {
+      background-color: rgba(255, 255, 255, 0.14);
+      color: #ffffff;
+    }
+    /* Keyboard focus on the dark bar: the Night focus colour (#56D6A9,
+       10:1 on the bar), drawn inside each link as Classic's ring is. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      > [data-slot='platform-topbar']
+      :is(a, button):focus-visible {
+      outline: 2px solid #56d6a9;
+      outline-offset: -2px;
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+
+    /* ── The page body (.plat-main 20 px over .page: 6 / 28 / 48, 20
+       between; the board's console page is 1320 wide, a form 736) ──────── */
+    :root[data-appearance='liquid-glass'] [data-glass-page='platform'] [data-slot='platform-page'] {
+      gap: 20px;
+      padding: 26px 28px 48px;
+    }
+
+    /* ── Cards straight on the scene frost it themselves (.plat-root .card:
+       blur 22, saturation 160%): the console table, the record sections,
+       the figures, a state card and the cards the console's forms draw. ── */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      :is(
+        [data-glass='card'],
+        [data-glass='panel'],
+        [data-glass='stat-strip'],
+        [data-glass='state-panel'][class~='bg-card'],
+        :is(div, section, form).bg-card.rounded-lg.border:not([data-glass])
+      ) {
+      -webkit-backdrop-filter: blur(22px) saturate(160%);
+      backdrop-filter: blur(22px) saturate(160%);
+    }
+    /* The console table's card is a keyboard stop (a scroll region): its
+       material shadow replaces Classic's ring, so the board's outline ring
+       shows the focus. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-table']:focus-visible {
+      outline: var(--lg-focus-w) solid var(--lg-focus);
+      outline-offset: 2px;
+      --tw-ring-shadow: 0 0 #0000;
+      --tw-ring-offset-shadow: 0 0 #0000;
+    }
+    /* The members table's Actions column stays on screen while the table
+       scrolls sideways under it (below 1024 px): there it is opaque, so no
+       cell shows through it. Wider, the table fits and the cell takes the
+       row's own glass. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='platform-table']
+      :is(th, td).sticky {
+      background-color: var(--lg-chrome);
+      border-color: var(--lg-line);
+    }
+    @media (min-width: 1024px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        [data-slot='platform-table']
+        :is(th, td).sticky {
+        background-color: transparent;
+      }
+    }
+
+    /* ── An organization's page (exact) ────────────────────────────────── */
+    /* The back link (.row.g4.sm.muted) and the head's actions: the billing
+       summary as a small label over its value, Act as as the 36 px
+       secondary button (admin.css). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='page-header']
+      > div:first-child:not(:last-child)
+      > a {
+      color: var(--lg-ink-3);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass='page-header']
+      > div:first-child:not(:last-child)
+      > a:hover {
+      color: var(--lg-ink);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-slot='org-billing-summary']
+      > div:first-child {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+    }
+    /* The Order items column: Allowed as the ok badge with its check, Not
+       allowed as the outline badge with its dash (.badge.b-ok / .b-outline
+       with ic-check / ic-minus, 13 px); the source line in ink 3. The marks
+       are drawn, not written: the badge's words stay its whole name. */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-testid='order-items-access-cell']
+      > [data-glass='badge']::before {
+      content: '';
+      flex: none;
+      width: 13px;
+      height: 13px;
+      background-color: currentColor;
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12h14'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-testid='order-items-access-cell']
+      > [data-glass='badge'][data-glass-variant='success']::before {
+      -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+      mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E")
+        center / contain no-repeat;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-testid='order-items-access-cell']
+      > [data-glass='badge'][data-glass-variant='success'] {
+      background-color: var(--lg-ok-wash);
+      color: var(--lg-ok);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-testid='order-items-access-cell']
+      > span {
+      color: var(--lg-ink-3);
+      font-size: 12px;
+      line-height: 16px;
+    }
+    /* The danger zone (.card.danger-zone: the danger line; .card-h with the
+       16/22 title in the danger ink; .card-b 16 px), and Remove organization
+       as the board's .btn-danger-soft (the danger wash, the danger ink). */
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass-role='danger-zone'] {
+      border-color: var(--lg-danger-line);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass-role='danger-zone']
+      [data-slot='detail-section-header']
+      > :is(h2, h3, h4) {
+      color: var(--lg-danger);
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass-role='danger-zone']
+      [data-slot='detail-section-body']
+      p {
+      color: var(--lg-ink-2);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass-role='danger-zone']
+      [data-glass='button'][data-glass-variant='destructive'] {
+      height: 36px;
+      padding: 0 14px;
+      background-color: var(--lg-danger-wash);
+      color: var(--lg-danger);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    :root[data-appearance='liquid-glass']
+      [data-glass-page='platform']
+      [data-glass-role='danger-zone']
+      [data-glass='button'][data-glass-variant='destructive']:hover {
+      background-color: color-mix(in srgb, var(--lg-danger-wash) 82%, var(--lg-danger));
+    }
+
+    /* ── Phones (sp.css 760 px: .plat-main's 20 px top, which has no phone
+       value, over the page box's 4 / 16 / 96, so 24 / 16 / 96; the bar keeps
+       its sections: the board hides them there, the console has no other
+       way between them) ───────────────────────────────────────────────── */
+    @media (max-width: 760px) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        [data-slot='platform-topbar-row'] {
+        column-gap: 12px;
+        padding-right: 12px;
+        padding-left: 12px;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        [data-slot='platform-page'] {
+        gap: 16px;
+        padding: 24px 16px 96px;
+      }
+    }
+
+    /* ── Reduce Transparency, Increase Contrast (.plat-root, .plat-bar and
+       .plat-root .card in the reduced and contrast materials): the opaque
+       ground, the bar's solid #14171F, no blur anywhere. ──────────────── */
+    @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+      :root[data-appearance='liquid-glass'] [data-glass-page='platform'] {
+        background: var(--lg-bg);
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        > [data-slot='platform-topbar'] {
+        background: #14171f;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        :is(
+          [data-glass='card'],
+          [data-glass='panel'],
+          [data-glass='stat-strip'],
+          [data-glass='state-panel'][class~='bg-card'],
+          :is(div, section, form).bg-card.rounded-lg.border:not([data-glass])
+        ) {
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+      }
+    }
+    /* The same on weak Chromium browsers (data-lg-material="reduced"; kept
+       declaration for declaration equal to the block above:
+       glass-material-twins.guard.test.ts). */
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced'] [data-glass-page='platform'] {
+      background: var(--lg-bg);
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='platform']
+      > [data-slot='platform-topbar'] {
+      background: #14171f;
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+    :root[data-appearance='liquid-glass'][data-lg-material='reduced']
+      [data-glass-page='platform']
+      :is(
+        [data-glass='card'],
+        [data-glass='panel'],
+        [data-glass='stat-strip'],
+        [data-glass='state-panel'][class~='bg-card'],
+        :is(div, section, form).bg-card.rounded-lg.border:not([data-glass])
+      ) {
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+
+    /* ── Forced colours: the system colours draw the bar and its chip. ─── */
+    @media (forced-colors: active) {
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        > [data-slot='platform-topbar'] {
+        border-bottom: 1px solid CanvasText;
+        background: Canvas;
+        color: CanvasText;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+      }
+      :root[data-appearance='liquid-glass']
+        [data-glass-page='platform']
+        [data-slot='platform-admin-marker'] {
+        border: 1px solid CanvasText;
+      }
+    }
+  }
+}

@@ -35,6 +35,7 @@ function Bar({
   return (
     <div
       className={cn('bg-muted max-w-full shrink-0 animate-pulse', className)}
+      data-glass="skeleton"
       style={{
         ...(w === undefined ? {} : { width: typeof w === 'number' ? `${w}px` : w }),
         ...(h === undefined ? {} : { height: h }),
@@ -46,11 +47,11 @@ function Bar({
 
 export default function ReturnsLoading() {
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass="skeleton-page" data-glass-width="wide">
       {/* The header: a 28 px title on its 42 px line, then the explanation,
           which wraps to two lines in its 768 px measure. */}
       <div className="min-w-0">
-        <div className="flex h-[42px] items-center">
+        <div className="flex h-[42px] items-center" data-glass-role="skeleton-title">
           <Bar w={132} h={26} />
         </div>
         <div className="mt-0.5 max-w-3xl space-y-2 py-1">
@@ -72,10 +73,11 @@ export default function ReturnsLoading() {
       {/* The table card: 11 px header labels on a 37 px row, then rows that
           pad by var(--row-py) like the table's, each as tall as a row with
           its 32 px thumbnail. */}
-      <div className="border-border bg-card overflow-hidden rounded-lg border">
+      <div className="border-border bg-card overflow-hidden rounded-lg border" data-glass="card">
         <div className="min-w-[860px]">
           <div
             className="border-border grid h-[37px] items-center gap-3 border-b px-4"
+            data-glass-role="skeleton-table-head"
             style={{ gridTemplateColumns: COLUMNS }}
           >
             {[28, 40, 32, 64, 64, 44, 52].map((w, i) => (
@@ -88,6 +90,7 @@ export default function ReturnsLoading() {
             <div
               key={i}
               className="border-border grid items-center gap-3 border-b px-4 last:border-0"
+              data-glass-role="skeleton-table-row"
               style={{
                 gridTemplateColumns: COLUMNS,
                 paddingTop: 'var(--row-py, 11px)',

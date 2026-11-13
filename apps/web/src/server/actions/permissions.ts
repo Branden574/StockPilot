@@ -3,12 +3,12 @@
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
 import { audit } from '@/server/services/audit';
 import { AUDITOR_PRESET_PERMISSIONS } from '@/lib/auditor-preset';
 import { broadcastPermissionsChanged } from '@/lib/realtime/broadcast';
 import { ServiceError, withContext } from '@/server/services/context';
 import { ListReadError, listRows } from '@/server/services/lib/list-rows';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   PERMISSIONS,
@@ -241,9 +241,7 @@ export async function setRolePermissionOverrideAction(input: {
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message, e.details);
-    return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
+    return actionErrorResult(e, 'actions.permissions.set_role_permission_override');
   }
 }
 
@@ -296,9 +294,7 @@ export async function applyAuditorPresetAction(): Promise<ActionResult<null>> {
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message, e.details);
-    return err('internal_error', e instanceof Error ? e.message : 'Failed to apply preset');
+    return actionErrorResult(e, 'actions.permissions.apply_auditor_preset');
   }
 }
 
@@ -388,8 +384,6 @@ export async function setUserPermissionOverrideAction(input: {
     revalidatePath('/dashboard/settings/roles');
     return ok(null);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message, e.details);
-    return err('internal_error', e instanceof Error ? e.message : 'Failed to update permission');
+    return actionErrorResult(e, 'actions.permissions.set_user_permission_override');
   }
 }

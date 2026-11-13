@@ -3,6 +3,9 @@ import { StyleSheet, View, type ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BrandLockup } from '@/components/brand/mark';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_AUTH } from '@/components/ui/glass/screens/auth';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { useTheme } from '@/lib/use-theme';
 
 /**
@@ -19,10 +22,14 @@ export function AuthShell({
   contentStyle?: ViewStyle;
 }) {
   const { c } = useTheme();
+  // Liquid Glass: the scene behind the brand bar and the screen's card (the
+  // Auth-SignIn-Mobile frame); the bar and the content keep their places.
+  const lg = useGlass();
   const insets = useSafeAreaInsets();
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
       <View
         style={{
           paddingTop: Math.max(insets.top, 24) + 16,
@@ -33,7 +40,14 @@ export function AuthShell({
         <BrandLockup size={26} />
       </View>
 
-      <View style={[styles.content, { paddingBottom: insets.bottom }, contentStyle]}>
+      <View
+        style={[
+          styles.content,
+          lg && GLASS_AUTH.content,
+          { paddingBottom: insets.bottom },
+          contentStyle,
+        ]}
+      >
         {children}
       </View>
     </View>

@@ -15,6 +15,11 @@ import {
   type Role,
 } from '@stockpilot/core';
 
+import {
+  CountDifferFigure,
+  CountLinesNote,
+  CountWideProgress,
+} from '@/components/cycle-counts/count-glass-summary';
 import { CountProgressBar } from '@/components/cycle-counts/count-progress-bar';
 import { CycleCountStatusBadge } from '@/components/cycle-counts/cycle-count-status-badge';
 import { HelpTip } from '@/components/onboarding/help-tip';
@@ -427,12 +432,17 @@ export function CycleCountDetail({
           valueTone={uncounted > 0 ? 'warning' : 'default'}
           data-testid="count-stat-uncounted"
         />
+        {/* Liquid Glass only: the board's fifth figure and its wide bar
+            (count-glass-summary.tsx), placed between two Classic figures. */}
+        <CountDifferFigure varianceCount={summary.varianceCount} />
+        <CountWideProgress counted={summary.counted} total={summary.total} />
         <StatStripItem
           size="detail"
           label="Net variance"
           value={signedDelta}
           valueTone={totalDelta !== 0 ? 'warning' : 'default'}
           data-testid="count-stat-net-variance"
+          data-glass-tone={totalDelta < 0 ? 'down' : totalDelta > 0 ? 'up' : 'none'}
         />
       </StatStrip>
 
@@ -530,6 +540,9 @@ export function CycleCountDetail({
                   className="pl-8"
                 />
               </div>
+              {/* Liquid Glass only: the board's note on Expected
+                  (count-glass-summary.tsx), between two Classic parts. */}
+              <CountLinesNote />
               <SegmentedTabs
                 semantics="nav"
                 size="sm"

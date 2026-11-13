@@ -1,14 +1,11 @@
 import * as React from 'react';
-import {
-  StyleSheet,
-  TextInput,
-  View,
-  type TextInputProps,
-  type ViewStyle,
-} from 'react-native';
+import { StyleSheet, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 
 import { FONT, RADIUS, TYPE_CEILING, capTo, resolveFontCap } from '@/lib/theme';
 import { useTheme } from '@/lib/use-theme';
+
+import { glassFieldBox, glassFieldInput, glassFieldLabel } from './glass/primitive-styles';
+import { useGlass } from './glass/use-glass';
 import { Mono } from './text';
 
 /**
@@ -32,11 +29,19 @@ export function Field({
   style?: ViewStyle;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const [focused, setFocused] = React.useState(false);
 
   return (
     <View style={[styles.wrap, style]}>
-      <Mono size={10} tracking={0.12} upper color={c.ink3}>
+      <Mono
+        size={10}
+        tracking={0.12}
+        upper
+        color={c.ink3}
+        // Liquid Glass: the form label in the system face, 13/18 600.
+        style={lg ? glassFieldLabel(lg) : undefined}
+      >
         {label}
       </Mono>
       <View
@@ -46,6 +51,8 @@ export function Field({
             backgroundColor: c.card,
             borderColor: focused ? c.ink : c.hair2,
           },
+          // Liquid Glass: the field fill with its 3:1 edge, the accent on focus.
+          lg && glassFieldBox(lg, focused),
         ]}
       >
         <TextInput
@@ -73,11 +80,10 @@ export function Field({
               color: c.ink,
               paddingRight: trailing ? 44 : 14,
             },
+            lg && glassFieldInput(lg),
           ]}
         />
-        {trailing ? (
-          <View style={styles.trailing}>{trailing}</View>
-        ) : null}
+        {trailing ? <View style={styles.trailing}>{trailing}</View> : null}
       </View>
     </View>
   );

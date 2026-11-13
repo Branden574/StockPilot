@@ -22,6 +22,11 @@ import Image from 'next/image';
 import * as React from 'react';
 
 import {
+  addAllButtonCopy,
+  addAllLabelCopy,
+  addAllState,
+  addAllTarget,
+  addAllWordsCopy,
   CART_ALL_STOCK_IN_CART_COPY,
   FREQUENTLY_ORDERED_SUBTITLE_COPY,
   FREQUENTLY_ORDERED_TITLE_COPY,
@@ -225,7 +230,47 @@ interface AddControlProps {
   onSetQty: (itemId: string, quantity: number) => void;
 }
 
+/**
+ * The card's control, plus "Add all" beside it: one press sets the line to
+ * everything available, in place of typing the number.
+ *
+ * - The quantity and the three states come from core (addAllTarget,
+ *   addAllState), the phone's rule too: everything available, never more
+ *   than one line of an order may hold, and no button when fewer than 2 can
+ *   be added (Add to cart already adds the one).
+ * - A press goes through `onSetQty`, the typed field's path, so it takes no
+ *   new prop (the memoized cards keep skipping) and a line marked as no
+ *   longer orderable is refused with the same message as a typed quantity.
+ * - With everything already in the cart the button is `aria-disabled`, not
+ *   `disabled`, and stays where it is in the tree while Add to cart turns
+ *   into the stepper: keyboard focus stays on it after the press.
+ */
 export function SfAddControl({ item, qty, onAdd, onDec, onSetQty }: AddControlProps) {
+  const available = availableOf(item);
+  const main = <SfMainControl item={item} qty={qty} onAdd={onAdd} onDec={onDec} onSetQty={onSetQty} />;
+  const state = addAllState(available, qty);
+  if (state === 'hidden') return main;
+  const full = state === 'full';
+  return (
+    <div className="sf-ctl">
+      {main}
+      <button
+        type="button"
+        className="sf-add sf-add-all"
+        aria-label={addAllLabelCopy(item.name, available, qty)}
+        aria-disabled={full || undefined}
+        title={full ? addAllWordsCopy(available, qty) : undefined}
+        onClick={() => {
+          if (!full) onSetQty(item.id, addAllTarget(available));
+        }}
+      >
+        {addAllButtonCopy(available)}
+      </button>
+    </div>
+  );
+}
+
+function SfMainControl({ item, qty, onAdd, onDec, onSetQty }: AddControlProps) {
   const available = availableOf(item);
   if (available <= 0 && qty === 0) {
     return (

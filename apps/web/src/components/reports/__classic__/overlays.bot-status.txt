@@ -1,0 +1,157 @@
+<span data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div>
+  <section aria-label="Filters" class="space-y-3">
+    <div class="gap-3 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:grid-cols-2" data-filter-grid-primary="true">
+      <div class="flex flex-col gap-1.5 min-w-0">
+        <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id1»-charter">
+          "Charter"
+        <select aria-describedby="«id1»-hint" class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id1»-charter">
+          <option value="all">
+            "All charters"
+          <option value="0e000000-0000-4000-8000-0000000000a1">
+            "Charter Alder · CH-A"
+          <option value="0e000000-0000-4000-8000-0000000000a2">
+            "Charter Birch"
+          <option value="0e000000-0000-4000-8000-0000000000a3">
+            "Charter Cedar · CH-C (archived)"
+          <option value="none">
+            "No charter"
+        <p class="leading-[18px] sm:not-sr-only sr-only text-[12px] text-muted-foreground" id="«id1»-hint">
+          "The charter each order was placed for."
+      <div class="flex flex-col gap-1.5 min-w-0" data-orders-placed="true">
+        <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id2»-range">
+          "Orders placed"
+        <div class="flex flex-col gap-2 lg:flex-row lg:items-center" data-orders-placed-row="true">
+          <select class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 lg:shrink-0 lg:w-44 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id2»-range">
+            <option value="all">
+              "All time"
+            <option value="today">
+              "Today"
+            <option value="week">
+              "This week"
+            <option value="month">
+              "This month"
+            <option value="30d">
+              "Last 30 days"
+            <option value="90d">
+              "Last 90 days"
+            <option value="year">
+              "This year"
+            <option value="custom">
+              "Custom range"
+          <div class="flex flex-1 flex-nowrap gap-1.5 items-center min-w-0" data-date-pair="true">
+            <button aria-expanded="false" aria-haspopup="dialog" aria-label="Start date" class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 flex flex-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-2 h-8 hover:border-ink-4 items-center max-sm:h-11 max-sm:text-base min-w-0 px-2.5 rounded-md text-[13px] text-foreground text-left transition-colors w-full" type="button">
+              <svg aria-hidden="true" class="h-3.5 lucide lucide-calendar-days shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 2v3">
+                <path d="M16 2v3">
+                <rect height="18" rx="2" width="18" x="3" y="3">
+                <path d="M3 9h18">
+                <path d="M8 13h.01">
+                <path d="M12 13h.01">
+                <path d="M16 13h.01">
+                <path d="M8 17h.01">
+                <path d="M12 17h.01">
+                <path d="M16 17h.01">
+              <span class="text-muted-foreground truncate">
+                "Start date"
+            <svg aria-hidden="true" class="h-3.5 lucide lucide-arrow-right shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M5 12h14">
+              <path d="m12 5 7 7-7 7">
+            <button aria-expanded="false" aria-haspopup="dialog" aria-label="End date" class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 flex flex-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-2 h-8 hover:border-ink-4 items-center max-sm:h-11 max-sm:text-base min-w-0 px-2.5 rounded-md text-[13px] text-foreground text-left transition-colors w-full" type="button">
+              <svg aria-hidden="true" class="h-3.5 lucide lucide-calendar-days shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                <path d="M8 2v3">
+                <path d="M16 2v3">
+                <rect height="18" rx="2" width="18" x="3" y="3">
+                <path d="M3 9h18">
+                <path d="M8 13h.01">
+                <path d="M12 13h.01">
+                <path d="M16 13h.01">
+                <path d="M8 17h.01">
+                <path d="M12 17h.01">
+                <path d="M16 17h.01">
+              <span class="text-muted-foreground truncate">
+                "End date"
+    <div class="gap-3 grid grid-cols-1 lg:grid-cols-4 sm:grid-cols-2" data-filter-grid="true">
+      <div class="flex flex-col gap-1.5">
+        <span class="font-medium leading-[18px] text-[12px] text-muted-foreground" id="«id3»-label">
+          "Status"
+        <button aria-controls="radix-«id4»" aria-expanded="true" aria-haspopup="dialog" aria-labelledby="«id3»-label «id3»-value" class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring gap-1.5 h-8 hover:border-ink-4 items-center max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground text-left transition-colors w-full" data-radix-popper-align="start" data-radix-popper-side="bottom" data-state="open" type="button">
+          <span class="flex-1 min-w-0 truncate" id="«id3»-value">
+            "Pending, In progress, Backordered, Delivered"
+          <svg aria-hidden="true" class="h-3.5 lucide lucide-chevron-down shrink-0 text-muted-foreground w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+            <path d="m6 9 6 6 6-6">
+      <div class="flex flex-col gap-1.5">
+        <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id5»-warehouse">
+          "Warehouse"
+        <select class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id5»-warehouse">
+          <option value="all">
+            "All warehouses you can see"
+          <option value="0e000000-0000-4000-8000-0000000000d1">
+            "North"
+      <div class="flex flex-col gap-1.5">
+        <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id6»-category">
+          "Category"
+        <select class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id6»-category">
+          <option value="all">
+            "All categories"
+          <option value="none">
+            "No category"
+      <div class="flex flex-col gap-1.5">
+        <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id7»-sort">
+          "Sort"
+        <select class="bg-card border border-line-strong disabled:cursor-not-allowed disabled:hover:border-line-strong disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 hover:border-ink-4 max-sm:h-11 max-sm:text-base px-2.5 rounded-md text-[13px] text-foreground transition-colors w-full" id="«id7»-sort">
+          <option value="copies">
+            "Most copies"
+          <option value="title">
+            "Title (A–Z)"
+          <option value="orders">
+            "Most orders"
+          <option value="latest">
+            "Latest order"
+    <form aria-label="Search books" class="flex flex-col gap-1.5 sm:max-w-md w-full" role="search">
+      <label class="font-medium leading-[18px] text-[12px] text-muted-foreground" for="«id8»-q">
+        "Search books"
+      <div class="relative">
+        <svg aria-hidden="true" class="-translate-y-1/2 absolute h-3.5 left-2.5 lucide lucide-search pointer-events-none text-muted-foreground top-1/2 w-3.5" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+          <path d="m21 21-4.34-4.34">
+          <circle cx="11" cy="11" r="8">
+        <input autocomplete="off" class="[&::-webkit-search-cancel-button]:hidden bg-card border border-[var(--ed-line-strong)] disabled:cursor-not-allowed disabled:opacity-50 file:bg-transparent file:border-0 file:font-medium file:text-[13px] flex focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-8 max-sm:h-11 max-sm:text-base pl-8 placeholder:text-muted-foreground pr-16 px-2.5 py-1 rounded-md text-[13px] transition-colors w-full" enterkeyhint="search" id="«id8»-q" inputmode="search" maxlength="100" placeholder="Title, SKU or ISBN" spellcheck="false" type="search" value="">
+        <div class="-translate-y-1/2 absolute flex gap-1 items-center right-1.5 top-1/2">
+      <p aria-live="polite" class="sr-only">
+<div data-radix-popper-content-wrapper="" style="position: fixed; left: 0px; top: 0px; transform: translate(0px, 4px); min-width: max-content; --radix-popper-available-width: 0px; --radix-popper-available-height: -4px; --radix-popper-anchor-width: 0px; --radix-popper-anchor-height: 0px; --radix-popper-transform-origin: 0% 0px;">
+  <div class="bg-popover border border-[var(--ed-line-strong)] data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 focus-visible:ring-0 focus-visible:ring-offset-0 outline-none p-3 rounded-lg shadow-md text-popover-foreground w-72 z-50" data-align="start" data-side="bottom" data-state="open" id="radix-«id4»" role="dialog" style="--radix-popover-content-transform-origin: var(--radix-popper-transform-origin); --radix-popover-content-available-width: var(--radix-popper-available-width); --radix-popover-content-available-height: var(--radix-popper-available-height); --radix-popover-trigger-width: var(--radix-popper-anchor-width); --radix-popover-trigger-height: var(--radix-popper-anchor-height);" tabindex="-1">
+    <fieldset class="space-y-1">
+      <legend class="font-medium mb-1.5 text-[13.5px] text-foreground">
+        "Status"
+      <label class="-mx-1.5 cursor-pointer flex gap-2.5 hover:bg-muted items-start leading-5 max-sm:min-h-11 min-h-8 px-1.5 py-1.5 rounded-md text-[13px]">
+        <input checked="" class="accent-foreground cursor-pointer h-4 mt-0.5 shrink-0 w-4" type="checkbox">
+        <span>
+          "Pending"
+      <label class="-mx-1.5 cursor-pointer flex gap-2.5 hover:bg-muted items-start leading-5 max-sm:min-h-11 min-h-8 px-1.5 py-1.5 rounded-md text-[13px]">
+        <input checked="" class="accent-foreground cursor-pointer h-4 mt-0.5 shrink-0 w-4" type="checkbox">
+        <span>
+          "In progress"
+          <span class="block leading-[18px] text-[12px] text-muted-foreground">
+            "In progress: Approved, Pick slip, Picking, Picked, Packaging, Staged (pickup), Ready, In transit."
+      <label class="-mx-1.5 cursor-pointer flex gap-2.5 hover:bg-muted items-start leading-5 max-sm:min-h-11 min-h-8 px-1.5 py-1.5 rounded-md text-[13px]">
+        <input checked="" class="accent-foreground cursor-pointer h-4 mt-0.5 shrink-0 w-4" type="checkbox">
+        <span>
+          "Backordered"
+      <label class="-mx-1.5 cursor-pointer flex gap-2.5 hover:bg-muted items-start leading-5 max-sm:min-h-11 min-h-8 px-1.5 py-1.5 rounded-md text-[13px]">
+        <input checked="" class="accent-foreground cursor-pointer h-4 mt-0.5 shrink-0 w-4" type="checkbox">
+        <span>
+          "Delivered"
+      <label class="-mx-1.5 cursor-pointer flex gap-2.5 hover:bg-muted items-start leading-5 max-sm:min-h-11 min-h-8 px-1.5 py-1.5 rounded-md text-[13px]">
+        <input class="accent-foreground cursor-pointer h-4 mt-0.5 shrink-0 w-4" type="checkbox">
+        <span>
+          "Denied"
+      <label class="-mx-1.5 cursor-pointer flex gap-2.5 hover:bg-muted items-start leading-5 max-sm:min-h-11 min-h-8 px-1.5 py-1.5 rounded-md text-[13px]">
+        <input class="accent-foreground cursor-pointer h-4 mt-0.5 shrink-0 w-4" type="checkbox">
+        <span>
+          "Cancelled"
+    <div class="border-border border-t flex gap-2 items-center justify-between mt-3 pt-3">
+      <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 border border-transparent disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-muted hover:text-foreground inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] transition-colors whitespace-nowrap" type="button">
+        "Reset to default"
+      <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-primary border border-transparent disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-primary/90 inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] text-primary-foreground transition-colors whitespace-nowrap" type="button">
+        "Apply"
+<span data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

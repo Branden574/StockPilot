@@ -1,6 +1,8 @@
 import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { classicMarkup, glassOnlyElements } from '@/test/classic-parity';
+
 /**
  * The Books page's server chain before rows: the two module checks run
  * together, the books gate still answers before any book is read, and the
@@ -64,6 +66,7 @@ const m = vi.hoisted(() => ({
   toggleProps: vi.fn(),
   emptyStateProps: vi.fn(),
   getWarehousesForRequest: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/link', async () => {
@@ -183,7 +186,11 @@ vi.mock('@/server/services/suppliers', () => ({
   SuppliersService: lookupSvc('listForLookups'),
 }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookupSvc('list') }));
-vi.mock('@/server/services/charters', () => ({ ChartersService: lookupSvc('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: async () => ({ list: async () => [], listLabels: m.charterLabels }),
+  },
+}));
 vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/services/lib/display-groups')>()),
   // As the real readers do, the client (a promise) is awaited inside a try.
@@ -197,7 +204,7 @@ vi.mock('@/server/services/lib/display-groups', async (importOriginal) => ({
   },
 }));
 
-import { ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
+import { effectivePermissions, ELSEWHERE_UNAVAILABLE_NOTE } from '@stockpilot/core';
 
 import { ClearWarehouseFilterButton } from '@/components/inventory/clear-warehouse-filter-button';
 import { createClient } from '@/lib/supabase/server';
@@ -212,7 +219,14 @@ const BOOK = {
   quantity_on_hand: 3,
   awaiting_first_receipt: false,
 };
-const LOOKUPS = { categories: [], locations: [], suppliers: [], tags: [], charters: [] };
+const LOOKUPS = {
+  categories: [],
+  locations: [],
+  suppliers: [],
+  tags: [],
+  charters: [],
+  unlistedCharters: [],
+};
 
 function logged<T>(name: string, fn: () => Promise<T>): Promise<T> {
   events.push(`${name}:start`);
@@ -276,6 +290,7 @@ beforeEach(() => {
   );
   m.loadInventoryList.mockImplementation(() => logged('list', async () => null));
   m.loadInventoryLookups.mockImplementation(async () => LOOKUPS);
+  m.charterLabels.mockImplementation(async () => []);
   m.loadInventoryTrendBuckets.mockImplementation(async () => ({}));
   m.resolveInventoryListImages.mockImplementation((_org: string, items: unknown[]) =>
     logged('images', async () => items),
@@ -309,6 +324,69 @@ afterEach(() => {
 function callPage(params: Record<string, string> = {}) {
   return BooksPage({ searchParams: Promise.resolve(params) });
 }
+
+/**
+ * B97 part 1: the table's charter lookup also names the archived and inactive
+ * charters, so a book tagged to one is no longer called "Generic"; the
+ * Charter filter keeps the active ones.
+ */
+describe('Books page: the Charter cell names archived charters (B97)', () => {
+  const ACTIVE = { id: 'ch-1', name: 'North Campus', code: 'NC' };
+  const ARCHIVED = { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' as const };
+  const charterLookup = () =>
+    (m.tableProps.mock.calls[0]![0] as { lookups: { charters: Map<string, unknown> } }).lookups
+      .charters;
+
+  it('manager: from the cached lookups', async () => {
+    m.loadInventoryLookups.mockImplementation(async () => ({
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+    }));
+    render(await callPage());
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it('manager, default view over the instant cap: from the cached list', async () => {
+    // No instant dataset (over the cap), so the default view is served by the
+    // cached list; only that payload names the archived charter.
+    m.loadInventoryDataset.mockImplementation(async () => null);
+    m.loadInventoryList.mockImplementation(async () => ({
+      items: [BOOK],
+      total: 1,
+      valueOnHand: 3,
+      ...LOOKUPS,
+      charters: [ACTIVE],
+      unlistedCharters: [ARCHIVED],
+      trends: {},
+      expectedCount: 0,
+    }));
+    render(await callPage());
+    expect(m.loadInventoryList).toHaveBeenCalled();
+    expect(m.inventoryList).not.toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).not.toHaveProperty('instant');
+    expect(charterLookup().get('ch-9')).toEqual({
+      name: 'Old Campus',
+      code: 'OC',
+      status: 'archived',
+    });
+    expect(charterLookup().get('ch-1')).toEqual({ name: 'North Campus', code: 'NC' });
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ charters: [ACTIVE] });
+  });
+
+  it("staff: from the member's own read of the archived and inactive charters", async () => {
+    h.role = 'staff';
+    m.charterLabels.mockImplementation(async () => [ARCHIVED]);
+    render(await callPage());
+    expect(m.charterLabels).toHaveBeenCalledWith({ exceptActive: true });
+    expect(charterLookup().get('ch-9')).toMatchObject({ name: 'Old Campus', status: 'archived' });
+  });
+});
 
 describe('Books page: server chain before rows', () => {
   it('the price_tracking check runs alongside the books gate, not after it', async () => {
@@ -885,6 +963,71 @@ describe('Books page: a staff page is planned group-aware', () => {
 });
 
 /**
+ * B68: Export (the toolbar menu and the bulk bar's button) showed to every
+ * member, while the export, its sample and export.csv answer only
+ * items:export, which staff and viewers lack by default. The page passes the
+ * member's EFFECTIVE permission (core can() over the request's set) at both of
+ * its table calls, so a grant and a revoke both count.
+ */
+describe('Books page: Export only for a member who holds items:export', () => {
+  /** Signs in as `role`, with a user-level override of items:export if given. */
+  function signedInAs(role: 'manager' | 'staff', granted?: boolean) {
+    h.role = role;
+    const permissions = effectivePermissions(
+      role,
+      [],
+      granted === undefined ? [] : [{ permission: 'items:export', granted }],
+    );
+    const ctx = { organizationId: 'org-1', userId: 'u-1', role, permissions };
+    m.requireOrgContext.mockImplementation(() => logged('ctx', async () => ctx));
+    m.withContext.mockImplementation(() => logged('withContext', async () => ctx));
+  }
+  /** Over the instant cap: the live list and the page's second table call. */
+  function overTheCap() {
+    m.loadInventoryDataset.mockImplementation(() => logged('dataset', async () => null));
+  }
+
+  it('a manager is offered it (instant mode)', async () => {
+    signedInAs('manager');
+    render(await callPage());
+    expect(m.tableProps).toHaveBeenCalledTimes(1);
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager is offered it (over the cap, the live list)', async () => {
+    signedInAs('manager');
+    overTheCap();
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('staff are not: they do not hold it by default', async () => {
+    signedInAs('staff');
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+
+  it('staff granted items:export are', async () => {
+    signedInAs('staff', true);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: true });
+  });
+
+  it('a manager whose items:export was revoked is not, at either table call', async () => {
+    signedInAs('manager', false);
+    render(await callPage());
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+
+    m.tableProps.mockClear();
+    overTheCap();
+    render(await callPage());
+    expect(m.inventoryList).toHaveBeenCalled();
+    expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canExport: false });
+  });
+});
+
+/**
  * Redesign P3.2: the Books list keeps its own Table / Grid choice
  * (sp_view_books), read on the server for the first paint.
  */
@@ -951,5 +1094,30 @@ describe('Books page: Cycle count in the bulk bar only for someone who can start
     );
     render(await callPage());
     expect(m.tableProps.mock.calls[0]![0]).toMatchObject({ canStartCount: false });
+  });
+});
+
+/**
+ * CLASSIC PARITY (Liquid Glass stage 3, items lane; IMPLEMENTATION-PLAN.md
+ * 4.6 and 4.7 item 3). The page's own markup (its frame, header and notices;
+ * the table is mocked here and has its own parity file in
+ * components/inventory/items.classic-parity.test.tsx), every inert hook
+ * stripped, must stay the file written before the stage 3 hooks went in.
+ */
+describe('Books page: classic parity of its own markup', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("the off rollout renders no glass-only element and today's markup", async () => {
+    const { container } = render(await callPage());
+    expect(glassOnlyElements(container)).toEqual([]);
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
+  });
+
+  it("the default rollout's markup, inert hooks stripped, is the same", async () => {
+    vi.stubEnv('NEXT_PUBLIC_LIQUID_GLASS', 'default');
+    const { container } = render(await callPage());
+    await expect(classicMarkup(container)).toMatchFileSnapshot('./__parity__/books-page.html');
   });
 });

@@ -9,9 +9,15 @@ import { IconMark } from '@/components/ui/icon-mark';
 import { getServerSession } from '@/lib/auth/session';
 import { env } from '@/lib/env';
 import { createAdminClient } from '@/lib/supabase/admin';
+// Liquid Glass's card on this page (styles/liquid-glass/pages/access.css): inert in Classic.
+import '@/styles/liquid-glass/pages/access.css';
 
 import { AcceptInviteButton } from './accept-button';
-import { inviteExpiredDescription } from './invite-copy';
+import {
+  INVITE_SIGN_IN_LINK,
+  INVITE_SIGN_IN_PROMPT,
+  inviteExpiredDescription,
+} from './invite-copy';
 import { InviteSignupForm } from './signup-form';
 
 /**
@@ -112,6 +118,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   // ground (no mesh), the brand link and the theme menu above one column.
   return (
     <ExternalShell
+      glassPage="access"
       width="md"
       topBar={
         <>
@@ -152,12 +159,12 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
         footer={
           signupOpen ? (
             <>
-              Already have an account?{' '}
+              {INVITE_SIGN_IN_PROMPT}{' '}
               <Link
                 href={`/signin?redirect=/invite/${token}`}
                 className="text-foreground font-medium hover:underline"
               >
-                Sign in
+                {INVITE_SIGN_IN_LINK}
               </Link>
             </>
           ) : undefined

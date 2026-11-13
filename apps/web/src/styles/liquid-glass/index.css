@@ -1,0 +1,20 @@
+/* Liquid Glass, the opt-in third appearance (stockpilot-work/liquid-glass/
+   IMPLEMENTATION-PLAN.md section 4). Imported once, from app/globals.css, right
+   after Tailwind, so cascade layer `lg` is declared after Tailwind's theme, base,
+   components and utilities layers and wins over them.
+
+   Only the global parts live here (first paint and every portal need them).
+   Page compositions are imported by their own route. Every rule in every file
+   is scoped to :root[data-appearance="liquid-glass"] and sits inside
+   @media screen (print.css is @media print only; visibility.css holds the two
+   show/hide rules), so the classic Dark and Light appearances never match a
+   glass rule and printing never gets glass (glass-scope.guard.test.ts). There
+   is no glass Tailwind variant or utility: everything is in these files. */
+@import './tokens.generated.css';
+@import './scene.css';
+@import './materials.css';
+@import './primitives.css';
+@import './shell.css';
+@import './states.css';
+@import './visibility.css';
+@import './print.css';

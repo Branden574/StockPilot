@@ -6,6 +6,8 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { can, formatCalendarDate, type Role } from '@stockpilot/core';
 
 import { Card } from '@/components/ui/card';
+import { GLASS_HEADER_ACTION, glassGrayCapsule } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { DataListScreen } from '@/components/data-list-screen';
 import { Pill } from '@/components/ui/pill';
 import { Mono } from '@/components/ui/text';
@@ -216,15 +218,28 @@ function HeaderAction({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
       style={({ pressed }) => [styles.headerActionFrame, { opacity: pressed ? 0.7 : 1 }]}
     >
-      <View style={[styles.headerAction, { borderColor: c.hair2, backgroundColor: c.card }]}>
+      <View
+        style={[
+          styles.headerAction,
+          { borderColor: c.hair2, backgroundColor: c.card },
+          // Liquid Glass: the small iOS gray capsule (.ios-btn.gray), 15/600 words.
+          lg && [glassGrayCapsule(lg), GLASS_HEADER_ACTION],
+        ]}
+      >
         <Icon size={14} color={c.ink} strokeWidth={1.6} />
-        <Mono size={11} tracking={0.04} color={c.ink} style={{ fontFamily: FONT.display }}>
+        <Mono
+          size={lg ? 15 : 11}
+          tracking={lg ? 0 : 0.04}
+          color={c.ink}
+          style={[{ fontFamily: FONT.display }, lg && lg.font.displaySemi]}
+        >
           {label}
         </Mono>
       </View>

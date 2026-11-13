@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   NEEDED_BY_IN_PAST_COPY,
   ORDER_ADD_WHILE_LOCKED_COPY,
+  ORDER_MAX_UNITS_PER_LINE,
   ORDER_PERMISSION_COPY,
   ORDER_WITHDRAWN_COPY,
   ORDER_NEEDS_CONNECTION_COPY,
@@ -12,6 +13,8 @@ import {
   STOREFRONT_SHIP_FROM_LOCKED_COPY,
   SUBMIT_ON_BEHALF_NOT_PERMITTED_COPY,
   SUBMIT_REMOVE_UNORDERABLE_COPY,
+  addAllTarget,
+  availableOf,
   initialCartState,
   type OrderCallResult,
   type OrderCatalogAnswer,
@@ -444,6 +447,30 @@ describe('quantities, kits and the server’s clock', () => {
     expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 10 }]);
     session.setQuantity(A, 0);
     expect(snap().cart?.lines).toEqual([]);
+  });
+
+  // "Add all" in the item details sheet and the quantity sheet: the line is
+  // set to core's target (everything available, never above one order's limit).
+  it('Add all sets the line to everything available, from an empty cart and from 5, never on top', async () => {
+    api.catalog.mockImplementation(async (_s, wh: string) => catalogAnswer(wh, 67));
+    await session.open(scope);
+    const item = snap().itemMap.get(A)!;
+    expect(addAllTarget(availableOf(item))).toBe(67);
+    expect(session.setQuantity(A, addAllTarget(availableOf(item)))).toBeNull();
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 67 }]);
+    session.setQuantity(A, 5);
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 5 }]);
+    expect(session.setQuantity(A, addAllTarget(availableOf(item)))).toBeNull();
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 67 }]);
+  });
+
+  it('Add all stops at the most one order can hold when more than that is available', async () => {
+    api.catalog.mockImplementation(async (_s, wh: string) => catalogAnswer(wh, 25_000));
+    await session.open(scope);
+    const item = snap().itemMap.get(A)!;
+    expect(session.setQuantity(A, addAllTarget(availableOf(item)))).toBeNull();
+    expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: ORDER_MAX_UNITS_PER_LINE }]);
+    expect(ORDER_MAX_UNITS_PER_LINE).toBe(10_000);
   });
 
   it('a kit is all or nothing, in core’s words when it does not fit', async () => {
@@ -1488,6 +1515,8 @@ describe('a line marked as not orderable can be lowered or removed, never raised
     expect(session.dispatch({ type: 'inc', itemId: A })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
     expect(session.dispatch({ type: 'add', itemId: A })).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
     expect(session.setQuantity(A, 5)).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
+    // Add all is the same raise: refused, and the line is not changed.
+    expect(session.setQuantity(A, addAllTarget(availableOf(snap().itemMap.get(A)!)))).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
     expect(snap().cart?.lines).toEqual([{ itemId: A, quantity: 2 }]);
     expect(snap().refusal).toBe(STOREFRONT_LINE_NOT_ORDERABLE_COPY);
     expect(session.dispatch({ type: 'dec', itemId: A })).toBeNull();

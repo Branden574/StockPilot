@@ -265,14 +265,14 @@ export function EmailSettingsCard(props: EmailSettingsCardProps) {
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <DialogContent>
-          <DialogHeader>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Cancel this email change?</DialogTitle>
             <DialogDescription>
               The verification links already sent will stop working and your sign-in email stays{' '}
               <span className="tabular-nums">{props.email}</span>.
             </DialogDescription>
           </DialogHeader>
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="ghost"
@@ -340,8 +340,8 @@ function ChangeEmailDialog(props: {
   return (
     <Dialog open={props.open} onOpenChange={close}>
       <DialogContent>
-        <form onSubmit={onSubmit} noValidate>
-          <DialogHeader>
+        <form data-glass="dialog-form" onSubmit={onSubmit} noValidate>
+          <DialogHeader data-glass="dialog-header">
             <DialogTitle>Change your email</DialogTitle>
             <DialogDescription>
               We will send a confirmation link to the new address and an approval link to{' '}
@@ -350,7 +350,7 @@ function ChangeEmailDialog(props: {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
+          <div data-glass="dialog-body" className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="newEmail">New email</Label>
               <Input
@@ -388,7 +388,7 @@ function ChangeEmailDialog(props: {
             </div>
           </div>
 
-          <DialogFooter>
+          <DialogFooter data-glass="dialog-footer">
             <Button
               type="button"
               variant="ghost"

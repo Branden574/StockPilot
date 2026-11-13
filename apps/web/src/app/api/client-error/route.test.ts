@@ -4,8 +4,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Security invariant (docket S43a): the client crash beacon is the one route on
- * the AAL1 allowlist (AAL1_ROUTES in src/test/api-step-up.guard.test.ts).
+ * Security invariant (docket S43a): the client crash beacon is on the AAL1
+ * allowlist (AAL1_ROUTES in src/test/api-step-up.guard.test.ts), beside the
+ * phone's sign-in and sign-out notes (app/api/v1/auth/step-up-pending.test.ts).
  *
  * withApiContext now refuses an account with a verified authenticator factor
  * until its session has the code. The error boundaries (app/error.tsx,

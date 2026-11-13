@@ -1,0 +1,134 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div aria-hidden="true" data-aria-hidden="true">
+<div aria-hidden="true" class="bg-black/70 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0 fixed inset-0 z-50" data-aria-hidden="true" data-state="open" style="pointer-events: auto;">
+<div aria-describedby="radix-«id3»" aria-labelledby="radix-«id2»" class="bg-card border-[var(--ed-line-strong)] border-l data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=closed]:slide-out-to-right data-[state=open]:animate-in data-[state=open]:duration-500 data-[state=open]:slide-in-from-right ease-out fixed flex flex-col gap-0 h-full inset-y-0 lg:max-w-2xl max-sm:border-l-0 md:max-w-2xl p-0 right-0 shadow-[0_10px_30px_rgba(0,0,0,0.25)] sm:max-w-xl sm:rounded-l-lg text-card-foreground transition w-full z-50" data-state="open" id="radix-«id1»" role="dialog" style="pointer-events: auto;" tabindex="-1">
+  <div class="border-b flex flex-col p-6 pr-12 space-y-1 text-left">
+    <h2 class="font-display font-medium text-lg tracking-[-0.02em]" id="radix-«id2»">
+      "Book A"
+    <p class="text-[13px] text-muted-foreground" id="radix-«id3»">
+      "Copies of this book requested: 30 in 3 orders"
+  <div class="flex-1 overflow-y-auto p-6">
+    <div class="space-y-4">
+      <dl class="border border-border gap-x-4 gap-y-2 grid grid-cols-[auto_minmax(0,1fr)] leading-5 px-4 py-3 rounded-lg text-[13px]" data-drawer-scope="true">
+        <dt class="text-muted-foreground">
+          "Book"
+        <dd class="min-w-0">
+          <span class="[overflow-wrap:anywhere] block font-medium">
+            "Book A"
+          <span class="block leading-[18px] mt-0.5 text-[12px] text-muted-foreground" data-book-identity="">
+            <span class="tabular-nums whitespace-nowrap" data-part="sku">
+              "SKU BK-A"
+            " · "
+            <span class="tabular-nums whitespace-nowrap" data-part="identifier">
+              "ISBN 9780140449136"
+            " · "
+            <span data-part="warehouse">
+              "North"
+            " · "
+            <span class="tabular-nums whitespace-nowrap" data-part="rack">
+              "Rack 12-B"
+        <dt class="text-muted-foreground">
+          "Charter"
+        <dd class="[overflow-wrap:anywhere] min-w-0">
+          "All charters"
+        <dt class="text-muted-foreground">
+          "Orders placed"
+        <dd class="min-w-0">
+          "All time"
+        <dt class="text-muted-foreground">
+          "Total requested"
+        <dd class="font-medium min-w-0">
+          "Copies of this book requested: 30 in 3 orders"
+      <div class="leading-[18px] space-y-1 text-[12.5px] text-muted-foreground">
+        <p>
+          "Status: Pending, In progress, Backordered, Delivered. Denied, cancelled and unconfirmed requests are left out."
+        <p>
+          "Warehouse: All warehouses you can see"
+      <div class="leading-[18px] space-y-1 text-[12.5px]">
+        <p class="font-medium">
+          "Recorded as fulfilled: 8 · Returned: 2"
+        <p class="text-muted-foreground">
+          "Recorded as fulfilled: units the order recorded as handed over. Since July 9, 2026 this is recorded at a signed hand-over; earlier orders recorded it when picking finished. It is not proof of delivery and is never subtracted."
+      <p class="leading-[18px] text-[12.5px] text-muted-foreground">
+        "As of 10:42 AM. An order opens as it is now, so its lines may differ if it changed after this time."
+      <div class="border border-border overflow-x-auto rounded-lg">
+        <table class="text-[13px] w-full">
+          <caption class="sr-only">
+            "Copies of this book requested: 30 in 3 orders"
+          <thead class="bg-sunk border-b border-border leading-[16.5px] text-[11px] text-muted-foreground tracking-[0.06em] uppercase">
+            <tr>
+              <th class="font-medium px-3 py-2.5 text-left whitespace-nowrap" scope="col">
+                "Order #"
+              <th class="font-medium px-3 py-2.5 text-left whitespace-nowrap" scope="col">
+                "Order date"
+              <th class="font-medium px-3 py-2.5 text-left" scope="col">
+                "Charter"
+              <th class="font-medium px-3 py-2.5 text-left" scope="col">
+                "Warehouse"
+              <th class="font-medium px-3 py-2.5 text-left" scope="col">
+                "Status"
+              <th class="font-medium px-3 py-2.5 text-right" scope="col">
+                "Copies of this book requested"
+          <tbody>
+            <tr class="border-border border-t hover:bg-muted transition-colors">
+              <th class="font-medium font-mono px-3 py-2 tabular-nums text-left text-xs whitespace-nowrap" scope="row">
+                <a class="hover:text-foreground hover:underline text-accent underline-offset-2" href="/dashboard/orders/0e000000-0000-4000-8000-000000000103?return=%2Fdashboard%2Freports%2Fbook-order-totals%3Fwarehouse%3Dall%26view%3D0e000000-0000-4000-8000-000000000f01">
+                  "SO-000003"
+              <td class="px-3 py-2 whitespace-nowrap">
+                "Sep 20, 2026"
+              <td class="[overflow-wrap:break-word] min-w-32 px-3 py-2">
+              <td class="px-3 py-2">
+                "North"
+              <td class="px-3 py-2">
+                "Pending"
+              <td class="font-mono px-3 py-2 tabular-nums text-right">
+                "5"
+            <tr class="border-border border-t hover:bg-muted transition-colors">
+              <th class="font-medium font-mono px-3 py-2 tabular-nums text-left text-xs whitespace-nowrap" scope="row">
+                <span title="Opening other people's orders needs approval access.">
+                  "SO-000002"
+                  <span class="sr-only">
+                    ". "
+                    "Opening other people's orders needs approval access."
+              <td class="px-3 py-2 whitespace-nowrap">
+                "Sep 20, 2026"
+              <td class="[overflow-wrap:break-word] min-w-32 px-3 py-2">
+              <td class="px-3 py-2">
+                "North"
+              <td class="px-3 py-2">
+                "Approved"
+              <td class="font-mono px-3 py-2 tabular-nums text-right">
+                "15"
+                <span class="font-sans ml-1 text-[12px] text-muted-foreground" data-line-ids="l2a,l2b" title="l2a, l2b">
+                  "(2 lines)"
+            <tr class="border-border border-t hover:bg-muted transition-colors">
+              <th class="font-medium font-mono px-3 py-2 tabular-nums text-left text-xs whitespace-nowrap" scope="row">
+                <span title="Opening other people's orders needs approval access.">
+                  "SO-000001"
+                  <span class="sr-only">
+                    ". "
+                    "Opening other people's orders needs approval access."
+              <td class="px-3 py-2 whitespace-nowrap">
+                "Sep 20, 2026"
+              <td class="[overflow-wrap:break-word] min-w-32 px-3 py-2">
+              <td class="px-3 py-2">
+                "North"
+              <td class="px-3 py-2">
+                "Approved"
+              <td class="font-mono px-3 py-2 tabular-nums text-right">
+                "10"
+      <nav aria-label="Order pages" class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <p aria-live="polite" class="tabular-nums text-[12.5px] text-muted-foreground">
+          "Showing 1–3 of 3 orders · Page 1 of 1"
+        <div class="flex gap-2">
+          <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-card border border-[var(--ed-line-strong)] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-muted inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] text-foreground transition-colors whitespace-nowrap" disabled="" type="button">
+            "Previous"
+          <button class="[&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg]:size-4 before:-translate-x-1/2 before:-translate-y-1/2 before:absolute before:content-none before:left-1/2 before:min-h-11 before:min-w-11 before:size-full before:top-1/2 bg-card border border-[var(--ed-line-strong)] disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring font-medium gap-1.5 h-7 hover:bg-muted inline-flex items-center justify-center max-sm:before:content-[''] pointer-coarse:before:content-[''] px-2.5 relative rounded-md text-[12.5px] text-foreground transition-colors whitespace-nowrap" disabled="" type="button">
+            "Next"
+  <button class="absolute focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-background focus-visible:ring-ring h-7 hover:bg-muted hover:text-foreground inline-flex items-center justify-center right-2.5 rounded-md text-muted-foreground top-2.5 transition-colors w-7" type="button">
+    <svg aria-hidden="true" class="h-4 lucide lucide-x w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M18 6 6 18">
+      <path d="m6 6 12 12">
+    <span class="sr-only">
+      "Close"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

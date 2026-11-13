@@ -25,6 +25,12 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { BundlesService } from '@/server/services/bundles';
 import { formatNumber, formatRelative } from '@/lib/utils';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 /** The page area (DESIGN-SPEC 4 and 5.3): max 1320, 28 / 32 / 64 padding, a
  *  16 px gutter on a phone, 16 px between blocks. The same box the loading
  *  skeleton draws. */
@@ -61,7 +67,7 @@ export default async function BundlesListPage({
   const bundles = await svc.list({ search, includeArchived: isArchivedView });
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="bundles">
       <PageHeader
         title="Bundles"
         titleId="bundles-title"

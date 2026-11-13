@@ -1,0 +1,110 @@
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">
+<div aria-hidden="true" data-aria-hidden="true">
+  <div class="mx-auto flex w-full max-w-[880px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div class="flex min-w-0 flex-col" data-slot="page-header">
+      <div class="mb-2">
+        <a href="/dashboard/orders/11111111-1111-4111-8111-111111111111">
+          "← Back to order"
+      <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+        <div class="min-w-0 max-w-full">
+          <div class="min-w-0">
+            <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+              <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+                "Pick slip"
+            <div class="text-muted-foreground text-[13.5px] mt-0.5">
+              "Order "
+              <span class="font-mono">
+                "#"
+                "11111111"
+              " ·"
+              ␣
+              "Robin Example"
+    <div>
+      <div class="border-border bg-card overflow-hidden rounded-lg border" data-testid="digital-pick">
+        <ul class="divide-border divide-y">
+          <li class="px-[18px] py-3" data-testid="digital-pick-line">
+            <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <div class="min-w-0 flex-1 basis-56">
+                <div class="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                  "Staff Polo, Navy, M"
+                <div class="text-muted-foreground mt-0.5 flex flex-wrap gap-x-2 font-mono text-[11.5px] leading-[18px]">
+                  <span>
+                    "APP-POLO-NVY-M"
+                  <span class="font-sans text-[12px]">
+                    "requested "
+                    "4"
+              <div class="flex items-center gap-2">
+                <input aria-label="Picked quantity for Staff Polo, Navy, M" class="flex rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base bg-sunk h-8 w-[72px] text-right font-mono tabular-nums" id="pick-line-LA" inputmode="numeric" max="4" min="0" placeholder="Qty" type="number" value="2">
+                <span class="text-muted-foreground min-w-[6ch] font-mono text-[12.5px] tabular-nums">
+                  "of "
+                  "4"
+                <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] min-w-[72px] max-sm:h-11 max-sm:px-4" type="button">
+                  <svg aria-hidden="true" class="lucide lucide-check h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M20 6 9 17l-5-5">
+                  "Save"
+          <li class="px-[18px] py-3" data-testid="digital-pick-line">
+            <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <div class="min-w-0 flex-1 basis-56">
+                <div class="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                  "Safety Vest, Hi-Vis"
+                <div class="text-muted-foreground mt-0.5 flex flex-wrap gap-x-2 font-mono text-[11.5px] leading-[18px]">
+                  <span>
+                    "SAF-VEST-HV"
+                  <span class="font-sans text-[12px]">
+                    "requested "
+                    "6"
+              <div class="flex items-center gap-2">
+                <input aria-label="Picked quantity for Safety Vest, Hi-Vis" class="flex rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base bg-sunk h-8 w-[72px] text-right font-mono tabular-nums" id="pick-line-LB" inputmode="numeric" max="6" min="0" placeholder="Qty" type="number" value="">
+                <span class="text-muted-foreground min-w-[6ch] font-mono text-[12.5px] tabular-nums">
+                  "of "
+                  "6"
+                <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] min-w-[72px] max-sm:h-11 max-sm:px-4" type="button">
+                  <svg aria-hidden="true" class="lucide lucide-check h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M20 6 9 17l-5-5">
+                  "Save"
+          <li class="px-[18px] py-3" data-testid="digital-pick-line">
+            <div class="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+              <div class="min-w-0 flex-1 basis-56">
+                <div class="text-[13.5px] font-medium leading-5 [overflow-wrap:anywhere]">
+                  "Whiteboard Markers, 4-pack"
+                <div class="text-muted-foreground mt-0.5 flex flex-wrap gap-x-2 font-mono text-[11.5px] leading-[18px]">
+                  <span>
+                    "OFF-MRK-4PK"
+                  <span class="font-sans text-[12px]">
+                    "requested "
+                    "10"
+              <div class="flex items-center gap-2">
+                <input aria-label="Picked quantity for Whiteboard Markers, 4-pack" class="flex rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base bg-sunk h-8 w-[72px] text-right font-mono tabular-nums" id="pick-line-LC" inputmode="numeric" max="10" min="0" placeholder="Qty" type="number" value="10">
+                <span class="text-muted-foreground min-w-[6ch] font-mono text-[12.5px] tabular-nums">
+                  "of "
+                  "10"
+                <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-7 px-2.5 text-[12.5px] min-w-[72px] max-sm:h-11 max-sm:px-4" type="button">
+                  <svg aria-hidden="true" class="lucide lucide-check h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M20 6 9 17l-5-5">
+                  "Save"
+        <div class="border-border flex justify-end border-t px-[18px] py-3.5">
+          <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3.5 text-[13px] max-sm:h-11 max-sm:px-5">
+            "Complete picking"
+            " (partial)"
+<div aria-hidden="true" class="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" data-aria-hidden="true" data-state="open" style="pointer-events: auto;">
+<div aria-describedby="radix-«id3»" aria-labelledby="radix-«id2»" class="bg-card text-card-foreground fixed left-[50%] top-[50%] z-50 grid w-[calc(100%-1rem)] translate-x-[-50%] translate-y-[-50%] gap-4 rounded-lg border p-4 shadow-[0_10px_30px_rgba(0,0,0,0.25)] duration-200 sm:p-6 max-h-[calc(100dvh-1rem)] overflow-y-auto sm:max-h-[calc(100dvh-2rem)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] max-w-md" data-state="open" data-testid="completion-confirm" id="radix-«id1»" role="dialog" style="pointer-events: auto;" tabindex="-1">
+  <div class="flex flex-col space-y-1.5 text-center sm:text-left">
+    <h2 class="font-display text-lg font-medium leading-tight tracking-[-0.02em]" id="radix-«id2»">
+      "Before you complete picking"
+    <div class="text-muted-foreground text-[13px] space-y-2" id="radix-«id3»">
+      <p>
+        "Not everything will be picked. Staff Polo, Navy, M: 2 of 4; Safety Vest, Hi-Vis: 0 of 6. They will be owed at hand-over, or you can remove them from the order first."
+      <p>
+        "Stock couldn't be checked. Picking may come up short."
+  <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3">
+      "Review short lines"
+    <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-transparent font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] bg-primary text-primary-foreground hover:bg-primary/90 h-8 px-3.5 text-[13px]">
+      "Complete picking"
+  <button class="text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-ring focus-visible:ring-offset-background absolute right-2.5 top-2.5 inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:pointer-events-none" type="button">
+    <svg aria-hidden="true" class="lucide lucide-x h-4 w-4" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M18 6 6 18">
+      <path d="m6 6 12 12">
+    <span class="sr-only">
+      "Close"
+<span aria-hidden="true" data-aria-hidden="true" data-radix-focus-guard="" style="opacity: 0; position: fixed; pointer-events: none; outline-color: none; outline-style: none; outline-width: initial;" tabindex="0">

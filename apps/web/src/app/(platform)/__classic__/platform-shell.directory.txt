@@ -1,0 +1,181 @@
+<div>
+  <div class="bg-background min-h-screen">
+    <header class="border-border bg-background sticky top-0 z-30 border-b" data-slot="platform-topbar">
+      <div class="mx-auto flex min-h-14 w-full min-w-0 max-w-[1320px] flex-wrap items-center gap-x-4 px-4 max-lg:pt-2 sm:px-6" data-slot="platform-topbar-row">
+        <a class="order-1 inline-flex h-10 shrink-0 items-center gap-2.5 rounded-md font-display text-[15px] font-semibold tracking-[-0.01em]" data-prefetch="undefined" href="/platform">
+          <span aria-hidden="true" class="bg-foreground text-background inline-grid size-[22px] place-items-center rounded-[5px] text-[13px] font-semibold">
+            "S"
+          <span>
+            "StockPilot "
+            <span class="text-muted-foreground">
+              "/ Platform"
+        <nav aria-label="Platform" class="flex min-w-0 flex-wrap items-center gap-1 order-3 basis-full max-lg:pb-2 lg:order-2 lg:flex-1 lg:basis-auto" data-slot="platform-nav">
+          <a aria-current="page" class="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:h-11 bg-muted text-foreground font-medium" data-prefetch="undefined" href="/platform">
+            <svg aria-hidden="true" class="lucide lucide-building-complex lucide-building-2 hidden h-3.5 w-3.5 sm:block" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M10 12h4">
+              <path d="M10 8h4">
+              <path d="M14 21v-3a2 2 0 0 0-4 0v3">
+              <path d="M6 10H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-2">
+              <path d="M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16">
+            "Organizations"
+          <a class="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:h-11 text-ink-2 hover:bg-muted hover:text-foreground" data-prefetch="undefined" href="/platform/provision">
+            <svg aria-hidden="true" class="lucide lucide-circle-plus lucide-plus-circle hidden h-3.5 w-3.5 sm:block" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="10">
+              <path d="M8 12h8">
+              <path d="M12 8v8">
+            "Provision"
+          <a class="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:h-11 text-ink-2 hover:bg-muted hover:text-foreground" data-prefetch="undefined" href="/platform/support">
+            <svg aria-hidden="true" class="lucide lucide-life-buoy hidden h-3.5 w-3.5 sm:block" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="12" cy="12" r="10">
+              <path d="m4.93 4.93 4.24 4.24">
+              <path d="m14.83 9.17 4.24-4.24">
+              <path d="m14.83 14.83 4.24 4.24">
+              <path d="m9.17 14.83-4.24 4.24">
+              <circle cx="12" cy="12" r="4">
+            "Support"
+          <a class="inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-[13px] transition-colors focus-visible:ring-inset focus-visible:ring-offset-0 max-sm:h-11 text-ink-2 hover:bg-muted hover:text-foreground" data-prefetch="undefined" href="/platform/audit">
+            <svg aria-hidden="true" class="lucide lucide-file-lock lucide-file-lock-2 hidden h-3.5 w-3.5 sm:block" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 9.8V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.706.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2h-3">
+              <path d="M14 2v5a1 1 0 0 0 1 1h5">
+              <path d="M9 17v-2a2 2 0 0 0-4 0v2">
+              <rect height="5" rx="1" width="8" x="3" y="17">
+            "Audit"
+          <span class="border-line-strong text-muted-foreground ml-2 inline-flex h-5 shrink-0 items-center gap-1 whitespace-nowrap rounded-full border px-2 text-[10.5px] font-medium uppercase tracking-[0.08em] max-sm:ml-0" data-slot="platform-admin-marker">
+            <svg aria-hidden="true" class="lucide lucide-shield-alert h-3 w-3" fill="none" height="24" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" stroke="currentColor" viewBox="0 0 24 24" width="24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z">
+              <path d="M12 8v4">
+              <path d="M12 16h.01">
+            "Platform admin"
+        <div class="order-2 ml-auto flex min-w-0 items-center gap-3 lg:order-3">
+          <span class="text-muted-foreground hidden min-w-0 truncate text-[12.5px] sm:inline">
+            "operator@example.test"
+          <a class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-7 px-2.5 text-[12.5px] shrink-0" data-prefetch="undefined" href="/dashboard">
+            "← My workspace"
+    <main>
+      <div class="mx-auto flex w-full min-w-0 flex-col gap-4 px-4 pb-16 pt-7 sm:px-8 max-w-[1320px]" data-slot="platform-page">
+        <div class="flex min-w-0 flex-col" data-slot="page-header">
+          <div class="flex min-w-0 flex-wrap justify-between gap-4 items-end">
+            <div class="min-w-0 max-w-full">
+              <div class="min-w-0">
+                <div class="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                  <h1 class="text-foreground min-w-0 font-medium tracking-[-0.025em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[28px] leading-[1.5]">
+                    "Organizations"
+                <div class="text-muted-foreground text-[13.5px] mt-0.5">
+                  "Every organization on the platform. Click one to view its data, manage billing, or act as it."
+        <div aria-label="Platform totals" class="border-border bg-card overflow-hidden rounded-lg border supports-[overflow:clip]:overflow-clip" data-slot="stat-strip" data-variant="detail" role="group">
+          <div class="[&>*]:border-border -mb-px -mr-px grid [&>*:last-child]:border-r-0 [&>*]:border-b [&>*]:border-r grid-cols-[repeat(auto-fit,minmax(min(100%,150px),1fr))]">
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Organizations"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "1,234"
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Users"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "56"
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Items"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "7,890"
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Inventory value"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "$12,346"
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Purchase orders"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "11"
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Orders"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "22"
+            <div class="min-w-0 px-[18px] py-4" data-slot="stat-strip-item">
+              <div class="text-muted-foreground text-[12.5px] leading-[18.75px]">
+                "Movements"
+              <div class="font-medium tabular-nums tracking-[-0.02em] [font-family:var(--font-display)] [overflow-wrap:anywhere] text-[24px] leading-9 text-foreground">
+                "33"
+        <form class="flex flex-wrap items-center gap-2" method="GET">
+          <input aria-label="Search organizations" class="bg-card flex h-8 w-full rounded-md border border-[var(--ed-line-strong)] px-2.5 py-1 text-[13px] transition-colors file:border-0 file:bg-transparent file:text-[13px] file:font-medium placeholder:text-muted-foreground focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 max-sm:h-11 max-sm:text-base min-w-0 max-w-sm flex-1 basis-56" name="q" placeholder="Search by name or slug…" type="search" value="">
+          <button class="relative inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md border font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 before:absolute before:left-1/2 before:top-1/2 before:size-full before:min-h-11 before:min-w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-none max-sm:before:content-[''] pointer-coarse:before:content-[''] border-[var(--ed-line-strong)] bg-card text-foreground hover:bg-muted h-8 text-[13px] px-3 max-sm:h-11" type="submit">
+            "Search"
+        <div class="flex flex-col gap-2">
+          <div aria-label="Organizations" class="border-border bg-card w-full min-w-0 overflow-x-auto rounded-lg border focus-visible:ring-ring focus-visible:ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2" data-slot="platform-table" role="region" tabindex="0">
+            <table class="w-full caption-bottom text-[13.5px]" style="min-width: 720px;">
+              <thead class="[&_tr]:border-b">
+                <tr class="data-[state=selected]:bg-success-wash border-b transition-colors hover:bg-transparent">
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    "Organization"
+                  <th class="text-muted-foreground px-3 py-2.5 text-left align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    "Billing"
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                    "Members"
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right">
+                    "Items"
+                  <th class="text-muted-foreground px-3 py-2.5 align-middle text-[11px] font-medium uppercase leading-[16.5px] tracking-[0.06em] first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right" title="The day each organization was created, in its own time zone.">
+                    "Created"
+              <tbody class="[&_tr:last-child]:border-0">
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <a class="group block min-w-0" data-prefetch="false" href="/platform/orgs/org-1">
+                      <div class="text-foreground font-medium group-hover:underline">
+                        "Example Org 1"
+                      <div class="text-muted-foreground text-[12px]">
+                        <span class="font-mono text-[11.5px]">
+                          "example-1"
+                        " · Education"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-success-wash text-success">
+                      "Pro · Comped"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono tabular-nums">
+                    "3"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono tabular-nums">
+                    "10"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+                    "31 Dec 2025"
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <a class="group block min-w-0" data-prefetch="false" href="/platform/orgs/org-2">
+                      <div class="text-foreground font-medium group-hover:underline">
+                        "Example Org 2"
+                      <div class="text-muted-foreground text-[12px]">
+                        <span class="font-mono text-[11.5px]">
+                          "example-2"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-transparent bg-warning-wash text-warning">
+                      "Business · Trial — 9d left"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono tabular-nums">
+                    "6"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono tabular-nums">
+                    "20"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+                    "31 Dec 2025"
+                <tr class="hover:bg-muted data-[state=selected]:bg-success-wash border-b transition-colors">
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <a class="group block min-w-0" data-prefetch="false" href="/platform/orgs/org-3">
+                      <div class="text-foreground font-medium group-hover:underline">
+                        "Example Org 3"
+                      <div class="text-muted-foreground text-[12px]">
+                        <span class="font-mono text-[11.5px]">
+                          "example-3"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0">
+                    <div class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-px text-xs/[18px] font-normal transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 border-[var(--ed-line-strong)] bg-sunk text-[var(--ed-ink-2)]">
+                      "Starter · Stripe"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono tabular-nums">
+                    "9"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-right font-mono tabular-nums">
+                    "30"
+                  <td class="px-3 py-[var(--row-py)] align-middle first:pl-4 last:pr-4 [&:has([role=checkbox])]:pr-0 text-muted-foreground whitespace-nowrap text-right text-[12.5px]">
+                    "31 Dec 2025"
+          <p class="text-muted-foreground text-[12.5px]">
+            "3"
+            " organization"
+            "s"
+            "."
+        <div class="border-border mt-6 border-t pt-6">
+          <div data-testid="passphrase-form">
+            "true"

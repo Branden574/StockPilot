@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   items: [] as Array<Record<string, unknown>>,
   tableProps: vi.fn(),
   list: vi.fn(),
+  charterLabels: vi.fn(),
 }));
 
 vi.mock('next/headers', () => ({
@@ -80,6 +81,11 @@ vi.mock('@/server/services/categories', () => ({ CategoriesService: lookup('list
 vi.mock('@/server/services/locations', () => ({ LocationsService: lookup('list') }));
 vi.mock('@/server/services/suppliers', () => ({ SuppliersService: lookup('listForLookups') }));
 vi.mock('@/server/services/tags', () => ({ TagsService: lookup('list') }));
+vi.mock('@/server/services/charters', () => ({
+  ChartersService: {
+    forCurrentUser: vi.fn(async () => ({ listLabels: h.charterLabels })),
+  },
+}));
 vi.mock('@/server/services/item-images', () => ({
   ItemImagesService: {
     forCurrentUser: vi.fn(async () => ({
@@ -111,6 +117,45 @@ beforeEach(() => {
     elsewhereUnavailable: false,
   }));
   h.total = 1;
+  h.charterLabels.mockImplementation(async () => []);
+});
+
+/**
+ * B97 part 1: the Rentals items list built its table lookups without
+ * charters, and the Charter column is always shown, so every rental item
+ * tagged to a charter read "Generic". It now names each charter, active or
+ * not (marked archived or inactive), from the member's own read.
+ */
+describe("Rentals items: the Charter cell names the item's charter (B97)", () => {
+  it('every charter, by its code, with its status', async () => {
+    h.charterLabels.mockImplementation(async () => [
+      { id: 'ch-1', name: 'North Campus', code: 'NC', status: 'active' },
+      { id: 'ch-9', name: 'Old Campus', code: 'OC', status: 'archived' },
+    ]);
+    await renderPage();
+    expect(h.charterLabels).toHaveBeenCalledWith();
+    const { charters } = (
+      h.tableProps.mock.calls[0]![0] as {
+        lookups: { charters: Map<string, unknown> };
+      }
+    ).lookups;
+    expect(charters.get('ch-1')).toEqual({ name: 'North Campus', code: 'NC', status: 'active' });
+    expect(charters.get('ch-9')).toEqual({ name: 'Old Campus', code: 'OC', status: 'archived' });
+  });
+
+  it('a failed read names none, and the list still renders', async () => {
+    h.charterLabels.mockImplementation(async () => {
+      throw new Error('statement timeout');
+    });
+    await renderPage();
+    expect(h.tableProps).toHaveBeenCalledTimes(1);
+    const { charters } = (
+      h.tableProps.mock.calls[0]![0] as {
+        lookups: { charters?: Map<string, unknown> };
+      }
+    ).lookups;
+    expect(charters?.size ?? 0).toBe(0);
+  });
 });
 
 describe('Rentals items: the Table / Grid choice comes from its own cookie', () => {
@@ -263,5 +308,25 @@ describe('Rentals items: a filter that leaves nothing is the table, with its fil
       // The search box holds the search.
       initialQuery: params.q,
     });
+  });
+});
+
+// B68: the toolbar and the bulk bar draw Export only when the page passes
+// canExport, and this page passes none, even to a manager who holds
+// items:export: every export reads only non-rental items (list() keeps
+// is_rental = false without rentalsOnly, and the selected read filters it), so
+// Export here saved items from the Items list, or a file with no rows. The
+// table's default (false) is pinned in inventory-table.export-permission.test.tsx.
+describe('Rentals items: no Export, for anyone (B68)', () => {
+  it('even a manager who holds items:export gets no canExport', async () => {
+    vi.mocked(requireOrgContext).mockResolvedValueOnce({
+      organizationId: 'org-1',
+      userId: 'u1',
+      role: 'manager',
+      permissions: new Set(['items:create', 'items:export']),
+    } as never);
+    await renderPage();
+    const props = h.tableProps.mock.calls[0]![0] as Record<string, unknown>;
+    expect(props.canExport ?? false).toBe(false);
   });
 });

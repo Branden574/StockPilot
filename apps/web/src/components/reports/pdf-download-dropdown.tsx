@@ -112,9 +112,16 @@ export function PdfDownloadDropdown({
           <ChevronDown aria-hidden className="text-muted-foreground -mr-0.5 !size-3.5" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className={note ? 'w-64' : 'w-56'}>
+      <DropdownMenuContent
+        align="end"
+        className={note ? 'w-64' : 'w-56'}
+        data-glass-role="report-pdf-menu"
+      >
         {note ? (
-          <DropdownMenuLabel className="text-muted-foreground text-[12px] font-normal leading-[18px]">
+          <DropdownMenuLabel
+            className="text-muted-foreground text-[12px] font-normal leading-[18px]"
+            data-glass-role="report-pdf-note"
+          >
             {note}
           </DropdownMenuLabel>
         ) : null}
@@ -145,7 +152,9 @@ export function PdfDownloadDropdown({
             <FileX2 className="text-ink-2 mr-2 h-4 w-4 self-start" />
             <div className="flex-1">
               <div>{labels?.withoutImages ?? 'Without images'}</div>
-              <div className="text-muted-foreground text-[11.5px]">Faster · smaller file</div>
+              <div className="text-muted-foreground text-[11.5px]" data-glass-role="report-pdf-sub">
+                Faster · smaller file
+              </div>
             </div>
           </a>
         </DropdownMenuItem>

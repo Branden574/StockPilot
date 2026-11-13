@@ -49,6 +49,7 @@ export function DetailSection({
   return (
     <section
       data-slot="detail-section"
+      data-glass="panel"
       className={cn(
         'border-border bg-card text-card-foreground min-w-0 overflow-hidden rounded-lg border',
         className,

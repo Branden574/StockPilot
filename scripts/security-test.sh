@@ -164,6 +164,11 @@ PGTAP_TESTS=(
   # Per-person release state. Own-row RLS is the control, and its writer is
   # SECURITY INVOKER precisely so it has no power beyond those policies.
   supabase/tests/0353_user_release_state.test.sql
+  # A person's chosen appearance (Liquid Glass, 0418 placeholder number):
+  # own-row RLS on the same shape, no delete, anon has nothing, only the known
+  # Design and Theme words are stored and a row with neither is refused, a
+  # save of one column keeps the other, and the row goes with the account.
+  supabase/tests/0418_user_appearance.test.sql
   supabase/tests/0354_module_enabled_honours_comp.test.sql
 
   # Direct-write lockdown (Phase 0 S1/S2, 2026-09-24): the ledger flag and the
@@ -793,6 +798,38 @@ PGTAP_TESTS=(
   # The two-session proofs are scripts/db-concurrency/0415_kit_races.sh; the
   # lock footprint is scripts/db-concurrency/0415_migration_lock_footprint.sh.
   supabase/tests/0415_bundle_component_checks.test.sql
+  # Approver warehouse scope (0416, security slice E): approve_order_request,
+  # approve_partial, close_partial, resume_fulfillment and reopen_picking
+  # refuse a caller without write access to the order's warehouse
+  # (user_can_access_warehouse 'write', the order update policy's term;
+  # 42501 forbidden, hint warehouse_write), so a staff member granted
+  # orders:approve acts only where they work and a viewer granted it
+  # nowhere; owners, admins and managers are unaffected. cancel_order_request
+  # asks it on the approver's path only, decided on the row it locks (the
+  # requester's own pending cancel asks no warehouse), and an order with no
+  # requester account (a public link, a deleted account) is nobody's own
+  # order, so only an approver cancels it; the person who placed an order
+  # cancels it as its requester only while they hold orders:request there
+  # (has_permission: a member removed from the organization, a disabled
+  # account, a revoked member and a portal customer are refused). Every
+  # restated body is production's with its added blocks removed, and taking
+  # each block out lets the refused call through. The two-session proofs are
+  # scripts/db-concurrency/0416_cancel_scope_race.sh; the lock footprint is
+  # scripts/db-concurrency/0416_migration_lock_footprint.sh.
+  supabase/tests/0416_order_functions_warehouse_scope.test.sql
+  # Recovery codes at aal2 (0417, docket S50b; no check reads the number):
+  # the database now asks for the same two-step sign-in level the app
+  # already asks for before it makes new recovery codes.
+  # generate_mfa_recovery_codes() refuses an aal1 token, a token with no aal
+  # claim and the request.jwt.claim.sub-only setup (42501, hint aal2_required,
+  # the Settings action's sentence) before it touches a row, so the person's
+  # codes stay as they were; an aal2 token still makes ten that replace the old
+  # set. The body is 0103's plus the five lines tagged S50b (taking them out
+  # lets the refused call through), the header and the ACL are byte for byte
+  # as before, consume_mfa_recovery_code() is not changed, and the migration's
+  # own preflight is replayed from the recorded statements. The lock footprint
+  # is scripts/db-concurrency/0417_migration_lock_footprint.sh.
+  supabase/tests/0417_recovery_codes_need_aal2.test.sql
   # Permission override updates (0431, docket S62): the database asks for the
   # same permission the app asks before a restriction changes. The UPDATE
   # rules of user_permission_overrides and role_permission_overrides ask of
@@ -957,7 +994,7 @@ WEB_TESTS=(
   # refuses an account with a verified authenticator factor whose session is
   # not aal2, on both paths, right after the identity check and before any
   # read (the route's own 401); the phone's snapshot end to end; the client
-  # crash beacon, the one route on the AAL1 allowlist; the two OAuth callbacks
+  # crash beacon, on the AAL1 allowlist; the two OAuth callbacks
   # that build their own principal ask the same question; and the sweep that
   # holds every route handler under src/app to the rule or to a reviewed list
   # (core's stepUpOwed truth table is in MANIFEST 4).
@@ -969,6 +1006,13 @@ WEB_TESTS=(
   src/lib/auth/api-context.refresh-swap.test.ts
   src/app/api/v1/mobile/snapshot/route.step-up.test.ts
   src/app/api/client-error/route.test.ts
+  # The phone's sign-in and sign-out notes (S5a), the other two routes on the
+  # AAL1 allowlist: an aal1 session of an account with an authenticator writes
+  # the sign-in row (code owed) and the device note, and its sign-out revokes
+  # and names the other sessions, through the REAL withApiContext; the same
+  # session still gets 401 from the push registration beside them, and
+  # withApiContext without the opt-out still answers it null.
+  src/app/api/v1/auth/step-up-pending.test.ts
   src/app/api/integrations/quickbooks/callback/route.test.ts
   src/app/api/integrations/sage_intacct/callback/route.test.ts
   src/test/api-step-up.guard.test.ts
@@ -1061,6 +1105,27 @@ WEB_TESTS=(
   src/server/actions/mfa-recovery.held-reads.test.ts
   src/server/actions/profile.held-reads.test.ts
   src/server/actions/email-change.held-reads.test.ts
+  # S5a: the phone's sign-in and sign-out reach the server. Each is one Audit
+  # log row per session, with a hashed session reference and never the session
+  # id, written only for a verified bearer token of the account itself; the
+  # phone's sign-out revokes the account's other sessions and names them on
+  # the sessions channel only after the revoke answered. That channel is
+  # public, so no path names a live session on it: "Sign out all other devices",
+  # Change password and the phone name the sessions they ended, never the one
+  # that stays (the guard holds every server keepId to the literal null), and
+  # "Sign out all other devices" names them only after its revoke answered
+  # without error. The new-device email goes out only for a device the call
+  # itself recorded (one per phone install) and its webhook event reaches
+  # accepted, non-act-as memberships only. The phone's device name comes from
+  # the allowlisted fields alone, never its User-Agent, and the sign-in note
+  # keeps only the device family in the Audit row and the organization's
+  # activity. The auth audit helpers are server code, never Server Actions.
+  src/app/api/v1/auth/signed-in/route.test.ts
+  src/app/api/v1/auth/signed-in/route.device-feed.test.ts
+  src/app/api/v1/auth/signed-out/route.test.ts
+  src/lib/auth/login-device.test.ts
+  src/test/session-revoked-payload.guard.test.ts
+  src/server/services/auth-audit.guard.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
@@ -1104,6 +1169,14 @@ WEB_TESTS=(
   # GRANT or REVOKE on public or an ALTER DEFAULT PRIVILEGES ... GRANT fails
   # the file on its own.
   src/test/migration-grants.guard.test.ts
+  # T24: a pgTAP pin that says a database function writes nothing, or only
+  # what the pin names, reads the write forms of the invariant suite
+  # (_sec_inv_writer_re in security_invariants.test.sql, proved form by form
+  # by INV-30b): the whole pattern or its UPDATE arm byte for byte, or the
+  # five bare verbs. A pin with a narrower list of its own fails. The five
+  # pins that carry the suite's forms keep, beside them, the public-qualified
+  # form they held before; taking that line out fails too.
+  src/test/pgtap-write-pins.guard.test.ts
   # S6-A — rental checkout, return and cancel answer an internal failure with
   # a fixed sentence, never the raw PostgREST text (the phone and the web
   # toast both show the message verbatim). The route and action pin the
@@ -1141,6 +1214,12 @@ WEB_TESTS=(
   # marker.
   src/app/api/no-raw-error-text.guard.test.ts
   src/server/lib/api-error-response.test.ts
+  # S31: a Server Action answers a failure it did not expect with a fixed
+  # sentence, never the error's own text, and reports it with the action's
+  # tag (server/lib/action-error-result.ts). The same census reads every
+  # Server Action and service and their imports. The file carries the
+  # "Security invariant" marker.
+  src/server/lib/action-error-result.test.ts
   # S34: a member's session never leaves with an analytics request. PostHog's
   # SDK sends to /ingest on our own origin, so the browser attaches every
   # cookie of this host. app/ingest/[...path]/route.ts builds each request to
@@ -1710,6 +1789,27 @@ MOBILE_TESTS=(
   src/lib/workspace-keys.wiring.test.ts
   src/lib/cycle-count-sync.backoff.sqlite.test.ts
 
+  # S5a: a signed-out phone stops showing the account's notifications. Every
+  # deliberate sign-out deletes this phone's push token row while the session
+  # still exists (awaited, bounded, by the token it registered), and so does a
+  # sign-out from another device; registration is held for the whole sign-out
+  # (a token refresh re-running it binds nothing) and never runs while the
+  # session still owes its authenticator code. The registration goes through
+  # register_push_token (SP-073). The phone's install id lives in the Keychain
+  # only, outlives every sign-out, and is never made up when the Keychain
+  # refuses. A "signed out from another device" message on the public sessions
+  # channel is a claim: the phone asks the Auth server about its own session
+  # first, outside auth-js, and a message about a live session, or one it gets
+  # no answer for, deletes no push row, signs nothing out and clears nothing.
+  src/lib/push-unbind.test.ts
+  src/lib/use-push-notifications.test.ts
+  src/lib/push-register-wiring.test.ts
+  src/lib/use-session-revocation.test.ts
+  src/lib/use-session-revocation.forged.test.ts
+  src/lib/session-check.test.ts
+  src/lib/supabase.fetch-auth-user.test.ts
+  src/lib/install-id.test.ts
+
   # The saved workspace records the account that saved it, and only that
   # account's requests, queued work and workspace load use it: another
   # account's, left by a fallback sign-out or a session the server ended, is
@@ -1844,6 +1944,14 @@ CORE_TESTS=(
   # link, so a link can add no recipient or parameter and opens only the
   # address the screen shows.
   src/email/mailto-link.test.ts
+  # Appearance sync (Liquid Glass): one person's unsaved or synced choice is
+  # never written under, or adopted by, another account on the same device; an
+  # unsaved choice not known to be in step with the account is checked against
+  # the account's row first; a choice made signed out reaches only an account
+  # that signs in in the same flow within 30 minutes, and only where its row
+  # holds nothing; a malformed stored or account value is dropped and counts
+  # as never chosen.
+  src/appearance/reconcile.test.ts
 )
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -51,6 +51,13 @@ import {
   resolveOrgTimezone,
 } from '@stockpilot/core';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css), then the console's own frame (pages/platform.css): every
+// rule is scoped to this area's [data-glass-page] root and to glass, so Classic
+// never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+import '@/styles/liquid-glass/pages/platform.css';
+
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Organization · Platform' };
 
@@ -201,6 +208,7 @@ export default async function PlatformOrgDetailPage({
 
       {/* ── Danger zone ──────────────────────────────────────────────── */}
       <DetailSection
+        data-glass-role="danger-zone"
         className="border-destructive/40 mt-6"
         title={<span className="text-destructive">Danger zone</span>}
       >

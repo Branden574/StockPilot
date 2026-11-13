@@ -25,6 +25,9 @@ import {
   sizePlaceholder,
 } from '@stockpilot/core';
 
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { IconChip } from '@/components/ui/row';
 import { Body, Display, Em, Eyebrow, FieldLabel, Mono } from '@/components/ui/text';
@@ -331,6 +334,11 @@ export default function NewItem() {
   const { role } = useRole();
   const permissions = useEffectivePermissions();
   const { c } = useTheme();
+  // Liquid Glass (inferred: the DS fields as a native grouped form with the
+  // iOS Item board's size chips): the scene behind the form, Back in the glass
+  // nav, the cards, fields and chips in their glass looks, and the Create bar
+  // on the glass-strong fill; every field, picker, size run and check stays.
+  const lg = useGlass();
   const params = useLocalSearchParams<{ barcode?: string; type?: string }>();
   const itemType: 'product' | 'book' = params.type === 'book' ? 'book' : 'product';
   const isBook = itemType === 'book';
@@ -999,9 +1007,10 @@ export default function NewItem() {
   }
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
           <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
           {/* The outline button's recipe (the card with the control border), a
               real 44pt frame rather than a 30pt pill with hitSlop. */}
@@ -1477,7 +1486,11 @@ export default function NewItem() {
       </KeyboardAvoidingView>
 
       <View
-        style={[styles.footer, { backgroundColor: c.paper, borderTopColor: c.hair }]}
+        style={[
+          styles.footer,
+          { backgroundColor: c.paper, borderTopColor: c.hair },
+          lg && { backgroundColor: lg.g.glassStrong, borderTopColor: lg.g.paneLine },
+        ]}
         onLayout={(e) => setFooterHeight(e.nativeEvent.layout.height)}
       >
         {/* Create is this screen's one ink button: it commits the form (the

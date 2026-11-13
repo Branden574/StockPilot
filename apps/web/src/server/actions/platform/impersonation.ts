@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { checkPlatformAdmin, currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
 import { requireSession } from '@/lib/auth/session';
 import { startActingAs, stopActingAs } from '@/server/services/platform/impersonation';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import { err, ok, type ActionResult } from '@stockpilot/core';
 
@@ -39,7 +40,7 @@ export async function startActingAsAction(
     });
     if (!res.ok) return err('not_found', 'Organization not found.');
   } catch (e) {
-    return err('internal_error', e instanceof Error ? e.message : 'Could not start impersonation');
+    return actionErrorResult(e, 'actions.platform.impersonation.start_acting_as');
   }
 
   revalidatePath('/dashboard', 'layout');
@@ -61,7 +62,7 @@ export async function stopActingAsAction(): Promise<ActionResult<{ ok: true }>> 
   try {
     await stopActingAs({ adminUserId: session.userId, adminEmail: session.email });
   } catch (e) {
-    return err('internal_error', e instanceof Error ? e.message : 'Could not stop impersonation');
+    return actionErrorResult(e, 'actions.platform.impersonation.stop_acting_as');
   }
   revalidatePath('/dashboard', 'layout');
   return ok({ ok: true });

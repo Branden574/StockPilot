@@ -15,6 +15,7 @@ import { checkRateLimit } from '@/lib/rate-limit';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { sha256Hex } from '@/lib/token-hash';
 import { maybeSendReturnPrompt } from '@/server/email/return-prompt';
+import { NOT_SET_UP_MESSAGE } from '@/server/lib/action-error-result';
 import {
   notifyRequesterBackordered,
   notifyRequesterBackorderShipped,
@@ -172,15 +173,13 @@ export async function POST(req: NextRequest) {
   let admin;
   try {
     admin = createAdminClient();
-  } catch {
+  } catch (e) {
+    // Only a server without the service-role key throws here. The signing
+    // page and the phone read that the feature is not set up, never the
+    // setting's name (S31); the report names it.
+    void reportError(e, { tag: 'orders.sign.admin_client', level: 'warning' });
     return NextResponse.json(
-      {
-        ok: false,
-        error: {
-          code: 'internal_error',
-          message: 'Server is missing SUPABASE_SERVICE_ROLE_KEY. Try again in a few minutes.',
-        },
-      },
+      { ok: false, error: { code: 'internal_error', message: NOT_SET_UP_MESSAGE } },
       { status: 500 },
     );
   }

@@ -25,6 +25,9 @@ export function WhatsNewButton() {
   return (
     <button
       id={WHATS_NEW_ENTRY_ID}
+      // Inert hook: the glass phone bar leaves this button out at 760 px and
+      // under, where the account menu carries What's New (shell.css).
+      data-glass="tb-whats-new"
       type="button"
       aria-label={label}
       title={label}

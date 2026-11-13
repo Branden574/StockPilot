@@ -8,6 +8,12 @@ import { can } from '@stockpilot/core';
 import { ProcedureCategoriesService } from '@/server/services/procedure-categories';
 import { WarehousesService } from '@/server/services/warehouses';
 
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+
 export const dynamic = 'force-dynamic';
 
 export default async function NewProcedurePage() {
@@ -25,7 +31,12 @@ export default async function NewProcedurePage() {
   if (!ctx.organizationId) redirect('/dashboard');
 
   return (
-    <div className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-[760px] flex-col gap-6 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="ops"
+      data-glass-view="procedure-new"
+      data-glass-width="form"
+    >
       <PageHeader
         back={
           <PageHeaderBackLink href="/dashboard/procedures">

@@ -12,6 +12,7 @@ import {
 } from '@stockpilot/core';
 
 import { AA_TEXT, AA_UI, contrast } from '../components/ui/__fixtures__/contrast';
+import { classicFlat, flatNorm } from './__fixtures__/classic-projection';
 import { dataListEmptyKind, dataListReloadNote } from '../components/ui/data-list-state';
 import { buttonTone, pillTone } from '../components/ui/tones';
 import {
@@ -391,10 +392,16 @@ describe('the catalog keeps its list, its iPad cart column and its search (M-OR-
   });
 
   it('the iPad cart column, beside the list, with Check out; the phone keeps the bar', () => {
+    // Classic's exact column, read from the code Classic runs; Liquid Glass
+    // lays the pane over the same column.
+    const classic = classicFlat(sourceOf(FILES.catalog), FILES.catalog);
     expect(code).toMatch(/\{layout\.kind === 'split' \? \(/);
-    expect(code).toContain(
-      'styles.cartColumn, { width: layout.cartColumnWidth, borderColor: c.hair, backgroundColor: c.card }',
+    expect(classic).toContain(
+      flatNorm(
+        'style={[styles.cartColumn, { width: layout.cartColumnWidth, borderColor: c.hair, backgroundColor: c.card }]}',
+      ),
     );
+    expect(code).toContain('lg && { backgroundColor: lg.g.pane, borderColor: lg.g.paneLine }');
     expect(code).toContain(
       '<SmallAction label={CART_CHECK_OUT_COPY} variant="primary" onPress={checkOut} />',
     );
@@ -404,12 +411,18 @@ describe('the catalog keeps its list, its iPad cart column and its search (M-OR-
   });
 
   it('the search and Sort & filter are the shared text box and an outline control', () => {
-    expect(code).toContain(
-      'style={[styles.search, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}',
+    const classic = classicFlat(sourceOf(FILES.catalog), FILES.catalog);
+    expect(classic).toContain(
+      flatNorm(
+        'style={[styles.search, { borderColor: c.hair2, backgroundColor: c.card, color: c.ink }]}',
+      ),
     );
-    expect(code).toContain(
-      'style={[styles.filterButton, { borderColor: c.hair2, backgroundColor: c.card }]}',
+    expect(classic).toContain(
+      flatNorm('style={[styles.filterButton, { borderColor: c.hair2, backgroundColor: c.card }]}'),
     );
+    // Liquid Glass: the iOS search and the filter as a 44 pt glass circle.
+    expect(code).toContain('lg && glassSearchBox(lg)');
+    expect(code).toContain('lg && GLASS_CIRCLE');
     expect(code).toMatch(/link: \{[^}]*borderRadius: RADIUS\.card,/);
   });
 });

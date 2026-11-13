@@ -2,6 +2,7 @@ import { Download } from 'lucide-react';
 import { notFound, redirect } from 'next/navigation';
 import { Suspense } from 'react';
 
+import { CountTitleStatus } from '@/components/cycle-counts/count-glass-summary';
 import { CopyReferenceButton } from '@/components/cycle-counts/copy-reference-button';
 import { CycleCountDetail } from '@/components/cycle-counts/cycle-count-detail';
 import { BackToCycleCounts } from '@/components/cycle-counts/cycle-count-list-memory';
@@ -26,6 +27,13 @@ import {
   formatOrgDateTime,
   resolveOrgTimezone,
 } from '@stockpilot/core';
+
+// The Liquid Glass operations composition (stage 4: pages/ops.css, the
+// shared frame, and the board's own file where there is one): every rule is
+// scoped to this page's [data-glass-page] root and to glass, so Classic never
+// matches it (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/ops.css';
+import '@/styles/liquid-glass/pages/counts.css';
 
 const LINE_PAGE_SIZE = 50;
 
@@ -147,7 +155,7 @@ export default async function CycleCountDetailPage({
   }
 
   return (
-    <div className={PAGE}>
+    <div className={PAGE} data-glass-page="ops" data-glass-view="cycle-count">
       {/* The count's record header (DESIGN-SPEC 6.1, 7.7): the way back to the
           remembered list view, the reference as the page's one h1 with its
           copy button, what the count covers and when it started, and the
@@ -178,7 +186,17 @@ export default async function CycleCountDetailPage({
           )
         }
         titleId={TITLE_ID}
-        titleAside={reference ? <CopyReferenceButton reference={reference} /> : null}
+        titleAside={
+          reference ? (
+            <>
+              {/* Liquid Glass only: the count's status beside the title, as
+                  the board draws it (count-glass-summary.tsx), between the h1
+                  and the copy button. */}
+              <CountTitleStatus status={header.status} />
+              <CopyReferenceButton reference={reference} />
+            </>
+          ) : null
+        }
         meta={reference ? null : <span>{CYCLE_COUNT_REFERENCE_UNAVAILABLE}</span>}
         subline={
           <>

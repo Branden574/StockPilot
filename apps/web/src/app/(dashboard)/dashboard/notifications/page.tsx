@@ -15,6 +15,12 @@ import { getDashboardActions, getDashboardSummary } from '@/server/services/move
 import { NotificationsService } from '@/server/services/notifications';
 import { cn, formatNumber } from '@/lib/utils';
 
+// The Liquid Glass insights composition (stage 4: pages/insights.css, the
+// lane's shared frame): every rule is scoped to this page's
+// [data-glass-page] root and to glass, so Classic never matches it
+// (styles/liquid-glass/glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/insights.css';
+
 export const metadata = {
   title: 'Notifications',
 };
@@ -83,13 +89,17 @@ export default async function NotificationsPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+      data-glass-page="insights"
+      data-glass-view="notifications"
+    >
       <PageHeader
         title="Notifications"
         subline="Live alerts on top — what needs your attention right now. Below, the history of recorded low-stock and PO events."
       />
 
-      <DetailSection title="Live alerts" flush>
+      <DetailSection title="Live alerts" flush data-glass-role="live-alerts">
         {liveAlerts.length > 0 ? (
           <ul>
             {liveAlerts.map((a) => (

@@ -29,6 +29,12 @@ import { Field } from '@/components/ui/field';
 import { IconChip } from '@/components/ui/row';
 import { Pill } from '@/components/ui/pill';
 import { Body, Display, Em, Eyebrow, Mono } from '@/components/ui/text';
+import { GlassSubline } from '@/components/ui/glass/parts';
+import { glassChip, glassChipLabel } from '@/components/ui/glass/primitive-styles';
+import { SceneBackground } from '@/components/ui/glass/scene-background';
+import { GLASS_LIST } from '@/components/ui/glass/screens/list';
+import { GLASS_NOTE, GLASS_OPS, glassSplitRule } from '@/components/ui/glass/screens/ops';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { PHOTO_BACKGROUND } from '@/components/ui/tones';
 import { createDebouncedScheduler, createSequenceGuard } from '@/lib/debounced-list-load';
 import { useEnabledModules } from '@/lib/enabled-modules';
@@ -93,6 +99,12 @@ function returnsEmptyState(answeredKey: string | null, shownKey: string): 'empty
 
 export default function ReturnsListScreen() {
   const { c } = useTheme();
+  // Liquid Glass (an inferred extension of Routes-Gallery-1's returns panel as
+  // an iOS list; on iPad the list beside the workbench, the iPad-Orders
+  // columns at portrait width): the scene, the glass nav, the large title over
+  // its line, the filters as iOS capsules, the RMAs as grouped glass cards.
+  // Every control, filter, state and word stays.
+  const lg = useGlass();
   const router = useRouter();
   const navigation = useNavigation();
   const enabledModules = useEnabledModules();
@@ -122,6 +134,11 @@ export default function ReturnsListScreen() {
 
   const load = React.useCallback(async () => {
     if (!enabled || !canRead) {
+      // A page read before the module or the permission went shows nothing
+      // now: the refusal outranks every read on its way (review of the S2
+      // follow-up).
+      guard.next();
+      moreGuard.next();
       setLoading(false);
       setRefreshing(false);
       return;
@@ -182,27 +199,36 @@ export default function ReturnsListScreen() {
   const emptyState = returnsEmptyState(answered, returnsQueryKey(filter, q));
 
   return (
-    <View style={[styles.root, { backgroundColor: c.paper }]}>
-      <SafeAreaView edges={['top']} style={{ backgroundColor: c.paper }}>
-        <View style={styles.topbar}>
-          <View style={styles.chips}>
+    <View style={[styles.root, { backgroundColor: lg ? 'transparent' : c.paper }]}>
+      {lg ? <SceneBackground /> : null}
+      <SafeAreaView edges={['top']} style={{ backgroundColor: lg ? 'transparent' : c.paper }}>
+        <View style={lg ? GLASS_LIST.nav : styles.topbar}>
+          <View style={lg ? GLASS_LIST.navGroup : styles.chips}>
             <IconChip icon={ArrowLeft} onPress={goBack} accessibilityLabel="Back" minTap />
             <IconChip icon={Menu} onPress={openDrawer} accessibilityLabel="Open menu" minTap />
           </View>
         </View>
-        <View style={styles.head}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Undo2 size={16} color={c.ink3} strokeWidth={1.5} />
-            <Eyebrow>RETURNS</Eyebrow>
-          </View>
-          <Display size={32} style={{ marginTop: 12 }}>
-            Returns <Em>and RMAs.</Em>
+        <View style={lg ? GLASS_LIST.head : styles.head}>
+          {/* Liquid Glass says the eyebrow's words under the title (.ios-sub). */}
+          {lg ? null : (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Undo2 size={16} color={c.ink3} strokeWidth={1.5} />
+              <Eyebrow>RETURNS</Eyebrow>
+            </View>
+          )}
+          <Display
+            size={lg ? 34 : 32}
+            style={lg ? GLASS_LIST.title : { marginTop: 12 }}
+            accessibilityRole={lg ? 'header' : undefined}
+          >
+            Returns {lg ? 'and RMAs' : <Em>and RMAs.</Em>}
           </Display>
+          {lg ? <GlassSubline style={GLASS_LIST.sub}>Returns</GlassSubline> : null}
         </View>
       </SafeAreaView>
 
       {!enabled || !canRead ? (
-        <View style={{ paddingHorizontal: 20, marginTop: 8 }}>
+        <View style={{ paddingHorizontal: lg ? 16 : 20, marginTop: 8 }}>
           <Card padding={16}>
             <Body size={14.5}>
               {!enabled
@@ -213,7 +239,7 @@ export default function ReturnsListScreen() {
         </View>
       ) : (
         <>
-          <View style={styles.toolbar}>
+          <View style={lg ? [styles.toolbar, GLASS_OPS.controls] : styles.toolbar}>
             {/* Buttons with a selected state, like the shared Chip: iOS gives
                 the "tab" role no trait, so VoiceOver read the filters without
                 saying they can be pressed (RX-1 simulator matrix). Each chip
@@ -235,10 +261,16 @@ export default function ReturnsListScreen() {
                       filter === f.id
                         ? { backgroundColor: c.ink, borderColor: c.ink }
                         : { backgroundColor: 'transparent', borderColor: c.hair2 },
+                      // Liquid Glass: the iOS capsule (the chosen one in ink).
+                      lg && glassChip(lg, filter === f.id),
                     ]}
                   >
                     <Text
-                      style={[styles.chipLabel, { color: filter === f.id ? c.paper : c.ink2 }]}
+                      style={[
+                        styles.chipLabel,
+                        { color: filter === f.id ? c.paper : c.ink2 },
+                        lg && glassChipLabel(lg, filter === f.id),
+                      ]}
                       maxFontSizeMultiplier={CONTROL_CAP}
                     >
                       {f.label}
@@ -295,7 +327,7 @@ export default function ReturnsListScreen() {
                 style={split ? styles.splitList : undefined}
                 data={rows}
                 keyExtractor={(r) => r.id}
-                contentContainerStyle={styles.list}
+                contentContainerStyle={lg ? [styles.list, GLASS_LIST.list] : styles.list}
                 keyboardDismissMode="on-drag"
                 // A refresh or next page that failed while rows are shown says so
                 // above them (returns review), instead of failing silently: on
@@ -303,7 +335,9 @@ export default function ReturnsListScreen() {
                 ListHeaderComponent={
                   loadError && rows.length > 0 ? (
                     <View style={styles.reloadNote}>
-                      <View style={[styles.banner, { backgroundColor: c.warnWash }]}>
+                      <View
+                        style={[styles.banner, { backgroundColor: c.warnWash }, lg && GLASS_NOTE]}
+                      >
                         <TriangleAlert
                           size={16}
                           color={c.warnText}
@@ -375,7 +409,14 @@ export default function ReturnsListScreen() {
                 )}
               />
               {split ? (
-                <View style={[styles.splitDetail, { borderColor: c.hair }]}>
+                <View
+                  style={[
+                    styles.splitDetail,
+                    { borderColor: c.hair },
+                    // Liquid Glass: the split's rule as the boards' hairline in --line-2.
+                    lg && glassSplitRule(lg),
+                  ]}
+                >
                   {selectedId ? (
                     <ReturnWorkbenchView
                       key={selectedId}
@@ -410,6 +451,7 @@ function ReturnRow({
   onPress: () => void;
 }) {
   const { c } = useTheme();
+  const lg = useGlass();
   const waiting = returnRowWaiting(row);
   const exchange = returnRowExchange(row);
   const label = `${returnRowTitle(row)}, ${returnStatusLabel(row.status)}, ${returnRowMeta(row)}, ${returnRowItems(row)}${
@@ -433,7 +475,8 @@ function ReturnRow({
             ? {
                 borderLeftWidth: 3,
                 borderLeftColor: c.accent,
-                backgroundColor: c.sunk,
+                // Liquid Glass: the chosen RMA on the selection fill.
+                backgroundColor: lg ? lg.g.selFill : c.sunk,
                 paddingLeft: 14,
               }
             : undefined

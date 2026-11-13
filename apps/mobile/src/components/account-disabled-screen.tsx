@@ -1,9 +1,16 @@
-import { Lock } from 'lucide-react-native';
+import { CircleX, Lock, LogOut } from 'lucide-react-native';
 import * as React from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { AuthShell } from '@/components/auth/auth-shell';
 import { Button } from '@/components/ui/button';
+import {
+  GLASS_AUTH,
+  GlassAuthPanelBackdrop,
+  GLASS_STATE_GLYPH,
+  glassStateTile,
+} from '@/components/ui/glass/screens/auth';
+import { useGlass } from '@/components/ui/glass/use-glass';
 import { Body, Display } from '@/components/ui/text';
 import { setAccountDisabled } from '@/lib/account-disabled-state';
 import { useAuth } from '@/lib/auth-context';
@@ -39,6 +46,10 @@ import { ACCOUNT_DISABLED_MESSAGE, ACCOUNT_DISABLED_TITLE } from '@stockpilot/co
 export function AccountDisabledScreen() {
   const { signOutToFallback } = useAuth();
   const { c } = useTheme();
+  // Liquid Glass: the Auth-States "Account disabled" card (centred, the
+  // danger tile, the heading, the line and Sign out) in the shell's glass
+  // card; the same words, button and gate.
+  const lg = useGlass();
   const [busy, setBusy] = React.useState(false);
 
   async function onSignOut() {
@@ -58,21 +69,52 @@ export function AccountDisabledScreen() {
   }
 
   return (
-    <AuthShell>
-      <View style={styles.iconWrap}>
-        <View style={[styles.iconRing, { borderColor: c.hair2 }]}>
-          <Lock size={28} color={c.ink} strokeWidth={1.5} />
+    <AuthShell contentStyle={lg ? GLASS_AUTH.gateCard : undefined}>
+      {lg ? <GlassAuthPanelBackdrop /> : null}
+      <View style={lg ? GLASS_AUTH.centred : styles.iconWrap}>
+        <View
+          style={[
+            styles.iconRing,
+            { borderColor: c.hair2 },
+            lg && GLASS_AUTH.tile,
+            lg && { backgroundColor: glassStateTile(lg, 'danger').fill },
+          ]}
+        >
+          {lg ? (
+            <CircleX
+              size={GLASS_STATE_GLYPH}
+              color={glassStateTile(lg, 'danger').ink}
+              strokeWidth={1.8}
+            />
+          ) : (
+            <Lock size={28} color={c.ink} strokeWidth={1.5} />
+          )}
         </View>
       </View>
 
-      <Display size={28} accessibilityRole="header">
+      <Display
+        size={lg ? 20 : 28}
+        accessibilityRole="header"
+        style={lg ? [GLASS_AUTH.centredText, { lineHeight: 26 }] : undefined}
+      >
         {ACCOUNT_DISABLED_TITLE}
       </Display>
-      <Body muted style={styles.message}>
+      <Body
+        muted
+        size={lg ? 13 : undefined}
+        color={lg ? lg.c.ink2 : undefined}
+        style={lg ? [styles.message, GLASS_AUTH.centredText, GLASS_AUTH.gateLine] : styles.message}
+      >
         {ACCOUNT_DISABLED_MESSAGE}
       </Body>
 
-      <Button block variant="outline" onPress={() => void onSignOut()} disabled={busy}>
+      <Button
+        block
+        variant="outline"
+        onPress={() => void onSignOut()}
+        disabled={busy}
+        leading={lg ? <LogOut size={18} color={lg.c.ink} strokeWidth={1.8} /> : undefined}
+      >
         Sign out
       </Button>
     </AuthShell>

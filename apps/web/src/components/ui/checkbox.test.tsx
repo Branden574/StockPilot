@@ -292,4 +292,28 @@ describe('Checkbox: the box', () => {
     expect(glyph.tagName).toBe('SPAN');
     expect(screen.getAllByRole('checkbox')).toHaveLength(1);
   });
+
+  it('the box carries the inert Liquid Glass hooks, on when ticked or mixed, wherever it sits', () => {
+    // Glass draws the box (not the button around it) from these: an accent
+    // box when on. They are inert: no class or behaviour depends on them.
+    const { rerender } = render(<Checkbox checked={false} label="Pick" />);
+    const glyph = () =>
+      screen.getByRole('checkbox', { name: 'Pick' }).firstElementChild as HTMLElement;
+    expect(glyph()).toHaveAttribute('data-glass', 'checkbox-glyph');
+    expect(glyph()).toHaveAttribute('data-glass-state', 'off');
+    rerender(<Checkbox checked label="Pick" />);
+    expect(glyph()).toHaveAttribute('data-glass-state', 'on');
+    rerender(<Checkbox checked={false} indeterminate label="Pick" />);
+    expect(glyph()).toHaveAttribute('data-glass-state', 'on');
+
+    rerender(
+      <div role="checkbox" aria-checked="false" aria-label="Warehouse A" tabIndex={0}>
+        <CheckboxGlyph checked={false} />
+      </div>,
+    );
+    const rowGlyph = screen.getByRole('checkbox', { name: 'Warehouse A' })
+      .firstElementChild as HTMLElement;
+    expect(rowGlyph).toHaveAttribute('data-glass', 'checkbox-glyph');
+    expect(rowGlyph).toHaveAttribute('data-glass-state', 'off');
+  });
 });

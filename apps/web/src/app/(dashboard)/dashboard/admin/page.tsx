@@ -18,6 +18,11 @@ import { requireOrgContext } from '@/lib/auth/session';
 import { effectiveNavLabel } from '@/lib/nav-labels';
 import { createClient } from '@/lib/supabase/server';
 
+// The Liquid Glass settings and administration composition (stage 4:
+// pages/admin.css): every rule is scoped to this area's [data-glass-page] root
+// and to glass, so Classic never matches it (glass-scope.guard.test.ts).
+import '@/styles/liquid-glass/pages/admin.css';
+
 interface AdminCard {
   href: string;
   icon: LucideIcon;
@@ -104,7 +109,11 @@ export default async function AdminOverviewPage() {
   ];
 
   return (
-    <div className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7">
+    <div
+      data-glass-page="admin"
+      data-glass-view="hub"
+      className="mx-auto flex w-full max-w-[1320px] flex-col gap-4 px-4 pb-16 pt-6 sm:px-8 sm:pt-7"
+    >
       <PageHeader
         eyebrow="Admin"
         title={title}

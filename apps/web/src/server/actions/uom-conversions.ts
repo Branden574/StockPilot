@@ -2,9 +2,8 @@
 
 import { revalidatePath } from 'next/cache';
 
-import { rethrowControlFlow } from '@/lib/control-flow';
-import { ServiceError } from '@/server/services/context';
 import { UomConversionsService } from '@/server/services/uom-conversions';
+import { actionErrorResult } from '@/server/lib/action-error-result';
 
 import {
   err,
@@ -27,9 +26,7 @@ export async function upsertUomConversionAction(
     revalidatePath('/dashboard/admin/uom-conversions');
     return ok(result);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.uom_conversions.upsert_uom_conversion');
   }
 }
 
@@ -42,8 +39,6 @@ export async function deleteUomConversionAction(
     revalidatePath('/dashboard/admin/uom-conversions');
     return ok(undefined);
   } catch (e) {
-    rethrowControlFlow(e);
-    if (e instanceof ServiceError) return err(e.code, e.message);
-    return err('internal_error', e instanceof Error ? e.message : 'Unknown error');
+    return actionErrorResult(e, 'actions.uom_conversions.delete_uom_conversion');
   }
 }

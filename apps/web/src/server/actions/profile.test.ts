@@ -49,6 +49,10 @@ const { authState, mfaState, redirectError } = vi.hoisted(() => ({
     orgLess: false,
     /** Signed out: requireSession() redirects to /signin. */
     signedOut: false,
+    /** Reads of the person's memberships so far, by either session reader. */
+    membershipReads: 0,
+    /** The read (1st, 2nd) whose membership list cannot be read, or null. */
+    membershipsUnreadableAt: null as number | null,
   },
   redirectError: (path: string): Error & { digest: string } => {
     const e = new Error('NEXT_REDIRECT') as Error & { digest: string };
@@ -84,11 +88,25 @@ vi.mock('@/lib/auth/session', () => ({
       role: sessionState.role,
     };
   }),
-  getSessionMemberships: vi.fn(async () =>
-    authState.orgLess
+  // A list that cannot be read: readSessionMemberships() says so, and
+  // getSessionMemberships() answers an empty list, as the session loader does.
+  getSessionMemberships: vi.fn(async () => {
+    authState.membershipReads += 1;
+    if (authState.membershipReads === authState.membershipsUnreadableAt) return [];
+    return authState.orgLess
       ? []
-      : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }],
-  ),
+      : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }];
+  }),
+  readSessionMemberships: vi.fn(async () => {
+    authState.membershipReads += 1;
+    if (authState.membershipReads === authState.membershipsUnreadableAt) return { ok: false };
+    return {
+      ok: true,
+      memberships: authState.orgLess
+        ? []
+        : [{ organizationId: 'org-1', role: sessionState.role, name: 'Test', logoUrl: null }],
+    };
+  }),
 }));
 
 const stubHolder: { stub: ReturnType<typeof makeSupabaseStub> | null } = {
@@ -261,8 +279,11 @@ import { revalidatePath, revalidateTag } from 'next/cache';
 import { audit } from '@/server/services/audit';
 import {
   ACCOUNT_DELETE_LAST_OWNER_COPY,
+  ACCOUNT_DELETE_RETRY_COPY,
   ACCOUNT_DELETE_SIGNED_OUT_COPY,
 } from '@/server/lib/account-deletion';
+
+import { err } from '@stockpilot/core';
 
 import {
   deleteOwnAccountAction,
@@ -281,6 +302,8 @@ const AVATAR_PREFIX =
 beforeEach(() => {
   authState.orgLess = false;
   authState.signedOut = false;
+  authState.membershipReads = 0;
+  authState.membershipsUnreadableAt = null;
   mfaState.orgPolicyRequires = false;
   mfaState.satisfied = true;
   mfaState.enrolled = false;
@@ -514,6 +537,106 @@ describe('setOrgLogoUrlAction', () => {
     expect(result.ok).toBe(true);
     expect(fetchObjectPrefixMock).not.toHaveBeenCalled();
     expect(logoStorage.remove).not.toHaveBeenCalled();
+  });
+
+  // S45: a logo prints on branded PDFs only when it decodes within the image
+  // decoder's cap (lib/image-decode.ts, 50 million pixels for PNG, JPEG and
+  // WebP), so a larger one is refused here, at upload, with its size. Only
+  // the header is read: these fixtures are headers alone.
+  describe('a logo too large to print (S45)', () => {
+    function pngHeaderOf(width: number, height: number): Uint8Array {
+      const b = pngBytes();
+      new DataView(b.buffer).setUint32(16, width);
+      new DataView(b.buffer).setUint32(20, height);
+      return b;
+    }
+    function jpegHeaderOf(width: number, height: number): Uint8Array {
+      return new Uint8Array([
+        0xff,
+        0xd8,
+        0xff,
+        0xc0,
+        0x00,
+        0x11,
+        0x08,
+        height >> 8,
+        height & 0xff,
+        width >> 8,
+        width & 0xff,
+        0x03,
+        1,
+        0x11,
+        0,
+        2,
+        0x11,
+        0,
+        3,
+        0x11,
+        0,
+      ]);
+    }
+    /** RIFF, WEBP, then a VP8X chunk stating the canvas size. */
+    function webpHeaderOf(width: number, height: number): Uint8Array {
+      const b = new Uint8Array(30);
+      b.set(new TextEncoder().encode('RIFF'), 0);
+      new DataView(b.buffer).setUint32(4, 22, true);
+      b.set(new TextEncoder().encode('WEBPVP8X'), 8);
+      new DataView(b.buffer).setUint32(16, 10, true);
+      const view = new DataView(b.buffer);
+      view.setUint16(24, (width - 1) & 0xffff, true);
+      b[26] = (width - 1) >> 16;
+      view.setUint16(27, (height - 1) & 0xffff, true);
+      b[29] = (height - 1) >> 16;
+      return b;
+    }
+    const avifHeader = new Uint8Array([
+      0,
+      0,
+      0,
+      0x1c,
+      ...new TextEncoder().encode('ftypavif'),
+      0,
+      0,
+      0,
+      0,
+      ...new TextEncoder().encode('avifmif1miaf'),
+    ]);
+
+    it.each([
+      ['a PNG of 10000 by 5001', pngHeaderOf(10000, 5001), '10000 by 5001'],
+      ['a JPEG of 8000 by 6251', jpegHeaderOf(8000, 6251), '8000 by 6251'],
+      ['a WebP of 7072 by 7072', webpHeaderOf(7072, 7072), '7072 by 7072'],
+    ])(
+      '%s is refused with its size, the object is removed, nothing is saved',
+      async (_l, body, size) => {
+        logoStorage.body = body;
+        const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-big.png` });
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.code).toBe('validation_error');
+          expect(result.error.message).toBe(
+            `That logo is too large to print (${size} pixels). Save a copy of at most 50 million pixels, such as 7000 by 7000, and upload it again.`,
+          );
+        }
+        expect(logoStorage.remove).toHaveBeenCalledWith(['org-1/logo-big.png']);
+        expect(stubHolder.stub!.chainArgs.get('organizations.update')).toBeUndefined();
+        expect(audit).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['a PNG of 7071 by 7071 (just under 50 million pixels)', pngHeaderOf(7071, 7071)],
+      ['a wide PNG wordmark of 6000 by 1200', pngHeaderOf(6000, 1200)],
+      ['a JPEG of 4000 by 3000', jpegHeaderOf(4000, 3000)],
+      ['a WebP of 7000 by 7000', webpHeaderOf(7000, 7000)],
+      ['an AVIF (its size is not read at upload)', avifHeader],
+    ])('%s is accepted', async (_l, body) => {
+      logoStorage.body = body;
+      const result = await setOrgLogoUrlAction({ url: `${LOGO_URL_BASE}logo-ok.png` });
+      expect(result.ok).toBe(true);
+      expect(logoStorage.remove).not.toHaveBeenCalled();
+      expect(audit).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('rejects a logo URL outside the org’s own storage folder (SSRF guard)', async () => {
@@ -1156,6 +1279,63 @@ describe('deleteOwnAccountAction', () => {
       );
     }
     expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The action reads the person's memberships twice: once at the top, and once
+   * before the delete. A list that cannot be read is not "no workspace":
+   * nothing is deleted and the person is asked to try again.
+   */
+  describe('a membership list that cannot be read', () => {
+    it('the first read: nothing is deleted or written, try again', async () => {
+      authState.membershipsUnreadableAt = 1;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(checkRateLimitMock).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      expect(revokeAllSessionsForUserMock).not.toHaveBeenCalled();
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'account.delete.membership_read',
+        extra: { source: 'web' },
+      });
+    });
+
+    it('the second read: nothing is deleted or written, try again', async () => {
+      authState.membershipsUnreadableAt = 2;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result).toEqual(err('internal_error', ACCOUNT_DELETE_RETRY_COPY));
+      expect(adminAuth.deleteUser).not.toHaveBeenCalled();
+      expect(adminRpc).not.toHaveBeenCalled();
+      expect(insertAuditRowReportedMock).not.toHaveBeenCalled();
+      // This read comes after the limiter, which counted the attempt.
+      expect(checkRateLimitMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledTimes(1);
+      expect(reportErrorMock).toHaveBeenCalledWith(expect.any(Error), {
+        tag: 'account.delete.membership_read',
+        extra: { source: 'web' },
+      });
+    });
+
+    it('control: a member whose list reads is deleted and the row is filed under their organization', async () => {
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(authState.membershipReads).toBe(2);
+      expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ organization_id: 'org-1', event: 'user.deactivated' }),
+      );
+    });
+
+    it('control: a person with no workspace is deleted and the row has no organization (SP-129)', async () => {
+      authState.orgLess = true;
+      const result = await deleteOwnAccountAction({ confirm: 'DELETE' });
+      expect(result.ok).toBe(true);
+      expect(authState.membershipReads).toBe(2);
+      expect(insertAuditRowReportedMock).toHaveBeenCalledWith(
+        expect.objectContaining({ organization_id: null, event: 'user.deactivated' }),
+      );
+    });
   });
 
   it('rethrows a redirect instead of reporting it as internal_error', async () => {

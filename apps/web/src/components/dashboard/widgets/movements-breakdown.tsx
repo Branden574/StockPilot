@@ -1,12 +1,17 @@
 import { ChartCard } from '@/components/dashboard/charts/chart-card';
 import { MiniBarChart } from '@/components/dashboard/mini-bar-chart';
 
+import { MovementsBreakdownGlassGrow } from './movements-breakdown-glass-grow';
 import type { DashboardWidgetProps } from './types';
 
 /**
  * 30-day movement mini-bar chart + the per-type share breakdown, in the value
  * card's chart-card look. The widget renderer (index.tsx) sets it beside the
  * inventory-value card when the two are adjacent, full width on its own.
+ *
+ * MovementsBreakdownGlassGrow renders nothing. In Liquid Glass it holds the
+ * bars' grow-in until the card is scrolled into the window; in Classic it
+ * does nothing at all.
  */
 export function MovementsBreakdownWidget({ barValues, breakdownRows }: DashboardWidgetProps) {
   return (
@@ -49,6 +54,7 @@ export function MovementsBreakdownWidget({ barValues, breakdownRows }: Dashboard
           ))}
         </div>
       </div>
+      <MovementsBreakdownGlassGrow />
     </ChartCard>
   );
 }
