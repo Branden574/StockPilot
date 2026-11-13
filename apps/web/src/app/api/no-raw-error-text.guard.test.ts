@@ -1830,6 +1830,60 @@ describe("an AI chat tool's refusal is the tool's own words (S30)", () => {
     expect(scope().map((file) => path.relative(SRC, file))).toContain('lib/ai/tool-errors.ts');
   });
 
+  it('every ToolRefusal is built with fixed words, except two that name what the model sent', () => {
+    // The model reads a ToolRefusal's words (at most 200 characters). These
+    // two are the only ones not written out in full: the stock adjustment's
+    // movement type quotes the value the model passed, and the new schedule
+    // event passes the event schema's first message about the model's
+    // arguments (the schema's and zod's own words, which do not quote it).
+    const BUILT = [
+      'lib/ai/tools.ts: `movementType must be one of ${AI_ADJUST_MOVEMENT_TYPES.join(\', \')} (got ${JSON.stringify(raw)})`',
+      "lib/ai/tools.ts: parsed.error.issues[0]?.message ?? 'Invalid event input'",
+    ];
+    const built: string[] = [];
+    for (const file of files(AI)) {
+      const source = readFileSync(file, 'utf8');
+      if (!source.includes('ToolRefusal(')) continue;
+      const sf = parse(file, source);
+      // A module-level `const NAME = '...'` counts as fixed words.
+      const fixedNames = new Set<string>();
+      for (const statement of sf.statements) {
+        if (!ts.isVariableStatement(statement)) continue;
+        if (!(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+        for (const decl of statement.declarationList.declarations) {
+          if (
+            ts.isIdentifier(decl.name) &&
+            decl.initializer &&
+            (ts.isStringLiteral(decl.initializer) ||
+              ts.isNoSubstitutionTemplateLiteral(decl.initializer))
+          ) {
+            fixedNames.add(decl.name.text);
+          }
+        }
+      }
+      const fixed = (arg: ts.Expression) =>
+        ts.isStringLiteral(arg) ||
+        ts.isNoSubstitutionTemplateLiteral(arg) ||
+        (ts.isIdentifier(arg) && fixedNames.has(arg.text));
+      const visit = (node: ts.Node) => {
+        if (
+          ts.isNewExpression(node) &&
+          ts.isIdentifier(node.expression) &&
+          node.expression.text === 'ToolRefusal'
+        ) {
+          const first = node.arguments?.[0];
+          if (!first || !fixed(first)) {
+            const words = first ? first.getText(sf).replace(/\s+/g, ' ') : '(none)';
+            built.push(`${path.relative(SRC, file)}: ${words}`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    expect(built).toEqual(BUILT);
+  });
+
   it('every fixed tool failure sentence is a string literal', () => {
     const file = path.join(AI, 'tool-errors.ts');
     const sf = parse(file, readFileSync(file, 'utf8'));
