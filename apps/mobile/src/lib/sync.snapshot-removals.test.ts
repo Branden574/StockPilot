@@ -1271,9 +1271,9 @@ describe('kits the server lists as active but the phone lacks come back (S75)', 
   /**
    * Kits are sent `since`-filtered, beside the complete active-kit id list
    * (activeBundleIds), and the phone only DELETED against that list. A pull
-   * that carried no kits (a member not allowed to see them, or the module
-   * off: the server sends empty lists) empties the phone's kits; once access
-   * returns, the delta pulls bring only kits edited since the cursor, so an
+   * that carried no kits (when the server answers with empty lists, as for
+   * the module off) empties the phone's kits; once kits come back, the delta
+   * pulls bring only kits edited since the cursor, so an
    * unchanged kit never arrived until a full pull. Now a pull whose active
    * list names a kit the phone lacks makes the next pull a full one, once:
    * an id the server keeps naming but never sends is reported after that

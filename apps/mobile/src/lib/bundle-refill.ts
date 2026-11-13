@@ -4,11 +4,11 @@
  * The snapshot sends kits changed since the phone's cursor, beside the
  * complete list of active kit ids (`activeBundleIds`), and the pull deletes
  * every cached kit that list does not name (sync.ts). It never fetched a kit
- * it lacked. A pull that carries no kits (a member not allowed to see them,
- * or the bundles module off: the server sends empty lists) empties the
- * phone's kits, and once access returns, the delta pulls bring only kits
- * edited since the cursor: an unchanged kit stayed missing until a full pull
- * (a workspace switch, a reinstall).
+ * it lacked. A pull that carries no kits (when the server answers with
+ * empty lists, as for the bundles module off) empties the phone's kits, and
+ * once kits come back, the delta pulls bring only kits edited since the
+ * cursor: an unchanged kit stayed missing until a full pull (a workspace
+ * switch, a reinstall).
  *
  * So after a pull's upserts, a list that names a kit the phone does not hold
  * makes the NEXT pull a full one. Once: the ids are remembered with the
