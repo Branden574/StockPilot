@@ -2,14 +2,19 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
 import Anthropic from '@anthropic-ai/sdk';
-import { GoogleGenerativeAIAbortError, GoogleGenerativeAIFetchError } from '@google/generative-ai';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  GoogleGenerativeAI,
+  GoogleGenerativeAIAbortError,
+  GoogleGenerativeAIFetchError,
+} from '@google/generative-ai';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ORDER_WAREHOUSE_WRITE_REFUSED_COPY } from '@stockpilot/core';
 
 import { ForbiddenError } from '@/lib/auth/warehouse';
+import { env } from '@/lib/env';
 import { mfaGateError, ServiceError, type ServiceContext } from '@/server/services/context';
-import type { ToolExecutor } from './tools';
+import { TOOL_CATALOG, type ToolExecutor } from './tools';
 
 /**
  * HI-5 at the LOOP BOUNDARY.
@@ -49,6 +54,7 @@ import {
   executeToolCall,
   newTurnOriginRegistry,
   runWithUntrustedOrigins,
+  streamChat,
   SYSTEM_PROMPT,
   TOOL_CONFLICT_MESSAGE,
   TOOL_FAILED_MESSAGE,
@@ -63,7 +69,12 @@ import {
   ToolRefusal,
   ToolUnavailableError,
 } from './tool-errors';
-import { untrustedTag, UntrustedWriteRefusedError } from './untrusted';
+import { streamChatClaude } from './chat-claude';
+import {
+  untrustedTag,
+  untrustedWriteRefusalSentence,
+  UntrustedWriteRefusedError,
+} from './untrusted';
 
 const ctx = {
   organizationId: 'org-1',
@@ -744,5 +755,285 @@ describe('SYSTEM_PROMPT: a failed tool is told in the app’s words (S30)', () =
       /If searchInventorySemantic returns 0 rows or an error, fall\s+back to searchInventory automatically/,
     );
     expect(SYSTEM_PROMPT).toMatch(/Surface a failed write\s+plainly from the sentence it returns/);
+  });
+});
+
+describe('a failed tool call: what the model reads, at every layer between the failure and the model (S30)', () => {
+  /**
+   * Every value below that the model may not read carries this mark. Made-up.
+   * The item's decisions let exactly three things of a failure reach the
+   * model: a ToolRefusal's words (at most 200 characters), a validation_error's
+   * words (fenced as data, at most 200 characters), and the outside-text
+   * refusal's sentence (the tool and the argument's name). Everything else is
+   * a fixed sentence, chosen without passing on any of the failure's own
+   * fields: no other message, no `details`, `cause`, `internalDetail`, `stack`
+   * or `hint`.
+   */
+  const MARK = 'ZQX7';
+  const marked = (where: string) => `${MARK}-${where}`;
+
+  /** A refusal's details that answer every field asked for, with marked words. */
+  function markedDetails(where: string): Record<string, unknown> {
+    const keys = ['recordId', 'name', 'sku', 'locationName', 'field', 'conflictItemId', 'message'];
+    const word = (key: string) => marked(`${where}-details-${key}`);
+    return new Proxy({} as Record<string, unknown>, {
+      get: (_target, key) => (typeof key === 'string' ? word(key) : undefined),
+      has: () => true,
+      ownKeys: () => keys,
+      getOwnPropertyDescriptor: (_target, key) =>
+        typeof key === 'string'
+          ? { value: word(key), enumerable: true, configurable: true, writable: true }
+          : undefined,
+    });
+  }
+
+  /** Marks every field of an error the model may not read. */
+  function dressed<E>(err: E, where: string): E {
+    if (err instanceof Error) {
+      const fields = err as Error & Record<string, unknown>;
+      fields.stack = marked(`${where}-stack`);
+      fields.hint = marked(`${where}-hint`);
+      if (fields.cause === undefined) fields.cause = new Error(marked(`${where}-cause`));
+      if (err instanceof ServiceError) fields.internalDetail = marked(`${where}-internal`);
+    }
+    return err;
+  }
+
+  const VALIDATION_WORDS = 'Quantity must be a whole number.';
+  const REFUSAL_WORDS = 'That address did not return an image.';
+
+  /** The sentence for each code, from the item's decision; a new code fails to compile here. */
+  const SENTENCE_BY_CODE: Record<ServiceError['code'], string> = {
+    unauthenticated: TOOL_FAILED_MESSAGE,
+    forbidden: TOOL_PERMISSION_MESSAGE,
+    not_found: TOOL_NOT_FOUND_MESSAGE,
+    validation_error: `<data>${VALIDATION_WORDS}</data>`,
+    plan_limit_exceeded: TOOL_FAILED_MESSAGE,
+    module_disabled: TOOL_FAILED_MESSAGE,
+    conflict: TOOL_CONFLICT_MESSAGE,
+    internal_error: TOOL_FAILED_MESSAGE,
+  };
+
+  const gate = (mfaEnrolled: boolean, where: string) => {
+    const err = mfaGateError({ mfaEnrolled });
+    Object.assign(err.details!, { name: marked(`${where}-details-name`) });
+    return dressed(err, where);
+  };
+
+  /** [failure, how it is made, the one sentence the model may read] */
+  const CASES: Array<[string, () => unknown, string]> = [
+    [
+      'a tool that could not finish',
+      () =>
+        new ToolUnavailableError('searchInventorySemantic', 'failed', {
+          cause: new Error(marked('unavailable-cause')),
+        }),
+      TOOL_FAILURE_SENTENCES.searchInventorySemantic.failed,
+    ],
+    [
+      'a tool not available right now',
+      () =>
+        dressed(
+          new ToolUnavailableError('backfillEmbeddings', 'unavailable', {
+            cause: { message: marked('vendor-cause'), status: 429 },
+          }),
+          'vendor',
+        ),
+      TOOL_FAILURE_SENTENCES.backfillEmbeddings.unavailable,
+    ],
+    [
+      'a tool refusal that kept what it refused',
+      () =>
+        dressed(
+          new ToolRefusal(REFUSAL_WORDS, { cause: new Error(marked('refusal-cause')) }),
+          'refusal',
+        ),
+      REFUSAL_WORDS,
+    ],
+    [
+      'a write of quoted outside text',
+      () => dressed(new UntrustedWriteRefusedError('adjustStock', 'reason'), 'untrusted'),
+      untrustedWriteRefusalSentence('adjustStock', 'reason'),
+    ],
+    [
+      'a ForbiddenError',
+      () => dressed(new ForbiddenError(marked('forbidden-message')), 'forbidden-error'),
+      TOOL_PERMISSION_MESSAGE,
+    ],
+    ...(Object.keys(SENTENCE_BY_CODE) as Array<ServiceError['code']>).map(
+      (code): [string, () => unknown, string] => [
+        `a service refusal with code ${code}`,
+        () =>
+          dressed(
+            new ServiceError(
+              code,
+              code === 'validation_error' ? VALIDATION_WORDS : marked(`${code}-message`),
+              markedDetails(code),
+            ),
+            code,
+          ),
+        SENTENCE_BY_CODE[code],
+      ],
+    ),
+    [
+      'the multi-factor gate for a member with a factor',
+      () => gate(true, 'gate-enrolled'),
+      TOOL_MFA_MESSAGES.aal2_required,
+    ],
+    [
+      'the multi-factor gate for a member with none',
+      () => gate(false, 'gate-unenrolled'),
+      TOOL_MFA_MESSAGES.mfa_required,
+    ],
+    ['an untyped error', () => dressed(new Error(marked('plain-message')), 'plain'), TOOL_FAILED_MESSAGE],
+    [
+      'an untyped error whose words the word map knows',
+      () => dressed(new Error(`Item not found: ${marked('words-message')}`), 'words'),
+      TOOL_NOT_FOUND_MESSAGE,
+    ],
+    ['a thrown string', () => marked('thrown-string'), TOOL_FAILED_MESSAGE],
+    [
+      'a thrown object',
+      () => ({
+        message: marked('object-message'),
+        details: markedDetails('object'),
+        hint: marked('object-hint'),
+      }),
+      TOOL_FAILED_MESSAGE,
+    ],
+  ];
+
+  it('no sentence the model may read carries the mark', () => {
+    for (const [, , sentence] of CASES) expect(sentence).not.toContain(MARK);
+  });
+
+  it.each(CASES)('%s: the classifier and toolFailureForModel give exactly the decided sentence', (_case, make, sentence) => {
+    expect(classifyToolErrorMessage(make())).toBe(sentence);
+    expect(toolFailureForModel(make(), ctx, 'searchInventory', 'ai.tool')).toBe(sentence);
+    expect(toolFailureForModel(make(), ctx, 'searchInventory', 'ai.tool.claude')).toBe(sentence);
+  });
+
+  /** Every request the chat loop sent to the model, as plain data. */
+  let sent: unknown[] = [];
+  const snapshot = (value: unknown) => JSON.parse(JSON.stringify(value)) as unknown;
+
+  /** One tool call to searchInventory, then a reply: the Gemini loop. */
+  function fakeGemini() {
+    let round = 0;
+    return vi.spyOn(GoogleGenerativeAI.prototype, 'getGenerativeModel').mockImplementation(((
+      params: unknown,
+    ) => {
+      sent.push(snapshot(params));
+      return {
+        generateContentStream: async (request: unknown) => {
+          sent.push(snapshot(request));
+          round += 1;
+          const parts =
+            round === 1
+              ? [{ functionCall: { name: 'searchInventory', args: {} } }]
+              : [{ text: 'Done.' }];
+          return {
+            stream: (async function* () {
+              yield { candidates: [{ content: { role: 'model', parts } }] };
+            })(),
+          };
+        },
+      };
+    }) as never);
+  }
+
+  /** One tool call to searchInventory, then a reply: the Claude loop. */
+  function fakeClaude() {
+    let round = 0;
+    return vi.spyOn(Anthropic.Messages.prototype, 'stream').mockImplementation(((body: unknown) => {
+      sent.push(snapshot(body));
+      round += 1;
+      const events =
+        round === 1
+          ? [
+              {
+                type: 'content_block_start',
+                index: 0,
+                content_block: { type: 'tool_use', id: 'toolu_example', name: 'searchInventory', input: {} },
+              },
+              { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{}' } },
+              { type: 'message_delta', delta: { stop_reason: 'tool_use' } },
+            ]
+          : [
+              { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Done.' } },
+              { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+            ];
+      return (async function* () {
+        yield* events;
+      })();
+    }) as never);
+  }
+
+  async function drain(run: AsyncGenerator<unknown, unknown>) {
+    for (;;) {
+      const next = await run.next();
+      if (next.done) return;
+    }
+  }
+
+  const failWith = (thrown: unknown) =>
+    vi.spyOn(TOOL_CATALOG.searchInventory!, 'execute').mockImplementation(() => {
+      throw thrown;
+    });
+
+  /** What the model read for the tool call, in the request after it. */
+  const geminiToolTurn = () => (sent.at(-1) as { contents: unknown[] }).contents.at(-1);
+  const claudeToolTurn = () => (sent.at(-1) as { messages: unknown[] }).messages.at(-1);
+
+  const savedAnthropicKey = env.ANTHROPIC_API_KEY;
+  beforeAll(() => {
+    (env as { ANTHROPIC_API_KEY: string }).ANTHROPIC_API_KEY = 'test-key';
+  });
+  afterAll(() => {
+    (env as { ANTHROPIC_API_KEY: string }).ANTHROPIC_API_KEY = savedAnthropicKey;
+  });
+  beforeEach(() => {
+    sent = [];
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('control: a tool result reaches the next request, so the requests read here are the model’s', async () => {
+    fakeGemini();
+    vi.spyOn(TOOL_CATALOG.searchInventory!, 'execute').mockResolvedValue({ total: marked('result') });
+    await drain(streamChat([], 'How many projectors?', ctx));
+    expect(JSON.stringify(sent)).toContain(marked('result'));
+
+    sent = [];
+    fakeClaude();
+    await drain(streamChatClaude([], 'How many projectors?', ctx));
+    expect(JSON.stringify(sent)).toContain(marked('result'));
+  });
+
+  it.each(CASES)('%s: the Gemini loop hands the model the decided sentence and nothing else', async (_case, make, sentence) => {
+    fakeGemini();
+    failWith(make());
+    await drain(streamChat([], 'How many projectors?', ctx));
+
+    expect(sent).toHaveLength(3); // the model's settings, then two requests
+    expect(geminiToolTurn()).toEqual({
+      role: 'user',
+      parts: [{ functionResponse: { name: 'searchInventory', response: { error: sentence } } }],
+    });
+    expect(JSON.stringify(sent)).not.toContain(MARK);
+  });
+
+  it.each(CASES)('%s: the Claude loop hands the model the decided sentence and nothing else', async (_case, make, sentence) => {
+    fakeClaude();
+    failWith(make());
+    await drain(streamChatClaude([], 'How many projectors?', ctx));
+
+    expect(sent).toHaveLength(2);
+    expect(claudeToolTurn()).toEqual({
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'toolu_example', content: sentence, is_error: true }],
+    });
+    expect(JSON.stringify(sent)).not.toContain(MARK);
   });
 });
