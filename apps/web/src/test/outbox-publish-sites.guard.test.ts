@@ -35,8 +35,9 @@
  *   template unless TABLE_NAMED lists it, and every insert, upsert, update or
  *   delete on a database client's `.from(` whose table is not a literal is
  *   listed in DYNAMIC_FROM_WRITES with the tables it can name. A
- *   `<client>.storage.from(bucket)` is a storage bucket, not a table, and is
- *   not counted; a variable merely named `storage` is not exempt.
+ *   `.update(` on `<client>.storage.from(bucket)` is a storage object move,
+ *   not a table write, and is not counted (an insert, upsert or delete there
+ *   still is); a variable merely named `storage` is not exempt.
  *   Rule 4. In the helper, publish_outbox is called once, directly on
  *   `createAdminClient()` imported from '@/lib/supabase/admin', and the
  *   module exports only HELPER_EXPORTS.
@@ -497,11 +498,12 @@ function literalEventTopic(o: ts.ObjectLiteralExpression, sf: ts.SourceFile): st
 }
 
 /**
- * A storage bucket, not a table: `.from(` read off `<client>.storage`, a
- * member access on another expression. Storage's `.update(path, file)` moves
- * an object; a database client's `.from(` is never reached through
- * `.storage`. A variable merely named `storage` is not exempt: what it holds
- * cannot be told from its name.
+ * Maybe a storage bucket: `.from(` read off `<client>.storage`, a member
+ * access on another expression. Storage's `.update(path, file)` moves an
+ * object, so only `.update(` is exempt there; storage has no insert, upsert
+ * or delete, so those are still table writes whatever the receiver is
+ * called. A variable merely named `storage` is not exempt at all: what it
+ * holds cannot be told from its name.
  */
 function isStorageReceiver(receiver: ts.Expression): boolean {
   const u = unwrap(receiver);
@@ -635,17 +637,18 @@ function scanFileUncached(file: string, source: string) {
       ts.isPropertyAccessExpression(n.expression) &&
       n.expression.name.text === 'from' &&
       n.arguments.length === 1 &&
-      literalText(n.arguments[0]) === null &&
-      !isStorageReceiver(n.expression.expression)
+      literalText(n.arguments[0]) === null
     ) {
+      const writes = isStorageReceiver(n.expression.expression)
+        ? ['insert', 'upsert', 'delete']
+        : ['insert', 'upsert', 'update', 'delete'];
       let top: ts.Node = n;
       const ops: string[] = [];
       while (ts.isPropertyAccessExpression(top.parent) && ts.isCallExpression(top.parent.parent)) {
         ops.push(top.parent.name.text);
         top = top.parent.parent;
       }
-      if (ops.some((o) => o === 'insert' || o === 'upsert' || o === 'update' || o === 'delete'))
-        fromWrites.push(`${file}#${memberOf(n)}`);
+      if (ops.some((o) => writes.includes(o))) fromWrites.push(`${file}#${memberOf(n)}`);
     }
     // Rule 5: how the helper module is reached.
     if (ts.isImportDeclaration(n) && isHelperPath(n.moduleSpecifier)) {
@@ -1478,6 +1481,27 @@ describe('the guard can fail (planted probes)', () => {
     const hit = all.find((f) => f.startsWith(`${NEW_FILE}#f writes through .from(`));
     expect(hit).toBeDefined();
     expect(hit).toContain('storage bucket');
+  });
+
+  it.each([
+    [
+      'an object field named storage',
+      "import { createAdminClient } from '@/lib/supabase/admin';\nexport async function f(t: string, row: object) { const db = { storage: createAdminClient() }; await db.storage.from(t).insert(row); }",
+      'f',
+    ],
+    [
+      'a class field named storage',
+      "import { createAdminClient } from '@/lib/supabase/admin';\nexport class Store { storage = createAdminClient(); async put(t: string, row: object) { await this.storage.from(t).upsert(row); } }",
+      'Store.put',
+    ],
+    [
+      'c.storage, as a delete',
+      'export async function f(c, t: string) { await c.storage.from(t).delete().eq("id", 1); }',
+      'f',
+    ],
+  ])('an insert, upsert or delete through %s is still a table write', (_label, source, member) => {
+    const all = verdict(withFile(REAL, NEW_FILE, source));
+    expect(all.some((f) => f.startsWith(`${NEW_FILE}#${member} writes through .from(`))).toBe(true);
   });
 
   it('a database client kept in a variable named storage gets no bucket exemption', () => {
