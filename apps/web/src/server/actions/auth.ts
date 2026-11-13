@@ -13,8 +13,11 @@ import {
   MFA_CODE_GOTRUE_LIMITED,
   MFA_CODE_NOT_CHECKED,
   MFA_CODE_REFUSED,
+  signOutThisSession,
 } from '@/lib/auth/mfa-code-attempts';
 import { sendPasswordResetEmail } from '@/lib/auth/password-reset-email';
+import { openedFromResetLink } from '@/lib/auth/reset-link-session';
+import { sessionAccountNow, type SessionAccountNow } from '@/lib/auth/session-account';
 import { readVerifiedSessionClaims } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
 import { broadcastToChannel } from '@/lib/realtime/broadcast';
@@ -34,6 +37,7 @@ import { unexpectedActionError } from '@/server/lib/action-error-result';
 import { audit } from '@/server/services/audit';
 import { emitAuthAudit, resolveDefaultOrgAndRole } from '@/server/services/auth-audit';
 import { revokeAllSessionsForUser } from '@/server/services/platform/sessions';
+import { SESSION_CHANGED } from '@/server/services/step-up-held';
 import { broadcastEndedSessions, listMySessionIds } from '@/server/services/sessions';
 
 import {
@@ -353,6 +357,46 @@ async function endSessionsAfterFailedGlobalSignOut(
   return databaseRevoke;
 }
 
+/**
+ * A password change whose update answered for another account than the one
+ * whose current password was checked: reported, that account signed out
+ * everywhere (with the database revoke when GoTrue's sign-out fails), its
+ * devices told, and its row written. Answers sign in again.
+ */
+async function endSessionsAfterPasswordSetForAnotherAccount(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  accountId: string,
+  email: string | null,
+): Promise<ActionResult<never>> {
+  void reportError(new Error('A password change set the password of another account than the one checked'), {
+    tag: 'auth.password_change_account_changed',
+    level: 'error',
+  });
+  const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
+  const databaseRevoke = revokeError
+    ? await endSessionsAfterFailedGlobalSignOut(revokeError, accountId, {
+        tag: 'auth.password_change_revoke_failed',
+        message: 'Password change could not confirm that every session ended',
+      })
+    : 'not_needed';
+  if (databaseRevoke !== 'ok') {
+    await broadcastToChannel(`user:${accountId}:sessions`, 'revoked', { keepId: null });
+  }
+  const { organizationId } = await resolveDefaultOrgAndRole(accountId);
+  await emitAuthAudit({
+    event: 'user.password.changed',
+    userId: accountId,
+    organizationId,
+    extra: {
+      email,
+      account_changed: true,
+      revoke_error: revokeErrorLabel(revokeError),
+      database_revoke: databaseRevoke,
+    },
+  });
+  return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+}
+
 export async function requestPasswordResetAction(
   input: RequestPasswordResetInput,
 ): Promise<ActionResult<{ ok: true }>> {
@@ -414,6 +458,35 @@ const RESET_CODE_ASK =
 const RESET_LINK_GONE =
   'That link has expired or was already used. Choose Forgot? on the sign-in page to get a new link by email.';
 
+/**
+ * A session that did not come from an emailed link in the last hour
+ * (lib/auth/reset-link-session.ts): a signed-in person changes their password
+ * in Settings, Security, which asks for the current one.
+ */
+const RESET_NEEDS_LINK =
+  'A new password can be set here only within an hour of opening the link in your email. Choose Forgot? on the sign-in page to get a new link. If you are signed in, use Change password in Settings → Security.';
+
+/** The reset link's session could not be verified just now; it is left as it is. */
+const RESET_UNCONFIRMED =
+  'Could not confirm your reset link just now, so your password was not changed. Try again in a moment.';
+
+/**
+ * The reset's answer when its session no longer verifies as the account the
+ * link opened (lib/auth/session-account): another account is signed out here;
+ * a session that could not be verified is refused and left alone, so the
+ * link's session stays for the next press.
+ */
+async function resetSessionRefusal(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  now: Exclude<SessionAccountNow, { kind: 'same' }>,
+): Promise<ActionResult<never>> {
+  if (now.kind === 'other') {
+    await signOutThisSession(supabase);
+    return err('unauthenticated', RESET_LINK_GONE);
+  }
+  return err('internal_error', RESET_UNCONFIRMED);
+}
+
 export async function completePasswordResetAction(
   // `totpCode` is additive and optional: the emailed recovery link and the
   // form both keep working without it, and it is read off the raw input rather
@@ -427,6 +500,24 @@ export async function completePasswordResetAction(
     return err('validation_error', parsed.error.issues[0]?.message ?? 'Invalid input');
   }
 
+  const supabase = await createClient();
+
+  // ONLY A SESSION FROM AN EMAILED LINK (S77). A new password is set here
+  // only on a session that an emailed link made in the last hour: its
+  // VERIFIED `amr` claim holds that link's entry (lib/auth/reset-link-session.ts
+  // lists the ways a person reaches this page and the method names). A
+  // session made with a password changes its password through Change
+  // password, which asks for the current one. Checked
+  // first: a refused session costs no limiter count, no factor read and no
+  // write. The account it verifies as is the account this press is for; the
+  // code budget and the password update are held to it below.
+  const linkClaims = await readVerifiedSessionClaims(supabase);
+  if (!linkClaims) return err('unauthenticated', RESET_LINK_GONE);
+  if (!openedFromResetLink(linkClaims.amr, Math.floor(Date.now() / 1000))) {
+    return err('forbidden', RESET_NEEDS_LINK);
+  }
+  const accountId = linkClaims.userId;
+
   // 5 completes / 15 min / ip. Closed mode — the user is briefly
   // authenticated by the recovery token at this point, but the
   // endpoint is still effectively unauthenticated front door.
@@ -435,15 +526,6 @@ export async function completePasswordResetAction(
   if (!rl.allowed) {
     return err('rate_limited', 'Too many attempts. Try again in a few minutes.');
   }
-
-  const supabase = await createClient();
-
-  // Snapshot the user BEFORE updateUser/signOut so we can attribute the
-  // audit row to a real userId even after the global signOut. If this one
-  // read fails, the update's own answer names the account (resetUser below).
-  const {
-    data: { user: preUser },
-  } = await supabase.auth.getUser();
 
   // MFA STEP-UP. GoTrue refuses `updateUser({ password })` outright when the
   // user has a verified factor and the calling session is not AAL2 — "AAL2
@@ -475,28 +557,37 @@ export async function completePasswordResetAction(
   const totpFactorId =
     (factorsData?.totp ?? []).find((f) => f.status === 'verified')?.id ?? null;
   if (totpFactorId) {
-    const { data: aal } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aal?.currentLevel !== 'aal2') {
+    // The session as it verifies AFTER the factor list (a read that can
+    // refresh the session into another account's), against the account this
+    // press is for: another account is signed out here and refused, a session
+    // that could not be verified is refused and left alone, both with nothing
+    // spent. Its level decides whether the code is needed, and its account is
+    // the one the code budget is spent on (shared with the sign-in code and
+    // the step-up, lib/auth/mfa-code-attempts.ts).
+    const heldNow = await sessionAccountNow(supabase, accountId);
+    if (heldNow.kind !== 'same') return resetSessionRefusal(supabase, heldNow);
+    const held = heldNow.claims;
+    if (held.aal !== 'aal2') {
       const code = normalizeTotpCode(input.totpCode);
       if (!code) {
         // `details.reason` lets the reset form reveal its code field instead of
         // showing a dead end. Same vocabulary as the API gate's aal2_required.
         return err('forbidden', RESET_CODE_ASK, { reason: 'aal2_required' });
       }
-      // The account whose code budget this press spends (shared with the
-      // sign-in code and the step-up, lib/auth/mfa-code-attempts.ts): the
-      // first read's, else the link session's verified claims. With neither,
-      // the code is not checked and nothing is spent.
-      const accountId = preUser?.id ?? (await readVerifiedSessionClaims(supabase))?.userId ?? null;
-      if (!accountId) {
-        return err('forbidden', MFA_CODE_NOT_CHECKED, { reason: 'aal2_required' });
-      }
       const check = await checkMfaCode(supabase, {
-        userId: accountId,
+        userId: held.userId,
         factorId: totpFactorId,
         code,
         path: 'password_reset',
       });
+      // GoTrue judged the code while the session held another account: this
+      // session was signed out (checkMfaCode), and no password is set.
+      if (check.kind === 'account_changed') return err('unauthenticated', RESET_LINK_GONE);
+      // GoTrue judged the code, then the session could not be verified: the
+      // answer is not used, the session is left alone, and no password is set.
+      if (check.kind === 'unconfirmed') {
+        return err('forbidden', MFA_CODE_NOT_CHECKED, { reason: 'aal2_required' });
+      }
       // The two pauses (this account's code budget spent, GoTrue's own limit
       // on code checks) carry `reason` too: an authenticator code changes
       // every 30 seconds, so the one in the box is stale once the wait is
@@ -523,6 +614,18 @@ export async function completePasswordResetAction(
         );
       }
     }
+  }
+
+  // The password is set only for the account this press is for, and only
+  // while its session still carries the link's entry: the session is read
+  // once more right before the update, against that account. One that now
+  // holds another account is signed out here and refused; one that could not
+  // be verified is refused and left alone.
+  const atUpdateNow = await sessionAccountNow(supabase, accountId);
+  if (atUpdateNow.kind !== 'same') return resetSessionRefusal(supabase, atUpdateNow);
+  const atUpdate = atUpdateNow.claims;
+  if (!openedFromResetLink(atUpdate.amr, Math.floor(Date.now() / 1000))) {
+    return err('forbidden', RESET_NEEDS_LINK);
   }
 
   const { data: updated, error } = await supabase.auth.updateUser({
@@ -565,11 +668,26 @@ export async function completePasswordResetAction(
     return unexpectedActionError(error, 'actions.auth.password_reset');
   }
 
-  // The account the new password was set for. A failed first read (a GoTrue
-  // 5xx) leaves preUser null while the rest of the press can still go
-  // through; the update's own answer names the same account, so the revoke
-  // broadcast and the audit row below still go out (docket B50 review).
-  const resetUser = preUser ?? updated?.user ?? null;
+  // The update's answer names the account the new password was set for. When
+  // that is not the account the link's session verified as, the session
+  // changed accounts between the last read and the update: that account's
+  // sessions are ended and its row written, as for any finished reset, and
+  // this press answers with the page's own words for a link that no longer
+  // works (a person here may have no working password to sign in with).
+  const updatedId = updated?.user?.id ?? null;
+  const accountChanged = updatedId !== null && updatedId !== accountId;
+  if (accountChanged) {
+    void reportError(new Error('A password reset set the password of another account than the link verified'), {
+      tag: 'auth.password_reset_account_changed',
+      level: 'error',
+    });
+  }
+
+  // The account the new password was set for, with the address the update's
+  // own answer names, else the token's (only when it is the same account).
+  const resetUser = accountChanged
+    ? { id: updatedId, email: updated?.user?.email ?? null }
+    : { id: accountId, email: updated?.user?.email ?? linkClaims.email ?? null };
 
   // SECURITY: after an email-recovery password update, force a fresh
   // sign-in rather than auto-elevating the recovery session into the
@@ -586,7 +704,7 @@ export async function completePasswordResetAction(
   // an hour, the auto-elevation this block exists to prevent.
   const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
   const databaseRevoke = revokeError
-    ? await endSessionsAfterFailedGlobalSignOut(revokeError, resetUser?.id ?? null, {
+    ? await endSessionsAfterFailedGlobalSignOut(revokeError, resetUser.id, {
         tag: 'auth.password_reset_revoke_failed',
         message: 'Password reset could not confirm that every session ended',
       })
@@ -595,24 +713,24 @@ export async function completePasswordResetAction(
   // point of resetting a password is that existing sessions may be in
   // hostile hands. Same broadcast contract as device management. Not sent
   // twice when the database revoke already did.
-  if (resetUser && databaseRevoke !== 'ok') {
+  if (databaseRevoke !== 'ok') {
     await broadcastToChannel(`user:${resetUser.id}:sessions`, 'revoked', { keepId: null });
   }
 
   // Audit the successful recovery-based reset.
-  if (resetUser) {
-    const { organizationId } = await resolveDefaultOrgAndRole(resetUser.id);
-    await emitAuthAudit({
-      event: 'user.password.reset_completed',
-      userId: resetUser.id,
-      organizationId,
-      extra: {
-        email: resetUser.email ?? null,
-        revoke_error: revokeErrorLabel(revokeError),
-        database_revoke: databaseRevoke,
-      },
-    });
-  }
+  const { organizationId } = await resolveDefaultOrgAndRole(resetUser.id);
+  await emitAuthAudit({
+    event: 'user.password.reset_completed',
+    userId: resetUser.id,
+    organizationId,
+    extra: {
+      email: resetUser.email,
+      revoke_error: revokeErrorLabel(revokeError),
+      database_revoke: databaseRevoke,
+      ...(accountChanged ? { account_changed: true } : {}),
+    },
+  });
+  if (accountChanged) return err('unauthenticated', RESET_LINK_GONE);
 
   // Redirect to /signin. The sign-in form's existing success toast
   // ("Password updated.") still fires from the consumer page.
@@ -729,10 +847,39 @@ export async function changePasswordAction(
   // cannot be listed. Never throws; unreadable is null and nothing is named.
   const listedSessions = await listMySessionIds(supabase);
 
-  const { error: updateError } = await supabase.auth.updateUser({
+  // The new password is set only for the account whose current password was
+  // checked above: the reads since then loaded the cookie session again, and
+  // a load can refresh it into another account's (lib/auth/verified-claims).
+  // Read once more right before the update (lib/auth/session-account): a
+  // session that now verifies as another account is signed out here and
+  // refused; one that could not be verified is refused and left alone, and no
+  // password is changed.
+  const sessionNow = await sessionAccountNow(supabase, user.id);
+  if (sessionNow.kind === 'other') {
+    await signOutThisSession(supabase);
+    return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+  }
+  if (sessionNow.kind === 'unverified') {
+    return err(
+      'internal_error',
+      'Could not confirm your sign-in just now, so your password was not changed. Try again in a moment.',
+    );
+  }
+
+  const { data: updated, error: updateError } = await supabase.auth.updateUser({
     password: parsed.data.newPassword,
   });
   if (updateError) return err('internal_error', updateError.message);
+
+  // The update's answer names the account the new password was set for. When
+  // that is not the account whose current password was checked, the session
+  // changed accounts between the read above and the update: every session of
+  // that account is ended, its row written, and this press answers with sign
+  // in again.
+  const updatedId = updated?.user?.id ?? null;
+  if (updatedId !== null && updatedId !== user.id) {
+    return endSessionsAfterPasswordSetForAnotherAccount(supabase, updatedId, updated?.user?.email ?? null);
+  }
 
   // SECURITY: revoke every OTHER live session for this user (mobile,
   // other browsers, stale tabs) but keep the current tab signed in so
