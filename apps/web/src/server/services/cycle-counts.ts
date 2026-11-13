@@ -709,6 +709,12 @@ export class CycleCountsService {
    * `release_cycle_count` RPC (race-safe, version-bumped). Counted lines are
    * preserved (owner decision) — only the assignment clears. A non-blank
    * reason is required and recorded in the audit trail.
+   *
+   * A refusal of a count that is already released says so (docket S42b):
+   * since S42 the RPC refuses a non-manager on a count with no assignee,
+   * which is also what an assignee meets when they tap Release count again
+   * after their own release went through (its answer lost) or after a
+   * manager released the count. See countIsAlreadyReleased.
    */
   async release(id: string, reason: string): Promise<CycleCountRow> {
     assertModuleEnabled(this.ctx, 'cycle_counts');
@@ -740,11 +746,18 @@ export class CycleCountsService {
         throw new ServiceError('conflict', 'This cycle count is closed — it can\'t be released.');
       if (msg.includes('cycle_count_not_found'))
         throw new ServiceError('not_found', 'Cycle count not found.');
-      if (msg.includes('forbidden'))
+      if (msg.includes('forbidden')) {
+        // Nothing was written: the RPC refused. A count already released
+        // answers a conflict, with no audit row; every other refusal keeps
+        // the sentence it had.
+        if (await this.countIsAlreadyReleased(id)) {
+          throw new ServiceError('conflict', 'This count was already released.');
+        }
         throw new ServiceError(
           'forbidden',
           'Only the assigned employee or a manager can release this count.',
         );
+      }
       throw new ServiceError('internal_error', 'Could not release the cycle count.');
     }
     await audit(
@@ -757,6 +770,44 @@ export class CycleCountsService {
       this.ctx,
     );
     return data as unknown as CycleCountRow;
+  }
+
+  /**
+   * After release_cycle_count refused a release ('forbidden'): is the count
+   * in progress with no assignee? Then the caller's release has nothing left
+   * to do, and "Only the assigned employee or a manager can release this
+   * count." would tell the person who WAS the assignee (their first release
+   * went through, or a manager's did) that only the assignee may release.
+   *
+   * One read, with the caller's own client in the active organization, as
+   * every read here: row level security decides what it sees (cycle_counts
+   * is readable by the members of its organization). Someone outside the
+   * count's organization never gets here: release() read the count in the
+   * active organization before the function (S39) and answered not found. A
+   * count this read no longer finds keeps the generic refusal, and so does a
+   * failed read (the refusal stands either way), which is reported. Asks no
+   * permission and writes nothing.
+   */
+  private async countIsAlreadyReleased(id: string): Promise<boolean> {
+    const { data, error } = await this.ctx.supabase
+      .from('cycle_counts')
+      .select('status, assigned_to')
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) {
+      void reportError(
+        new Error(`cycle count read after a refused release failed: ${error.message}`),
+        {
+          tag: 'cycle_counts.release.refusal_read',
+          level: 'warning',
+          extra: { cycleCountId: id, code: (error as { code?: string }).code ?? null },
+        },
+      );
+      return false;
+    }
+    const count = data as { status: CycleCountStatus; assigned_to: string | null } | null;
+    return count?.status === 'in_progress' && count.assigned_to === null;
   }
 
   /**
@@ -1787,6 +1838,9 @@ export class CycleCountsService {
         confirmed_at: new Date().toISOString(),
         confirmed_by: this.ctx.userId,
       })
+      // Filtered to THIS organization (S41), like every write named by a
+      // row id: only the app knows which organization is active.
+      .eq('organization_id', this.ctx.organizationId)
       .eq('id', scanId)
       .select('id')
       .maybeSingle();

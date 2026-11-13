@@ -94,17 +94,20 @@ function buildGreeting(timezone: string | null): { word: string; dateLabel: stri
 // with the NeedsAttentionHero it feeds) and is imported above.
 
 export default async function DashboardHome() {
-  // Resolve the topbar warehouse filter once and pass it into every
-  // summary call so the dashboard tiles, low-stock list, and shift-
-  // command counts all narrow to the same scope.
-  const warehouseFilter = await getActiveWarehouseFilter();
-
   // SECURITY-CRITICAL: org/auth context stays BLOCKING in the shell (never
   // behind Suspense) so an unauthenticated/unauthorized request is rejected
   // before any chrome paints. requireOrgContext + orgRow + the active
   // warehouse name are all request-cached/cheap, so the header (greeting,
   // action buttons) paints immediately while the heavy data sections stream.
+  // FIRST, before anything else is awaited: the page asks for the member's
+  // context itself (no session, no organization, an authenticator code still
+  // owed), whatever the layout above it did for this request.
   const ctx = await requireOrgContext();
+
+  // Resolve the topbar warehouse filter once and pass it into every
+  // summary call so the dashboard tiles, low-stock list, and shift-
+  // command counts all narrow to the same scope.
+  const warehouseFilter = await getActiveWarehouseFilter();
 
   const supabaseShell = await createClient();
   const [orgRow, activeWhNameRes] = await Promise.all([

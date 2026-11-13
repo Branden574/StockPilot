@@ -8,6 +8,8 @@ import { env } from '@/lib/env';
 import { SESSION_HEADER_USER_EMAIL } from '@/lib/supabase/middleware';
 import { createClient } from '@/lib/supabase/server';
 
+import { stepUpOwed } from '@stockpilot/core';
+
 import { requireSession, type ServerSession } from './session';
 import { readVerifiedSessionClaimsOf, type VerifiedSessionClaims } from './verified-claims';
 
@@ -29,17 +31,26 @@ export function isPlatformAdmin(email: string | null | undefined): boolean {
   return allowlist.split(',').includes(normalized);
 }
 
+/** The verified auth user of a request: who it is, and the factors GoTrue lists for it. */
+interface VerifiedUser {
+  id: string;
+  email: string | null;
+  /** GoTrue's own list for this user, from the same answer that named it. */
+  factors: ReadonlyArray<{ status?: string | null }>;
+}
+
 /**
  * The VERIFIED auth user of the current request (auth.getUser() validates the
  * session against the auth server): its id with its email, so the gates below
- * can hold the AAL2 claims to the same account whose email is allowlisted.
- * Cached per render, shared with getVerifiedEmail.
+ * can hold the AAL2 claims to the same account whose email is allowlisted, and
+ * its factors, so they can tell whether that account has an authenticator
+ * without a second round trip. Cached per render, shared with getVerifiedEmail.
  */
-const getVerifiedUser = cache(async (): Promise<{ id: string; email: string | null } | null> => {
+const getVerifiedUser = cache(async (): Promise<VerifiedUser | null> => {
   const supabase = await createClient();
   const { data, error } = await supabase.auth.getUser();
   if (error || !data?.user) return null;
-  return { id: data.user.id, email: data.user.email ?? null };
+  return { id: data.user.id, email: data.user.email ?? null, factors: data.user.factors ?? [] };
 });
 
 /**
@@ -58,13 +69,21 @@ export const getVerifiedEmail = cache(
   async (): Promise<string | null> => (await getVerifiedUser())?.email ?? null,
 );
 
-/** Whether the current request's VERIFIED auth email is an allowlisted admin. */
+/**
+ * Whether the current request is an allowlisted admin's: the VERIFIED auth
+ * email is on the allowlist, and the session does not still owe that
+ * account's authenticator code (owesStepUp below). The gate of the two
+ * platform pages under /dashboard/admin, of the support-ticket triage action
+ * and of "stop acting as", and what shows the platform links and the
+ * impersonation banner.
+ */
 export async function currentUserIsPlatformAdmin(): Promise<boolean> {
-  return isPlatformAdmin(await getVerifiedEmail());
+  const admin = await verifiedPlatformAdmin();
+  return admin !== null && !(await owesStepUp(admin));
 }
 
 /** The verified user when its email is on the allowlist, else null. */
-async function verifiedPlatformAdmin(): Promise<{ id: string } | null> {
+async function verifiedPlatformAdmin(): Promise<VerifiedUser | null> {
   const user = await getVerifiedUser();
   return user && isPlatformAdmin(user.email) ? user : null;
 }
@@ -120,6 +139,23 @@ export async function currentUserIsPlatformAdminFromRequestHeader(): Promise<boo
  */
 async function currentVerifiedClaims(adminId: string): Promise<VerifiedSessionClaims | null> {
   return readVerifiedSessionClaimsOf(await createClient(), adminId);
+}
+
+/**
+ * Does the allowlisted account's session still owe its authenticator code?
+ * The one rule (stepUpOwed in @stockpilot/core) that requireOrgContext() and
+ * the API context apply to a member: an account with a verified factor counts
+ * only on a session at aal2. An allowlisted account with no authenticator owes
+ * nothing here; the console itself (requirePlatformAdmin) and every dangerous
+ * action (requireStepUp) ask for aal2 outright.
+ *
+ * The factors are those of the getUser() answer that named the account, and
+ * the level is read only when one of them is verified: a local signature
+ * check, held to this same account (currentVerifiedClaims).
+ */
+async function owesStepUp(admin: VerifiedUser): Promise<boolean> {
+  if (!stepUpOwed(admin.factors, null)) return false;
+  return stepUpOwed(admin.factors, (await currentVerifiedClaims(admin.id))?.aal);
 }
 
 /**
@@ -191,7 +227,8 @@ export type PlatformAdminCheck =
  * Action-layer equivalent of requirePlatformAdmin. Use at the top of every
  * platform-admin server action. `requireStepUp` adds the fresh-AAL2
  * requirement for the dangerous actions (act-as, billing changes,
- * provisioning).
+ * provisioning). Without it, an allowlisted account that has an authenticator
+ * is still refused (`aal2_required`) until its session has entered the code.
  */
 export async function checkPlatformAdmin(
   opts: { requireStepUp?: boolean } = {},
@@ -207,6 +244,8 @@ export async function checkPlatformAdmin(
     const claims = await currentVerifiedClaims(admin.id);
     if (claims?.aal !== 'aal2') return { ok: false, reason: 'aal2_required' };
     if (!stepUpIsFresh(claims)) return { ok: false, reason: 'aal2_required' };
+  } else if (await owesStepUp(admin)) {
+    return { ok: false, reason: 'aal2_required' };
   }
   return { ok: true, session };
 }

@@ -7,7 +7,8 @@ import { unstable_rethrow } from 'next/navigation';
  * end the work by THROWING an error that carries a `digest`. The signed-out
  * path depends on it: withContext() -> requireOrgContext() answers a missing
  * session with a redirect to sign-in, a disabled account with a redirect to
- * /account-disabled and a member with no organization with a redirect to
+ * /account-disabled, a session that still owes its authenticator code with a
+ * redirect to /signin/mfa and a member with no organization with a redirect to
  * /onboarding. A catch that turns that error into an ActionResult hands the
  * browser "Something went wrong" (or the bare text "NEXT_REDIRECT"), and the
  * person stays on a page that can no longer save anything.
