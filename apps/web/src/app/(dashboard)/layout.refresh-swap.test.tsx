@@ -39,12 +39,32 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
  *   read as "no authenticator" and the gate was skipped at aal1, until the
  *   layout took the list only as the context user's own. The last block runs
  *   the REAL factor list; the blocks before it stub the member's own.
+ *
+ * requireOrgContext() now asks the same question before the layout does
+ * (docket S43c, lib/auth/step-up-gate), on the same two reads held to the same
+ * member. These blocks take that gate out, so they still show the layout's
+ * own gate standing by itself. The final block puts it back, as in a real
+ * request, and runs the same sessions through both.
  */
 
 const hoisted = vi.hoisted(() => ({
   realClaimsRead: null as null | (() => Promise<unknown>),
   realFactorsRead: null as null | (() => Promise<unknown>),
+  /** Take requireOrgContext()'s own code gate out, leaving the layout's alone. */
+  codeGateOut: true,
 }));
+vi.mock('@/lib/auth/step-up-gate', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/lib/auth/step-up-gate')>();
+  return {
+    ...real,
+    startStepUpReads: () =>
+      hoisted.codeGateOut
+        ? ({} as ReturnType<typeof real.startStepUpReads>)
+        : real.startStepUpReads(),
+    stepUpIsOwed: async (...args: Parameters<typeof real.stepUpIsOwed>) =>
+      hoisted.codeGateOut ? false : real.stepUpIsOwed(...args),
+  };
+});
 
 let jar = new Map<string, string>();
 vi.mock('next/headers', async () => {
@@ -260,6 +280,7 @@ beforeEach(() => {
   authAs = [];
   restSubjects = [];
   onContextAnswered = null;
+  hoisted.codeGateOut = true;
   server = fakeAuthServer(projectKey);
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(
@@ -495,5 +516,55 @@ describe("the layout gate with the real session reads: the factor list is the me
     await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
     expect(restSubjects).toEqual([MEMBER]);
     expect(authCalls.filter((p) => p === '/token')).toHaveLength(1);
+  });
+});
+
+/**
+ * As in a real request: requireOrgContext()'s gate runs first, then the
+ * layout's. The fixture's proxy headers carry no page to come back to, so the
+ * context's redirect is the bare code page.
+ */
+describe("with requireOrgContext()'s own gate in front, the same sessions get the same answers", () => {
+  const TO_CODE_PAGE = /^REDIRECT:\/signin\/mfa$/;
+
+  beforeEach(() => {
+    hoisted.codeGateOut = false;
+  });
+
+  it("the member's aal1 token beside another account's aal2 refresh token: the code page", async () => {
+    await memberCookie('aal1', OTHER_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await otherAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    expect(restSubjects).toEqual([MEMBER]);
+  });
+
+  it('crossing the margin before the render: the identity is still refuted (sign-in), and no context is made', async () => {
+    await memberCookie('aal1', OTHER_REFRESH, CROSSED_BEFORE_RENDER);
+    await otherAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(/^REDIRECT:\/signin$/);
+    expect(restSubjects).toEqual([OTHER]);
+  });
+
+  it("the member's aal1 token with a no-factor account's refresh token, the real list first: the code page", async () => {
+    readTheRealFactorList();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    expect(restSubjects).toEqual([MEMBER]);
+  });
+
+  it("the real list started after the context, refreshed into a no-factor account: the code page, never 'no authenticator'", async () => {
+    startFactorsReadAfterTheContext();
+    await memberCookie('aal1', NO_FACTOR_REFRESH, CROSSES_DURING_FIRST_ROUND_TRIP);
+    await noFactorAccountSession();
+    await expect(DashboardLayout({ children: null })).rejects.toThrow(TO_CODE_PAGE);
+    expect(restSubjects).toEqual([MEMBER]);
+  });
+
+  it("control: the member's own aal2 session, refreshing before the render or during it, renders the dashboard", async () => {
+    await memberCookie('aal2', MEMBER_REFRESH, CROSSED_BEFORE_RENDER);
+    await memberOwnRefresh();
+    await expect(DashboardLayout({ children: null })).resolves.toBeTruthy();
+    expect(restSubjects).toEqual([MEMBER]);
   });
 });

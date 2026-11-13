@@ -11,11 +11,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  * every rollout.
  */
 
+// The page takes the person from the member's context (requireOrgContext);
+// the same person either way.
+const person = { userId: '11111111-1111-4111-8111-111111111111', email: 'person@example.test' };
 vi.mock('@/lib/auth/session', () => ({
-  requireSession: async () => ({
-    userId: '11111111-1111-4111-8111-111111111111',
-    email: 'person@example.test',
-  }),
+  requireSession: async () => person,
+  requireOrgContext: async () => person,
 }));
 vi.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
