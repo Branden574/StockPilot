@@ -1,10 +1,12 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { headers } from 'next/headers';
 
 import { requireSession } from '@/lib/auth/session';
 import { readVerifiedSessionTokenOf } from '@/lib/auth/verified-claims';
 import { verifyPasswordSideChannel } from '@/lib/auth/verify-password';
+import { clientIpFromHeaders } from '@/lib/client-ip';
 import { rethrowControlFlow } from '@/lib/control-flow';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { createAccessTokenClient } from '@/lib/supabase/access-token-client';
@@ -109,6 +111,26 @@ export async function getMfaRecoveryCodeStatus(): Promise<{
   }
 }
 
+/** The words for every limit of the recovery code below. */
+const RECOVERY_PAUSED = 'Too many recovery-code attempts. Wait a few minutes and try again.';
+const RECOVERY_WINDOW_MS = 15 * 60_000;
+/** Presses of one account at one client address in a window. */
+const RECOVERY_PRESSES_AT_ADDRESS = 5;
+/**
+ * Presses of one account that carry a password, at every address, in a
+ * window. One address can put at most 10 presses into one window (its own
+ * 5-per-window bucket can start a second window inside this one), so one
+ * address alone never fills this bucket.
+ */
+const RECOVERY_PASSWORD_CHECKS = 15;
+/** Presses of one account whose password checked out, at every address, in a window. */
+const RECOVERY_CODE_CHECKS = 5;
+
+/** One count in a bucket of the recovery code; closed: a limiter that cannot answer refuses. */
+async function allowRecoveryPress(key: string, limit: number): Promise<boolean> {
+  return (await checkRateLimit(key, limit, RECOVERY_WINDOW_MS, 'closed')).allowed;
+}
+
 /**
  * Used by /signin/mfa when the user can't reach their TOTP device.
  * Verifies one of their unused recovery codes, and on success unenrolls
@@ -123,12 +145,23 @@ export async function consumeMfaRecoveryCodeAction(input: {
   try {
     const session = await requireSession();
 
-    // Rate-limit the recovery-code consume path. Without this an
-    // attacker (legitimate AAL1 session) could brute-force-style spam
-    // codes to enumerate consumed-vs-not, or burn the user's codes
-    // to force a re-enrollment lockout. 5 attempts / 15 minutes is
-    // generous for a real user who made a typo and tight enough that
-    // brute force is impractical against the 80-bit code space.
+    // Rate-limit the recovery-code consume path, in three buckets, each
+    // counted once per press and each closed:
+    //   1. every press, first: the account at this client address
+    //      (lib/client-ip, which trusts x-forwarded-for only on Vercel), 5 per
+    //      15 minutes. A session of the account at one address cannot spend
+    //      the bucket of the person at another;
+    //   2. every press that carries a password, before the password check:
+    //      the account at every address, 15 per 15 minutes, so password
+    //      guesses here stay bounded for the account whatever the address,
+    //      and one address alone never fills it (RECOVERY_PASSWORD_CHECKS);
+    //   3. every press whose password checked out, before the code is
+    //      checked: the account at every address, 5 per 15 minutes, so code
+    //      guesses stay bounded for the account whatever the address.
+    // The limiter checks and counts in one step (increment_rate_limit, 0048),
+    // so each bucket counts the presses that reach its check, never a press
+    // that stopped earlier: a press with no password spends only the first,
+    // a wrong password never reaches the third.
     //
     // 'closed' is load-bearing: checkRateLimit defaults to mode 'open', which
     // answers `allowed: true` whenever the increment_rate_limit RPC errors —
@@ -142,12 +175,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
     // change-password, email-change request/resend) already passes 'closed';
     // this one had been missing it. The trade — a limiter outage blocks
     // recovery-code use for its duration — is the one they all already make.
-    const rl = await checkRateLimit(`mfa-recovery:${session.userId}`, 5, 15 * 60_000, 'closed');
-    if (!rl.allowed) {
-      return err(
-        'validation_error',
-        'Too many recovery-code attempts. Wait a few minutes and try again.',
-      );
+    const ip = clientIpFromHeaders(await headers());
+    if (
+      !(await allowRecoveryPress(
+        `mfa-recovery:${session.userId}:${ip}`,
+        RECOVERY_PRESSES_AT_ADDRESS,
+      ))
+    ) {
+      return err('validation_error', RECOVERY_PAUSED);
     }
 
     // Password re-confirm is MANDATORY. This flow is inherently AAL1 (the user
@@ -157,6 +192,14 @@ export async function consumeMfaRecoveryCodeAction(input: {
     // (`if (input.password)`), which let a direct call skip the check entirely.
     if (!input.password) {
       return err('forbidden', 'Your account password is required to use a recovery code.');
+    }
+    if (
+      !(await allowRecoveryPress(
+        `mfa-recovery-password:${session.userId}`,
+        RECOVERY_PASSWORD_CHECKS,
+      ))
+    ) {
+      return err('validation_error', RECOVERY_PAUSED);
     }
     const pwRes = await verifyPasswordSideChannel(session.email, input.password);
     if (!pwRes.ok) {
@@ -175,6 +218,10 @@ export async function consumeMfaRecoveryCodeAction(input: {
     const supabase = await createClient();
     const held = await readVerifiedSessionTokenOf(supabase, session.userId);
     if (!held) return err('unauthenticated', SESSION_CHANGED, { reason: 'session_changed' });
+
+    if (!(await allowRecoveryPress(`mfa-recovery-code:${session.userId}`, RECOVERY_CODE_CHECKS))) {
+      return err('validation_error', RECOVERY_PAUSED);
+    }
 
     const { data: ok_, error } = await createAccessTokenClient(held.token).rpc(
       'consume_mfa_recovery_code',
