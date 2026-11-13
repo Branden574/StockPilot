@@ -69,7 +69,8 @@ describe('the Liquid Glass release is a draft at the top, and never leaves the s
   it('keeps every RECHECK as a code comment only, never in the words a reader would see', () => {
     expect(JSON.stringify(release())).not.toMatch(/RECHECK/);
     const text = readFileSync(resolve(__dirname, 'registry.ts'), 'utf8');
-    const block = text.slice(0, text.indexOf(`id: '${RELEASES[1]!.id}'`));
+    // Re-pinned by docs/whats-new-2026-11-13 (2026-11-13; was: every pinned position three places higher): the Release count, AI Assistant and not found releases are published at the top, below the Liquid Glass draft, so every position below it moves down by three.
+    const block = text.slice(0, text.indexOf(`id: '${RELEASES[4]!.id}'`));
     const lines = block.split('\n').filter((l) => l.includes('RECHECK'));
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expect(line.trim().startsWith('//'), line).toBe(true);

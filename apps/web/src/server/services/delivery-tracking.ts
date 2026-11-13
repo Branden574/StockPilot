@@ -57,7 +57,13 @@ export class DeliveryTrackingService {
 
   /** Delete the live point when an order leaves in_transit (completed/cancelled). */
   async purgeForOrder(orderId: string): Promise<void> {
-    await this.ctx.supabase.from('delivery_locations').delete().eq('order_request_id', orderId);
+    // Filtered to this organization (S41), like every write named by a row
+    // id: only the app knows which organization is active.
+    await this.ctx.supabase
+      .from('delivery_locations')
+      .delete()
+      .eq('organization_id', this.ctx.organizationId)
+      .eq('order_request_id', orderId);
   }
 }
 

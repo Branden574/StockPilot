@@ -222,8 +222,9 @@ describe('PostHog on /signin, through the real SDK', () => {
   it('empties its queue by fetch when the page goes away, so no Referer carries the address', async () => {
     // A beacon goes by the page's referrer policy, which for a same-origin
     // request such as /ingest is the full address (next.config.ts:
-    // strict-origin-when-cross-origin), and the /ingest rewrite forwards it to
-    // PostHog. The SDK's fetch asks for the origin only.
+    // strict-origin-when-cross-origin). The /ingest route passes no Referer on
+    // to PostHog, and this keeps the address out of the request in the first
+    // place: the SDK's fetch asks for the origin only.
     onSignInFromInvite();
     const instance = posthog.init(KEY, { ...providerOptions, ...QUIET }, 'b39_unload');
     fetchStub.mockClear();

@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { SupportTriage } from '@/components/admin/support-triage';
 import { PageHeader, PageHeaderBackLink } from '@/components/patterns/page-header';
 import { currentUserIsPlatformAdmin } from '@/lib/auth/platform-admin';
+import { requireOrgContext } from '@/lib/auth/session';
 import { listSupportTickets } from '@/server/services/support-tickets';
 
 // The Liquid Glass settings and administration composition (stage 4:
@@ -15,6 +16,10 @@ export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Support tickets · Admin' };
 
 export default async function AdminSupportPage() {
+  // The member's context first, as on every dashboard page: no session, no
+  // organization and an authenticator code still owed are answered here, by
+  // the page itself, before the gate below or any ticket is read.
+  await requireOrgContext();
   // Platform-admin only — support tickets are StockPilot's own inbox, not
   // per-org data. Non-admins bounce to the dashboard. Gated on the VERIFIED
   // auth email, never the user-writable profile column.

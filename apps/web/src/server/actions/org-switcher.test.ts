@@ -4,13 +4,20 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 
+// The action asks for the member's context (requireOrgContext), which sends a
+// session that still owes its authenticator code to /signin/mfa
+// (lib/auth/session.step-up.test.ts). Here it answers, or redirects as the
+// real one does.
 vi.mock('@/lib/auth/session', () => ({
-  requireSession: vi.fn(async () => ({
+  requireOrgContext: vi.fn(async () => ({
     userId: 'user-1',
     email: 'u@example.test',
     fullName: null,
     avatarUrl: null,
     defaultOrganizationId: 'org-1',
+    organizationId: 'org-1',
+    organizationName: 'Org One',
+    role: 'staff',
   })),
 }));
 
@@ -23,6 +30,9 @@ vi.mock('@/lib/supabase/server', () => ({
 }));
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
+
+import { requireOrgContext } from '@/lib/auth/session';
 
 import { switchOrganizationAction } from './org-switcher';
 
@@ -66,6 +76,23 @@ describe('switchOrganizationAction', () => {
 
     // user_profiles.update was actually issued
     expect(stubHolder.stub.fromCalls).toContain('user_profiles');
+  });
+
+  it('a session the context sends to the authenticator code page switches nothing, and the redirect gets out', async () => {
+    stubHolder.stub = makeSupabaseStub({
+      'organization_members.select': {
+        data: [{ organization_id: VALID_ORG_ID }],
+        error: null,
+      },
+      'user_profiles.update': { data: null, error: null },
+    });
+    vi.mocked(requireOrgContext).mockImplementationOnce(async () => redirect('/signin/mfa'));
+
+    await expect(switchOrganizationAction({ organizationId: VALID_ORG_ID })).rejects.toMatchObject({
+      digest: expect.stringContaining('/signin/mfa'),
+    });
+    expect(stubHolder.stub.fromCalls).toEqual([]);
+    expect(revalidatePath).not.toHaveBeenCalled();
   });
 
   it('returns internal_error when the update fails', async () => {
