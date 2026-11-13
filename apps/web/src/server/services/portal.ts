@@ -183,10 +183,73 @@ function comparePortalMappings(
 }
 
 /**
+ * How many of an account's mappings resolvePortalContext asks the module and
+ * plan gate of, first in comparePortalMappings order. An account with more
+ * accepted mappings than this is served from its earliest acceptances only:
+ * if none of their orgs has the portal on, it is not a portal user, even when
+ * a later acceptance's org has it on.
+ */
+export const PORTAL_MAPPINGS_TRIED_MAX = 10;
+
+type PortalGate = { moduleRow: unknown; org: unknown };
+
+const PORTAL_GATE_ORG_COLUMNS =
+  'name, logo_url, plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier';
+
+/**
+ * The b2b_portal module row (enabled only) and the billing row of each org,
+ * two requests however many orgs: the per-org reads it always made for one
+ * org, and one batched read of each table for several. A failed read gives no
+ * row, which the gate treats as the portal off, as before.
+ */
+async function readPortalGates(
+  admin: ReturnType<typeof createAdminClient>,
+  orgIds: readonly string[],
+): Promise<Map<string, PortalGate>> {
+  const ids = [...new Set(orgIds)];
+  const gates = new Map<string, PortalGate>();
+  if (ids.length === 0) return gates;
+  if (ids.length === 1) {
+    const orgId = ids[0]!;
+    const [{ data: moduleRow }, { data: org }] = await Promise.all([
+      admin
+        .from('organization_modules')
+        .select('module_id, settings')
+        .eq('organization_id', orgId)
+        .eq('module_id', 'b2b_portal')
+        .eq('enabled', true)
+        .maybeSingle(),
+      admin.from('organizations').select(PORTAL_GATE_ORG_COLUMNS).eq('id', orgId).maybeSingle(),
+    ]);
+    gates.set(orgId, { moduleRow, org });
+    return gates;
+  }
+  const [{ data: moduleRows }, { data: orgRows }] = await Promise.all([
+    admin
+      .from('organization_modules')
+      .select('organization_id, module_id, settings')
+      .in('organization_id', ids)
+      .eq('module_id', 'b2b_portal')
+      .eq('enabled', true),
+    admin.from('organizations').select(`id, ${PORTAL_GATE_ORG_COLUMNS}`).in('id', ids),
+  ]);
+  const modules = new Map(
+    ((moduleRows ?? []) as Array<{ organization_id: string }>).map((m) => [m.organization_id, m]),
+  );
+  const orgs = new Map(((orgRows ?? []) as Array<{ id: string }>).map((o) => [o.id, o]));
+  for (const id of ids) {
+    gates.set(id, { moduleRow: modules.get(id) ?? null, org: orgs.get(id) ?? null });
+  }
+  return gates;
+}
+
+/**
  * Resolve the signed-in user's portal context, or null when they are not a
  * portal user. The first resolution of an invited mapping stamps accepted_at.
- * A user mapped to several customers gets the first, in comparePortalMappings
- * order, whose organization has the portal on (switcher = later).
+ * A user mapped to several customers gets the first accepted one, in
+ * comparePortalMappings order, whose organization has the portal on; a user
+ * with no accepted mapping gets the newest invitation if its organization has
+ * the portal on (switcher = later).
  *
  * An account that has a verified authenticator, on a session that has not
  * entered its code, is sent to the code page before anything is resolved: the
@@ -272,34 +335,37 @@ export async function resolvePortalContext(): Promise<PortalContext | null> {
   candidates.sort(comparePortalMappings);
 
   // Module + plan gate: disabling b2b_portal OR downgrading below Business
-  // shuts that org's customer portal off, mirroring the org-side gate. It is
-  // asked of each mapping in the order above and the first that passes is
-  // opened, so one org turning its portal off never hides another org's. On
-  // the admin client (portal users have no RLS grants), scoped to the
-  // mapping's org.
+  // shuts that org's customer portal off, mirroring the org-side gate. On the
+  // admin client (portal users have no RLS grants), scoped to the mapping's
+  // org. Which mappings it is asked of:
+  //   - an account with an accepted mapping: each ACCEPTED mapping, in the
+  //     order above, and the first that passes is opened, so one org turning
+  //     its portal off never hides another org the customer already uses.
+  //     An invitation is never opened in their place: an org does not gain a
+  //     customer because another org switched its portal off;
+  //   - an account with none: the newest invitation alone, as it always was.
+  // Any org can add a mapping by inviting the person, so the mappings asked
+  // are capped (the earliest acceptances, which the sort puts first, are
+  // always inside the cap), and the gate is read once for all their orgs.
+  const accepted = candidates.filter((c) => c.accepted_at);
+  const tried = (accepted.length > 0 ? accepted : candidates.slice(0, 1)).slice(
+    0,
+    PORTAL_MAPPINGS_TRIED_MAX,
+  );
+  const gates = await readPortalGates(
+    admin,
+    tried.map((c) => c.customer.organization_id),
+  );
   let opened: {
     chosen: (typeof candidates)[number];
     moduleRow: unknown;
     org: unknown;
   } | null = null;
-  for (const candidate of candidates) {
-    const orgId = candidate.customer.organization_id;
-    const [{ data: moduleRow }, { data: org }] = await Promise.all([
-      admin
-        .from('organization_modules')
-        .select('module_id, settings')
-        .eq('organization_id', orgId)
-        .eq('module_id', 'b2b_portal')
-        .eq('enabled', true)
-        .maybeSingle(),
-      admin
-        .from('organizations')
-        .select(
-          'name, logo_url, plan, access_tier, billing_arrangement, stripe_subscription_id, trial_ends_at, trial_tier',
-        )
-        .eq('id', orgId)
-        .maybeSingle(),
-    ]);
+  for (const candidate of tried) {
+    const { moduleRow, org } = gates.get(candidate.customer.organization_id) ?? {
+      moduleRow: null,
+      org: null,
+    };
     if (!moduleRow) continue;
     if (
       !planAllowsB2bPortal(((org as OrgBillingState | null) ?? { plan: null }) as OrgBillingState)
