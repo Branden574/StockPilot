@@ -38,7 +38,11 @@ export async function startActingAsAction(
       adminEmail: gate.session.email,
       organizationId: parsed.data.organizationId,
     });
-    if (!res.ok) return err('not_found', 'Organization not found.');
+    if (!res.ok) {
+      return res.reason === 'org_unreadable'
+        ? err('internal_error', 'Could not read the organization, so nothing was changed. Try again.')
+        : err('not_found', 'Organization not found.');
+    }
   } catch (e) {
     return actionErrorResult(e, 'actions.platform.impersonation.start_acting_as');
   }

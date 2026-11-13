@@ -3,47 +3,67 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeSupabaseStub, type MockCall, type QueryResult } from '@/test/supabase-mock';
 
 /**
- * "Act as this org": the reads that decide what start and stop write. A read
- * that answers an error stops the step before anything is written (the action
- * reports it and shows its sentence): it is never read as "not a member", "no
- * previous organization" or "no session to end".
+ * "Act as this org": the reads and the grant delete that decide what start,
+ * stop and the sweep write next. A read that answers an error is never read as
+ * "no organization", "not a member", "no previous organization" or "no session
+ * to end": start and stop write nothing more (the action reports it and shows
+ * its sentence). A grant delete that fails ends no session, so a later sweep
+ * tries it again.
  */
 
-const { recordPlatformAudit } = vi.hoisted(() => ({
+const { recordPlatformAudit, reportError } = vi.hoisted(() => ({
   recordPlatformAudit: vi.fn(async (_row: unknown) => {}),
+  reportError: vi.fn(async (..._args: unknown[]) => {}),
 }));
 
 vi.mock('./audit', () => ({ recordPlatformAudit }));
+vi.mock('@/lib/error-reporter', () => ({ reportError }));
 
 const ADMIN_ID = 'a0000000-0000-4000-8000-000000000001';
 const ORG_ID = '0a000000-0000-4000-8000-000000000002';
 const PREVIOUS_ORG_ID = '0a000000-0000-4000-8000-000000000003';
+const OTHER_ORG_ID = '0a000000-0000-4000-8000-000000000004';
 const READ_FAILED = { message: 'canceling statement due to statement timeout', code: '57014' };
 
-/** What each read answers in a test. */
+/** What each read answers in a test, and the organizations whose grant delete fails. */
 const answers: {
+  expired: QueryResult;
   activeSession: QueryResult;
+  org: QueryResult;
   membership: QueryResult;
   profile: QueryResult;
+  grantDeleteFailsFor: string[];
 } = {
+  expired: { data: [], error: null },
   activeSession: { data: null, error: null },
+  org: { data: null, error: null },
   membership: { data: null, error: null },
   profile: { data: null, error: null },
+  grantDeleteFailsFor: [],
 };
 
 let stub = makeStub();
+
+/** The value of the chain's `.eq(column, value)` filter. */
+function eqValue(call: MockCall, column: string): unknown {
+  const i = call.methods.findIndex((m, n) => m === 'eq' && call.args[n]?.[0] === column);
+  return i === -1 ? undefined : call.args[i]?.[1];
+}
 
 function makeStub() {
   return makeSupabaseStub({
     'platform_impersonation_sessions.select': (call: MockCall) =>
       // The sweep's expired sessions (`.lt('expires_at', now)`), else the active one.
-      call.methods.includes('lt') ? { data: [], error: null } : answers.activeSession,
+      call.methods.includes('lt') ? answers.expired : answers.activeSession,
     'platform_impersonation_sessions.insert': { data: null, error: null },
     'platform_impersonation_sessions.update': { data: null, error: null },
-    'organizations.select': { data: { id: ORG_ID, name: 'Example Org' }, error: null },
+    'organizations.select': () => answers.org,
     'organization_members.select': () => answers.membership,
     'organization_members.insert': { data: null, error: null },
-    'organization_members.delete': { data: null, error: null },
+    'organization_members.delete': (call: MockCall) =>
+      answers.grantDeleteFailsFor.includes(eqValue(call, 'organization_id') as string)
+        ? { data: null, error: READ_FAILED }
+        : { data: null, error: null },
     'user_profiles.select': () => answers.profile,
     'user_profiles.update': { data: null, error: null },
   });
@@ -53,24 +73,63 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => stub.client,
 }));
 
-import { startActingAs, stopActingAs } from './impersonation';
+import { startActingAs, stopActingAs, sweepExpiredImpersonations } from './impersonation';
 
 /** Every write the stub saw, as "table.op". */
 function writes(): string[] {
   return [...stub.chainsAll.keys()].filter((k) => !k.endsWith('.select'));
 }
 
+/** The session ids the stub saw ended. */
+function endedSessions(): unknown[] {
+  return (stub.chainArgsAll.get('platform_impersonation_sessions.update') ?? []).map(
+    (args) => args.find((a, n) => n > 0 && a[0] === 'id')?.[1],
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   stub = makeStub();
+  answers.expired = { data: [], error: null };
   answers.activeSession = { data: null, error: null };
+  answers.org = { data: { id: ORG_ID, name: 'Example Org' }, error: null };
   answers.membership = { data: null, error: null };
   answers.profile = { data: { default_organization_id: PREVIOUS_ORG_ID }, error: null };
+  answers.grantDeleteFailsFor = [];
 });
 
 const START = { adminUserId: ADMIN_ID, adminEmail: 'ops@example.test', organizationId: ORG_ID, now: 1_000 };
+const STOP = { adminUserId: ADMIN_ID, adminEmail: 'ops@example.test' };
+const ACTIVE = {
+  data: { id: 's-1', target_organization_id: ORG_ID, previous_organization_id: PREVIOUS_ORG_ID },
+  error: null,
+};
 
 describe('startActingAs', () => {
+  it('writes nothing when the earlier session could not be read', async () => {
+    answers.activeSession = { data: null, error: READ_FAILED };
+    await expect(startActingAs(START)).rejects.toThrow(/session/);
+    expect(writes()).toEqual([]);
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
+  it('writes nothing and says so when the organization could not be read', async () => {
+    answers.org = { data: null, error: READ_FAILED };
+    await expect(startActingAs(START)).resolves.toEqual({ ok: false, reason: 'org_unreadable' });
+    expect(writes()).toEqual([]);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'platform.impersonation.org-read' }),
+    );
+  });
+
+  it('an organization that does not exist is not found', async () => {
+    answers.org = { data: null, error: null };
+    await expect(startActingAs(START)).resolves.toEqual({ ok: false, reason: 'org_not_found' });
+    expect(writes()).toEqual([]);
+    expect(reportError).not.toHaveBeenCalled();
+  });
+
   it('writes nothing when the admin membership in the organization could not be read', async () => {
     answers.membership = { data: null, error: READ_FAILED };
     await expect(startActingAs(START)).rejects.toThrow(/membership/);
@@ -107,28 +166,55 @@ describe('startActingAs', () => {
 describe('stopActingAs', () => {
   it('ends nothing and throws when the active session could not be read', async () => {
     answers.activeSession = { data: null, error: READ_FAILED };
-    await expect(stopActingAs({ adminUserId: ADMIN_ID, adminEmail: 'ops@example.test' })).rejects.toThrow(
-      /session/,
-    );
+    await expect(stopActingAs(STOP)).rejects.toThrow(/session/);
     expect(writes()).toEqual([]);
   });
 
   it('with no active session there is nothing to end', async () => {
-    await expect(stopActingAs({ adminUserId: ADMIN_ID, adminEmail: 'ops@example.test' })).resolves.toEqual({
-      stopped: false,
-    });
+    await expect(stopActingAs(STOP)).resolves.toEqual({ stopped: false });
     expect(writes()).toEqual([]);
   });
 
+  it('when the grant delete fails it throws, restores no profile and ends no session', async () => {
+    answers.activeSession = ACTIVE;
+    answers.grantDeleteFailsFor = [ORG_ID];
+    await expect(stopActingAs(STOP)).rejects.toThrow(/grant/);
+    expect(writes()).toEqual(['organization_members.delete']);
+    expect(recordPlatformAudit).not.toHaveBeenCalled();
+  });
+
   it('ends the active session and removes only the temporary grant', async () => {
-    answers.activeSession = {
-      data: { id: 's-1', target_organization_id: ORG_ID, previous_organization_id: PREVIOUS_ORG_ID },
+    answers.activeSession = ACTIVE;
+    await expect(stopActingAs(STOP)).resolves.toEqual({ stopped: true });
+    expect(stub.chains.get('organization_members.delete')).toContain('not');
+    expect(endedSessions()).toEqual(['s-1']);
+    expect(recordPlatformAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'acted_as_end' }));
+  });
+});
+
+describe('sweepExpiredImpersonations', () => {
+  it('a grant delete that fails ends no session for it, is reported, and the next session is still swept', async () => {
+    answers.expired = {
+      data: [
+        { id: 's-1', admin_user_id: ADMIN_ID, target_organization_id: ORG_ID, previous_organization_id: null },
+        {
+          id: 's-2',
+          admin_user_id: ADMIN_ID,
+          target_organization_id: OTHER_ORG_ID,
+          previous_organization_id: PREVIOUS_ORG_ID,
+        },
+      ],
       error: null,
     };
-    await expect(stopActingAs({ adminUserId: ADMIN_ID, adminEmail: 'ops@example.test' })).resolves.toEqual({
-      stopped: true,
-    });
-    expect(stub.chains.get('organization_members.delete')).toContain('not');
-    expect(recordPlatformAudit).toHaveBeenCalledWith(expect.objectContaining({ action: 'acted_as_end' }));
+    answers.grantDeleteFailsFor = [ORG_ID];
+    await expect(sweepExpiredImpersonations(1_000)).resolves.toBeUndefined();
+    const deletes = stub.chainArgsAll.get('organization_members.delete') ?? [];
+    expect(deletes.map((args) => args.find((a) => a[0] === 'organization_id')?.[1])).toEqual([ORG_ID, OTHER_ORG_ID]);
+    expect(endedSessions()).toEqual(['s-2']);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(reportError).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ tag: 'platform.impersonation.sweep-grant-delete', extra: { sessionId: 's-1' } }),
+    );
   });
 });
