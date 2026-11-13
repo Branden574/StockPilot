@@ -1,8 +1,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
 
-import { withApiContext } from '@/lib/auth/api-context';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { apiContextGate } from '@/server/lib/api-context-gate';
 import { ExceptionEscalationService } from '@/server/services/exception-escalation';
 
 import { exceptionsErrorResponse, exceptionsRateLimitedResponse } from '../../error-response';
@@ -51,9 +51,15 @@ export const dynamic = 'force-dynamic';
  *   500 a failure that leaves it unknown whether a request was saved or
  *       linked (the claim is kept for 2 minutes so a retry cannot save a
  *       second one); the phone says so (core ESCALATE_SERVER_PROBLEM_COPY).
+ *   503 `check_failed` with details { reason: 'context_unavailable',
+ *       retryable, nothingWritten }: the caller's access could not be checked,
+ *       so the request was refused before anything here ran (the API context
+ *       gate, docket S26). Nothing was saved; the phone says to try again.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const ctx = await withApiContext(req);
+  const gate = await apiContextGate(req);
+  if ('response' in gate) return gate.response;
+  const ctx = gate.ctx;
   if (!ctx) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
 
   const { id } = await params;

@@ -1,3 +1,5 @@
+import { CONTEXT_UNAVAILABLE_COPY, isRefusedBeforeAnyWrite } from '@stockpilot/core';
+
 import { queuedAdjustPayload } from './adjust-outbox';
 import {
   adjustItemStock,
@@ -56,6 +58,10 @@ import { UNCONFIRMED_SETTLE_MS, unconfirmedStock } from './unconfirmed-stock';
  * committed (a dropped connection, or api()'s 20 s timeout), a queued replay
  * would move the stock a second time. So an online failure is SAID —
  * refused, or unconfirmed with the number labelled — never silently retried.
+ * That includes the one 5xx known to come before any write: the server could
+ * not check the caller's access and refused at once (docket S26, core
+ * isRefusedBeforeAnyWrite). It is a refusal, "Adjustment not saved", and the
+ * operator taps again; it is not re-sent or queued for them.
  * The scan tab passes no `offline` and stays online-only, like the other
  * manual stock writes on the phone (transfer, remove-from-rack): it cannot
  * show an item without reading it from the server first.
@@ -83,9 +89,10 @@ export type ItemAdjustOutcome =
   | { kind: 'refused'; alert: AdjustAlert }
   /**
    * The request may or may not have been written, and may still be running:
-   * the connection failed, timed out, or the server answered 5xx. The item is
-   * now in unconfirmed-stock.ts, which keeps its total labelled until a read
-   * shows the write or the write can no longer land.
+   * the connection failed, timed out, or the server answered a 5xx (any but
+   * the one marked as refused before any write, which is 'refused'). The item
+   * is now in unconfirmed-stock.ts, which keeps its total labelled until a
+   * read shows the write or the write can no longer land.
    */
   | { kind: 'unconfirmed'; alert: AdjustAlert }
   /**
@@ -122,6 +129,16 @@ const UNCONFIRMED: AdjustAlert = {
     'is not applied twice.',
 };
 
+/**
+ * The server could not check the caller's access just now and refused before
+ * doing anything (docket S26): nothing was written, and another tap in a
+ * moment may work. Core's sentence, the same on every reader of the marker.
+ */
+const ACCESS_NOT_CHECKED: AdjustAlert = {
+  title: 'Adjustment not saved',
+  message: CONTEXT_UNAVAILABLE_COPY,
+};
+
 /** Every 4xx means nothing was written; the operator must be told so. */
 const NOTHING_CHANGED = 'Nothing was changed.';
 
@@ -132,9 +149,9 @@ function withNothingChanged(message: string): string {
 }
 
 /**
- * Refusal or uncertainty, decided on the numeric HTTP status only (the same
- * rule drain-failure.ts keeps: `code` is sometimes a sentence, never a
- * contract).
+ * Refusal or uncertainty, decided on the numeric HTTP status (the same rule
+ * drain-failure.ts keeps: `code` is sometimes a sentence, never a contract),
+ * with ONE exception read before it.
  *
  * EVERY 4xx means nothing was written. The route performs the write last,
  * after rate limiting, validation, the permission and MFA gates and the
@@ -142,10 +159,18 @@ function withNothingChanged(message: string): string {
  * edge 429 never reaches it at all. Anything else — no status (network error,
  * api()'s timeout) or a 5xx (a gateway timeout can arrive after the commit) —
  * is unconfirmed.
+ *
+ * The exception is the 503 the server marks as refused before any write: it
+ * could not check the caller's access, so it refused before the route did
+ * anything (docket S26). It is recognised only by core's
+ * isRefusedBeforeAnyWrite, which requires the status, the code and every
+ * detail of the mark, never the message, and it is a refusal: nothing was
+ * written, and the on-hand gets no "Not confirmed" label.
  */
 export function classifyAdjustFailure(
   err: unknown,
 ): Exclude<ItemAdjustOutcome, { kind: 'saved' } | { kind: 'queued' }> {
+  if (isRefusedBeforeAnyWrite(err)) return { kind: 'refused', alert: ACCESS_NOT_CHECKED };
   const e = err as { status?: unknown; details?: unknown } | null | undefined;
   const status = typeof e?.status === 'number' ? e.status : null;
   if (status === null || status < 400 || status >= 500) {

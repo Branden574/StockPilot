@@ -25,7 +25,10 @@
  * Everything else stays retryable — 401 on a live account (token blip), 408,
  * 429, every 5xx, a timeout, a network error, a null throw — because the
  * outbox holds real operator work and discarding it on a transient failure
- * would silently lose warehouse activity.
+ * would silently lose warehouse activity. That includes the 503 the server
+ * marks as refused before any write (docket S26): nothing was written, so it
+ * is retryable here like any 5xx. The `adjust_stock` kind, which is sent at
+ * most once, reads that mark itself (adjust-outbox.ts adjustDrainVerdict).
  *
  * The verdict keys off the numeric HTTP status, never the message: a handful
  * of routes put a human sentence in `error`. The ONE place `code` matters is

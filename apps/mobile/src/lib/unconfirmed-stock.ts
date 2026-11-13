@@ -7,7 +7,8 @@ import * as React from 'react';
  * ═══ WHY A READ IS NOT ENOUGH TO CLEAR IT ═══
  *
  * An adjustment is UNCONFIRMED when the phone never heard the answer: a
- * dropped connection, api()'s 20 s timeout, or a 5xx (item-adjust.ts). The
+ * dropped connection, api()'s 20 s timeout, or a 5xx (item-adjust.ts; not the
+ * one 503 marked as refused before any write, which is a refusal). The
  * write may have committed, may never commit, or may STILL BE RUNNING: the
  * server keeps going after the phone stops waiting. The item screen used to
  * re-read the item at once and treat that read as the confirmed total, so a
