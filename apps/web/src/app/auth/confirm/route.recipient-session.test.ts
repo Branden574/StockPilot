@@ -67,6 +67,7 @@ import {
   FIXTURE_SUPABASE_URL,
   makeSigningKey,
   sessionClaims,
+  sessionCookies,
   signAccessToken,
   type SigningKey,
 } from '@/test/auth-session-fixture';
@@ -86,6 +87,11 @@ const REFRESH_REF = 'refresh-ref-2';
 let projectKey: SigningKey;
 /** The account GoTrue's /verify makes a session for. */
 let sessionUser = USER_A;
+/**
+ * /verify answers as for the first of an email change's two confirmations:
+ * the confirmation is recorded and no session is made.
+ */
+let firstOfTwo = false;
 /** Requests that reached the fake Auth server, as `METHOD /path?query`. */
 let requests: string[] = [];
 
@@ -105,6 +111,12 @@ async function authServer(input: RequestInfo | URL, init?: RequestInit): Promise
   const path = url.pathname.slice(new URL(base).pathname.length);
   requests.push(`${init?.method ?? 'GET'} ${path}${url.search}`);
   if (path === '/verify') {
+    if (firstOfTwo) {
+      return json(200, {
+        msg: 'Confirmation link accepted. Please proceed to confirm link sent to the other email',
+        code: '200',
+      });
+    }
     const claims = sessionClaims({ sub: sessionUser });
     const jwt = await signAccessToken(projectKey, claims);
     return json(200, {
@@ -124,6 +136,28 @@ async function authServer(input: RequestInfo | URL, init?: RequestInit): Promise
   }
   if (path === '/logout') return new Response(null, { status: 204 });
   return json(404, { msg: `no route ${path}` });
+}
+
+/** The account the session cookie in the jar is for, or null when there is none. */
+function sessionUserInJar(): string | null {
+  const chunks = [...jar]
+    .filter(([name, value]) => name.startsWith(FIXTURE_AUTH_COOKIE) && value !== '')
+    .sort(([a], [b]) => a.localeCompare(b, 'en', { numeric: true }));
+  if (chunks.length === 0) return null;
+  const encoded = chunks
+    .map(([, value]) => value)
+    .join('')
+    .replace(/^base64-/, '');
+  const session = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as {
+    user?: { id?: string };
+  };
+  return session.user?.id ?? null;
+}
+
+/** This browser signed in as `id`, before the press. */
+async function signInJarAs(id: string): Promise<void> {
+  const claims = sessionClaims({ sub: id, email: 'member@example.com' });
+  jar = sessionCookies(await signAccessToken(projectKey, claims), claims);
 }
 
 /** The session cookie's chunks still holding a value. */
@@ -168,6 +202,7 @@ beforeEach(() => {
   writes.length = 0;
   requests = [];
   sessionUser = USER_A;
+  firstOfTwo = false;
   vi.clearAllMocks();
   vi.stubGlobal('fetch', authServer);
 });
@@ -209,5 +244,34 @@ describe('POST /auth/confirm with the real session libraries (S25)', () => {
     expect(completeEmailChange).toHaveBeenCalledWith({ userId: USER_B });
     expect(liveSessionCookies()).toEqual([]);
     expect(requests).toEqual(['POST /verify', 'POST /logout?scope=local']);
+  });
+});
+
+// What the confirmation page's notice says to a browser signed in as another
+// account, for an email-change link (route.ts): the first press of the two
+// signs no one in and that browser stays signed in as it was; the second
+// completes the change and signs the browser in to the link's account.
+describe('POST /auth/confirm for an email change in a browser signed in as another account (S25)', () => {
+  it('the first of the two confirmations: no session is written and the other account stays signed in', async () => {
+    await signInJarAs(USER_B);
+    const before = new Map(jar);
+    firstOfTwo = true;
+    const res = await POST(pressFor('email_change'));
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('One confirmation done');
+    expect(jar).toEqual(before);
+    expect(sessionUserInJar()).toBe(USER_B);
+    expect(completeEmailChange).not.toHaveBeenCalled();
+    expect(requests).toEqual(['POST /verify']);
+  });
+
+  it('the second: the change is completed and this browser is signed in to the account the link is for', async () => {
+    await signInJarAs(USER_B);
+    const res = await POST(pressFor('email_change'));
+    expect(res.status).toBe(303);
+    expect(res.headers.get('location')).toBe(`${BASE}/dashboard/settings/profile?emailChanged=1`);
+    expect(sessionUserInJar()).toBe(USER_A);
+    expect(completeEmailChange).toHaveBeenCalledWith({ userId: USER_A });
+    expect(requests).toEqual(['POST /verify']);
   });
 });

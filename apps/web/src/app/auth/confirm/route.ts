@@ -347,16 +347,35 @@ function emailChangeLine(current: string, pending: string): string {
 }
 
 /**
- * A signed link in a browser signed in as ANOTHER account (compared by user
- * id, never by address): pressing on replaces that session, and the page
- * names both. A browser already signed in as the link's own account is told
- * nothing: there is nothing to warn about.
+ * A signed recovery, invite or sign-in link in a browser signed in as ANOTHER
+ * account (compared by user id, never by address): pressing on replaces that
+ * session, and the page names both. A browser already signed in as the link's
+ * own account is told nothing: there is nothing to warn about.
  */
 function otherAccountNotice(signedInEmail: string | null, recipientEmail: string): string {
   const who = signedInEmail
     ? `You're signed in as ${addr(signedInEmail)} on this browser.`
     : 'This browser is already signed in to another StockPilot account.';
   return `<p class="note">${who} Continuing signs you in as ${addr(recipientEmail)} instead. If you didn't ask for this link, close this page.</p>`;
+}
+
+/**
+ * A signed email-change link in a browser signed in as ANOTHER account. The
+ * two links name the same account and GoTrue takes them in either order, so
+ * the page cannot tell whether a press is the first or the second, and says
+ * what each does: while the other address has not confirmed, a press signs no
+ * one in and the browser stays signed in as it is (POST's "one to go" page);
+ * once it has, a press completes the change and signs the browser in to the
+ * link's account, whose sign-in email is then the new address.
+ */
+function emailChangeOtherAccountNotice(signedInEmail: string | null, newEmail: string): string {
+  const who = signedInEmail
+    ? `You're signed in as ${addr(signedInEmail)} on this browser.`
+    : 'This browser is already signed in to another StockPilot account.';
+  const stays = signedInEmail
+    ? `you stay signed in as ${addr(signedInEmail)}`
+    : 'you stay signed in to that account';
+  return `<p class="note">${who} If the other address has not confirmed the change yet, continuing signs no one in and ${stays}. If it has, continuing completes the change and signs you in as ${addr(newEmail)} instead. If you didn't ask for this link, close this page.</p>`;
 }
 
 /** What a browser that runs no script shows above the disabled button. */
@@ -470,6 +489,7 @@ export async function GET(request: NextRequest) {
     return tryAgainPage();
   }
   let line: string;
+  let newEmail: string | null = null;
   if (type === 'email_change') {
     // GoTrue keeps one pending change, and every new request replaces the
     // links of the last one. A link whose change is done, cancelled or
@@ -479,13 +499,16 @@ export async function GET(request: NextRequest) {
     const pending = pendingEmailChangeFor(account, verdict.issued);
     if (pending === null) return expiredAnswer(origin, type);
     line = emailChangeLine(account.email, pending);
+    newEmail = pending;
   } else {
     line = recipientLine(type as 'recovery' | 'invite' | 'magiclink', account.email);
   }
   const notice =
-    signedIn && signedIn.id !== verdict.userId
-      ? otherAccountNotice(signedIn.email, account.email)
-      : '';
+    !signedIn || signedIn.id === verdict.userId
+      ? ''
+      : newEmail !== null
+        ? emailChangeOtherAccountNotice(signedIn.email, newEmail)
+        : otherAccountNotice(signedIn.email, account.email);
   return confirmPage({
     type,
     tokenHash,
