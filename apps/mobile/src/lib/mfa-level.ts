@@ -38,7 +38,7 @@ export interface FactorLike {
 /** The user of a session, or the one getUser() answers. */
 export interface UserLike {
   readonly id?: string | null;
-  readonly factors?: ReadonlyArray<FactorLike | null | undefined> | null;
+  readonly factors?: readonly (FactorLike | null | undefined)[] | null;
 }
 
 /** The part of a session this module reads. */
