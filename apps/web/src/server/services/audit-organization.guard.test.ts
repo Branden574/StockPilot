@@ -18,6 +18,14 @@ import { describe, expect, it } from 'vitest';
  *   2. every other source file under src that names the column, or the
  *      session's copy of it, is listed in READS_DEFAULT with what it does
  *      with it, and every listed file still names it.
+ *
+ * What it does NOT catch (a reviewer still reads for these):
+ *   - a new reader inside a file already on the list: the list is per file,
+ *     so a second use in, say, session.ts passes unseen;
+ *   - a read that never names the column, such as `select('*')` on
+ *     user_profiles, or a row handed on from such a read;
+ *   - SQL, database functions and triggers, and anything outside
+ *     apps/web/src (the phone app, edge functions, migrations).
  */
 
 const WEB_SRC = path.resolve(__dirname, '../..');

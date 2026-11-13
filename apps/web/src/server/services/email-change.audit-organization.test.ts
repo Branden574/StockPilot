@@ -9,8 +9,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * that resolves to no organization is still written, with organization_id
  * null, never dropped.
  *
- * A membership read that fails files the row with no organization and reports
- * the failure (fail closed: never an organization the read could not confirm).
+ * A read the resolver needs that fails (or throws) is reported, and the next
+ * read runs: the default-membership read, then the oldest-accepted-membership
+ * read. Both membership reads ask only for this person's accepted rows. Only
+ * when every read failed or found nothing is the row filed with no
+ * organization.
  *
  * The membership check under test is the REAL resolver, over an in-memory
  * organization_members table that honours the filters the resolver sends
@@ -19,6 +22,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 const USER_ID = '55555555-5555-4555-8555-555555555555';
+/** Somebody else, whose memberships never count for USER_ID. */
+const OTHER_USER_ID = '56565656-5656-4565-8565-565656565656';
 /** The person's own workspace, an accepted membership. */
 const ORG_HOME = '11111111-1111-4111-8111-111111111111';
 /** Another workspace the person also belongs to (joined later than ORG_HOME). */
@@ -39,6 +44,10 @@ const h = vi.hoisted(() => ({
   failingReads: new Set<string>(),
   /** A select list whose read of user_profiles fails (the resolver's own read). */
   failingProfileSelect: null as string | null,
+  /** A select list whose read of user_profiles throws instead of answering. */
+  throwingProfileSelect: null as string | null,
+  /** The organization_members read filtered to one organization fails. */
+  failingDefaultMemberRead: false,
   inserts: [] as Array<{ table: string; payload: Record<string, unknown> }>,
   updates: [] as Array<{ table: string; payload: Record<string, unknown> }>,
 }));
@@ -50,9 +59,15 @@ function selectQuery(table: string, columns: string) {
   const orders: Array<[string, boolean]> = [];
   let limit: number | null = null;
   const run = () => {
+    if (table === 'user_profiles' && h.throwingProfileSelect === columns) {
+      throw new TypeError('read threw in test');
+    }
     const failed =
       h.failingReads.has(table) ||
-      (table === 'user_profiles' && h.failingProfileSelect === columns);
+      (table === 'user_profiles' && h.failingProfileSelect === columns) ||
+      (table === 'organization_members' &&
+        h.failingDefaultMemberRead &&
+        eqs.some(([c]) => c === 'organization_id'));
     if (failed) {
       return { data: null, error: { code: 'XX000', message: 'read failed in test' } };
     }
@@ -195,6 +210,13 @@ const WORLDS: Record<string, { world: World; expected: string | null }> = {
     world: { defaultOrg: ORG_OTHER, members: [member(ORG_OTHER, false, '2026-01-01T00:00:00Z')] },
     expected: null,
   },
+  'a default organization whose only membership row belongs to a different person': {
+    world: {
+      defaultOrg: ORG_OTHER,
+      members: [{ ...member(ORG_OTHER, true, '2026-01-01T00:00:00Z'), user_id: OTHER_USER_ID }],
+    },
+    expected: null,
+  },
   'a default organization that does not exist': {
     world: { defaultOrg: ORG_MISSING, members: [] },
     expected: null,
@@ -296,6 +318,8 @@ beforeEach(() => {
   for (const k of Object.keys(h.tables)) delete h.tables[k];
   h.failingReads.clear();
   h.failingProfileSelect = null;
+  h.throwingProfileSelect = null;
+  h.failingDefaultMemberRead = false;
   h.inserts.length = 0;
   h.updates.length = 0;
   getUserById.mockResolvedValue(authUser());
@@ -333,7 +357,7 @@ describe.each(WRITERS)('email-change audit writer: $name', (writer) => {
     },
   );
 
-  it('a membership read that fails files the row with no organization and reports the failure', async () => {
+  it('every membership read fails: the row is written with no organization and the failure reported', async () => {
     setWorld(WORLDS['a current accepted member of the default organization']!.world);
     h.failingReads.add('organization_members');
     writer.arrange?.();
@@ -349,27 +373,70 @@ describe.each(WRITERS)('email-change audit writer: $name', (writer) => {
   });
 });
 
-describe('resolveDefaultOrgAndRole: a read that fails resolves to no organization and is reported', () => {
-  it('the profile read fails: no organization, even though an accepted membership exists', async () => {
-    setWorld(WORLDS['a current accepted member of the default organization']!.world);
+describe('resolveDefaultOrgAndRole: a failed read is reported and the next read runs', () => {
+  const MULTI = 'a default the person is not a member of, while they hold other accepted memberships';
+  const CURRENT = 'a current accepted member of the default organization';
+
+  function reportsFor(step: string) {
+    return reportError.mock.calls.filter(
+      ([, ctx]) => (ctx as { extra?: { step?: string } }).extra?.step === step,
+    );
+  }
+
+  it('the profile read fails and the membership read succeeds: the oldest accepted membership, one report', async () => {
+    setWorld(WORLDS[CURRENT]!.world);
     h.failingProfileSelect = 'default_organization_id';
-    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: null, role: null });
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
     expect(reportError).toHaveBeenCalledTimes(1);
     const [, ctx] = reportError.mock.calls[0]! as [unknown, { tag: string; extra: Record<string, unknown> }];
-    expect(ctx).toMatchObject({ tag: 'audit.organization_unresolved', level: 'warning' });
-    // The code only, never the message, which can quote request details.
+    expect(ctx).toMatchObject({
+      tag: 'audit.organization_unresolved',
+      level: 'warning',
+      extra: { step: 'profile', code: 'XX000' },
+    });
+    // The step and the code only, never the message, which can quote request details.
     expect(JSON.stringify(reportError.mock.calls)).not.toContain('read failed in test');
   });
 
-  it('the membership read fails: no organization, reported once', async () => {
-    setWorld(WORLDS['a default the person is not a member of, while they hold other accepted memberships']!.world);
-    h.failingReads.add('organization_members');
-    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: null, role: null });
+  it('the profile read throws: reported, and the membership read still answers', async () => {
+    setWorld(WORLDS[MULTI]!.world);
+    h.throwingProfileSelect = 'default_organization_id';
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
+    expect(reportsFor('profile')).toHaveLength(1);
+    expect(reportError).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(reportError.mock.calls)).not.toContain('read threw in test');
+  });
+
+  it('the default-membership read fails: reported, and the oldest accepted membership answers', async () => {
+    setWorld(WORLDS[CURRENT]!.world);
+    h.failingDefaultMemberRead = true;
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
+    expect(reportsFor('default_membership')).toHaveLength(1);
     expect(reportError).toHaveBeenCalledTimes(1);
   });
 
+  it('every read fails: no organization, each failure reported, nothing thrown', async () => {
+    setWorld(WORLDS[MULTI]!.world);
+    h.failingProfileSelect = 'default_organization_id';
+    h.failingReads.add('organization_members');
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: null, role: null });
+    expect(reportsFor('profile')).toHaveLength(1);
+    expect(reportsFor('any_membership')).toHaveLength(1);
+    for (const [, ctx] of reportError.mock.calls) {
+      expect(ctx).toMatchObject({ tag: 'audit.organization_unresolved' });
+    }
+  });
+
+  it('both membership reads fail with the default set: no organization, both reported', async () => {
+    setWorld(WORLDS[CURRENT]!.world);
+    h.failingReads.add('organization_members');
+    await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: null, role: null });
+    expect(reportsFor('default_membership')).toHaveLength(1);
+    expect(reportsFor('any_membership')).toHaveLength(1);
+  });
+
   it('reads that succeed report nothing', async () => {
-    setWorld(WORLDS['a current accepted member of the default organization']!.world);
+    setWorld(WORLDS[CURRENT]!.world);
     await expect(resolveDefaultOrgAndRole(USER_ID)).resolves.toEqual({ organizationId: ORG_HOME, role: 'staff' });
     expect(reportError).not.toHaveBeenCalled();
   });
