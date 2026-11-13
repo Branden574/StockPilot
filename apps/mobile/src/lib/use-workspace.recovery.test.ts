@@ -52,6 +52,10 @@ const storage = vi.hoisted(() => ({
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: storage }));
 vi.mock('./db', () => ({ deleteOrgData: vi.fn(async () => {}) }));
 vi.mock('./enabled-modules', () => ({ refreshEnabledModules: vi.fn() }));
+// The saved permissions and warehouse scope a switch tells the screens to
+// read again (B124); their own tests are use-workspace.saved-access.test.ts.
+vi.mock('./use-effective-permissions', () => ({ refreshEffectivePermissions: async () => {} }));
+vi.mock('./warehouse-scope', () => ({ refreshWarehouseScope: async () => {} }));
 vi.mock('./sync', () => ({
   syncNow: vi.fn(async () => {}),
   syncAfterRunning: vi.fn(async () => {}),
@@ -67,7 +71,11 @@ const gate = vi.hoisted(() => ({
   nextWarehouses: null as Promise<void> | null,
 }));
 vi.mock('./supabase', () => {
-  const offline = { data: null, error: { message: 'TypeError: Network request failed' }, status: 0 };
+  const offline = {
+    data: null,
+    error: { message: 'TypeError: Network request failed' },
+    status: 0,
+  };
   const members = {
     select: () => members,
     eq: () => members,
@@ -106,7 +114,8 @@ vi.mock('./supabase', () => {
   };
   return {
     supabase: {
-      from: (t: string) => (t === 'organization_members' ? members : t === 'user_profiles' ? profiles : warehouses),
+      from: (t: string) =>
+        t === 'organization_members' ? members : t === 'user_profiles' ? profiles : warehouses,
       auth: {
         onAuthStateChange: (cb: typeof auth.listener) => {
           auth.listener = cb;
@@ -145,7 +154,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
     store.set('workspace.activeWarehouseId.org-b', 'wh-1');
     useWorkspace();
     await settled();
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeWarehouseId: 'wh-1', activeWarehouseName: 'Main' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeWarehouseId: 'wh-1',
+      activeWarehouseName: 'Main',
+    });
 
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     gate.failWarehouses = true; // the next screen that mounts, on flaky Wi-Fi
@@ -153,7 +166,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
     useWorkspace();
     await settled();
 
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeWarehouseId: 'wh-1', activeWarehouseName: 'Main' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeWarehouseId: 'wh-1',
+      activeWarehouseName: 'Main',
+    });
     expect(published.at(-1)?.warehouses.map((w) => w.id)).toEqual(['wh-1', 'wh-2']);
     expect(published.slice(before).some((s) => s.activeWarehouseId === null)).toBe(false);
     // The saved choice is untouched.
@@ -164,7 +181,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
     store.set('workspace.activeWarehouseId.org-b', 'wh-2');
     useWorkspace();
     await settled();
-    expect(published.at(-1)).toMatchObject({ activeOrgId: 'org-b', activeWarehouseId: 'wh-2', activeWarehouseName: 'Annex' });
+    expect(published.at(-1)).toMatchObject({
+      activeOrgId: 'org-b',
+      activeWarehouseId: 'wh-2',
+      activeWarehouseName: 'Annex',
+    });
   });
 
   // The load read its warehouses without a bound, so a request that never
@@ -178,7 +199,11 @@ describe('a failed warehouse read keeps the warehouses on screen', () => {
       await vi.advanceTimersByTimeAsync(14_000);
       expect(published.at(-1)?.loading).toBe(true);
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(published.at(-1)).toMatchObject({ loading: false, activeOrgId: 'org-b', activeWarehouseId: 'wh-2' });
+      expect(published.at(-1)).toMatchObject({
+        loading: false,
+        activeOrgId: 'org-b',
+        activeWarehouseId: 'wh-2',
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -271,8 +296,12 @@ describe('useSync loads the workspace again when none is shown', () => {
 
   it('on each sync tick and on every return to the foreground', () => {
     expect(src).toContain("import { retryWorkspace } from './use-workspace';");
-    expect(src).toMatch(/setInterval\(\(\) => \{[\s\S]*?void syncNow\(\);\s*void retryWorkspace\(\);/);
-    expect(src).toMatch(/if \(state === 'active'\) \{\s*void syncNow\(\);\s*void retryWorkspace\(\);/);
+    expect(src).toMatch(
+      /setInterval\(\(\) => \{[\s\S]*?void syncNow\(\);\s*void retryWorkspace\(\);/,
+    );
+    expect(src).toMatch(
+      /if \(state === 'active'\) \{\s*void syncNow\(\);\s*void retryWorkspace\(\);/,
+    );
   });
 
   it('when the connection comes back (the rule sync.ts isOnline() applies), and stops listening on sign-out', () => {

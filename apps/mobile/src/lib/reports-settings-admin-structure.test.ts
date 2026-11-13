@@ -446,7 +446,9 @@ describe('Book Order Totals screens: the per-mode palette', () => {
       ),
     );
     // Liquid Glass: the iOS search field.
-    expect(list).toContain('lg && glassSearchBox(lg), ]} > <Search size={16} color={c.ink3} strokeWidth={1.4} />');
+    expect(list).toContain(
+      'lg && glassSearchBox(lg), ]} > <Search size={16} color={c.ink3} strokeWidth={1.4} />',
+    );
     expect(list).toContain('placeholder="Title, SKU or ISBN" placeholderTextColor={c.ink3}');
   });
 
@@ -1308,7 +1310,10 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
         ...load.matchAll(
           /if \((?:!read \|\| read\.error|whResp\.error)\) \{([\s\S]*?)return;\s*\}/g,
         ),
-        ...load.matchAll(/\} catch \{\s*(setList[\s\S]*?)return;\s*\}/g),
+        // B124: a catch may first drop an answer a newer read replaced.
+        ...load.matchAll(
+          /\} catch \{\s*(?:if \(!guard\.current\.isCurrent\(token\)\) return;\s*)?(setList[\s\S]*?)return;\s*\}/g,
+        ),
       ].map((m) => m[1]!);
       expect(failurePaths.length, list.file).toBeGreaterThanOrEqual(1);
       for (const path of failurePaths) {
@@ -1317,7 +1322,9 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
         expect(path).not.toContain('setList({');
       }
       // A thrown read is a failure too, never a spinner that turns forever.
-      expect(load).toMatch(/\} catch \{\s*(read = null;|setList\()/);
+      expect(load).toMatch(
+        /\} catch \{\s*(read = null;|setList\(|if \(!guard\.current\.isCurrent\(token\)\) return;\s*setList\()/,
+      );
       // Run the screen's own updater: this workspace's rows stay, another's go.
       const updater = new Function(
         'prev',
@@ -1334,7 +1341,11 @@ describe('Admin lists: a failed read is said, never "No X yet." (D25)', () => {
       expect(load).toMatch(
         /setFailed\((false|chartersFailed && whRows\.length > 0 \? 'charters' : null)\);/,
       );
-      expect(body).toContain('const rows = list?.rows ?? NO_ROWS;');
+      // B124: only rows read for the workspace on screen are drawn
+      // (admin-lists-workspace.test.ts runs each screen's load).
+      expect(body).toContain(
+        'const rows = list !== null && list.orgId === orgId ? list.rows : NO_ROWS;',
+      );
     },
   );
 

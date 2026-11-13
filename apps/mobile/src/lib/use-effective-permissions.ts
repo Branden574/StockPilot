@@ -50,11 +50,15 @@ export async function readPersistedPermissions(): Promise<Set<Permission> | null
   }
 }
 
-const listeners = new Set<() => void>();
+const listeners = new Set<() => Promise<void>>();
 
-/** Notify active useEffectivePermissions() hooks to re-read the persisted set. */
-export function refreshEffectivePermissions(): void {
-  for (const fn of listeners) fn();
+/**
+ * Notify active useEffectivePermissions() hooks to re-read the persisted set.
+ * Resolves once every one has read it (a workspace switch waits for that
+ * before it shows the new workspace); never rejects.
+ */
+export function refreshEffectivePermissions(): Promise<void> {
+  return Promise.all([...listeners].map((fn) => fn().catch(() => undefined))).then(() => undefined);
 }
 
 /**

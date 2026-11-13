@@ -215,21 +215,39 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // ---- end native-ops lane ----
   // Stage 4, native-admin lane (admin, AI, notifications, settings, support,
   // team, Zendesk): each pinned to its file at b64bd37cc.
+  // Re-pinned for B124 (Classic is meant to change: only rows read for the workspace on screen
+  // are drawn, and an older read that lands last is dropped). Before B124 the projection was
+  // 983e3696...b18f, the pin it had.
   'app/(drawer)/admin/audit.tsx':
-    '983e3696acaac9e4e8f6501d97390001a5bc65b3f1fb7876f210cd684e87b18f',
-  'app/(drawer)/admin/bins.tsx': '38b016049c29d882aa27b051e8558470fe353248f7cb90fdd3f160c6c77b23a0',
+    'be4227833d807f59b887a6a74463a01a3a4c2a451b0b36c8d1919dbf78c8fbdd',
+  // Re-pinned for B124 (Classic is meant to change: only rows read for the workspace on screen
+  // are drawn, and an older read that lands last is dropped). Before B124 the projection was
+  // 38b01604...23a0, the pin it had.
+  'app/(drawer)/admin/bins.tsx': '666cfd3be922e69ea4b285d549e115b9537f3b7e51a78bf32c9593f31613a09d',
+  // Re-pinned for B124 (Classic is meant to change: only rows read for the workspace on screen
+  // are drawn, and an older read that lands last is dropped). Before B124 the projection was
+  // d71f8843...5524, the pin it had.
   'app/(drawer)/admin/charters.tsx':
-    'd71f88437c13a5e0ddc900fbe6f9d50bd0705696807b6b44f7da74d4aff55524',
+    '16b606d15b55ccd875efc376a4af6b30ddee840c32eddf5338f657a879752fb3',
   'app/(drawer)/admin/index.tsx':
     '812d807e0efd520dcb2e150a1f4b086d2b20d4524cce49da22e7bd0a70bb31cd',
+  // Re-pinned for B124 (Classic is meant to change: only rows read for the workspace on screen
+  // are drawn, and an older read that lands last is dropped). Before B124 the projection was
+  // 8ee431a8...f564, the pin it had.
   'app/(drawer)/admin/uom-conversions.tsx':
-    '8ee431a8368e292fcd40c570f5bcf81f30cc7dc67aeca08e5f22f13206fef564',
+    'bf5a608917756e0103becad7791ff29dd83577f5d12c761809bdb2f5ec6a3efd',
   'app/(drawer)/admin/users.tsx':
     'fa67ffef5600aaa7c640afab7448bbccbf7af0c4e1cb9fa17f2f56ddaa8ff540',
+  // Re-pinned for B124 (Classic is meant to change: only rows read for the workspace on screen
+  // are drawn, and an older read that lands last is dropped). Before B124 the projection was
+  // e2c340ce...a6b3, the pin it had.
   'app/(drawer)/admin/vendor-mappings.tsx':
-    'e2c340ced7072d8312586d2ee85e592e8e19ddbc68116908a5d14beb9847a6b3',
+    '1d1d075bb9084bf0db632db37236e7b1e4c4dd713ffc0c072fa96b9d1f4f175a',
+  // Re-pinned for B124 (Classic is meant to change: only rows read for the workspace on screen
+  // are drawn, and an older read that lands last is dropped). Before B124 the projection was
+  // 4fa3b12d...8a08, the pin it had.
   'app/(drawer)/admin/warehouses.tsx':
-    '4fa3b12d3e6b909f2b0505a42b3fa4182355a4476ad023a23dbe016079a78a08',
+    'f126190b426a2866986bf82c0464a211d044fdf20c6865b0a6302875ac82999e',
   'app/(drawer)/ai.tsx': '1e1f6b6e86817bb952cd00ddaf5cd0eb32273ef8053b99fd32f15fd79e914371',
   'app/(drawer)/notifications.tsx':
     '9d359357d41c32952be12437de57a44ce4fb26da377a900eb1ed7dfe833b439c',

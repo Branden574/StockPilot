@@ -8,6 +8,8 @@ import { deleteOrgData } from './db';
 import { refreshEnabledModules } from './enabled-modules';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
+import { refreshEffectivePermissions } from './use-effective-permissions';
+import { refreshWarehouseScope } from './warehouse-scope';
 import { chooseActiveOrg } from './workspace-choice';
 import {
   readCacheRepairOwed,
@@ -409,6 +411,7 @@ async function loadWorkspace(userId: string) {
       // one while only the phone's own store is failing.
       console.warn('[workspace] the cache repair failed; it stays owed for the next load', err);
     }
+    await rereadSavedAccess();
     // Recorded done once this wipe has worked: it was asked for after this
     // load's save, so every pull that writes after it names the workspace
     // chosen (an answer asked for before it is discarded: db.ts
@@ -494,6 +497,19 @@ async function loadWorkspace(userId: string) {
   if (activeOrgId && resetCache) {
     void syncNow(true).then(() => refreshEnabledModules());
   }
+}
+
+/**
+ * Tell every screen to read the saved permissions and warehouse scope again,
+ * and wait until they have: the wipe just deleted them with the previous
+ * workspace's rows (db.ts deleteOrgData states this duty), and the screens
+ * hold the last values read in memory. Called right after the wipe, before
+ * the new workspace is shown, so no screen narrows or widens by the previous
+ * workspace's permissions or banner while this one's pull is out (or for good
+ * offline). Never throws: each re-read keeps its last value on a failure.
+ */
+async function rereadSavedAccess(): Promise<void> {
+  await Promise.all([refreshEffectivePermissions(), refreshWarehouseScope()]);
 }
 
 /** The retry running now (see retryWorkspace). */
@@ -596,6 +612,7 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     // Still owed: the next load clears the cache before it shows a workspace.
     console.warn('[workspace] deleteOrgData on org switch failed; the next load clears again', err);
   }
+  await rereadSavedAccess();
   if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   // Recorded done as at the load, while this switch's record is the latest.
   // Not awaited: nothing may come between the check above and the publish
