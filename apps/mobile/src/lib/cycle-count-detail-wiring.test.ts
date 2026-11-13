@@ -81,9 +81,10 @@ describe('cycle-count/[id].tsx: a fetch the cache discarded is loaded again once
     );
     // Two passes at most: the mount, the workspace change and both Retry
     // buttons go through load(); since S75 so does the reload after a count
-    // the phone could not store (reloadAfterLineGone).
+    // the phone could not store (reloadAfterLineGone), and the quiet read in
+    // place when the phone finishes syncing (count-access-refresh.ts).
     expect(screen.match(/loadOnce\(\)/g)).toHaveLength(2);
-    expect(screen.match(/void load\(\);/g)).toHaveLength(4);
+    expect(screen.match(/void load\(\);/g)).toHaveLength(5);
     expect(screen).toContain('const COUNT_NOT_SAVED_AFTER_A_CHANGE =');
   });
 });

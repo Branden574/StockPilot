@@ -24,6 +24,7 @@ import { SceneBackground } from '@/components/ui/glass/scene-background';
 import { useGlass } from '@/components/ui/glass/use-glass';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/lib/auth-context';
+import { mergeScannedCounts } from '@/lib/count-access-refresh';
 import { countNotSavedAlert, createLineGoneNotice } from '@/lib/count-save-refusal';
 import {
   countStoredForLiveAccount,
@@ -155,11 +156,11 @@ function CycleCountScanScreenInner() {
       return;
     }
     setLines(snap.lines);
-    // Seed the per-line counted map from cache so the header tally
-    // reflects already-counted lines.
-    const seed = new Map<string, number>();
-    for (const l of snap.lines) if (l.counted != null) seed.set(l.id, l.counted);
-    setScannedMap(seed);
+    // The per-line counted map from the cache, so the header tally reflects
+    // already-counted lines, merged into what this screen scanned: read again
+    // when the phone finishes syncing (not synced yet -> allowed), a count
+    // scanned here stays (count-access-refresh.ts mergeScannedCounts).
+    setScannedMap((prev) => mergeScannedCounts(prev, snap.lines));
   }
 
   React.useEffect(() => {

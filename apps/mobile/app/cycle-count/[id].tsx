@@ -82,6 +82,7 @@ import { createDraftDebouncer } from '@/lib/draft-debouncer';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { supabase } from '@/lib/supabase';
 import { useOrg } from '@/lib/use-org';
+import { type CountLoadKey, countReloadIsQuiet } from '@/lib/count-access-refresh';
 import { countReadFailedView } from '@/lib/count-read-failed';
 import {
   CYCLE_COUNTS_NOT_AVAILABLE,
@@ -746,8 +747,27 @@ export default function CycleCountDetail() {
     if (lineGoneAnswered > 0) onLineGoneAnswered();
   }, [lineGoneAnswered]);
 
+  // What the last load ran for, and what is on screen now: when the phone
+  // finishes syncing while a count it fetched is on screen (not synced yet ->
+  // allowed), the count is read again in place, with no spinner and nothing
+  // on screen reset (count-access-refresh.ts countReloadIsQuiet), so a
+  // counter who is typing keeps the keyboard, the list and the drafts.
+  const lastLoadKey = React.useRef<CountLoadKey | null>(null);
+  const loadKeyNow = React.useEffectEvent(() => ({
+    key: { id, orgId, access },
+    linesShown: lines.length > 0,
+  }));
   React.useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount AND dep-change re-run: the flag resets are pre-await by necessity (the spinner must show during the fetch; a workspace switch re-runs this with stale content otherwise); everything else is post-await
+    const { key, linesShown } = loadKeyNow();
+    const quiet = countReloadIsQuiet(lastLoadKey.current, key, linesShown);
+    lastLoadKey.current = key;
+    if (quiet) {
+      void load();
+      return;
+    }
+    // Fetch-on-mount AND dep-change re-run: the flag resets are pre-await by
+    // necessity (the spinner must show during the fetch; a workspace switch
+    // re-runs this with stale content otherwise); everything else is post-await.
     setLoading(true);
     setReadError(null);
     setEmptyState('none');
