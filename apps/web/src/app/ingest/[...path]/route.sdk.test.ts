@@ -26,12 +26,18 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
  * header, so what happens to cookies is route.test.ts's (Node) business.
  */
 
-const { sdkFetch, realFetch, PROJECT_REF } = vi.hoisted(() => {
+const { sdkFetch, sdkFetched, realFetch, PROJECT_REF } = vi.hoisted(() => {
   const realFetch = globalThis.fetch;
   const sdkFetch = vi.fn<typeof fetch>();
-  globalThis.fetch = sdkFetch;
+  /** Told each time the SDK has asked for something by fetch. */
+  const sdkFetched = new Set<() => void>();
+  globalThis.fetch = (...args: Parameters<typeof fetch>) => {
+    const answer = sdkFetch(...args);
+    for (const told of [...sdkFetched]) told();
+    return answer;
+  };
   // A neutral name holds the value (route.test.ts says why).
-  return { sdkFetch, realFetch, PROJECT_REF: 'phc_placeholder' };
+  return { sdkFetch, sdkFetched, realFetch, PROJECT_REF: 'phc_placeholder' };
 });
 
 vi.mock('next/navigation', () => ({ usePathname: () => window.location.pathname }));
@@ -347,12 +353,29 @@ describe('the real SDK through /ingest, with the options the provider gives it',
     expect(refused, 'a request the SDK makes that the route does not pass on').toEqual([]);
   });
 
-  /** The one event batch the SDK has sent to /ingest/e/ since the last reset, once it has. */
+  /**
+   * The one event batch the SDK has sent to /ingest/e/ since the last reset,
+   * once it has. Waits for the SDK's own requests, not for a time: the SDK
+   * gzips a batch with the native CompressionStream, off the main thread, so
+   * how long a batch takes to go out is the machine's business (docket T28).
+   * A batch that never goes out fails the test on its timeout.
+   */
   async function eventBatchSent(nth = 0): Promise<Asked> {
-    const batches = async () =>
-      (await askedByFetch()).filter(({ at }) => at.startsWith('/ingest/e/'));
-    await vi.waitFor(async () => expect((await batches()).length).toBeGreaterThan(nth));
-    return (await batches())[nth]!;
+    for (;;) {
+      // Listening before looking, so a request made while we look is not missed.
+      let told = () => {};
+      const nextRequest = new Promise<void>((resolve) => {
+        told = resolve;
+      });
+      sdkFetched.add(told);
+      try {
+        const batches = (await askedByFetch()).filter(({ at }) => at.startsWith('/ingest/e/'));
+        if (batches.length > nth) return batches[nth]!;
+        await nextRequest;
+      } finally {
+        sdkFetched.delete(told);
+      }
+    }
   }
 
   /** That the route passed a batch on as the SDK sent it: its headers, its query, its bytes. */
@@ -477,6 +500,16 @@ describe('the real SDK through /ingest, with the options the provider gives it',
     }
   });
 
+  /**
+   * How long after PostHog refuses a batch posthog-js 1.438.15 sends it again,
+   * at most (lib/src/retry-queue.js). The first retry is due
+   * pickNextRetryDelay(0) after the failure: 3000 ms, give or take half of
+   * 1500 ms, so 2250 to 3750 ms. The queue looks for due retries every 3000 ms
+   * (_pollIntervalMs) and sends one only once it is past due. So the second
+   * look, 6000 ms after the failure, sends it whatever the jitter was.
+   */
+  const FIRST_RETRY_SENT_WITHIN_MS = 2 * 3000;
+
   it('a batch PostHog did not take is sent again with its retry counted, and the route passes that on too', async () => {
     postHogAnswers(null);
     sdkFetch.mockImplementationOnce(async () => new Response('', { status: 503 }));
@@ -484,10 +517,24 @@ describe('the real SDK through /ingest, with the options the provider gives it',
       toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     });
     try {
-      const instance = sdk('s38_retry', QUIET);
+      // The clock moves only once PostHog's refusal has reached the SDK's
+      // retry queue. The SDK reports the refusal (on_request_error, which only
+      // listens) in the same call that queues the batch again. Moved first,
+      // by a fixed 60 s as this test once did, the clock could run out before
+      // the refused batch had even gone out (its gzip and the answer's body are
+      // real work that no fake timer waits for), and the retry then fell due
+      // after the last move, never to be sent (docket T28).
+      let refused = () => {};
+      const batchRefused = new Promise<void>((resolve) => {
+        refused = resolve;
+      });
+      const instance = sdk('s38_retry', { ...QUIET, on_request_error: () => refused() });
       instance.capture('s38_placeholder_event');
-      await vi.advanceTimersByTimeAsync(60_000);
+      await batchRefused;
+      // The refusal was the batch's: it is the one request made so far.
+      expect((await askedByFetch()).map(({ at }) => at)).toEqual(['/ingest/e/']);
 
+      await vi.advanceTimersByTimeAsync(FIRST_RETRY_SENT_WITHIN_MS);
       const retry = await eventBatchSent(1);
       expect(retry.at).toBe('/ingest/e/?retry_count=1');
       await expectPassedOn(retry);
