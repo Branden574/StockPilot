@@ -2021,8 +2021,10 @@ describe('/ingest reads an event batch only up to a set size, however it is pack
     const over = packed('base64', batchOfSize(MOST_BATCH_BYTES + 1));
     const atTheSize = packed('base64', batchOfSize(MOST_BATCH_BYTES));
     const from = vi.spyOn(Buffer, 'from');
+    // What each Buffer.from(text, 'base64') call decoded to (its overloads
+    // type the calls by the first only).
     const decodedBase64 = () =>
-      from.mock.calls.flatMap((call, i) =>
+      (from.mock.calls as unknown[][]).flatMap((call, i) =>
         call[1] === 'base64' ? [(from.mock.results[i]!.value as Buffer).byteLength] : [],
       );
 
