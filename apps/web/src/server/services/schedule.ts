@@ -762,27 +762,36 @@ export class ScheduleService {
 
     // Read the row first so the audit entry can record what was
     // removed (title + status + warehouse). Cheap; the index covers it.
-    const { data: prior } = await this.ctx.supabase
+    // A miss refuses (S41), so the audit entry always has the row it
+    // describes. A failed read refuses too, never "no such event".
+    const { data: prior, error: priorError } = await this.ctx.supabase
       .from('schedule_events')
       .select('title, status, warehouse_id, bundle_id, starts_at')
       .eq('organization_id', this.ctx.organizationId)
       .eq('id', id)
       .maybeSingle();
+    if (priorError) throw new ServiceError('internal_error', priorError.message);
+    if (!prior) throw new ServiceError('not_found', 'Event not found');
 
-    const { error } = await this.ctx.supabase
+    // The deleted row is asked back: a filtered delete that matches no row
+    // is not an error, so only the returned row proves the event was deleted.
+    const { data: gone, error } = await this.ctx.supabase
       .from('schedule_events')
       .delete()
       .eq('organization_id', this.ctx.organizationId)
-      .eq('id', id);
+      .eq('id', id)
+      .select('id')
+      .maybeSingle();
     if (error) throw new ServiceError('internal_error', error.message);
+    if (!gone) throw new ServiceError('not_found', 'Event not found');
 
     await audit(
       {
         event: 'schedule.deleted',
         entityType: 'schedule_event',
         entityId: id,
-        warehouseId: (prior?.warehouse_id as string | null) ?? null,
-        before: prior ?? null,
+        warehouseId: (prior.warehouse_id as string | null) ?? null,
+        before: prior,
       },
       this.ctx,
     );

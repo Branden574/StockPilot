@@ -318,6 +318,14 @@ select is(
 select ok(
   (select (select count(*) from regexp_matches(p.prosrc, '\mupdate\s+public\.order_requests\s+set\s+needed_by\s*=\s*p_needed_by\s+where\s+id\s*=\s*p_id;', 'gi')) = 1
           and (select count(*) from regexp_matches(p.prosrc, '\mupdate\s+public\.schedule_events\M', 'gi')) = 1
+          -- Two UPDATEs in all, counted with the security invariant suite's own
+          -- UPDATE form (the UPDATE arm of _sec_inv_writer_re in
+          -- security_invariants.test.sql): ONLY, unqualified or quoted, a table
+          -- in any schema. A guard test keeps this copy equal. The line after
+          -- it is the count this pin held before: two UPDATEs that name
+          -- public, whatever follows the table (the suite's form reads an
+          -- UPDATE as far as its SET).
+          and (select count(*) from regexp_matches(p.prosrc, $w$\mupdate\s+(only\s*\(?\s*)?(("([^"]|"")+"|[a-z_][a-z0-9_$]*)\s*\.\s*)*("([^"]|"")+"|[a-z_][a-z0-9_$]*)(\s*\))?(\s*\*)?(\s+(as\s+)?("([^"]|"")+"|[a-z_][a-z0-9_$]*))?\s+set\M$w$, 'gi')) = 2
           and (select count(*) from regexp_matches(p.prosrc, '\mupdate\s+public\.', 'gi')) = 2
           and p.prosrc !~* '\m(insert\s+into|delete\s+from|truncate|merge\s+into)\M'
           and p.prosrc !~* '\mstatus\s*='

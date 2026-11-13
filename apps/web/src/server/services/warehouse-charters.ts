@@ -4,6 +4,7 @@ import { reportError } from '@/lib/error-reporter';
 
 import { audit } from './audit';
 import { assertPermission, ServiceError, withContext, type ServiceContext } from './context';
+import { readInActiveOrg } from './lib/in-active-org';
 import { LOOKUP_ROW_CEILING, reportLookupCeiling } from './lib/lookup-ceiling';
 import { fetchAllRows } from './lib/paginate';
 import { postgrestErrorText } from './lib/postgrest-error';
@@ -99,6 +100,10 @@ export class WarehouseChartersService {
     charterIds: string[],
   ): Promise<() => Promise<void>> {
     assertPermission(this.ctx, 'organization:update');
+    // S41: the warehouse is read in THIS organization first, and a miss
+    // refuses. The links below are read, inserted and deleted by warehouse id,
+    // and the audit row names it.
+    await readInActiveOrg(this.ctx, 'warehouses', warehouseId, 'Warehouse not found.');
 
     // Every current link, page by page, ordered by charter (B47 part C). One
     // read with no range stopped at 1000 links on the warehouse, so a save
