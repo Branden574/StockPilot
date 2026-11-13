@@ -3043,9 +3043,9 @@ const backfillEmbeddingsTool: ToolExecutor = {
   },
   async execute(args, ctx) {
     // The multi-factor gate first, as assertPermission runs it for every other
-    // write tool and as the Settings backfill does (server/actions/
-    // embeddings.ts): this tool checks a role, not a permission, so it asks
-    // the gate itself.
+    // write tool and as the Settings backfill does
+    // (server/actions/embeddings.ts): this tool checks a role, not a
+    // permission, so it asks the gate itself.
     if (ctx.mfaRequired && !ctx.mfaSatisfied) throw mfaGateError(ctx);
     // Admin gate. Thrown, like every other write tool's refusal, so the
     // attempt is audited as failed.

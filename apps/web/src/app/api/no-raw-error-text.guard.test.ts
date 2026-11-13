@@ -2530,10 +2530,11 @@ describe("what the model can read from a service's refusal is listed (S30 review
       clause.statements.forEach(look);
       return reads;
     };
+    // Source text is compared with its white space folded, so wrapping a line
+    // of the classifier differently is not a failure.
+    const written = (node: ts.Node) => node.getText(sf).replace(/\s+/g, ' ');
     const wordCases = switches[0]!.caseBlock.clauses.flatMap((clause) =>
-      readsWords(clause)
-        ? [ts.isCaseClause(clause) ? clause.expression.getText(sf) : 'default']
-        : [],
+      readsWords(clause) ? [ts.isCaseClause(clause) ? written(clause.expression) : 'default'] : [],
     );
     expect(wordCases).toEqual(
       Object.entries(MODEL_READS)
@@ -2546,7 +2547,7 @@ describe("what the model can read from a service's refusal is listed (S30 review
     const reads = (node: ts.Node) => {
       if (node === switches[0]) return;
       if (ts.isPropertyAccessExpression(node) && node.name.text === 'message') {
-        messageReads.push(node.parent.getText(sf));
+        messageReads.push(written(node.parent));
       }
       ts.forEachChild(node, reads);
     };
