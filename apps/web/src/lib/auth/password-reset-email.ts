@@ -6,6 +6,8 @@ import { env } from '@/lib/env';
 import { reportError } from '@/lib/error-reporter';
 import { createAdminClient } from '@/lib/supabase/admin';
 
+import { confirmLinkUrl } from './confirm-link';
+
 /**
  * Mints a one-time recovery link for `email` and delivers it through the
  * app's own Resend transport. Shared by every reset-sending surface (the
@@ -44,7 +46,9 @@ export async function sendPasswordResetEmail(email: string): Promise<boolean> {
     // (PKCE-only, lib/supabase/client.test.ts), so the person lands on
     // /signin with a spent link, not signed in, and with live tokens in the
     // address bar. /auth/confirm verifies the hash server-side (verifyOtp)
-    // and lands the user on /reset/complete with cookies set.
+    // and lands the user on /reset/complete with cookies set. The link names
+    // the account GoTrue made it for (`r`, docket S25), so the page can show
+    // whose password it sets before anyone presses.
     if (linkError) return false; // no account for this address, among others
     const hashedToken = data?.properties?.hashed_token;
     if (!hashedToken) {
@@ -55,7 +59,21 @@ export async function sendPasswordResetEmail(email: string): Promise<boolean> {
       });
       return false;
     }
-    const resetUrl = `${env.NEXT_PUBLIC_APP_URL}/auth/confirm?token_hash=${encodeURIComponent(hashedToken)}&type=recovery&next=${encodeURIComponent('/reset/complete')}`;
+    const resetUrl = confirmLinkUrl({
+      tokenHash: hashedToken,
+      type: 'recovery',
+      next: '/reset/complete',
+      userId: data?.user?.id,
+    });
+    if (!resetUrl) {
+      // No key to sign with, or GoTrue returned no usable id: the link could
+      // not name its account, so send nothing. Reported without the token,
+      // the id or the address.
+      void reportError(new Error('a recovery link could not be signed for its account'), {
+        tag: 'auth.confirm_link_unsigned',
+      });
+      return false;
+    }
 
     // Render via the es security family (redesign, 2026-07). Only the
     // message (html/text/subject/from) changed — the minting above is

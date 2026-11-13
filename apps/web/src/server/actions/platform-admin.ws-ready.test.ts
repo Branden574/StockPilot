@@ -6,6 +6,16 @@ import { makeSupabaseStub } from '@/test/supabase-mock';
 // generateLink minting exactly as before, and deliver the es ws-ready
 // template (dedicated design — no longer the generic invite email) from
 // the registry hello@ sender.
+//
+// Docket S25: the invite link carries `r`, the account it is for, signed for
+// the new owner's user id that GoTrue returned (checked with the app's own
+// checker); a link that cannot be signed is not sent. The signing value is a
+// dull one under a neutral name, set before @/lib/env reads the environment
+// (src/test/secret-shaped-fixtures.guard.test.ts).
+vi.hoisted(() => {
+  const SIGNING_INPUT = 'test-only-signing-input';
+  process.env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_INPUT;
+});
 
 const sendEmail = vi.fn();
 const generateLink = vi.fn();
@@ -37,16 +47,26 @@ vi.mock('@/lib/supabase/admin', () => ({
   createAdminClient: () => adminStub.client,
 }));
 
+import { env } from '@/lib/env';
+import { emailedConfirmLink } from '@/test/confirm-link-check';
+
 import { createOrgForCustomerAction } from './platform-admin';
+
+/** The new owner's auth user, as GoTrue's generateLink returns it. */
+const NEW_OWNER_ID = '99999999-9999-4999-8999-999999999999';
+/** GoTrue's hashed token is a sha224 in hex: 56 characters. */
+const LINK_HASH = 'ab'.repeat(28);
+const SIGNING_COPY = env.SUPABASE_SERVICE_ROLE_KEY;
 
 describe('createOrgForCustomerAction — es ws-ready wiring', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    env.SUPABASE_SERVICE_ROLE_KEY = SIGNING_COPY;
     sendEmail.mockResolvedValue({ ok: true, id: 'test' });
     generateLink.mockResolvedValue({
       data: {
-        user: { id: 'auth-user-9' },
-        properties: { hashed_token: 'hashWS', action_link: 'https://sb/verify?token=raw' },
+        user: { id: NEW_OWNER_ID },
+        properties: { hashed_token: LINK_HASH, action_link: 'https://sb/verify?token=raw' },
       },
       error: null,
     });
@@ -70,6 +90,7 @@ describe('createOrgForCustomerAction — es ws-ready wiring', () => {
       to: string;
       subject: string;
       html: string;
+      text: string;
       from?: string;
       replyTo?: string;
     };
@@ -79,7 +100,7 @@ describe('createOrgForCustomerAction — es ws-ready wiring', () => {
     // Registry subject, byte-equal.
     expect(msg.subject).toBe('Your Acme Co workspace on StockPilot is ready');
     // Still our server-verified confirm route that forces set-a-password.
-    expect(msg.html).toContain('/auth/confirm?token_hash=hashWS&amp;type=invite');
+    expect(msg.html).toContain(`/auth/confirm?token_hash=${LINK_HASH}&amp;type=invite`);
     expect(msg.html).not.toContain('https://sb/verify');
     // The dedicated ws-ready design, not the old generic invite.
     expect(msg.html).toContain('Your workspace is ready.');
@@ -97,10 +118,50 @@ describe('createOrgForCustomerAction — es ws-ready wiring', () => {
       actorEmail: gate.session.email,
       action: 'org_provisioned',
       targetOrganizationId: 'org-1',
-      targetUserId: 'auth-user-9',
+      targetUserId: NEW_OWNER_ID,
       detail: { slug: 'acme-co', via: 'provision' },
     });
+
+    // S25: the page will name the new owner, the account GoTrue just made.
+    expect(emailedConfirmLink(msg.text)).toMatchObject({
+      type: 'invite',
+      next: '/reset/complete',
+      recipient: NEW_OWNER_ID,
+    });
   });
+
+  it.each([
+    ['no service key to sign with', () => (env.SUPABASE_SERVICE_ROLE_KEY = ''), NEW_OWNER_ID],
+    ['a user id that is not a UUID', () => {}, 'auth-user-9'],
+  ])(
+    'sends nothing, reports it and tells the operator when the invite link cannot be signed: %s',
+    async (_label, arrange, userId) => {
+      arrange();
+      generateLink.mockResolvedValue({
+        data: {
+          user: { id: userId },
+          properties: { hashed_token: LINK_HASH, action_link: 'https://sb/verify?token=raw' },
+        },
+        error: null,
+      });
+      const { reportError } = await import('@/lib/error-reporter');
+      const res = await createOrgForCustomerAction({
+        email: 'owner@acme.example',
+        name: 'Acme Co',
+        timezone: 'America/Los_Angeles',
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.error.message).toMatch(/Org created, but no invite link could be made/);
+        expect(res.error.message).toMatch(/Send password reset/);
+      }
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(reportError).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ tag: 'platform-admin.invite-link' }),
+      );
+    },
+  );
 
   // Docket B39 review: GoTrue's raw action_link hands its session back in the
   // URL fragment, which the app never uses, so an owner who pressed it landed
@@ -109,7 +170,7 @@ describe('createOrgForCustomerAction — es ws-ready wiring', () => {
   it('sends nothing, reports it and tells the operator when GoTrue returns no hashed token, never the action_link', async () => {
     generateLink.mockResolvedValue({
       data: {
-        user: { id: 'auth-user-9' },
+        user: { id: NEW_OWNER_ID },
         properties: { action_link: 'https://sb/verify?token=raw' },
       },
       error: null,
