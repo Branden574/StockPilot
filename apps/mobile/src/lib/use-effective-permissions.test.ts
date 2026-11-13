@@ -104,9 +104,22 @@ describe('useEffectivePermissionsState', () => {
     expect(permissionsOnceRead(now)).toBe(now.permissions);
   });
 
+  // S75: an empty set is a saved set. Only a pull and the light permission
+  // read write the key, and both write a list only when the server sent one
+  // (the server refuses a request whose permissions it cannot read), so an
+  // empty saved set is a member who holds no permission.
+  it('an empty set: read, with it (no permission held)', async () => {
+    db.getMeta.mockResolvedValue('[]');
+    useEffectivePermissionsState();
+    await settle();
+    const now = useEffectivePermissionsState();
+    expect(now.read).toBe(true);
+    expect(now.answered).toBe(true);
+    expect(now.permissions).toEqual(new Set());
+  });
+
   it.each([
     ['nothing saved', null],
-    ['an empty set', '[]'],
     ['a set that does not parse', 'not json'],
   ])('%s: read, with no set, so the static defaults decide as before', async (_label, raw) => {
     db.getMeta.mockResolvedValue(raw);
@@ -283,6 +296,32 @@ describe('answered: the device store has answered, never the wait (S75)', () => 
     expect(now.answered).toBe('failed');
     expect(now.read).toBe(true);
     expect([...(now.permissions ?? [])]).toEqual(['items:create']);
+  });
+});
+
+describe('a read that failed is read again at the end of every pull (S75)', () => {
+  it('rereadFailedEffectivePermissions reads again a reader whose last read failed', async () => {
+    const { rereadFailedEffectivePermissions } = await import('./use-effective-permissions');
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    useEffectivePermissionsState();
+    await settle();
+    expect(useEffectivePermissionsState().answered).toBe('failed');
+    db.getMeta.mockReset().mockResolvedValue(saved('items:create'));
+    await rereadFailedEffectivePermissions();
+    expect(db.getMeta).toHaveBeenCalledTimes(1);
+    const now = useEffectivePermissionsState();
+    expect(now.answered).toBe(true);
+    expect([...(now.permissions ?? [])]).toEqual(['items:create']);
+  });
+
+  it('a reader whose last read answered is not read again', async () => {
+    const { rereadFailedEffectivePermissions } = await import('./use-effective-permissions');
+    db.getMeta.mockResolvedValue(saved('items:create'));
+    useEffectivePermissionsState();
+    await settle();
+    db.getMeta.mockClear();
+    await rereadFailedEffectivePermissions();
+    expect(db.getMeta).not.toHaveBeenCalled();
   });
 });
 

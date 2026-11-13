@@ -62,6 +62,21 @@ export function refreshEnabledModules(): Promise<void> {
   return Promise.all([...listeners].map((fn) => fn().catch(() => undefined))).then(() => undefined);
 }
 
+/** The hooks whose latest read threw ('failed'), until a read comes back. */
+const failedReads = new Set<() => Promise<void>>();
+
+/**
+ * Read again in every hook whose latest read threw, and only those: called at
+ * the end of every pull (sync.ts), so a screen whose read failed does not
+ * stay 'unreadable' until Try again or a remount when the saved set did not
+ * change. Never rejects.
+ */
+export function rereadFailedEnabledModules(): Promise<void> {
+  return Promise.all([...failedReads].map((fn) => fn().catch(() => undefined))).then(
+    () => undefined,
+  );
+}
+
 /**
  * React hook returning the current org's enabled module set, defaulting to
  * DEFAULT_ENABLED_MODULES until a persisted value is read (a read that throws
@@ -135,10 +150,14 @@ export function useEnabledModulesState(): EnabledModulesState {
         // The device store could not be read: the last set read stays for
         // the menu, a first read still counts as read, and the read failed.
         stopWaiting();
-        if (!cancelled) setState((prev) => ({ ...prev, read: true, answered: 'failed' }));
+        if (!cancelled) {
+          failedReads.add(reread);
+          setState((prev) => ({ ...prev, read: true, answered: 'failed' }));
+        }
         return;
       }
       stopWaiting();
+      failedReads.delete(reread);
       if (cancelled) return;
       // Nothing saved keeps the set already shown, as before.
       setState((prev) => ({
@@ -153,6 +172,7 @@ export function useEnabledModulesState(): EnabledModulesState {
       cancelled = true;
       stopWaiting();
       listeners.delete(reread);
+      failedReads.delete(reread);
     };
   }, []);
 

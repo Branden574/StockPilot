@@ -9,6 +9,7 @@ import { refreshEnabledModules } from './enabled-modules';
 import { refreshCacheOwner } from './use-cache-owner';
 import { syncAfterRunning, syncNow } from './sync';
 import { supabase } from './supabase';
+import { countSelection } from './use-count-selection';
 import { refreshEffectivePermissions } from './use-effective-permissions';
 import { refreshWarehouseScope } from './warehouse-scope';
 import { chooseActiveOrg } from './workspace-choice';
@@ -192,9 +193,23 @@ let shownEpoch: number | null = null;
 let epochUserId: string | null | undefined;
 supabase.auth.onAuthStateChange((_event, session) => {
   const id = session?.user?.id ?? null;
-  if (epochUserId !== undefined && id !== epochUserId) endAccountEpoch();
+  if (epochUserId !== undefined && id !== epochUserId) {
+    endAccountEpoch();
+    forgetWorkspacePicks();
+  }
   epochUserId = id;
 });
+
+/**
+ * The picks made on this phone for one account in one workspace, held in
+ * memory by module-level stores, forgotten when the account changes (a
+ * sign-out included) and when another workspace's cache replaces this one's:
+ * the items picked for a cycle count (use-count-selection.ts), which Select
+ * and the review showed to the next account.
+ */
+function forgetWorkspacePicks(): void {
+  countSelection.clear();
+}
 
 /** Workspace loads running now (see retryWorkspace). */
 let loadsRunning = 0;
@@ -412,6 +427,7 @@ async function loadWorkspace(userId: string) {
       // one while only the phone's own store is failing.
       console.warn('[workspace] the cache repair failed; it stays owed for the next load', err);
     }
+    forgetWorkspacePicks();
     await rereadSavedAccess();
     // Recorded done once this wipe has worked: it was asked for after this
     // load's save, so every pull that writes after it names the workspace
@@ -621,6 +637,7 @@ async function switchActiveOrg(orgId: string, epoch: number): Promise<void> {
     // Still owed: the next load clears the cache before it shows a workspace.
     console.warn('[workspace] deleteOrgData on org switch failed; the next load clears again', err);
   }
+  forgetWorkspacePicks();
   await rereadSavedAccess();
   if (epoch !== accountEpoch()) return; // signed out mid-switch: show nothing
   // Recorded done as at the load, while this switch's record is the latest.

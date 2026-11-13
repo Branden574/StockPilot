@@ -106,10 +106,12 @@ vi.mock('./account-disabled-state', () => ({ getAccountDisabled: () => false }))
 vi.mock('./enabled-modules', () => ({
   ENABLED_MODULES_META_KEY: 'enabled_modules',
   refreshEnabledModules: vi.fn(),
+  rereadFailedEnabledModules: vi.fn(async () => undefined),
 }));
 vi.mock('./use-effective-permissions', () => ({
   EFFECTIVE_PERMISSIONS_META_KEY: 'effective_permissions',
   refreshEffectivePermissions: vi.fn(),
+  rereadFailedEffectivePermissions: vi.fn(async () => undefined),
 }));
 vi.mock('./warehouse-scope', () => ({
   WAREHOUSE_SCOPE_META_KEY: 'warehouse_scope',
@@ -336,6 +338,48 @@ async function fullPull(snap: Snap) {
   apiMock.api.mockResolvedValue(snap);
   await pullSnapshot(true);
 }
+
+describe('the saved permission set a pull writes (S75)', () => {
+  // Every writer of the key: this pull, fetchEffectivePermissions
+  // (use-effective-permissions.ts) and the wipes that delete it (db.ts). An
+  // empty list from the server is the member's answer (the server refuses a
+  // request whose permissions it cannot read), so it is saved as an empty
+  // set; a snapshot that carries no list at all leaves the saved set as it is.
+  it('an empty list is saved as an empty set', async () => {
+    meta.store.set('effective_permissions', '["items:read"]');
+    await deltaPull(emptySnap({ permissions: [] }));
+    expect(meta.store.get('effective_permissions')).toBe('[]');
+  });
+
+  it('a list is saved as it came', async () => {
+    await deltaPull(emptySnap({ permissions: ['items:read', 'items:create'] }));
+    expect(meta.store.get('effective_permissions')).toBe('["items:read","items:create"]');
+  });
+
+  it('no list at all: the saved set stays as it is, and nothing is written for it', async () => {
+    meta.store.set('effective_permissions', '["items:read"]');
+    await deltaPull(emptySnap());
+    expect(meta.store.get('effective_permissions')).toBe('["items:read"]');
+    meta.store.delete('effective_permissions');
+    await deltaPull(emptySnap());
+    expect(meta.store.has('effective_permissions')).toBe(false);
+  });
+});
+
+describe('a saved-access read that failed is read again at the end of every pull (S75)', () => {
+  it('whether or not the saved sets changed', async () => {
+    const modules = await import('./enabled-modules');
+    const permissions = await import('./use-effective-permissions');
+    const failedModules = vi.mocked(modules.rereadFailedEnabledModules);
+    const failedPermissions = vi.mocked(permissions.rereadFailedEffectivePermissions);
+    failedModules.mockClear();
+    failedPermissions.mockClear();
+    await deltaPull(emptySnap({ permissions: ['items:read'] }));
+    await deltaPull(emptySnap({ permissions: ['items:read'] }));
+    expect(failedModules).toHaveBeenCalledTimes(2);
+    expect(failedPermissions).toHaveBeenCalledTimes(2);
+  });
+});
 
 describe('cycle counts — reconciled on EVERY pull', () => {
   /**

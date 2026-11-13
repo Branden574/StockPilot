@@ -21,8 +21,10 @@ import { getMeta, setMeta } from './db';
  * Default-while-loading is `undefined` → drawerSectionsFor passes it through to
  * resolveSurface, which falls back to the STATIC role permissions. So the
  * drawer renders today's role-based nav until the effective set loads, then
- * narrows/widens per overrides — never an empty flash. (An empty persisted set
- * is also treated as "not loaded" since no real member has zero permissions.)
+ * narrows/widens per overrides — never an empty flash. An empty saved set is
+ * a saved set: a member who holds no permission (S75). Both writers save a
+ * list only when the server sent one, and the server refuses a request whose
+ * permissions it cannot read rather than send none.
  *
  * Like enabled-modules, this is COSMETIC nav gating only — the API independently
  * enforces permissions server-side (assertPermission + RLS), so a briefly
@@ -61,6 +63,21 @@ export function refreshEffectivePermissions(): Promise<void> {
   return Promise.all([...listeners].map((fn) => fn().catch(() => undefined))).then(() => undefined);
 }
 
+/** The hooks whose latest read threw ('failed'), until a read comes back. */
+const failedReads = new Set<() => Promise<void>>();
+
+/**
+ * Read again in every hook whose latest read threw, and only those: called at
+ * the end of every pull (sync.ts), so a screen whose read failed does not
+ * stay 'unreadable' until Try again or a remount when the saved set did not
+ * change. Never rejects.
+ */
+export function rereadFailedEffectivePermissions(): Promise<void> {
+  return Promise.all([...failedReads].map((fn) => fn().catch(() => undefined))).then(
+    () => undefined,
+  );
+}
+
 /**
  * Light fetch of the effective permission set → persist + notify. Used by the
  * realtime subscription (and on demand). Fail-silent: a failed fetch leaves the
@@ -69,7 +86,10 @@ export function refreshEffectivePermissions(): Promise<void> {
 export async function fetchEffectivePermissions(): Promise<void> {
   try {
     const res = await api<{ role: Role; permissions: string[] }>('/api/v1/me/permissions');
-    const next = JSON.stringify(Array.isArray(res.permissions) ? res.permissions : []);
+    // Only a list the server sent is saved: an empty saved set is a member
+    // who holds no permission, never "not known".
+    if (!Array.isArray(res.permissions)) return;
+    const next = JSON.stringify(res.permissions);
     const prev = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
     await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, next);
     if (prev !== next) refreshEffectivePermissions();
@@ -150,14 +170,19 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
         // the read failed (it offers Try again), whatever was answered before.
         stopWaiting();
         if (!cancelled) {
+          failedReads.add(reread);
           setState((prev) => ({ ...(prev.read ? prev : READ_NOTHING_SAVED), answered: 'failed' }));
         }
         return;
       }
       stopWaiting();
+      failedReads.delete(reread);
       if (cancelled) return;
+      // A saved set, empty included, is the member's answer: only a pull and
+      // fetchEffectivePermissions write the key, each only with a list the
+      // server sent (sync.ts, above).
       setState({
-        permissions: persisted && persisted.size > 0 ? persisted : undefined,
+        permissions: persisted ?? undefined,
         read: true,
         answered: true,
       });
@@ -168,6 +193,7 @@ export function useEffectivePermissionsState(): EffectivePermissionsState {
       cancelled = true;
       stopWaiting();
       listeners.delete(reread);
+      failedReads.delete(reread);
     };
   }, []);
 

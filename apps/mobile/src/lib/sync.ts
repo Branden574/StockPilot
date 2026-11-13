@@ -43,10 +43,15 @@ import {
   serializeBundleRefill,
 } from './bundle-refill';
 import { classifyDrainFailure } from './drain-failure';
-import { ENABLED_MODULES_META_KEY, refreshEnabledModules } from './enabled-modules';
+import {
+  ENABLED_MODULES_META_KEY,
+  refreshEnabledModules,
+  rereadFailedEnabledModules,
+} from './enabled-modules';
 import {
   EFFECTIVE_PERMISSIONS_META_KEY,
   refreshEffectivePermissions,
+  rereadFailedEffectivePermissions,
 } from './use-effective-permissions';
 import { OutboxSessionChangedError, OWNED_BY_USER_SQL, outboxSendDecision } from './outbox-scope';
 import { clearPhotoCaches, wipeWithPhotoCaches } from './photo-cache-wipe';
@@ -802,12 +807,15 @@ export async function pullSnapshot(
     // Same pattern for the user's EFFECTIVE permissions — drives the drawer's
     // permission-based nav gating. Re-renders the drawer immediately when an
     // admin grants/revokes access (next foreground/60s sync, no restart).
-    const nextPermsJson = JSON.stringify(
-      Array.isArray(snap.permissions) ? snap.permissions : [],
-    );
-    const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
-    await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
-    permissionsChanged = prevPermsJson !== nextPermsJson;
+    // Saved only when the server sent a list: an empty list is a member who
+    // holds no permission (the server refuses a request whose permissions it
+    // cannot read), and a snapshot without one leaves the saved set as it is.
+    if (Array.isArray(snap.permissions)) {
+      const nextPermsJson = JSON.stringify(snap.permissions);
+      const prevPermsJson = await getMeta(EFFECTIVE_PERMISSIONS_META_KEY);
+      await setMeta(EFFECTIVE_PERMISSIONS_META_KEY, nextPermsJson);
+      permissionsChanged = prevPermsJson !== nextPermsJson;
+    }
 
     // Warehouse scope (same persist+notify pattern) — drives the Items
     // screen's scoped-view banner. Only written when the server actually sent
@@ -846,6 +854,10 @@ export async function pullSnapshot(
   void refreshCacheOwner();
   if (modulesChanged) refreshEnabledModules();
   if (permissionsChanged) refreshEffectivePermissions();
+  // A screen whose read of the saved sets failed reads again now, changed or
+  // not (it would otherwise stay 'unreadable' until Try again or a remount).
+  void rereadFailedEnabledModules();
+  void rereadFailedEffectivePermissions();
   if (scopeChanged) refreshWarehouseScope();
 
   return {

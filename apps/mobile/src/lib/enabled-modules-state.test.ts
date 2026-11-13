@@ -174,6 +174,30 @@ describe('useEnabledModulesState', () => {
   });
 });
 
+describe('a read that failed is read again at the end of every pull (S75)', () => {
+  it('rereadFailedEnabledModules reads again a reader whose last read failed', async () => {
+    const { rereadFailedEnabledModules } = await import('./enabled-modules');
+    db.getMeta.mockRejectedValue(new Error('database is locked'));
+    useEnabledModulesState();
+    await settle();
+    expect(useEnabledModulesState().answered).toBe('failed');
+    db.getMeta.mockReset().mockResolvedValue(saved('bundles'));
+    await rereadFailedEnabledModules();
+    expect(db.getMeta).toHaveBeenCalledTimes(1);
+    expect(useEnabledModulesState().answered).toBe('saved');
+  });
+
+  it('a reader whose last read answered is not read again', async () => {
+    const { rereadFailedEnabledModules } = await import('./enabled-modules');
+    db.getMeta.mockResolvedValue(saved('bundles'));
+    useEnabledModulesState();
+    await settle();
+    db.getMeta.mockClear();
+    await rereadFailedEnabledModules();
+    expect(db.getMeta).not.toHaveBeenCalled();
+  });
+});
+
 describe('useEnabledModules (the menu and the tabs): unchanged', () => {
   it('the default set until read, then the saved set', async () => {
     db.getMeta.mockResolvedValue(saved('bundles'));
