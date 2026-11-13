@@ -1,0 +1,91 @@
+import { readFileSync } from 'node:fs';
+import * as path from 'node:path';
+
+import { describe, expect, it, vi } from 'vitest';
+
+import { screenFunction } from './__fixtures__/screen-functions';
+
+/** What the count screens say (screen-access.ts CYCLE_COUNTS_NOT_AVAILABLE, pinned there). */
+const CYCLE_COUNTS_NOT_AVAILABLE = 'Cycle counts are not available to you in this workspace.';
+type ScreenAccess = 'unknown' | 'allowed' | 'denied';
+
+/**
+ * THE COUNT SCANNERS OPEN THE COUNT SAVED ON THIS PHONE ONLY FOR A MEMBER WHO
+ * MAY SEE CYCLE COUNTS (S75).
+ *
+ * The barcode scanner (cycle-count/scan/[id].tsx) and the AI shelf scan
+ * (cycle-count/ai-scan/[id].tsx) read the count's lines from the phone, and
+ * can be opened by a link as well as from the count screen. They now ask the
+ * count screen's question first (screen-access.ts, the side menu's rule): a
+ * member who may not is told so and taken back, nothing is read; until it is
+ * known, nothing is read. A member who may keeps every path as before.
+ *
+ * Each screen's own load function is RUN here (screen-functions.ts).
+ */
+
+const SCAN = 'app/cycle-count/scan/[id].tsx';
+const AI_SCAN = 'app/cycle-count/ai-scan/[id].tsx';
+const COUNT_ID = '0a000000-0000-0000-0000-0000000000b2';
+const LINES = [{ id: 'l1', counted: 3 }];
+
+function harness(file: string, name: string, access: ScreenAccess) {
+  const getCycleCount = vi.fn(async () => ({ header: { id: COUNT_ID }, lines: LINES }));
+  const alert = vi.fn();
+  const back = vi.fn();
+  const shown: unknown[] = [];
+  const run = screenFunction<() => Promise<void>>(file, name, {
+    id: COUNT_ID,
+    cycleCountId: COUNT_ID,
+    access,
+    CYCLE_COUNTS_NOT_AVAILABLE,
+    getCycleCount,
+    Alert: { alert },
+    router: { back },
+    setLines: (v: unknown) => shown.push(v),
+    setCachedLines: (v: unknown) => shown.push(v),
+    setScannedMap: () => undefined,
+  });
+  return { run, getCycleCount, alert, back, shown };
+}
+
+describe.each([
+  ['the barcode scanner', SCAN, 'loadLines'],
+  ['the AI shelf scan', AI_SCAN, 'loadCachedLines'],
+] as const)('%s', (_label, file, name) => {
+  it('a member who may see cycle counts gets the lines saved on this phone, as before', async () => {
+    const h = harness(file, name, 'allowed');
+    await h.run();
+    expect(h.getCycleCount).toHaveBeenCalledWith(COUNT_ID);
+    expect(h.shown).toContainEqual(LINES);
+    expect(h.alert).not.toHaveBeenCalled();
+  });
+
+  it('a member who may not is told so and taken back; nothing is read', async () => {
+    const h = harness(file, name, 'denied');
+    await h.run();
+    expect(h.getCycleCount).not.toHaveBeenCalled();
+    expect(h.shown).toEqual([]);
+    expect(h.alert).toHaveBeenCalledTimes(1);
+    const [, message, buttons] = h.alert.mock.calls[0] as [
+      string,
+      string,
+      { onPress: () => void }[],
+    ];
+    expect(message).toBe(CYCLE_COUNTS_NOT_AVAILABLE);
+    buttons[0]!.onPress();
+    expect(h.back).toHaveBeenCalledTimes(1);
+  });
+
+  it('before it is known, nothing is read and nothing is said', async () => {
+    const h = harness(file, name, 'unknown');
+    await h.run();
+    expect(h.getCycleCount).not.toHaveBeenCalled();
+    expect(h.alert).not.toHaveBeenCalled();
+  });
+
+  it("asks the count screen's question, and loads again when the answer changes", () => {
+    const src = readFileSync(path.resolve(__dirname, '../..', file), 'utf8');
+    expect(src).toContain("const access = useDrawerEntryAccess('/cycle-counts');");
+    expect(src).toMatch(/\}, \[user, (id|cycleCountId), access\]\);/);
+  });
+});

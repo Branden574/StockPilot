@@ -220,19 +220,21 @@ describe('the count scanner', () => {
     expect(typeof options.onDismiss).toBe('function');
   });
 
-  function afterScan(onPhone: boolean) {
+  function afterScan(onPhone: boolean, access: 'allowed' | 'denied' = 'allowed') {
     const back = vi.fn();
     const setLines = vi.fn();
     const setScannedMap = vi.fn();
     const snap = { lines: [{ id: 'l2', counted: null }] };
+    const getCycleCount = vi.fn(async () => (onPhone ? snap : null));
     const run = screenFunction<() => Promise<void>>(SCAN, 'afterScanLineGone', {
       id: 'cc1',
-      getCycleCount: vi.fn(async () => (onPhone ? snap : null)),
+      access,
+      getCycleCount,
       router: { back },
       setLines,
       setScannedMap,
     });
-    return { run, back, setLines };
+    return { run, back, setLines, getCycleCount };
   }
 
   it('afterwards: the lines on this phone are read again, or the scanner closes when the count is gone', async () => {
@@ -243,6 +245,13 @@ describe('the count scanner', () => {
     const gone = afterScan(false);
     await gone.run();
     expect(gone.back).toHaveBeenCalledTimes(1);
+  });
+
+  it('afterwards, for a member who may no longer see cycle counts: the scanner closes, nothing is read', async () => {
+    const denied = afterScan(true, 'denied');
+    await denied.run();
+    expect(denied.getCycleCount).not.toHaveBeenCalled();
+    expect(denied.back).toHaveBeenCalledTimes(1);
   });
 
   it('a saved scan is still tallied', async () => {

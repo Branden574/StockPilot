@@ -32,6 +32,8 @@ import {
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { shouldStackRow } from '@/lib/dynamic-type-layout';
+import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { reportPhoneSaveFailure } from '@/lib/phone-save-report';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
@@ -106,9 +108,18 @@ function CycleCountScanScreenInner() {
   const [burstMode, setBurstMode] = React.useState(false);
   const [lastScan, setLastScan] = React.useState<{ code: string; at: number } | null>(null);
   const [scannedMap, setScannedMap] = React.useState<Map<string, number>>(new Map());
+  // The count screen's question (screen-access.ts): the lines saved on this
+  // phone are read only for a member who may see cycle counts.
+  const access = useDrawerEntryAccess('/cycle-counts');
 
   async function loadLines() {
-    if (!id) return;
+    if (!id || access === 'unknown') return;
+    if (access === 'denied') {
+      Alert.alert('Not available', CYCLE_COUNTS_NOT_AVAILABLE, [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+      return;
+    }
     const snap = await getCycleCount(id);
     if (!snap) {
       // Detail screen handles the offline-uncached state; if we land
@@ -134,9 +145,10 @@ function CycleCountScanScreenInner() {
     void loadLines();
     // loadLines is a plain function, new on every render (it reads only id
     // and the router): listing it would load the lines on every render. The
-    // lines load once per signed-in user and count.
+    // lines load once per signed-in user and count, and again when whether
+    // this member may see cycle counts is known or changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, id]);
+  }, [user, id, access]);
 
 
   /** Saves one count on the phone and queues it. False when nothing was saved (said). */
@@ -197,7 +209,7 @@ function CycleCountScanScreenInner() {
   async function afterScanLineGone() {
     let snap: Awaited<ReturnType<typeof getCycleCount>> = null;
     try {
-      snap = id ? await getCycleCount(id) : null;
+      snap = id && access === 'allowed' ? await getCycleCount(id) : null;
     } catch {
       snap = null;
     }

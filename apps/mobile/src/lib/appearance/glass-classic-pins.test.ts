@@ -131,14 +131,18 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   'src/components/order-storefront/storefront-state.tsx':
     'f9bee75bc78955389e5f40c9ae4c48ee644748570b7fec73b6b4c4d49a50fd7d',
   // New item, the count flows, Scan PO and Manage items (native-core).
+  // Re-pinned for S75 (Classic is meant to change: the lines saved on this phone are read only
+  // for a member who may see cycle counts, who is otherwise told so and taken back). Before S75
+  // the projection was ce429361...4a5e, the pin it had.
   'app/cycle-count/ai-scan/[id].tsx':
-    'ce429361709bc71da56ffdb387155e6b93aa2282d9d3d8dc08d000c569224a5e',
+    '3a8e47566dcfaf53526620cb80b84977c3974ac84698845f8c8326ee118c5fe0',
   'app/cycle-count/new.tsx': 'e0f0dcbd01c04afce172de9e1888ab6a482eb3ff1b9b7d332ad8c35000600072',
-  // Re-pinned for S75 (Classic is meant to change: a scanned count the phone could not store is
-  // said with Count not saved and never marked counted; OK reads the count again or leaves).
-  // Before S75 the projection was 7990871c...00c2, the pin it had.
+  // Re-pinned for S75 (Classic is meant to change: the lines saved on this phone are read only for
+  // a member who may see cycle counts, who is otherwise told so and taken back; a scanned count the
+  // phone could not store is said with Count not saved and never marked counted, and OK reads the
+  // count again or leaves). Before S75 the projection was 7990871c...00c2, the pin it had.
   'app/cycle-count/scan/[id].tsx':
-    '93e393b107f69f312675ffd8dc5dbb1601d9b8f4f8e3d96d37c65865e657d3b8',
+    'b26f7e81b16071949c167a83d2f52b0c23c5945f9ea452e0cf5df1c48ebc6047',
   // Re-pinned for B124 (Classic is meant to change: a member without items:create is told so
   // beside Create and refused before anything is sent). Before B124 the projection was
   // 1869d65f...7806, the pin it had.

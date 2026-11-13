@@ -38,9 +38,11 @@ import {
 } from '@/lib/cycle-count-cache';
 import { cycleCountSync } from '@/lib/cycle-count-sync';
 import { postMultipart } from '@/lib/multipart-upload';
+import { CYCLE_COUNTS_NOT_AVAILABLE } from '@/lib/screen-access';
 import { supabase } from '@/lib/supabase';
 import { FONT, TYPE_CEILING, capTo, palette, radius, space } from '@/lib/theme';
 import { useHoldAppearanceAdoptionWhileFocused } from '@/lib/appearance/use-adoption-hold';
+import { useDrawerEntryAccess } from '@/lib/use-screen-access';
 import { useTheme } from '@/lib/use-theme';
 
 const AI_CONFIDENCE_THRESHOLD = 0.85;
@@ -149,33 +151,51 @@ export default function AiScanScreen() {
 
   const [phase, setPhase] = React.useState<Phase>({ kind: 'idle' });
   const [cachedLines, setCachedLines] = React.useState<CachedCycleCountLine[]>([]);
+  // The count screen's question (screen-access.ts): the lines saved on this
+  // phone are read only for a member who may see cycle counts.
+  const access = useDrawerEntryAccess('/cycle-counts');
+
+  // The lines saved on this phone. A read that fails is said, and the screen
+  // goes back: it used to be an unhandled rejection that left "0 books in this
+  // count" over a camera that could only scan nothing.
+  async function loadCachedLines() {
+    if (!cycleCountId || access === 'unknown') return;
+    if (access === 'denied') {
+      Alert.alert('Not available', CYCLE_COUNTS_NOT_AVAILABLE, [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+      return;
+    }
+    let snap: Awaited<ReturnType<typeof getCycleCount>>;
+    try {
+      snap = await getCycleCount(cycleCountId);
+    } catch {
+      Alert.alert('Could not load this count', 'This count could not be read on this phone.', [
+        { text: 'OK', onPress: () => router.back() },
+      ]);
+      return;
+    }
+    if (!snap) {
+      Alert.alert(
+        'No cached lines',
+        'Open this cycle count from the list once while online so it can be cached for AI scanning.',
+        [{ text: 'OK', onPress: () => router.back() }],
+      );
+      return;
+    }
+    setCachedLines(snap.lines);
+  }
 
   React.useEffect(() => {
     if (!user || !cycleCountId) return;
-    void (async () => {
-      // The lines saved on this phone. A read that fails is said, and the
-      // screen goes back: it used to be an unhandled rejection that left
-      // "0 books in this count" over a camera that could only scan nothing.
-      let snap: Awaited<ReturnType<typeof getCycleCount>>;
-      try {
-        snap = await getCycleCount(cycleCountId);
-      } catch {
-        Alert.alert('Could not load this count', 'This count could not be read on this phone.', [
-          { text: 'OK', onPress: () => router.back() },
-        ]);
-        return;
-      }
-      if (!snap) {
-        Alert.alert(
-          'No cached lines',
-          'Open this cycle count from the list once while online so it can be cached for AI scanning.',
-          [{ text: 'OK', onPress: () => router.back() }],
-        );
-        return;
-      }
-      setCachedLines(snap.lines);
-    })();
-  }, [user, cycleCountId, router]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-mount: every set is post-await; the effect synchronizes with the device store
+    void loadCachedLines();
+    // loadCachedLines is a plain function, new on every render: listing it
+    // would load the lines on every render. They load once per signed-in user
+    // and count, and again when whether this member may see cycle counts is
+    // known or changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, cycleCountId, access]);
 
   async function onCapture() {
     if (!cameraRef.current || phase.kind !== 'idle') return;
