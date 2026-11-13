@@ -193,6 +193,41 @@ describe('publishOutboxEventForResolvedOrganization: a requester return or a pub
   );
 });
 
+describe('the dedupe key names the document in lower case', () => {
+  const UPPER = ID.toUpperCase();
+
+  it('a member event for an upper-case id has the same key as for the lower-case id', async () => {
+    await publishOutboxEvent(ctx(), {
+      topic: 'purchase_order.ordered',
+      aggregateId: UPPER,
+      payload: {},
+    });
+    await publishOutboxEvent(ctx(), {
+      topic: 'purchase_order.ordered',
+      aggregateId: ID,
+      payload: {},
+    });
+    const keys = admin.rpcCalls.map((c) => (c.args as { p_dedupe_key: string }).p_dedupe_key);
+    expect(keys).toEqual([`purchase_order.ordered:${ID}`, `purchase_order.ordered:${ID}`]);
+  });
+
+  it('a member-free event for an upper-case id has the same key as for the lower-case id', async () => {
+    const resolved = { organizationId: 'org-resolved', resolvedBy: 'public_request_link' } as const;
+    await publishOutboxEventForResolvedOrganization(resolved, {
+      topic: 'public_request.created',
+      aggregateId: UPPER,
+      payload: {},
+    });
+    await publishOutboxEventForResolvedOrganization(resolved, {
+      topic: 'public_request.created',
+      aggregateId: ID,
+      payload: {},
+    });
+    const keys = admin.rpcCalls.map((c) => (c.args as { p_dedupe_key: string }).p_dedupe_key);
+    expect(keys).toEqual([`public_request.created:${ID}`, `public_request.created:${ID}`]);
+  });
+});
+
 describe('a failed write is reported and never thrown', () => {
   const event = {
     topic: 'purchase_order.ordered' as const,

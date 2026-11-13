@@ -11,10 +11,12 @@ import type { ServiceContext } from '@/server/services/context';
  * Connector export events (outbox_events, drained to QuickBooks, Sage Intacct
  * and Zendesk) are recorded here and nowhere else in the app.
  *
- * Every event is written through the service client, with the topic, the
- * payload and the dedupe key `<topic>:<aggregate id>` each caller has always
- * sent, after the action that causes it has succeeded. The organization is
- * never taken from a request:
+ * Every event is written through the service client, with the topic and
+ * payload each caller has always sent and the dedupe key `<topic>:<aggregate
+ * id>` (the id in lower case, so one document sent in another letter case is
+ * still one event; every id the app holds is already lower case), after the
+ * action that causes it has succeeded. The organization is never taken from
+ * a request:
  *
  *   - publishOutboxEvent(ctx, ...) is for a signed-in member's action. The
  *     organization is the checked service context's, and the context must
@@ -142,7 +144,7 @@ async function write(organizationId: string, event: OutboxEventInput<OutboxTopic
       p_aggregate_type: EVENT_TOPICS[event.topic].aggregateType,
       p_aggregate_id: event.aggregateId,
       p_payload: event.payload,
-      p_dedupe_key: `${event.topic}:${event.aggregateId}`,
+      p_dedupe_key: `${event.topic}:${event.aggregateId.toLowerCase()}`,
     });
     if (error) {
       void reportError(error, {
