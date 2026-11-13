@@ -84,15 +84,16 @@
  *          `rows === null`, `rows.length === 0`, `rows.length < 1`
  *          (`count === 0`, `count < 1` for a count), or a count that is not
  *          the one wanted (`rows.length !== wanted`);
- *        - a choice between two values: `rows ? … : …`;
- *        - a yes/no or a count that is returned or kept in a variable
- *          (`return rows.length > 0`, `done = Boolean(rows)`), for the
- *          caller or the code after it to act on.
+ *        - a yes/no, a count or a choice between two values that is
+ *          returned or kept in a variable (`return rows.length > 0`,
+ *          `done = Boolean(rows)`, `return rows ? a : b`), for the caller or
+ *          the code after it to act on.
  *      `rows` is the name the answer's `data` or `count` is bound to
  *      (`r.data` and `r.count` for `const r = await …`), a later name it is
  *      handed to, or `rows ?? []`. A test that is true when a row DID come
- *      back is not one (`if (rows) { … }`, `if (rows.length > 0) { … }`): it
- *      does something more for a hit and still answers done for a miss.
+ *      back is not one (`if (rows) { … }`, `if (rows.length > 0) { … }`,
+ *      `tell(rows ? rows.name : null)`): it does something more for a hit
+ *      and still answers done for a miss.
  *      ROW_PROOF_EXEMPT lists the few that prove nothing, with the reason.
  *
  * WHAT THE TABLE-WRITE SCAN DOES NOT SEE.
@@ -1738,10 +1739,10 @@ const COMPARISONS: ReadonlySet<ts.SyntaxKind> = new Set([
  * What `node` reads of an answer, when it reads whether rows came back.
  * `miss`: it is true when none did (`!rows`, `rows === null`,
  * `rows.length === 0`, `rows.length < 1`, `rows.length !== wanted`,
- * `count === 0`), or it chooses between two values (`rows ? … : …`). Not
- * `miss`: a yes/no or a count that is true, or not zero, when rows DID come
- * back (`Boolean(rows)`, `!!rows`, `rows !== null`, `rows.length`,
- * `rows.length > 0`, `count > 0`).
+ * `count === 0`). Not `miss`: a yes/no or a count that is true, or not zero,
+ * when rows DID come back (`Boolean(rows)`, `!!rows`, `rows !== null`,
+ * `rows.length`, `rows.length > 0`, `count > 0`), and a choice between two
+ * values (`rows ? … : …`).
  */
 function presenceRead(node: ts.Node): { name: string; miss: boolean } | null {
   const of = (name: string | null, miss: boolean) => (name ? { name, miss } : null);
@@ -1783,22 +1784,21 @@ function presenceRead(node: ts.Node): { name: string; miss: boolean } | null {
       isShortfall(compared.operatorToken.kind, compared.right);
     return of(answerRef(node.expression), miss);
   }
-  if (ts.isConditionalExpression(node)) return of(answerRef(node.condition), true);
+  if (ts.isConditionalExpression(node)) return of(answerRef(node.condition), false);
   return null;
 }
 
 /**
- * Whether a yes/no or a count goes where a "no" can be acted on: it is
- * returned, kept in a variable (a declaration's value, or the right of an
- * assignment), or chooses between two values (`… ? a : b`). The condition of
- * an `if` does none of these: `if (rows.length > 0) { … }` does something
- * more for a hit and nothing for a miss.
+ * Whether a yes/no, a count or a choice goes where a "no" can be acted on:
+ * it is returned, or kept in a variable (a declaration's value, or the right
+ * of an assignment). The condition of an `if` and an argument of a call do
+ * neither: `if (rows.length > 0) { … }` and `tell(rows ? rows.name : null)`
+ * do something more for a hit and nothing for a miss.
  */
 function isHandedOn(node: ts.Node): boolean {
   for (let n = node; n.parent; n = n.parent) {
     const p = n.parent;
     if (ts.isReturnStatement(p)) return true;
-    if (ts.isConditionalExpression(p) && p.condition === n) return true;
     if (ts.isVariableDeclaration(p)) return p.initializer === n;
     if (ts.isBinaryExpression(p) && p.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
       return p.right === n;
@@ -1810,8 +1810,9 @@ function isHandedOn(node: ts.Node): boolean {
 
 /**
  * The name `node` tests for a miss, if it is such a test: a read that is true
- * when no row came back, wherever it stands, or a yes/no or a count that is
- * handed on. `if (rows) { … }` and `if (rows.length > 0) { … }` are not.
+ * when no row came back, wherever it stands, or a yes/no, a count or a
+ * choice that is handed on. `if (rows) { … }` and `if (rows.length > 0) { … }`
+ * are not.
  */
 function missTestOf(node: ts.Node): string | null {
   const read = presenceRead(node);
@@ -2813,7 +2814,13 @@ describe('the scan machinery itself', () => {
         }
         async chosen(id) {
           const { data } = await ${write}.select('id');
-          say(data.length > 0 ? 'done' : 'missing');
+          const answer = data.length > 0 ? 'done' : 'missing';
+          return answer;
+        }
+        async choiceOnly(id) {
+          const { data } = await ${write}.select('name').maybeSingle();
+          tell(data ? data.name : null);
+          tell((data ?? []).length > 0 ? 'changed' : 'unchanged');
         }
         async countNone(id) {
           const { count } = await ${write}.select('id', { count: 'exact', head: true });
@@ -2842,10 +2849,13 @@ describe('the scan machinery itself', () => {
     // True when no row came back, or fewer than were wanted.
     expect(tested('S.noneLeft')).toBe(true);
     expect(tested('S.short')).toBe(true);
-    // A yes/no or a count kept in a variable, or choosing between two values.
+    // A yes/no, a count or a choice between two values, returned or kept in
+    // a variable.
     expect(tested('S.kept')).toBe(true);
     expect(tested('S.keptCount')).toBe(true);
     expect(tested('S.chosen')).toBe(true);
+    // A choice that is only handed to a call decides nothing for a miss.
+    expect(tested('S.choiceOnly')).toBe(false);
     // The same for an answer's count.
     expect(tested('S.countNone')).toBe(true);
     expect(tested('S.countHit')).toBe(false);
