@@ -30,6 +30,9 @@ import { CONFIRM_FALLBACK_LANDING, CONFIRM_LANDINGS, confirmLanding } from './co
  *     confirmLinkUrl;
  *   - no other source names the page's path, however it would write a link;
  *   - outside the app's sources, only the two sign-in harnesses do either.
+ * And the page is the only place a link's token is spent: one verifyOtp call
+ * in the whole repository, reached only after the page's POST has asked for
+ * the field its press gate adds to a press it let through.
  */
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -156,6 +159,26 @@ function readSource(name: string, src: string): Reading {
   };
   visit(file);
   return reading;
+}
+
+/**
+ * How many times a source uses GoTrue's token-spending call in code: the
+ * name as an identifier or as a quoted property name. A comment is no use.
+ */
+function spends(name: string, src: string): number {
+  const file = ts.createSourceFile(name, src, ts.ScriptTarget.Latest, true, scriptKind(name));
+  let uses = 0;
+  const visit = (node: ts.Node) => {
+    if (
+      (ts.isIdentifier(node) || ts.isStringLiteralLike(node) || ts.isTemplateLiteralToken(node)) &&
+      node.text === 'verifyOtp'
+    ) {
+      uses += 1;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return uses;
 }
 
 /**
@@ -315,6 +338,33 @@ describe("the app's confirmation emails land where the route sends them", () => 
       paths('a.ts', "// /auth/confirm\nimport { x } from '@/app/auth/confirm/press-gate';"),
     ).toBe(0);
     expect(paths('a.ts', "const m = await import('@/lib/auth/confirm-link');")).toBe(0);
+  });
+
+  it("only the confirmation page spends a link's token, once, after it has asked for the press gate's field", () => {
+    const spenders = Object.fromEntries(
+      SOURCES.filter(({ src }) => src.includes('verifyOtp'))
+        .map(({ rel, src }) => [rel, spends(rel, src)] as const)
+        .filter(([, uses]) => uses > 0),
+    );
+    expect(spenders).toEqual({ [ROUTE]: 1 });
+    // In the page's POST, the question comes before the link's account
+    // reference is read, before the session client exists and before the
+    // token is spent.
+    const route = SOURCES.find(({ rel }) => rel === ROUTE)!.src;
+    const post = route.slice(route.indexOf('export async function POST('));
+    const asked = post.indexOf(
+      'if (form?.get(PRESS_GATE_PASSED_FIELD) !== PRESS_GATE_PASSED_VALUE) {',
+    );
+    expect(asked).toBeGreaterThan(-1);
+    for (const later of ['verifyConfirmRecipient(', 'createClient(', '.verifyOtp(']) {
+      expect(post.indexOf(later), later).toBeGreaterThan(asked);
+    }
+    // The reading is not blind: a call and a quoted property name are read, a
+    // comment is not.
+    expect(spends('a.ts', 'await supabase.auth.verifyOtp({ type, token_hash });')).toBe(1);
+    expect(spends('a.ts', "await supabase.auth['verifyOtp'](args);")).toBe(1);
+    expect(spends('a.ts', 'const { verifyOtp: spend } = supabase.auth;')).toBe(1);
+    expect(spends('a.ts', '// verifyOtp runs in the page only\nexport {};')).toBe(0);
   });
 
   it('the builders are the five reviewed ones (a new one must be checked against the landings)', () => {
@@ -601,6 +651,13 @@ describe("the repository's sign-in harnesses land where they wait", () => {
       ({ rel, src }) => !SCRIPT.test(rel) && /\bauth\/confirm(?![\w/-])/.test(src),
     ).map(({ rel }) => rel);
     expect(others).toEqual([]);
+  });
+
+  it("no file outside the app's sources spends a link's token, by the client call or by GoTrue's verify path", () => {
+    const spenders = OUTSIDE.filter(({ src }) =>
+      /verifyOtp|verify_otp|auth\/v1\/verify\b/.test(src),
+    ).map(({ rel }) => rel);
+    expect(spenders).toEqual([]);
   });
 
   it('each signs r with the same construction as the app', () => {

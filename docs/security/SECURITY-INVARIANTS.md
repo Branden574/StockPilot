@@ -1833,8 +1833,10 @@ application structure.
   five link builders are the only ones that ask GoTrue for a link token, each
   as many times as reviewed and each signing for the id GoTrue returned with
   its link; no source but the link writer and the page names the page's
-  path; and in the rest of the repository only the two sign-in harnesses do
-  either, each signing `r` and waiting for the gate);
+  path; in the rest of the repository only the two sign-in harnesses do
+  either, each signing `r` and waiting for the gate; and the page's `POST`
+  is the only code in the repository that spends a link's token, after it
+  has asked for the gate's field);
   [`security-headers.test.ts`](../../apps/web/src/test/security-headers.test.ts)
   (the opener policy header and the two headers that refuse a frame reach
   the page, each in one value; `route.test.ts` holds the page to setting
