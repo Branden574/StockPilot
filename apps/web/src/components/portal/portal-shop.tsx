@@ -28,9 +28,13 @@ import {
 /** Orders in a terminal fulfilled state are the only ones with a return budget. */
 const RETURNABLE_ORDER_STATUSES = new Set(['completed', 'delivered']);
 
-/** Place order did not come back: the page cannot say whether it was placed. */
+/**
+ * Place order did not come back: the page cannot say whether it was placed.
+ * The orders on this page were read before the press, so the customer is
+ * sent to a reload (which reads them again), not to the list below.
+ */
 const ORDER_UNCONFIRMED_MESSAGE =
-  "We couldn't confirm your order went through. Check your orders below before placing it again.";
+  "We couldn't confirm your order went through. Reload the page and check your orders before placing it again.";
 
 /** A section title (the storefront's section heading: Inter Tight 16 / 500). */
 const SECTION_TITLE =
@@ -103,6 +107,13 @@ export function PortalShop({
   const [notes, setNotes] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  // The last Place order call did not come back, so whether that order was
+  // placed is not known. Until the page is reloaded the cart and the note are
+  // shown as they were sent, read-only, and Place order stays disabled: a
+  // second press would send the same cart again, and nothing on the server
+  // tells the two apart. Only a reload clears it (the state does not survive
+  // one), and the reload reads the customer's orders again.
+  const [unconfirmed, setUnconfirmed] = React.useState(false);
   const [placedId, setPlacedId] = React.useState<string | null>(null);
   // Which order's "Return or exchange" sheet is open, and which order just
   // got a request (drives the in-portal confirmation banner).
@@ -127,10 +138,12 @@ export function PortalShop({
   const total = cartLines.reduce((s, [id, q]) => s + q * (byId.get(id)?.unitPrice ?? 0), 0);
 
   function setQty(itemId: string, qty: number) {
+    if (unconfirmed) return;
     setCart((prev) => ({ ...prev, [itemId]: Math.max(0, Math.min(qty, 100000)) }));
   }
 
   function reorder(order: PortalOrder) {
+    if (unconfirmed) return;
     const next: Record<string, number> = {};
     let skipped = 0;
     for (const line of order.lines) {
@@ -148,6 +161,9 @@ export function PortalShop({
   }
 
   async function submit() {
+    // Never while a call is out, and never again after one whose outcome is
+    // not known (see `unconfirmed`).
+    if (busy || unconfirmed) return;
     setError(null);
     setBusy(true);
     let res: Awaited<ReturnType<typeof submitPortalOrderAction>>;
@@ -161,15 +177,18 @@ export function PortalShop({
       // navigating, so nothing is shown on the way.
       if (isControlFlow(e)) return;
       // The call did not come back (the connection dropped, the server could
-      // not answer). The button returns and the cart and the note stay. The
-      // page cannot know whether the order was placed, so it does not say.
+      // not answer). The page cannot know whether the order was placed, so it
+      // does not say, and it does not offer the same cart again: the message
+      // sends the customer to a reload, and Place order stays disabled.
+      setUnconfirmed(true);
       setError(ORDER_UNCONFIRMED_MESSAGE);
       return;
     } finally {
       setBusy(false);
     }
     if (!res.ok) {
-      // A refusal keeps the cart and the note too: the next press sends them.
+      // A refusal the server answered: nothing was placed. The button comes
+      // back and the cart and the note stay, so the next press sends them.
       setError(res.error.message);
       return;
     }
@@ -260,7 +279,7 @@ export function PortalShop({
                       type="button"
                       className={STEP_BUTTON}
                       onClick={() => setQty(item.itemId, qty - 1)}
-                      disabled={qty === 0}
+                      disabled={qty === 0 || unconfirmed}
                       aria-label={`Remove one ${item.name}`}
                     >
                       <Minus className="h-3.5 w-3.5" aria-hidden />
@@ -274,12 +293,14 @@ export function PortalShop({
                         const n = parseInt(e.target.value.replace(/\D/g, ''), 10);
                         setQty(item.itemId, Number.isFinite(n) ? n : 0);
                       }}
+                      readOnly={unconfirmed}
                       aria-label={`Quantity of ${item.name}`}
                     />
                     <button
                       type="button"
                       className={STEP_BUTTON}
                       onClick={() => setQty(item.itemId, qty + 1)}
+                      disabled={unconfirmed}
                       aria-label={`Add one ${item.name}`}
                     >
                       <Plus className="h-3.5 w-3.5" aria-hidden />
@@ -342,7 +363,12 @@ export function PortalShop({
                           ${o.total.toFixed(2)}
                         </span>
                       )}
-                      <Button variant="outline" size="sm" onClick={() => reorder(o)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => reorder(o)}
+                        disabled={unconfirmed}
+                      >
                         <RotateCcw className="h-3.5 w-3.5" /> Reorder
                       </Button>
                       {canRequestReturn && (
@@ -424,6 +450,20 @@ export function PortalShop({
                 {error}
               </p>
             )}
+            {/* Only after a call whose outcome is not known: a full page load,
+                which reads the customer's orders again and clears the cart. */}
+            {unconfirmed && (
+              <div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.location.reload()}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" aria-hidden /> Reload
+                </Button>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               {/* On a phone the count takes the first line, then the notes
                   and Place order share the second (same order as the DOM). */}
@@ -445,9 +485,14 @@ export function PortalShop({
                 aria-label="Notes for your supplier (optional)"
                 value={notes}
                 maxLength={2000}
+                readOnly={unconfirmed}
                 onChange={(e) => setNotes(e.target.value)}
               />
-              <Button onClick={() => void submit()} disabled={busy} className="max-sm:h-11">
+              <Button
+                onClick={() => void submit()}
+                disabled={busy || unconfirmed}
+                className="max-sm:h-11"
+              >
                 {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
                 Place order
               </Button>

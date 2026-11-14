@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -300,12 +300,19 @@ describe('PortalShop: Return or exchange (returns RX-3)', () => {
 });
 
 /**
- * Place order always gives the button back. The action answers a refusal as
- * a result with its words (a check that could not be read is "Your access
- * could not be checked. Please try again."), and a call that does not come
- * back at all (the connection dropped) is answered with the page's own
- * sentence, which does not claim to know whether the order was placed. Either
- * way the cart and the note stay, and the next press sends the same order.
+ * Place order after an answer that was not "placed".
+ *
+ * A REFUSAL THE SERVER ANSWERED says nothing was placed (a check that could
+ * not be read is "Your access could not be checked. Please try again."): its
+ * words are shown, the button comes back, the cart and the note stay, and
+ * the next press sends the same order.
+ *
+ * A CALL THAT DID NOT COME BACK (the connection dropped, the server could
+ * not answer) has an outcome the page cannot know: the order may have been
+ * placed. The page says so, tells the customer to reload and check their
+ * orders, offers Reload (a full page load, which reads the orders again),
+ * and keeps Place order disabled until then, so a second press cannot send
+ * the same cart. The cart and the note stay on screen, read-only.
  */
 describe('PortalShop: Place order after a refusal or a call that failed', () => {
   async function shopWithOneInCart() {
@@ -346,25 +353,57 @@ describe('PortalShop: Place order after a refusal or a call that failed', () => 
     expect(await screen.findByRole('status')).toHaveTextContent('Order submitted');
   });
 
-  it('a call that does not come back: the page says so, the button is usable again, and the cart is kept', async () => {
+  it('a call that does not come back: the page says to reload and check, offers Reload, and keeps Place order disabled so a second press sends nothing', async () => {
     actions.submitPortalOrderAction.mockRejectedValueOnce(new Error('Failed to fetch'));
+    const reload = vi.spyOn(window.location, 'reload').mockImplementation(() => {});
+    const user = await shopWithOneInCart();
+    await user.type(screen.getByLabelText('Notes for your supplier (optional)'), 'Leave at the desk');
+    await user.click(screen.getByRole('button', { name: 'Place order' }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      "We couldn't confirm your order went through. Reload the page and check your orders before placing it again.",
+    );
+    expect(screen.queryByText('Failed to fetch')).toBeNull();
+
+    // Place order stays disabled, and pressing it sends nothing.
+    const place = screen.getByRole('button', { name: 'Place order' });
+    expect(place).toBeDisabled();
+    await user.click(place);
+    fireEvent.click(place);
+    expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(1);
+
+    // The cart and the note are still on screen, and can no longer be changed.
+    expect(screen.getByText('1 units')).toBeInTheDocument();
+    const note = screen.getByLabelText('Notes for your supplier (optional)');
+    expect(note).toHaveValue('Leave at the desk');
+    expect(note).toHaveAttribute('readonly');
+    const addOne = screen.getByRole('button', { name: /Add one Composition Notebook/i });
+    expect(addOne).toBeDisabled();
+    fireEvent.click(addOne);
+    expect(screen.getByText('1 units')).toBeInTheDocument();
+
+    // The list is not read again behind the customer's back, and nothing claims success.
+    expect(refresh).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Order submitted/)).toBeNull();
+
+    // Reload is a full page load.
+    expect(reload).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Reload' }));
+    expect(reload).toHaveBeenCalledTimes(1);
+    reload.mockRestore();
+  });
+
+  it('Reload is offered only after a call that did not come back, never after a refusal', async () => {
+    actions.submitPortalOrderAction.mockResolvedValueOnce({
+      ok: false,
+      error: { code: 'validation_error', message: 'An item is no longer available.' },
+    });
     const user = await shopWithOneInCart();
     await user.click(screen.getByRole('button', { name: 'Place order' }));
-    expect(
-      await screen.findByText(
-        "We couldn't confirm your order went through. Check your orders below before placing it again.",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.queryByText('Failed to fetch')).toBeNull();
-    const place = screen.getByRole('button', { name: 'Place order' });
-    expect(place).toBeEnabled();
-
-    actions.submitPortalOrderAction.mockResolvedValueOnce({ ok: true, data: { id: 'order-2' } });
-    await user.click(place);
-    await waitFor(() => expect(actions.submitPortalOrderAction).toHaveBeenCalledTimes(2));
-    expect(actions.submitPortalOrderAction.mock.calls[1]![0].lines).toEqual([
-      { itemId: 'i-1', quantity: 1 },
-    ]);
+    expect(await screen.findByText('An item is no longer available.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reload' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Place order' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /Add one Composition Notebook/i })).toBeEnabled();
   });
 });
-
