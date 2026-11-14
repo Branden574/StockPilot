@@ -35,12 +35,3 @@ export function returnOptionsIpBucketKey(ip: string): string {
 
 export const RETURN_OPTIONS_PER_IP_PER_HOUR = 120;
 export const RETURN_OPTIONS_PER_TOKEN_PER_HOUR = 600;
-
-/**
- * The caller's address for a public bucket: x-forwarded-for only on Vercel
- * (elsewhere a client could rotate it), else x-real-ip, else 'unknown'.
- */
-export function publicRequestIp(headers: Pick<Headers, 'get'>, env: Record<string, string | undefined> = process.env): string {
-  const xff = env.VERCEL === '1' ? headers.get('x-forwarded-for') : null;
-  return xff?.split(',')[0]?.trim() || headers.get('x-real-ip') || 'unknown';
-}

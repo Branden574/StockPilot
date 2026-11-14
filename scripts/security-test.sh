@@ -1198,6 +1198,17 @@ WEB_TESTS=(
   src/lib/auth/login-device.test.ts
   src/test/session-revoked-payload.guard.test.ts
   src/server/services/auth-audit.guard.test.ts
+  # S79: the caller's address is read in one place (lib/client-ip.ts:
+  # x-forwarded-for only on Vercel; clientIpForRecord stores an IP literal or
+  # null), and no other source file reads, names or builds an address header
+  # (the guard carries the "Security invariant" marker). New-device alerts are
+  # counted per account and per organization with closed buckets, and the
+  # limiter says when it could not answer (login-device.test.ts above).
+  src/test/request-address-headers.guard.test.ts
+  src/lib/client-ip.test.ts
+  src/lib/rate-limit.failed.test.ts
+  src/server/services/auth-audit.address.test.ts
+  src/app/api/v1/auth/password-reset/route.address.test.ts
 
   # Only a platform admin creates a workspace (S20, owner decision b.9):
   # createOrganizationAction runs checkPlatformAdmin({ requireStepUp: true })
