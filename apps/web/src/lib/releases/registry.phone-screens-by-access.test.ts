@@ -22,17 +22,16 @@ import { RELEASES } from './registry';
  * Glass draft and above the phone authenticator code release. One release
  * with three entries, as #527 is one phone change:
  *
- *  - the buttons that add an item, Cycle counts and Bundles show only where
- *    the member has access to them (every member);
+ *  - the add buttons, Cycle counts and Bundles follow the member's access
+ *    (every member);
  *  - after a workspace switch, the phone shows only the new workspace, and a
  *    screen still waiting for a workspace says so (every member);
- *  - a cycle count says Count not saved when a number could not be saved
- *    because its line is no longer in the count on the phone (whoever counts:
- *    stock:adjust, module cycle_counts).
+ *  - a cycle count now also says Count not saved when a line is no longer
+ *    in the count on the phone (whoever counts: stock:adjust, module
+ *    cycle_counts).
  *
  * The suggested line about bundles coming back after access returns is left
- * out: the server sends every active kit today, so no member sees one go
- * missing until a later server change, and the line would describe that.
+ * out: no member notices it today.
  *
  * publishedAt is set at merge to the whole minute at or after the first iOS
  * launch of the update, so these tests pin its shape and its order, not the
@@ -121,23 +120,23 @@ describe('the phone screens by access release: the words', () => {
 
   it('says what the phone does, in the reviewed words', () => {
     expect(release().title).toBe(
-      'The phone keeps to your access and your workspace, and says when a count was not saved',
+      "The phone follows your access and keeps each workspace's own lists",
     );
     expect(release().summary).toBe(
-      'The mobile app now shows the buttons that add an item, Cycle counts and Bundles only where you have access to them, and after a workspace switch its lists show only the new workspace. A screen still waiting for a workspace now says so instead of loading without end, and a cycle count says Count not saved when a number could not be saved.',
+      "The mobile app's add buttons, Cycle counts and Bundles now follow your access, and after a workspace switch its lists show only the new workspace. A screen still waiting for a workspace now says so, and a cycle count now also says Count not saved when a line is no longer in the count.",
     );
 
     expect(access().title).toBe(
-      'The phone shows the buttons that add an item, Cycle counts and Bundles only where you have access to them',
+      "The phone's add buttons, Cycle counts and Bundles follow your access",
     );
     expect(access().whatChanged).toBe(
-      'The buttons that add an item, on Inventory, Books and Scan, now show only if you can add items in the workspace on screen. Cycle counts and Bundles, with the Bundles card on Home, follow the side menu: if you do not have access to them in this workspace, a screen opened from a link says so.',
+      'The buttons that add an item, on Items, Books and Scan, now show only if you can add items in the workspace on screen. Cycle counts and Bundles, with the Bundles card on Home, now follow the side menu.',
     );
     expect(access().whyItMatters).toBe(
       'What the phone offers now matches the side menu and what you can save, so a button you see is one you can use.',
     );
     expect(access().howItAffectsYou).toBe(
-      'If you can add items and use cycle counts and bundles, nothing changes for you.',
+      'If you can add items and use cycle counts and bundles, nothing changes for you once the phone has synced.',
     );
     expect(access().whatToDo).toBe(
       'No action needed. If you need one of these, ask an admin in your organization.',
@@ -147,21 +146,21 @@ describe('the phone screens by access release: the words', () => {
       'After a workspace switch, the phone shows only the new workspace',
     );
     expect(workspace().whatChanged).toBe(
-      "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone stops using your role and permissions from the previous workspace as soon as you switch. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
+      "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone reads your role and permissions for the new workspace before it shows it. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
     );
     expect(workspace().whyItMatters).toBe(
-      'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so instead of loading without end.',
+      'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so.',
     );
     expect(workspace().howItAffectsYou).toBe(
-      'Right after a switch, or after signing in without a connection, a screen may say the phone has not finished syncing this workspace yet. Check your connection: the screen loads once the phone has synced, or when you try again.',
+      'Right after a switch or a sign-in, before the phone has synced, a screen may say the phone has not finished syncing this workspace yet. Check your connection: the screen loads once the phone has synced, or when you try again.',
     );
     expect(workspace().whatToDo).toBe('No action needed.');
 
     expect(count().title).toBe(
-      'A cycle count says Count not saved when a number could not be saved',
+      'A cycle count now also says Count not saved when a line is no longer in the count on the phone',
     );
     expect(count().whatChanged).toBe(
-      'If a number you type or scan on a cycle count cannot be saved because its line is no longer in the count on the phone, the phone now says Count not saved. When you tap OK, it loads the count again, or closes it if the count is no longer on the phone.',
+      'If a number you type or scan on a cycle count cannot be saved because its line is no longer in the count on the phone, the phone now says Count not saved. When you tap OK, the phone loads the count again, or closes it if it is no longer open to you.',
     );
     expect(count().whyItMatters).toBe(
       'Before, the number stayed on the line as if it had been saved.',
@@ -172,7 +171,7 @@ describe('the phone screens by access release: the words', () => {
     expect(count().whatToDo).toBe('No action needed.');
   });
 
-  it('keeps to what a member notices: three entries, no bundle refill line, nothing about who saw what, never "book" for a quantity', () => {
+  it('keeps to what a member notices: three entries, no bundle refill line, plain words about what the phone does now, never "book" for a quantity', () => {
     const text = readerText(release()).join(' ');
     expect(release().entries).toHaveLength(3);
     expect(text).not.toMatch(/regain|come back|comes back/i);
@@ -181,10 +180,13 @@ describe('the phone screens by access release: the words', () => {
     expect(text).not.toMatch(/!/);
     // Reassign changes only before the phone's first sync of a workspace: left out.
     expect(text).not.toMatch(/Reassign/);
-    // The two entries every member reads say nothing of what the phone did before.
+    // The two entries every member reads say what the phone does now, never
+    // what it did before: no "Before,", "used to", "previously", "the previous
+    // workspace", "no longer", "anymore", "stops using" or "instead of".
     for (const e of [access(), workspace()]) {
-      expect([e.whatChanged, e.whyItMatters, e.howItAffectsYou].join(' '), e.id).not.toMatch(
-        /\bbefore,/i,
+      const said = [e.title, e.whatChanged, e.whyItMatters, e.howItAffectsYou].join(' ');
+      expect(said, e.id).not.toMatch(
+        /\bbefore,|\bused to\b|\bpreviously\b|\bprevious workspace\b|\bno longer\b|\banymore\b|\bstops? using\b|\binstead of\b/i,
       );
     }
   });
@@ -224,7 +226,7 @@ describe('the phone screens by access release: the words', () => {
 });
 
 describe('the phone screens by access release rests on the phone code (#527)', () => {
-  it('the buttons that add an item follow items:create on Inventory, Books and Scan', () => {
+  it('the buttons that add an item follow items:create on Items, Books and Scan', () => {
     for (const screen of [
       '(drawer)/(tabs)/inventory.tsx',
       '(drawer)/(tabs)/books.tsx',

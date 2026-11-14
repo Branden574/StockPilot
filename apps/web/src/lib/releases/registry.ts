@@ -203,46 +203,44 @@ export const RELEASES: Release[] = [
   {
     id: 'phone-screens-by-access-2026-11',
     revision: 1,
-    // S75 (phone half) and B124: #527 (squash 60f1bfe48), phone only. The
-    // phone has it from the update published 2026-11-14 05:39:05Z (group
-    // 8c30f488, runtime 1.4.0). SET AT MERGE: publishedAt is the whole minute
+    // S75 and B124: #527 (squash 60f1bfe48), phone only. The phone has it
+    // from the update published 2026-11-14 05:39:05Z (group 8c30f488,
+    // runtime 1.4.0). SET AT MERGE: publishedAt is the whole minute
     // at or after the first iOS launch of that update (the integrator's
     // record, not readable from the code); the Liquid Glass placeholder above
     // takes the same minute.
     // One release, as #527 is one phone change. From #527's four suggested
     // lines, checked against the phone code at 60f1bfe48 (paths under
     // apps/mobile):
-    // - Line 1 (access): the + on Inventory and Books and the Scan tab's add
+    // - Line 1 (access): the + on Items and Books and the Scan tab's add
     //   cards follow items:create (app/(drawer)/(tabs)/inventory.tsx:280,
     //   books.tsx:255, scan.tsx:232); Cycle counts and Bundles ask the side
     //   menu's own rule (src/lib/screen-access.ts:88-97, drawer-nav.ts
-    //   drawerOffers) and say "... are not available to you in this
-    //   workspace." (screen-access.ts:151-155). Reassign is left out: it
+    //   drawerOffers), as the Home Bundles card does. Reassign is left out: it
     //   differs only before the phone's first sync of a workspace
     //   (src/lib/count-reassign-offer.test.ts:14-20).
     // - Line 2 (workspace switch): Users, Team, Accounts, Bundles, Cycle
     //   counts and six admin lists draw only the workspace's own rows; the
     //   switch re-reads the saved access before the new workspace is shown
-    //   (src/lib/use-workspace.ts:577-596, rereadSavedAccess). "Every list, menu and role ...
-    //   straight away, even offline" is not said: the menu keeps the module
+    //   (src/lib/use-workspace.ts:577-596, rereadSavedAccess). "Every list,
+    //   menu and role ... straight away, even offline" is not said: the menu keeps the module
     //   set it shows until the pull saves the new one (use-workspace.ts:584-
     //   586). The not-synced sentence is screen-access.ts:143-144.
-    // - Line 3 (count not saved): count-save-refusal.ts:54-58; the count
-    //   screen and the scanner say it and load the count again or close
+    // - Line 3 (count not saved): the alert existed for other refusals; the
+    //   new case is a line no longer on the phone (count-save-refusal.ts:54-
+    //   58); the count screen and the scanner say it and load the count again or close
     //   (app/cycle-count/[id].tsx:450-456, :778-802; scan/[id].tsx:268-317).
     //   Before #527 the line was marked saved whatever updateLocalLine
     //   answered.
-    // - Line 4 (bundles come back after access returns) is left out: the
-    //   server sends every active kit today (apps/web/src/app/api/v1/mobile/
-    //   snapshot/route.ts, the bundles read), so no member sees a kit go
-    //   missing; src/lib/bundle-refill.ts prepares for a later server change.
+    // - Line 4 (bundles come back after access returns) is left out: no
+    //   member notices it today; src/lib/bundle-refill.ts is groundwork only.
     // Who is told: the first two entries every member (no audience); the
     // count entry whoever counts (stock:adjust, module cycle_counts).
     // Platform: the mobile app. No links.
     status: 'published',
-    title: 'The phone keeps to your access and your workspace, and says when a count was not saved',
+    title: "The phone follows your access and keeps each workspace's own lists",
     summary:
-      'The mobile app now shows the buttons that add an item, Cycle counts and Bundles only where you have access to them, and after a workspace switch its lists show only the new workspace. A screen still waiting for a workspace now says so instead of loading without end, and a cycle count says Count not saved when a number could not be saved.',
+      "The mobile app's add buttons, Cycle counts and Bundles now follow your access, and after a workspace switch its lists show only the new workspace. A screen still waiting for a workspace now says so, and a cycle count now also says Count not saved when a line is no longer in the count.",
     // SET AT MERGE: the whole minute at or after the first iOS launch of the update (placeholder).
     publishedAt: '2026-11-14T06:00:00Z',
     entries: [
@@ -250,14 +248,13 @@ export const RELEASES: Release[] = [
         id: 'phone-add-item-and-screens-by-access',
         category: 'fixed',
         area: 'Mobile app',
-        title:
-          'The phone shows the buttons that add an item, Cycle counts and Bundles only where you have access to them',
+        title: "The phone's add buttons, Cycle counts and Bundles follow your access",
         whatChanged:
-          'The buttons that add an item, on Inventory, Books and Scan, now show only if you can add items in the workspace on screen. Cycle counts and Bundles, with the Bundles card on Home, follow the side menu: if you do not have access to them in this workspace, a screen opened from a link says so.',
+          'The buttons that add an item, on Items, Books and Scan, now show only if you can add items in the workspace on screen. Cycle counts and Bundles, with the Bundles card on Home, now follow the side menu.',
         whyItMatters:
           'What the phone offers now matches the side menu and what you can save, so a button you see is one you can use.',
         howItAffectsYou:
-          'If you can add items and use cycle counts and bundles, nothing changes for you.',
+          'If you can add items and use cycle counts and bundles, nothing changes for you once the phone has synced.',
         whatToDo: 'No action needed. If you need one of these, ask an admin in your organization.',
       },
       {
@@ -266,20 +263,21 @@ export const RELEASES: Release[] = [
         area: 'Mobile app',
         title: 'After a workspace switch, the phone shows only the new workspace',
         whatChanged:
-          "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone stops using your role and permissions from the previous workspace as soon as you switch. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
+          "After you switch workspaces, Users, Team, Accounts, Bundles, Cycle counts and the admin lists on the phone show only the new workspace's records, and the phone reads your role and permissions for the new workspace before it shows it. If a workspace has not finished loading or syncing, a screen with nothing to show says so and lets you try again.",
         whyItMatters:
-          'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so instead of loading without end.',
+          'Each workspace keeps its own records and your access in it, and a screen that is still waiting tells you so.',
         howItAffectsYou:
-          'Right after a switch, or after signing in without a connection, a screen may say the phone has not finished syncing this workspace yet. Check your connection: the screen loads once the phone has synced, or when you try again.',
+          'Right after a switch or a sign-in, before the phone has synced, a screen may say the phone has not finished syncing this workspace yet. Check your connection: the screen loads once the phone has synced, or when you try again.',
         whatToDo: 'No action needed.',
       },
       {
         id: 'phone-count-not-saved-line-gone',
         category: 'fixed',
         area: 'Cycle counts',
-        title: 'A cycle count says Count not saved when a number could not be saved',
+        title:
+          'A cycle count now also says Count not saved when a line is no longer in the count on the phone',
         whatChanged:
-          'If a number you type or scan on a cycle count cannot be saved because its line is no longer in the count on the phone, the phone now says Count not saved. When you tap OK, it loads the count again, or closes it if the count is no longer on the phone.',
+          'If a number you type or scan on a cycle count cannot be saved because its line is no longer in the count on the phone, the phone now says Count not saved. When you tap OK, the phone loads the count again, or closes it if it is no longer open to you.',
         whyItMatters: 'Before, the number stayed on the line as if it had been saved.',
         howItAffectsYou:
           'This is rare: it happens when the count changes while you are counting, for example when someone posts or cancels it.',
