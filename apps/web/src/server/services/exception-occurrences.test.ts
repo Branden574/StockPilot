@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { RECOUNT_FACTS_NOT_YET } from '@/test/recount-facts';
 
 const reportError = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/lib/error-reporter', () => ({ reportError }));
@@ -125,6 +126,7 @@ describe('syncOrg — throttle, force, and never throwing', () => {
     membersError?: boolean;
   }) {
     const stub = makeSupabaseStub({
+      ...RECOUNT_FACTS_NOT_YET,
       'exception_sync_state.select.maybeSingle': opts.stateError
         ? { data: null, error: { message: 'state read failed' } }
         : {
@@ -309,7 +311,7 @@ function userSvc(
   role: 'owner' | 'admin' | 'manager' | 'staff' | 'viewer' = 'staff',
   permissions?: ReadonlySet<string>,
 ) {
-  const stub = makeSupabaseStub(results);
+  const stub = makeSupabaseStub({ ...RECOUNT_FACTS_NOT_YET, ...results });
   const ctx = makeServiceContext(stub.client, { organizationId: ORG, role, ...(permissions ? { permissions } : {}) });
   return { svc: new ExceptionOccurrencesService(ctx as never), stub };
 }
@@ -667,7 +669,8 @@ describe('act', () => {
   it('acknowledges through the RPC with the trimmed note and client id, and returns the row', async () => {
     const { svc, stub } = actSvc();
     const o = await svc.act(OCC, { action: 'acknowledge', note: '  checking rack  ', clientEventId: ' ev-1 ' });
-    expect(stub.rpcCalls).toEqual([
+    // The writes (the re-read's exception_recount_facts read is not one).
+    expect(stub.rpcCalls.filter((c) => c.name !== 'exception_recount_facts')).toEqual([
       {
         name: 'exception_occurrence_act',
         args: { p_id: OCC, p_action: 'acknowledge', p_note: 'checking rack', p_client_event_id: 'ev-1' },
