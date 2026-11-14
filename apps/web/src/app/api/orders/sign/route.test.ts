@@ -809,13 +809,11 @@ describe('POST /api/orders/sign — a requester who is no longer a member (S36)'
     expect((notifyRequesterBackordered.mock.calls[0]?.[0] as NotifyCall).requesterEmail).toBeNull();
   });
 
-  // Review of round 2 (security lens): the two refusals above compare the
-  // signer email with the withheld address, which comes from a profile read
-  // of its own. When that read failed, the address was unknown, the refusal
-  // lapsed, and the receipt went to the address the sign page had offered:
-  // the former member's own. With the address unknown, no signer receipt
-  // goes out at all. A receipt lost to a read error is acceptable (every
-  // email here is best-effort); one to a former member's own address is not.
+  // The two refusals above compare the signer email with the withheld
+  // address, which comes from a profile read of its own. When that read
+  // fails, the address is unknown and no signer receipt goes out at all. A
+  // receipt lost to a read error is acceptable (every email here is
+  // best-effort); one to a former member's own address is not.
   /** The requester's own profile: the address the sign page offers as the
    *  default signer email (the read of it fails in these tests). */
   const OWN = { email: 'former@example.com', full_name: 'Former Requester' };

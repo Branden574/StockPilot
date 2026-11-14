@@ -10,13 +10,12 @@ import {
 } from './insights-access';
 
 /**
- * Docket S36 (part a), with B72 part 3: Today's briefing and the morning
- * briefing notice showed every line to anyone who could open the page
- * (items:update), so a staff member without orders:approve read "N orders
- * awaiting approval" for the whole organization and its link opened their own
- * requests, and a reader whose purchase order access was revoked still read
- * the purchase order lines. Each line now follows the gate of the page it
- * links to.
+ * Docket S36 (part a), with B72 part 3: each line of Today's briefing and the
+ * morning briefing notice follows the gate of the page it links to. The
+ * approvals line shows only to an approver (orders:approve, never a viewer),
+ * the purchase order lines only to a reader with purchase_orders:read, and a
+ * line whose page belongs to a module only while that module is on; overrides
+ * apply either way.
  */
 
 const ALL_MODULES = new Set<ModuleId>(['orders', 'purchase_orders', 'cycle_counts', 'ai']);

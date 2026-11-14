@@ -276,16 +276,13 @@ describe("resolveRequesterContact: a member's own address follows the current-me
 });
 
 /**
- * Docket S36, review of round 2 (security lens): the sign route refuses a
- * signer receipt to a withheld own address by comparing the signer email with
- * `withheldEmail`, because the sign page offers that address as the default
- * signer email. The address comes from the requester's own (email, full_name)
- * profile read, which dropped its `error` and swallowed a throw (an ignored
- * error read as "no row"): a failed read left `withheldEmail` null, the
- * refusal lapsed, and the receipt reached a former member's own address,
- * unreported. A withheld address that could not be read is now flagged
- * (`withheldEmailUnknown`), and the failed read is reported under the
- * caller's tag.
+ * Docket S36: the sign route refuses a signer receipt to a withheld own
+ * address by comparing the signer email with `withheldEmail`, because the
+ * sign page offers that address as the default signer email. The address
+ * comes from the requester's own (email, full_name) profile read. When that
+ * read fails (an error or a throw), the withheld address is flagged as
+ * unknown (`withheldEmailUnknown`), so the route sends no signer receipt, and
+ * the failed read is reported under the caller's tag.
  */
 describe('resolveRequesterContact: an own address that cannot be read (S36)', () => {
   const OWN_ORDER = {

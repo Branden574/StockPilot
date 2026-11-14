@@ -401,9 +401,10 @@ select is(
                join (values (:own::uuid, 'own'), (:adm::uuid, 'adm'), (:mgr::uuid, 'mgr'), (:mgr2::uuid, 'mgr2'), (:mgrNo::uuid, 'mgrNo'), (:dis::uuid, 'dis'),
                             (:stfAp::uuid, 'stfAp')) u(id, who) on u.id = n.user_id
               where n.type = 'order_request.created' and n.link = '/dashboard/orders/' || (select a.r::jsonb#>>'{order,id}' from ans a where a.tag = 'P1')),
-  -- The notice audience migration (S36a) moved the alert from the role list to
-  -- orders:approve with write access to the order's warehouse: the revoked
-  -- manager is no longer told, and the staff member granted it in whA is.
+  -- The alert goes to the members who hold orders:approve (overrides
+  -- applied) with write access to the order's warehouse (0422): the manager
+  -- whose orders:approve is revoked is not told, and the staff member granted
+  -- it in whA is.
   'placed|web|true|true|true|null|adm,mgr,own,stfAp',
   'P2: one placed row for the key (the placer, the order, the hash, the surface) and one "New order request" notification per member who may approve it in its warehouse (the granted staff member included, the revoked manager not), not the manager who turned it off nor the disabled one');
 select is(

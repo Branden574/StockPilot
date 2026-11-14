@@ -12,12 +12,11 @@ import {
 
 /**
  * Docket S36 (part a), with B72 part 3: Today's briefing (gatherInsights, the
- * page path) counted the organization's pending requests for every reader
- * (pendingCount) and showed every line to anyone who could open the page. So
- * a staff member without orders:approve read "N orders awaiting approval" and
- * its link opened their own requests, the AI summary was written from lines
- * the reader could not open, and a staff approver was counted requests in
- * warehouses they do not work in.
+ * page path) shows a reader only the lines they can open
+ * (insights-access.ts), and the AI summary is written from those lines. The
+ * approvals line counts the pending requests this reader could approve
+ * (approvablePendingCount): none without orders:approve or for a viewer, and
+ * for a staff approver only those in the warehouses they can write in.
  *
  * The count here is the REAL OrderRequestsService against the stub (the stub
  * answers by the query's own filters), so a warehouse filter the count forgets

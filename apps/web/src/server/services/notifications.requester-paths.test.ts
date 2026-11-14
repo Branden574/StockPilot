@@ -5,10 +5,10 @@ import type { ModuleId } from '@stockpilot/core';
 import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
- * Docket S36 (review of #440): the app-written notices about an order go to
- * the order's stored requester id. 0422 stops the database's own notices to
- * someone who is no longer a member of the organization; these four paths
- * write through createNotification instead, and the 0028 trigger pushes every
+ * Docket S36: the app-written notices about an order go to the order's stored
+ * requester id. The database's own notices go only to a current member of
+ * the organization (0422); these four paths write through createNotification
+ * instead, and the 0028 trigger pushes every
  * row it writes. Each path runs here for real (createNotification is NOT
  * mocked; only the database is a stub), twice: with the requester still a
  * member (one notice, the control) and after they were removed or left (none).
