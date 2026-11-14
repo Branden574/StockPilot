@@ -3,7 +3,7 @@ import * as path from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { makeSupabaseStub } from '@/test/supabase-mock';
+import { makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
  * Tests for the at-most-once maintenance-resolved email (Task 6). Load-
@@ -74,6 +74,18 @@ function makeStub(overrides: Record<string, unknown> = {}) {
     'organization_modules.select': MODULE_SETTINGS_DEFAULT,
     'maintenance_request_share_links.select': NO_ACTIVE_LINK,
     'maintenance_request_attachments.select': NO_RESOLUTION_PHOTOS,
+    // S36: the requester is still a current member of the request's
+    // organization, on an account that is not disabled
+    // (maintenance-resolved.member.test.ts covers the rest).
+    'user_profiles.select': { data: [{ disabled_at: null }], error: null },
+    'organization_members.select': servedLikePostgrest([
+      {
+        organization_id: ORG_ID,
+        user_id: 'requester-1',
+        accepted_at: '2026-01-05T00:00:00Z',
+        impersonation_expires_at: null,
+      },
+    ]),
     ...overrides,
   });
 }

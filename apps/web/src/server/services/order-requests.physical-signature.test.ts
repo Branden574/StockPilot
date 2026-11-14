@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ModuleId } from '@stockpilot/core';
 
-import { makeServiceContext, makeSupabaseStub } from '@/test/supabase-mock';
+import { makeServiceContext, makeSupabaseStub, servedLikePostgrest } from '@/test/supabase-mock';
 
 /**
  * L91: the paper (physical) signature path sent the partly-fulfilled and the
@@ -112,13 +112,30 @@ describe('confirmPhysicalSignature: hand-over notices name the order by its numb
  * unchanged: a requester who deleted their account is never emailed.
  */
 describe('confirmPhysicalSignature: the requester is reached at their own address (L94)', () => {
-  const MEMBER = { id: 'ord-1', requester_user_id: 'user-req', requester_email: null, requester_name: null };
+  const MEMBER = {
+    id: 'ord-1',
+    organization_id: 'org-test',
+    requester_user_id: 'user-req',
+    requester_email: null,
+    requester_name: null,
+  };
   const PROFILE = { email: 'reggie@example.org', full_name: 'Reggie Requester' };
+  // S36: the requester is still a current member of the order's organization
+  // (order-requests.member-email.test.ts covers a former member).
+  const CURRENT_MEMBER = servedLikePostgrest([
+    {
+      organization_id: 'org-test',
+      user_id: 'user-req',
+      accepted_at: '2026-01-05T00:00:00Z',
+      impersonation_expires_at: null,
+    },
+  ]);
 
   it('a partial hand-over emails the member at their profile address', async () => {
     admin.results = {
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
+      'user_profiles.select': { data: [PROFILE], error: null },
       'notification_preferences.select.maybeSingle': { data: null, error: null },
+      'organization_members.select': CURRENT_MEMBER,
     };
     await service({ ...MEMBER, status: 'backordered', order_number: 49 }, { prior: 0, requested: 5, fulfilled: 2 })
       .confirmPhysicalSignature('ord-1', 'Dock Signer');
@@ -135,8 +152,9 @@ describe('confirmPhysicalSignature: the requester is reached at their own addres
 
   it('a backorder remainder handed over emails the member at their profile address', async () => {
     admin.results = {
-      'user_profiles.select.maybeSingle': { data: PROFILE, error: null },
+      'user_profiles.select': { data: [PROFILE], error: null },
       'notification_preferences.select.maybeSingle': { data: { email_order_completed: true }, error: null },
+      'organization_members.select': CURRENT_MEMBER,
     };
     await service({ ...MEMBER, status: 'completed', order_number: 49 }, { prior: 2, requested: 5, fulfilled: 5 })
       .confirmPhysicalSignature('ord-1', 'Dock Signer');
