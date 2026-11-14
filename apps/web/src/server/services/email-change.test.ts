@@ -84,6 +84,12 @@ const envState = vi.hoisted(() => {
 vi.mock('@/lib/env', () => ({ env: envState }));
 const INITIAL_ENV = { ...envState };
 vi.mock('@/lib/error-reporter', () => ({ reportError: vi.fn(async () => {}) }));
+// The organization an audit row is filed under is the membership rule's
+// answer (docket S74); that rule is tested over real membership rows in
+// email-change.audit-organization.test.ts. Here the person is a member of org-1.
+vi.mock('@/server/services/auth-audit', () => ({
+  resolveDefaultOrgAndRole: vi.fn(async () => ({ organizationId: 'org-1', role: 'staff' })),
+}));
 
 import {
   cancelEmailChange,
