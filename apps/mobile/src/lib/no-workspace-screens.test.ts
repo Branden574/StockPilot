@@ -249,6 +249,8 @@ function countLoadNoWorkspace(workspaceLoading: boolean) {
     orgId: null,
     access: 'not-synced',
     workspaceLoading,
+    // No workspace known: waiting while its load runs.
+    waitingForWorkspace: workspaceLoading,
     lastLoadKey: { current: null },
     countAnswerStillShown: (a: unknown, b: unknown) => a === b,
     CYCLE_COUNTS_NOT_AVAILABLE: 'x',
@@ -299,7 +301,44 @@ describe('the count screen online with no workspace and no stored copy', () => {
     expect(c.from).not.toHaveBeenCalled();
     const code = flat(COUNT);
     expect(code).toContain('const { orgId, loading: workspaceLoading } = useOrg();');
-    expect(code).toContain('}, [id, orgId, access, workspaceLoading]);');
+  });
+});
+
+/**
+ * The workspace hook publishes loading: true on every change of the signed-in
+ * user object (a token refresh, about hourly) and whenever another screen
+ * using it mounts (the scanner opened over the count screen), with the
+ * workspace already shown. loadOnce depended on that flag, so each toggle
+ * made a new load: the screen went to its spinner (the entry boxes unmounted,
+ * the keyboard closed, the list scrolled back) and the count was fetched
+ * twice. Only "no workspace yet, still loading" decides anything now.
+ */
+describe('the count screen while the workspace hook reloads', () => {
+  /** loadOnce's dependency list, evaluated from the screen's own source. */
+  function loadOnceDeps(orgId: string | null, workspaceLoading: boolean): unknown[] {
+    const code = flat(COUNT);
+    const body = code.slice(code.indexOf('const loadOnce = React.useCallback('));
+    const deps = /\}, \[([^\]]*)\]\);/.exec(body)![1]!;
+    const derived = /const waitingForWorkspace = ([^;]*);/.exec(code)?.[1] ?? 'undefined';
+    return new Function(
+      'id',
+      'orgId',
+      'access',
+      'workspaceLoading',
+      `const waitingForWorkspace = ${derived}; return [${deps}];`,
+    )('count-1', orgId, 'allowed', workspaceLoading) as unknown[];
+  }
+
+  it('with a workspace shown, loading true then false keeps the same load: no spinner, no second fetch, the entry boxes stay', () => {
+    expect(loadOnceDeps(ORG, true)).toEqual(loadOnceDeps(ORG, false));
+    // The load is what the screen's load effect follows ([load, userId,
+    // lineSaver]); nothing else on the screen reads the flag.
+    const code = flat(COUNT);
+    expect(code.match(/\bworkspaceLoading\b/g)).toHaveLength(2);
+  });
+
+  it('with no workspace yet, the load runs again when the workspace load ends', () => {
+    expect(loadOnceDeps(null, true)).not.toEqual(loadOnceDeps(null, false));
   });
 });
 

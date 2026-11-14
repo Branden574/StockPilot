@@ -292,7 +292,7 @@ function countLoad(access: ScreenAccess, online: boolean, fetchedHere = false) {
     // ended (no-workspace-screens.test.ts has it loading).
     lastLoadKey: { current: null },
     countAnswerStillShown,
-    workspaceLoading: false,
+    waitingForWorkspace: false,
     setLinked: () => undefined,
   });
   return { loadOnce, calls, state, hydrated, cached };
@@ -372,7 +372,7 @@ describe('the wiring: both screens ask the side menu rule, and act on a change',
   it('the count screen reads its access the same way, and loadOnce follows it', () => {
     const count = code(COUNT);
     expect(count).toContain("const access = useDrawerEntryAccess('/cycle-counts');");
-    expect(count).toMatch(/\}, \[id, orgId, access, workspaceLoading\]\);/);
+    expect(count).toMatch(/\}, \[id, orgId, access, waitingForWorkspace\]\);/);
   });
 });
 

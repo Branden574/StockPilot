@@ -110,6 +110,8 @@ function countScreen() {
       setConflictBanner: () => undefined,
       rememberedCloseGate: () => null,
       setCloseGate: () => undefined,
+      setReassignOpen: () => undefined,
+      setReleaseOpen: () => undefined,
       load: async () => {
         screen.lines = ['line'];
       },

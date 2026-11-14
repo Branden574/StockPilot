@@ -139,7 +139,7 @@ describe('a count link opened offline reads only a count the signed-in account s
       // ended (no-workspace-screens.test.ts has it loading).
       lastLoadKey: { current: null },
       countAnswerStillShown,
-      workspaceLoading: false,
+      waitingForWorkspace: false,
       setLinked: () => undefined,
     });
     await loadOnce();

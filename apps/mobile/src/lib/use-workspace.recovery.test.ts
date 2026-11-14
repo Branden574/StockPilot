@@ -301,11 +301,11 @@ describe('retryWorkspace: no workspace is not the end', () => {
   // workspace (said by each screen, and asked for again by the sync loop and
   // Try again), a profile read with the workspace the memberships give.
   it.each([
-    ['membership', 'holdMemberships', 'with no workspace', false],
-    ['profile', 'holdProfile', 'with the workspace the memberships give', true],
+    ['membership', 'with no workspace', 'holdMemberships', false],
+    ['profile', 'with the workspace the memberships give', 'holdProfile', true],
   ] as const)(
     'a %s read that never answers ends the load after 15 s, %s',
-    async (_read, hold, _outcome, chosen) => {
+    async (_read, _outcome, hold, chosen) => {
       emitAuth(null);
       emitAuth('u1');
       vi.useFakeTimers();
@@ -324,6 +324,57 @@ describe('retryWorkspace: no workspace is not the end', () => {
       }
     },
   );
+
+  // On a link where the membership read always takes longer than 15 s, the
+  // bound alone would mean no workspace ever loads. A late answer still
+  // applies when it is for the account still signed in and no membership
+  // answer has landed since; one for an account that has gone is ignored.
+  it('a membership read that answers at 20 s still loads the workspace', async () => {
+    emitAuth(null);
+    emitAuth('u1');
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let answer!: () => void;
+      gate.holdMemberships = new Promise<void>((r) => {
+        answer = r;
+      });
+      useWorkspace();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(published.at(-1)).toMatchObject({ loading: false, activeOrgId: null });
+      await vi.advanceTimersByTimeAsync(5_000);
+      answer();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(published.at(-1)?.activeOrgId).not.toBeNull();
+    } finally {
+      gate.holdMemberships = null;
+      vi.useRealTimers();
+    }
+  });
+
+  it('a late membership answer for an account that has gone is ignored', async () => {
+    emitAuth(null);
+    emitAuth('u1');
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      let answer!: () => void;
+      gate.holdMemberships = new Promise<void>((r) => {
+        answer = r;
+      });
+      useWorkspace();
+      await vi.advanceTimersByTimeAsync(15_000);
+      emitAuth('u2');
+      const before = published.length;
+      answer();
+      await vi.advanceTimersByTimeAsync(100);
+      expect(published.slice(before).some((p) => p.activeOrgId !== null)).toBe(false);
+    } finally {
+      gate.holdMemberships = null;
+      vi.useRealTimers();
+      emitAuth('u1');
+    }
+  });
 });
 
 // useSync (the app root's sync loop) imports React Native, so its wiring is

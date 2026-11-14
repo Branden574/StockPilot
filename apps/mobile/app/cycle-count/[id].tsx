@@ -260,6 +260,11 @@ export default function CycleCountDetail() {
   const syncSnapshot = useSyncStatus();
 
   const { orgId, loading: workspaceLoading } = useOrg();
+  // Only "no workspace yet, and its load still running" decides anything
+  // here. The hook also reports loading while a workspace is shown (a token
+  // refresh, another screen using it mounting): that must not make a new
+  // load, which would blank the count to its spinner and fetch it twice.
+  const waitingForWorkspace = !orgId && workspaceLoading;
   // Whether this member may see cycle counts (the side menu's rule, decided
   // once the saved permissions and modules are read: screen-access.ts). Asked
   // before the copy on this phone or the database is read.
@@ -580,8 +585,8 @@ export default function CycleCountDetail() {
     }
     if (!orgId) {
       // Still loading the workspace (a cold start): the spinner stays, and
-      // this runs again when the load ends (workspaceLoading is in its deps).
-      if (workspaceLoading) return;
+      // this runs again when the load ends (waitingForWorkspace is in its deps).
+      if (waitingForWorkspace) return;
       // Online with no workspace known for this account once the load has
       // ended (a first sign-in offline, then the connection back): with no
       // copy on screen, said with Retry, never a spinner that does not end.
@@ -762,7 +767,7 @@ export default function CycleCountDetail() {
       if (!stillHere()) return;
       setLinked({ kind: 'failed' });
     }
-  }, [id, orgId, access, workspaceLoading]);
+  }, [id, orgId, access, waitingForWorkspace]);
 
   /**
    * After a count the phone could not store because its line is no longer in
@@ -858,13 +863,16 @@ export default function CycleCountDetail() {
       // linked exceptions (their chips match lines by item, so another
       // count's would show on lines that share an item), the server's line
       // locations, the scope, the conflict banner, and the Post gate (the one
-      // remembered for this account and workspace, or loading).
+      // remembered for this account and workspace, or loading). The Reassign
+      // and Release sheets opened for it close.
       setLinked({ kind: 'none' });
       setServerLocations(new Map());
       setScope(null);
       setConflictBanner(null);
       const knownGate = rememberedCloseGate(key.userId, key.orgId);
       setCloseGate(knownGate ? { kind: 'known', gate: knownGate } : { kind: 'loading' });
+      setReassignOpen(false);
+      setReleaseOpen(false);
     }
     // Fetch-on-mount AND dep-change re-run: the flag resets are pre-await by
     // necessity (the spinner must show during the fetch; a workspace switch

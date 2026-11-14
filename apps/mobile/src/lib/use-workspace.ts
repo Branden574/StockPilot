@@ -167,16 +167,24 @@ function loadWarehousesBounded(orgId: string): Promise<WarehouseOption[] | null>
 const WORKSPACE_READ_TIMEOUT_MS = 15_000;
 
 /** A workspace load's read, answered with null (as a failed read is) when it
- *  rejects or takes longer than WORKSPACE_READ_TIMEOUT_MS. */
-function boundedWorkspaceRead<T>(what: string, read: () => Promise<T | null>): Promise<T | null> {
+ *  rejects or takes longer than WORKSPACE_READ_TIMEOUT_MS. An answer that
+ *  comes after that is handed to `late`, when given. */
+function boundedWorkspaceRead<T>(
+  what: string,
+  read: () => Promise<T | null>,
+  late?: (value: T | null) => void,
+): Promise<T | null> {
   return new Promise((resolve) => {
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       console.warn(`[workspace] ${what} timed out`);
       resolve(null);
     }, WORKSPACE_READ_TIMEOUT_MS);
     read().then(
       (value) => {
         clearTimeout(timer);
+        if (timedOut) late?.(value);
         resolve(value);
       },
       () => {
@@ -278,23 +286,42 @@ async function recordRepairDone(record: number): Promise<void> {
   }
 }
 
-async function hydrate(userId: string): Promise<void> {
+/** Membership answers a workspace load has taken (see loadWorkspace). */
+let membershipAnswers = 0;
+
+async function hydrate(userId: string, memberships?: OrgOption[]): Promise<void> {
   loadsRunning += 1;
   try {
-    await loadWorkspace(userId);
+    await loadWorkspace(userId, memberships);
   } finally {
     loadsRunning -= 1;
   }
 }
 
-async function loadWorkspace(userId: string) {
+/** One workspace load. `given` is a membership answer that came after its own
+ *  load had stopped waiting (below): used in place of a new read. */
+async function loadWorkspace(userId: string, given?: OrgOption[]) {
   const epochAtStart = accountEpoch();
   const switchesAtStart = switchesStarted;
+  const answersAtStart = membershipAnswers;
   const [memberships, saved, profileDefault, repairOwed] = await Promise.all([
     // Bounded: a read that never answers ends like a failed one (null), so the
     // load ends and a screen says there is no workspace, never a spinner for
-    // good; the sync loop and Try again ask again (retryWorkspace).
-    boundedWorkspaceRead('membership read', () => loadOrgs(userId)),
+    // good; the sync loop and Try again ask again (retryWorkspace). On a link
+    // where every read takes longer than that, a late answer still loads the
+    // workspace: when it is for the account still signed in and no membership
+    // answer has landed since, it runs a load of its own with that answer.
+    given !== undefined
+      ? Promise.resolve(given)
+      : boundedWorkspaceRead(
+          'membership read',
+          () => loadOrgs(userId),
+          (late) => {
+            if (late === null) return;
+            if (accountEpoch() !== epochAtStart || membershipAnswers !== answersAtStart) return;
+            void hydrate(userId, late);
+          },
+        ),
     readSavedWorkspace(AsyncStorage),
     boundedWorkspaceRead('default organization read', () => loadProfileDefaultOrg(userId)),
     // A cache repair an earlier load or switch could not finish (below).
@@ -319,6 +346,7 @@ async function loadWorkspace(userId: string) {
   // The account changed while these reads were out (sign-out, another user,
   // eviction): this load belongs to an account that is gone.
   if (accountEpoch() !== epochAtStart) return;
+  if (memberships !== null) membershipAnswers += 1;
   // THE MEMBERSHIP READ FAILED (offline, a dropped connection). Every screen
   // that mounts runs this load, and a failed read used to count as "a member
   // of nothing": the workspace became null for the WHOLE APP, and every screen

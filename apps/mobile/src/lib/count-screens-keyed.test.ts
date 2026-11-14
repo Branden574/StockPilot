@@ -109,7 +109,7 @@ describe('the count screen', () => {
         id: COUNT_ID,
         orgId: 'org-a',
         access: 'allowed',
-        workspaceLoading: false,
+        waitingForWorkspace: false,
         lastLoadKey,
         countAnswerStillShown: await stillShown(),
         CYCLE_COUNTS_NOT_AVAILABLE: 'x',
@@ -253,6 +253,8 @@ describe('the count screen', () => {
         setConflictBanner: set('banner'),
         setCloseGate: set('gate'),
         rememberedCloseGate: () => null,
+        setReassignOpen: () => undefined,
+        setReleaseOpen: () => undefined,
         setLoading: () => undefined,
         setReadError: () => undefined,
         setEmptyState: () => undefined,
@@ -280,13 +282,48 @@ describe('the count screen', () => {
     );
   });
 
+  it('a Reassign or Release sheet open across an account change is closed', () => {
+    for (const next of [B, SIGNED_OUT]) {
+      const sheets = { reassign: true, release: true };
+      const lastLoadKey = { current: A as Key };
+      effectCallback<() => void>(COUNT, 'countLoadClearsScreen(lastLoadKey.current', {
+        lastLoadKey,
+        loadKeyNow: () => ({ key: next, linesShown: true }),
+        countReloadIsQuiet,
+        countLoadClearsScreen,
+        countLoadDraftAction,
+        lineSaver: { dropAll: () => undefined, flushAll: () => undefined },
+        setDraft: () => undefined,
+        setHeader: () => undefined,
+        setLines: () => undefined,
+        setLinked: () => undefined,
+        setServerLocations: () => undefined,
+        setScope: () => undefined,
+        setConflictBanner: () => undefined,
+        setCloseGate: () => undefined,
+        rememberedCloseGate: () => null,
+        setReassignOpen: (v: boolean) => {
+          sheets.reassign = v;
+        },
+        setReleaseOpen: (v: boolean) => {
+          sheets.release = v;
+        },
+        setLoading: () => undefined,
+        setReadError: () => undefined,
+        setEmptyState: () => undefined,
+        load: async () => undefined,
+      })();
+      expect(sheets).toEqual({ reassign: false, release: false });
+    }
+  });
+
   it('an offline load resets the linked exceptions too', async () => {
     const linked: unknown[] = [];
     const loadOnce = screenCallback<() => Promise<unknown>>(COUNT, 'loadOnce', {
       id: COUNT_ID,
       orgId: 'org-a',
       access: 'allowed',
-      workspaceLoading: false,
+      waitingForWorkspace: false,
       lastLoadKey: { current: A },
       countAnswerStillShown: await stillShown(),
       CYCLE_COUNTS_NOT_AVAILABLE: 'x',

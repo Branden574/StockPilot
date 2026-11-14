@@ -88,7 +88,11 @@ export const CLASSIC_PINS: Readonly<Record<string, string>> = {
   // resets the linked exceptions, line locations, scope, conflict banner and Post gate; offline
   // drops the linked exceptions; the spinner stays while the workspace is still loading). Before
   // this the pin was 620a8103...2981.
-  'app/cycle-count/[id].tsx': '0bb4d9e1f64d5b7ff9311d9e7f3e1511143cb0b319a84e30a14f9a32636be039',
+  // Re-pinned again for S75 closing round (Classic is meant to change: the load follows only
+  // whether the workspace is still loading with none known, so a workspace hook reload with a
+  // workspace shown makes no new load; the clear closes the Reassign and Release sheets). Before
+  // this the pin was 0bb4d9e1...e039.
+  'app/cycle-count/[id].tsx': '995fb341ca42bfd5b11da22e1b9cdd14d875e73107329abb24c3c729e64a2506',
   // Re-pinned for B124 (Classic is meant to change: its web link is built by webLink from the
   // configured host; a production build opens the same address). Before B124 the projection was
   // 0e3f35aa...a3fa, the pin it had.
